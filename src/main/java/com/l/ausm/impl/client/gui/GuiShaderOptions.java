@@ -42,6 +42,7 @@ public class GuiShaderOptions extends GuiScreen {
 
     private final GuiScreen parent;
     private final String packName;
+    private final Map<String, String> savedValues = new LinkedHashMap<>();
     private final Map<String, String> pendingValues = new LinkedHashMap<>();
     private final List<String> screenHistory = new ArrayList<>();
     private final Set<String> expandedSidebarScreens = new HashSet<>();
@@ -73,7 +74,8 @@ public class GuiShaderOptions extends GuiScreen {
     public GuiShaderOptions(GuiScreen parent, String packName) {
         this.parent = parent;
         this.packName = packName;
-        this.pendingValues.putAll(MainMod.getShaderPackManager().getOptionOverrides(packName));
+        this.savedValues.putAll(MainMod.getShaderPackManager().getOptionOverrides(packName));
+        this.pendingValues.putAll(savedValues);
         this.properties = MainMod.getShaderPackManager().getShaderProperties(packName, pendingValues);
         syncProfileWithCurrentValuesIfNeeded(this.properties);
     }
@@ -385,6 +387,8 @@ public class GuiShaderOptions extends GuiScreen {
         }
         if (button.id == 201) {
             MainMod.getShaderPackManager().setShaderOptions(packName, pendingValues);
+            savedValues.clear();
+            savedValues.putAll(pendingValues);
             if (applyButton != null) {
                 applyButton.enabled = false;
             }
@@ -786,9 +790,7 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     private boolean isDirty() {
-        Map<String, String> savedValues = comparableOptions(MainMod.getShaderPackManager().getOptionOverrides(packName));
-        Map<String, String> currentValues = comparableOptions(pendingValues);
-        return !currentValues.equals(savedValues);
+        return !comparableOptions(pendingValues).equals(comparableOptions(savedValues));
     }
 
     private Map<String, String> comparableOptions(Map<String, String> values) {

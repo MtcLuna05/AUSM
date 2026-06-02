@@ -915,6 +915,10 @@ public class PipelineContext {
     }
 
     public void initialize(ShaderPack pack, Map<String, String> optionOverrides) {
+        initialize(pack, optionOverrides, null);
+    }
+
+    public void initialize(ShaderPack pack, Map<String, String> optionOverrides, ShaderProperties preloadedProperties) {
         cleanup(); // Clear previous state
         shaderProperties = emptyShaderProperties();
         activePackName = pack.getName();
@@ -927,7 +931,7 @@ public class PipelineContext {
         }
 
         Minecraft mc = Minecraft.getMinecraft();
-        ShaderProperties properties = ShaderProperties.load(pack, optionOverrides);
+        ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
         programSet = ShaderProgramSet.load(pack, properties);
         packDirectives = properties.packDirectives().withComputeDirectives(programSet.computeDirectives());
         rebuildFullscreenProgramArrays();

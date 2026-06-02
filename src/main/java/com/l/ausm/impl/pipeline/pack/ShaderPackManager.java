@@ -30,6 +30,12 @@ public class ShaderPackManager implements ShaderPackController {
     private final Path shaderConfigFile;
     private ShaderPack currentPack = NoneShaderPack.INSTANCE;
     private Map<String, String> currentOptionOverrides = Map.of();
+    private final Map<ShaderPropertiesCacheKey, ShaderProperties> shaderPropertiesCache = new LinkedHashMap<>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<ShaderPropertiesCacheKey, ShaderProperties> eldest) {
+            return size() > 24;
+        }
+    };
     private String selectedPackName = "OFF";
     private boolean shadersEnabled = false;
     private boolean pendingPipelineReload = false;
@@ -155,6 +161,7 @@ public class ShaderPackManager implements ShaderPackController {
         }
         this.currentPack = newPack;
         this.currentOptionOverrides = loadOptionOverrides(newPack.getName());
+        clearShaderPropertiesCache();
         
         // Notify the pipeline to reload and compile shaders
         PipelineContext.getInstance().initialize(this.currentPack, this.currentOptionOverrides);
@@ -281,7 +288,8 @@ public class ShaderPackManager implements ShaderPackController {
         }
         saveShaderConfig();
         if (shadersEnabled && pendingPipelineReload) {
-            PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides);
+            ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
+            PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides, properties);
             compiledDimensionId = getClientDimensionId();
             pendingPipelineReload = false;
         }
@@ -305,13 +313,21 @@ public class ShaderPackManager implements ShaderPackController {
             return ShaderProperties.load(NoneShaderPack.INSTANCE, Map.of());
         }
 
+        ShaderPropertiesCacheKey cacheKey = new ShaderPropertiesCacheKey(packName, Map.copyOf(overrides));
+        ShaderProperties cached = shaderPropertiesCache.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+
         ShaderPack pack = openPack(packName);
         if (pack == null) {
             return ShaderProperties.load(NoneShaderPack.INSTANCE, Map.of());
         }
 
         try {
-            return ShaderProperties.load(pack, overrides);
+            ShaderProperties properties = ShaderProperties.load(pack, overrides);
+            shaderPropertiesCache.put(cacheKey, properties);
+            return properties;
         } finally {
             try {
                 pack.close();
@@ -346,6 +362,7 @@ public class ShaderPackManager implements ShaderPackController {
             return;
         }
 
+        ShaderProperties properties = getShaderProperties(packName, copy);
         saveOptionOverrides(packName, copy);
         if (currentPackTarget) {
             currentOptionOverrides = copy;
@@ -354,7 +371,7 @@ public class ShaderPackManager implements ShaderPackController {
                 PipelineContext.getInstance().setActive(false);
                 return;
             }
-            PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides);
+            PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides, properties);
             compiledDimensionId = getClientDimensionId();
             pendingPipelineReload = false;
             PipelineContext.getInstance().setActive(true);
@@ -389,7 +406,8 @@ public class ShaderPackManager implements ShaderPackController {
                 PipelineContext.getInstance().setActive(false);
                 return;
             }
-            PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides);
+            ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
+            PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides, properties);
             compiledDimensionId = getClientDimensionId();
             pendingPipelineReload = false;
             PipelineContext.getInstance().setActive(true);
@@ -438,6 +456,10 @@ public class ShaderPackManager implements ShaderPackController {
     private Path optionFile(String packName) {
         String safeName = packName.replaceAll("[^A-Za-z0-9._-]", "_");
         return optionOverridesDir.resolve(safeName + ".properties");
+    }
+
+    private void clearShaderPropertiesCache() {
+        shaderPropertiesCache.clear();
     }
 
     private void saveShaderConfig() {
@@ -510,5 +532,8 @@ public class ShaderPackManager implements ShaderPackController {
             return Integer.MIN_VALUE;
         }
         return mc.world.provider.getDimension();
+    }
+
+    private record ShaderPropertiesCacheKey(String packName, Map<String, String> overrides) {
     }
 }

@@ -90,35 +90,21 @@ public final class ShaderImageSet {
     public void clearSmallImages() {
         for (LoadedImage image : loadedImages) {
             ShaderImageDirective directive = image.directive();
-            if (!directive.clear()) {
+            ByteBuffer pixels = image.clearPixels();
+            if (pixels == null) {
                 continue;
             }
 
             int pixelFormat = ShaderTextureLoader.pixelFormat(directive.format());
             int pixelType = ShaderTextureLoader.pixelType(directive.pixelType());
-            int imageWidth = directive.relative()
-                    ? Math.max(1, (int) (width * directive.relativeWidth()))
-                    : Math.max(1, directive.width());
-            int imageHeight = directive.relative()
-                    ? Math.max(1, (int) (height * directive.relativeHeight()))
-                    : Math.max(1, directive.height());
-            int imageDepth = Math.max(1, directive.depth());
-            long byteCount = (long) componentCount(pixelFormat) * byteSize(pixelType) * imageWidth * imageHeight * imageDepth;
-            if (byteCount <= 0 || byteCount > 4L * 1024L * 1024L) {
-                continue;
-            }
-
-            ByteBuffer pixels = zeroPixels(pixelFormat, pixelType, imageWidth, imageHeight, imageDepth);
-            if (pixels == null) {
-                continue;
-            }
+            pixels.clear();
 
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
             GL11.glBindTexture(image.textureTarget(), image.textureId());
             switch (directive.target()) {
-                case TEXTURE_1D -> GL11.glTexSubImage1D(image.textureTarget(), 0, 0, imageWidth, pixelFormat, pixelType, pixels);
-                case TEXTURE_2D -> GL11.glTexSubImage2D(image.textureTarget(), 0, 0, 0, imageWidth, imageHeight, pixelFormat, pixelType, pixels);
-                case TEXTURE_3D -> GL12.glTexSubImage3D(image.textureTarget(), 0, 0, 0, 0, imageWidth, imageHeight, imageDepth, pixelFormat, pixelType, pixels);
+                case TEXTURE_1D -> GL11.glTexSubImage1D(image.textureTarget(), 0, 0, image.width(), pixelFormat, pixelType, pixels);
+                case TEXTURE_2D -> GL11.glTexSubImage2D(image.textureTarget(), 0, 0, 0, image.width(), image.height(), pixelFormat, pixelType, pixels);
+                case TEXTURE_3D -> GL12.glTexSubImage3D(image.textureTarget(), 0, 0, 0, 0, image.width(), image.height(), image.depth(), pixelFormat, pixelType, pixels);
             }
             int error = GL11.glGetError();
             if (error != GL11.GL_NO_ERROR) {
@@ -184,6 +170,10 @@ public final class ShaderImageSet {
             case TEXTURE_2D -> GL11.glTexImage2D(target, 0, internalFormat, imageWidth, imageHeight, 0, pixelFormat, pixelType, clearPixels);
             case TEXTURE_3D -> GL12.glTexImage3D(target, 0, internalFormat, imageWidth, imageHeight, imageDepth, 0, pixelFormat, pixelType, clearPixels);
         }
+        if (clearPixels != null) {
+            clearPixels.clear();
+        }
+        ByteBuffer perFrameClearPixels = smallClearBuffer(clearPixels, pixelFormat, pixelType, imageWidth, imageHeight, imageDepth);
         GL11.glBindTexture(target, 0);
         int error = GL11.glGetError();
         if (error != GL11.GL_NO_ERROR) {
@@ -195,8 +185,20 @@ public final class ShaderImageSet {
                 ShaderBindingLayout.CUSTOM_IMAGE_TEXTURE_BASE_UNIT + unit,
                 textureId,
                 target,
-                internalFormat
+                internalFormat,
+                imageWidth,
+                imageHeight,
+                imageDepth,
+                perFrameClearPixels
         );
+    }
+
+    private static ByteBuffer smallClearBuffer(ByteBuffer clearPixels, int pixelFormat, int pixelType, int width, int height, int depth) {
+        if (clearPixels == null) {
+            return null;
+        }
+        long size = (long) componentCount(pixelFormat) * byteSize(pixelType) * width * Math.max(1, height) * Math.max(1, depth);
+        return size > 0 && size <= 4L * 1024L * 1024L ? clearPixels : null;
     }
 
     private static ByteBuffer zeroPixels(int pixelFormat, int pixelType, int width, int height, int depth) {
@@ -226,6 +228,17 @@ public final class ShaderImageSet {
         };
     }
 
-    private record LoadedImage(ShaderImageDirective directive, int unit, int samplerUnit, int textureId, int textureTarget, int internalFormat) {
+    private record LoadedImage(
+            ShaderImageDirective directive,
+            int unit,
+            int samplerUnit,
+            int textureId,
+            int textureTarget,
+            int internalFormat,
+            int width,
+            int height,
+            int depth,
+            ByteBuffer clearPixels
+    ) {
     }
 }
