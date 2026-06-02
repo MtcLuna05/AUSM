@@ -246,11 +246,18 @@ public final class ShaderBlockIdMap {
             case "nether_wart" -> minecraft("nether_wart");
             case "chorus_flower" -> minecraft("chorus_flower");
             case "redstone_ore" -> minecraft("redstone_ore", "lit_redstone_ore");
+            case "redstone_torch" -> minecraft("redstone_torch");
+            case "redstone_lamp" -> minecraft("redstone_lamp", "lit_redstone_lamp");
+            case "jack_o_lantern" -> minecraft("lit_pumpkin");
+            case "magma_block" -> minecraft("magma");
+            case "sea_lantern" -> minecraft("sea_lantern");
+            case "end_rod" -> minecraft("end_rod");
             case "glowstone" -> minecraft("glowstone");
             case "torch" -> minecraft("torch", "redstone_torch", "unlit_redstone_torch");
             case "water" -> minecraft("water", "flowing_water");
             case "lava" -> minecraft("lava", "flowing_lava");
             case "fire" -> minecraft("fire");
+            case "nether_portal" -> minecraft("portal");
             default -> List.of();
         };
     }

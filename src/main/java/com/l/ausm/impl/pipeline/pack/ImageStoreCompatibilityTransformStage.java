@@ -20,6 +20,10 @@ public final class ImageStoreCompatibilityTransformStage implements ShaderTransf
                 "layout(r8ui) writeonly uniform uimage3D voxelimg;"
         );
         transformed = transformed.replace(
+                "writeonly uniform uimage3D voxel_img;",
+                "layout(r16ui) writeonly uniform uimage3D voxel_img;"
+        );
+        transformed = transformed.replace(
                 "writeonly uniform uimage2D puddle_img;",
                 "layout(r8ui) writeonly uniform uimage2D puddle_img;"
         );
@@ -30,6 +34,14 @@ public final class ImageStoreCompatibilityTransformStage implements ShaderTransf
         transformed = transformed.replace(
                 "writeonly uniform image3D lightimg1;",
                 "layout(rgba16f) writeonly uniform image3D lightimg1;"
+        );
+        transformed = transformed.replace(
+                "writeonly uniform image3D floodfill_img;",
+                "layout(rgba16f) writeonly uniform image3D floodfill_img;"
+        );
+        transformed = transformed.replace(
+                "writeonly uniform image3D floodfill_img_copy;",
+                "layout(rgba16f) writeonly uniform image3D floodfill_img_copy;"
         );
         MainMod.LOGGER.debug("[ShaderTransform] Applied image-store compatibility transform");
         return transformed;
