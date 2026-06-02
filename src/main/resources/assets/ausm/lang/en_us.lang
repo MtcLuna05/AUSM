@@ -1,0 +1,8 @@
+key.categories.ausm=AUSM Shaders
+
+key.ausm.config=Open Shader Config
+key.ausm.reload=Reload Shaders
+key.ausm.toggle=Toggle Shaders
+
+tooltip.ausm.reloadedShader=Reloaded Shaders
+tooltip.ausm.toggledShader=Toggled Shaders

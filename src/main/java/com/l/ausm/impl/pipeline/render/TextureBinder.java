@@ -1,0 +1,281 @@
+package com.l.ausm.impl.pipeline.render;
+
+import com.l.ausm.api.pipeline.fbo.*;
+import com.l.ausm.api.pipeline.shader.*;
+import com.l.ausm.api.pipeline.pack.*;
+
+import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.api.pipeline.fbo.Attachment;
+import com.l.ausm.impl.pipeline.fbo.DeferredFramebuffer;
+import com.l.ausm.impl.pipeline.shader.ShaderBindingLayout;
+import net.minecraft.client.renderer.GlStateManager;
+import net.minecraft.client.renderer.OpenGlHelper;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL20;
+
+import java.nio.ByteBuffer;
+
+/**
+ * Handles binding the G-Buffer textures into the correct OpenGL Texture Units
+ * before executing Deferred and Composite shader passes.
+ */
+public class TextureBinder {
+    public static final int LIGHTMAP_TEXTURE_UNIT = 2;
+    public static final int SHADOWTEX0_TEXTURE_UNIT = ShaderBindingLayout.SHADOW_TEXTURE_BASE_UNIT;
+    public static final int SHADOWTEX1_TEXTURE_UNIT = ShaderBindingLayout.SHADOW_TEXTURE_BASE_UNIT + 1;
+    public static final int SHADOWCOLOR0_TEXTURE_UNIT = ShaderBindingLayout.SHADOW_TEXTURE_BASE_UNIT + 2;
+    public static final int DEPTHTEX0_TEXTURE_UNIT = ShaderBindingLayout.DEPTH_TEXTURE_BASE_UNIT;
+    public static final int COLORTEX4_TEXTURE_UNIT = ShaderBindingLayout.HIGH_COLOR_TEXTURE_BASE_UNIT;
+    public static final int COLORTEX5_TEXTURE_UNIT = ShaderBindingLayout.HIGH_COLOR_TEXTURE_BASE_UNIT + 1;
+    public static final int COLORTEX6_TEXTURE_UNIT = ShaderBindingLayout.HIGH_COLOR_TEXTURE_BASE_UNIT + 2;
+    public static final int COLORTEX7_TEXTURE_UNIT = ShaderBindingLayout.HIGH_COLOR_TEXTURE_BASE_UNIT + 3;
+    public static final int DEPTHTEX1_TEXTURE_UNIT = ShaderBindingLayout.DEPTH_TEXTURE_BASE_UNIT + 1;
+    public static final int DEPTHTEX2_TEXTURE_UNIT = ShaderBindingLayout.DEPTH_TEXTURE_BASE_UNIT + 2;
+    public static final int NOISETEX_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT;
+    public static final int COLORTEX8_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 1;
+    public static final int COLORTEX9_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 2;
+    public static final int COLORTEX16_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 3;
+    public static final int CENTER_DEPTH_SMOOTH_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 4;
+    public static final int SPECULAR_TEXTURE_UNIT = ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT - 1;
+    private static int fallbackBlackTexture = -1;
+    private static int fallbackNormalTexture = -1;
+    private static int fallbackSpecularTexture = -1;
+    private static int maxCombinedTextureUnits = -1;
+
+    /**
+     * Binds the multiple render targets (MRTs) from the "read" framebuffer 
+     * so that the fullscreen shader pass can sample them.
+     */
+    public static void bindDeferredTextures() {
+        DeferredFramebuffer readBuffer =
+                PipelineContext.getInstance()
+                        .getPingPongManager()
+                        .getReadBuffer();
+
+        for (Attachment attachment : Attachment.values()) {
+            bindAttachment(readBuffer, attachment, textureUnitForAttachment(attachment));
+        }
+
+        bindRawTexture(DEPTHTEX0_TEXTURE_UNIT, readBuffer.getDepthTexture());
+        bindDepthTexture(readBuffer, DeferredFramebuffer.DEPTHTEX1_SNAPSHOT, DEPTHTEX1_TEXTURE_UNIT);
+        bindDepthTexture(readBuffer, DeferredFramebuffer.DEPTHTEX2_SNAPSHOT, DEPTHTEX2_TEXTURE_UNIT);
+        bindRawTexture(COLORTEX16_TEXTURE_UNIT, fallbackBlackTexture());
+        bindRawTexture(CENTER_DEPTH_SMOOTH_TEXTURE_UNIT, PipelineContext.getInstance().getCenterDepthSmoothTexture());
+        bindNoiseTexture();
+
+        restoreDefaultTextureUnit();
+    }
+
+    /**
+     * Iris exposes render-target samplers to gbuffers programs, but only for
+     * colortex4+ so the world texture atlas can remain bound on unit 0.
+     */
+    public static void bindGbufferRenderTargetSamplers() {
+        DeferredFramebuffer readBuffer =
+                PipelineContext.getInstance()
+                        .getPingPongManager()
+                        .getReadBuffer();
+
+        bindAttachment(readBuffer, Attachment.AUX1, COLORTEX4_TEXTURE_UNIT);
+        bindAttachment(readBuffer, Attachment.AUX2, COLORTEX5_TEXTURE_UNIT);
+        bindAttachment(readBuffer, Attachment.AUX3, COLORTEX6_TEXTURE_UNIT);
+        bindAttachment(readBuffer, Attachment.AUX4, COLORTEX7_TEXTURE_UNIT);
+        bindAttachment(readBuffer, Attachment.AUX5, COLORTEX8_TEXTURE_UNIT);
+        bindAttachment(readBuffer, Attachment.AUX6, COLORTEX9_TEXTURE_UNIT);
+
+        bindRawTexture(DEPTHTEX0_TEXTURE_UNIT, readBuffer.getDepthTexture());
+        bindDepthTexture(readBuffer, DeferredFramebuffer.DEPTHTEX1_SNAPSHOT, DEPTHTEX1_TEXTURE_UNIT);
+        bindDepthTexture(readBuffer, DeferredFramebuffer.DEPTHTEX2_SNAPSHOT, DEPTHTEX2_TEXTURE_UNIT);
+        bindRawTexture(COLORTEX16_TEXTURE_UNIT, fallbackBlackTexture());
+        bindRawTexture(CENTER_DEPTH_SMOOTH_TEXTURE_UNIT, PipelineContext.getInstance().getCenterDepthSmoothTexture());
+        bindNoiseTexture();
+
+        restoreDefaultTextureUnit();
+    }
+
+    public static void bindNoiseTexture() {
+        bindRawTexture(NOISETEX_TEXTURE_UNIT, PipelineContext.getInstance().getNoiseTexture());
+    }
+
+    public static void bindShadowTextures() {
+        int shadowDepthTexture = PipelineContext.getInstance().getShadowDepthTexture();
+        int shadowDepthSnapshotTexture = PipelineContext.getInstance().getShadowDepthSnapshotTexture();
+        int shadowColorTexture = PipelineContext.getInstance().getShadowColor0Texture();
+        if (shadowDepthTexture == -1 || shadowDepthSnapshotTexture == -1) {
+            return;
+        }
+
+        PipelineContext.getInstance().configureShadowDepthTextureCompareMode();
+        bindRawTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture);
+        bindRawTexture(SHADOWTEX1_TEXTURE_UNIT, shadowDepthSnapshotTexture);
+        if (shadowColorTexture != -1) {
+            bindRawTexture(SHADOWCOLOR0_TEXTURE_UNIT, shadowColorTexture);
+        }
+        restoreDefaultTextureUnit();
+    }
+
+    public static void bindMaterialFallbackTextures() {
+        bindRawTexture(textureUnitForSampler("normals"), fallbackNormalTexture());
+        bindRawTexture(textureUnitForSampler("specular"), fallbackSpecularTexture());
+        restoreDefaultTextureUnit();
+    }
+
+    public static void mirrorVanillaLightmapToIrisUnit() {
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + 1);
+        int lightmapTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        if (lightmapTexture > 0) {
+            bindIrisLightmap(lightmapTexture);
+        }
+    }
+
+    public static void bindIrisLightmap(int textureId) {
+        if (textureId > 0) {
+            bindRawTexture(LIGHTMAP_TEXTURE_UNIT, textureId);
+        }
+    }
+
+    private static void bindDepthTexture(DeferredFramebuffer fbo, int snapshotIndex, int textureUnitIndex) {
+        int depthTex = fbo.getDepthSamplerTexture(snapshotIndex);
+        if (depthTex != -1) {
+            bindRawTexture(textureUnitIndex, depthTex);
+        }
+    }
+
+    private static void bindAttachment(DeferredFramebuffer fbo, Attachment attachment, int textureUnitIndex) {
+        int texId = fbo.getTexture(attachment);
+        if (texId != -1) {
+            bindRawTexture(textureUnitIndex, texId);
+        }
+    }
+
+    private static int textureUnitForAttachment(Attachment attachment) {
+        return switch (attachment) {
+            case COLOR -> 0;
+            case DEPTH -> 1;
+            case NORMAL -> 2;
+            case COMPOSITE -> 3;
+            case AUX1 -> COLORTEX4_TEXTURE_UNIT;
+            case AUX2 -> COLORTEX5_TEXTURE_UNIT;
+            case AUX3 -> COLORTEX6_TEXTURE_UNIT;
+            case AUX4 -> COLORTEX7_TEXTURE_UNIT;
+            case AUX5 -> COLORTEX8_TEXTURE_UNIT;
+            case AUX6 -> COLORTEX9_TEXTURE_UNIT;
+        };
+    }
+
+    public static int textureUnitForSampler(String samplerName) {
+        if (samplerName.startsWith("colortex")) {
+            try {
+                int unit = Integer.parseInt(samplerName.substring("colortex".length()));
+                return switch (unit) {
+                    case 0, 1, 2, 3 -> unit;
+                    case 4 -> COLORTEX4_TEXTURE_UNIT;
+                    case 5 -> COLORTEX5_TEXTURE_UNIT;
+                    case 6 -> COLORTEX6_TEXTURE_UNIT;
+                    case 7 -> COLORTEX7_TEXTURE_UNIT;
+                    case 8 -> COLORTEX8_TEXTURE_UNIT;
+                    case 9 -> COLORTEX9_TEXTURE_UNIT;
+                    case 16 -> COLORTEX16_TEXTURE_UNIT;
+                    default -> -1;
+                };
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+        }
+
+        return switch (samplerName) {
+            case "tex", "texture", "gtexture", "u_MainSampler", "gcolor" -> 0;
+            case "iris_overlay" -> 1;
+            case "lightmap" -> LIGHTMAP_TEXTURE_UNIT;
+            case "gdepth" -> 1;
+            case "gnormal" -> 2;
+            case "normals" -> 3;
+            case "composite" -> 3;
+            case "specular" -> SPECULAR_TEXTURE_UNIT;
+            case "shadow", "watershadow", "shadowtex0", "shadowtex0HW" -> SHADOWTEX0_TEXTURE_UNIT;
+            case "shadowtex1", "shadowtex1HW" -> SHADOWTEX1_TEXTURE_UNIT;
+            case "shadowcolor", "shadowcolor0" -> SHADOWCOLOR0_TEXTURE_UNIT;
+            case "shadowcolor1" -> COLORTEX4_TEXTURE_UNIT;
+            case "gaux1" -> COLORTEX4_TEXTURE_UNIT;
+            case "gaux2" -> COLORTEX5_TEXTURE_UNIT;
+            case "gaux3" -> COLORTEX6_TEXTURE_UNIT;
+            case "gaux4" -> COLORTEX7_TEXTURE_UNIT;
+            case "gdepthtex", "depthtex0", "dhDepthTex", "dhDepthTex0" -> DEPTHTEX0_TEXTURE_UNIT;
+            case "depthtex1", "dhDepthTex1" -> DEPTHTEX1_TEXTURE_UNIT;
+            case "depthtex2", "dhDepthTex2" -> DEPTHTEX2_TEXTURE_UNIT;
+            case "noisetex" -> NOISETEX_TEXTURE_UNIT;
+            case "iris_centerDepthSmooth" -> CENTER_DEPTH_SMOOTH_TEXTURE_UNIT;
+            default -> -1;
+        };
+    }
+
+    public static void bindRawTexture(int textureUnitIndex, int textureId) {
+        bindTexture(GL11.GL_TEXTURE_2D, textureUnitIndex, textureId);
+    }
+
+    public static void bindTexture(int textureTarget, int textureUnitIndex, int textureId) {
+        if (!isValidTextureUnit(textureUnitIndex)) {
+            return;
+        }
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnitIndex);
+        GL11.glBindTexture(textureTarget, textureId);
+    }
+
+    private static boolean isValidTextureUnit(int textureUnitIndex) {
+        return textureUnitIndex >= 0 && textureUnitIndex < maxCombinedTextureUnits();
+    }
+
+    private static int maxCombinedTextureUnits() {
+        if (maxCombinedTextureUnits < 0) {
+            maxCombinedTextureUnits = GL11.glGetInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+            if (maxCombinedTextureUnits <= 0) {
+                maxCombinedTextureUnits = 32;
+            }
+        }
+        return maxCombinedTextureUnits;
+    }
+
+    public static void restoreDefaultTextureUnit() {
+        GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+    }
+
+    private static int fallbackBlackTexture() {
+        if (fallbackBlackTexture != -1) {
+            return fallbackBlackTexture;
+        }
+
+        fallbackBlackTexture = createFallbackTexture((byte) 0, (byte) 0, (byte) 0, (byte) 255);
+        return fallbackBlackTexture;
+    }
+
+    private static int fallbackNormalTexture() {
+        if (fallbackNormalTexture != -1) {
+            return fallbackNormalTexture;
+        }
+
+        fallbackNormalTexture = createFallbackTexture((byte) 128, (byte) 128, (byte) 255, (byte) 255);
+        return fallbackNormalTexture;
+    }
+
+    private static int fallbackSpecularTexture() {
+        if (fallbackSpecularTexture != -1) {
+            return fallbackSpecularTexture;
+        }
+
+        fallbackSpecularTexture = createFallbackTexture((byte) 0, (byte) 0, (byte) 0, (byte) 255);
+        return fallbackSpecularTexture;
+    }
+
+    private static int createFallbackTexture(byte r, byte g, byte b, byte a) {
+        int texture = GL11.glGenTextures();
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+        ByteBuffer pixel = org.lwjgl.BufferUtils.createByteBuffer(4);
+        pixel.put(r).put(g).put(b).put(a).flip();
+        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, 1, 1, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
+        return texture;
+    }
+}

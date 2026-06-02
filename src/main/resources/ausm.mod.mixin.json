@@ -1,0 +1,41 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.l.ausm.impl.mixin",
+  "refmap": "ausm.refmap.json",
+  "compatibilityLevel": "JAVA_8",
+  "mixins": [
+    "gui.GuiVideoSettingsMixin",
+    "pipeline.EntityRendererAccessor",
+    "pipeline.EntityRendererMixin",
+    "pipeline.FramebufferMixin",
+    "pipeline.GuiContainerMixin",
+    "pipeline.GuiIngameMixin",
+    "pipeline.GuiScreenMixin",
+    "pipeline.ItemRendererMixin",
+    "pipeline.LayerArmorBaseMixin",
+    "pipeline.LayerSpiderEyesMixin",
+    "pipeline.MinecraftMixin",
+    "pipeline.RenderItemMixin",
+    "pipeline.RenderLightningBoltMixin",
+    "pipeline.RenderMixin",
+    "pipeline.RenderManagerMixin",
+    "pipeline.RenderGlobalAccessor",
+    "pipeline.RenderSkyMixin",
+    "pipeline.TileEntityBeaconRendererMixin",
+    "pipeline.TileEntityRendererDispatcherMixin",
+    "pipeline.AmbientOcclusionFaceMixin",
+    "pipeline.BlockModelRendererMixin",
+    "pipeline.BlockStateContainerStateImplementationMixin",
+    "pipeline.BlockRendererDispatcherMixin",
+    "pipeline.BufferBuilderMixin",
+    "pipeline.RenderChunkMixin",
+    "pipeline.VertexBufferConsumerMixin",
+    "pipeline.VboRenderListMixin",
+    "pipeline.WorldVertexBufferUploaderMixin"
+  ],
+  "client": [
+  ],
+  "server": [
+  ]
+}

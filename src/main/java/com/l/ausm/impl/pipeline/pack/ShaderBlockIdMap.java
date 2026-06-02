@@ -1,0 +1,351 @@
+package com.l.ausm.impl.pipeline.pack;
+
+import com.l.ausm.api.pipeline.fbo.*;
+import com.l.ausm.api.pipeline.shader.*;
+import com.l.ausm.api.pipeline.pack.*;
+
+import com.l.ausm.impl.MainMod;
+import net.minecraft.block.Block;
+import net.minecraft.block.properties.IProperty;
+import net.minecraft.block.state.IBlockState;
+import net.minecraft.util.ResourceLocation;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+public final class ShaderBlockIdMap {
+
+    private ShaderBlockIdMap() {
+    }
+
+    public static BlockIdRules load(ShaderPack pack, ShaderPackLayout layout) {
+        Map<Block, Integer> blockIds = new LinkedHashMap<>();
+        List<StateRule> stateRules = new ArrayList<>();
+        String blockPropertiesPath = layout.rootPath("block.properties");
+        boolean hasBlockProperties = pack.hasResource(blockPropertiesPath);
+        loadFile(pack, blockPropertiesPath, blockIds, stateRules);
+        if (!hasBlockProperties) {
+            addLegacyDefaults(blockIds);
+        } else {
+            addPackCompatibilityAliases(blockIds);
+        }
+        return new BlockIdRules(Map.copyOf(blockIds), List.copyOf(stateRules));
+    }
+
+    private static void addLegacyDefaults(Map<Block, Integer> blockIds) {
+        addLegacyBlockId(blockIds, 1, "stone");
+        addLegacyBlockId(blockIds, 2, "grass");
+        addLegacyBlockId(blockIds, 4, "cobblestone");
+        addLegacyBlockId(blockIds, 50, "torch", "redstone_torch", "unlit_redstone_torch");
+        addLegacyBlockId(blockIds, 89, "glowstone");
+        addLegacyBlockId(blockIds, 124, "redstone_lamp", "lit_redstone_lamp");
+        addLegacyBlockId(blockIds, 12, "sand");
+        addLegacyBlockId(blockIds, 24, "sandstone");
+        addLegacyBlockId(blockIds, 41, "gold_block");
+        addLegacyBlockId(blockIds, 42, "iron_block");
+        addLegacyBlockId(blockIds, 57, "diamond_block");
+        addLegacyBlockId(blockIds, -123, "emerald_block");
+        addLegacyBlockId(blockIds, 35, "wool");
+        addLegacyBlockId(blockIds, 9, "water", "flowing_water");
+        addLegacyBlockId(blockIds, 11, "lava", "flowing_lava");
+        addLegacyBlockId(blockIds, 79, "ice");
+        addLegacyBlockId(blockIds, 18, "leaves", "leaves2");
+        addLegacyBlockId(blockIds, 95, "stained_glass");
+        addLegacyBlockId(blockIds, 160, "stained_glass_pane");
+        addLegacyBlockId(blockIds, 31, "tallgrass");
+        addLegacyBlockId(blockIds, 59, "wheat", "carrots", "potatoes");
+        addLegacyBlockId(blockIds, 37, "yellow_flower", "red_flower");
+        addLegacyBlockId(blockIds, 175, "double_plant");
+        addLegacyBlockId(blockIds, 51, "fire");
+        addLegacyBlockId(blockIds, 111, "waterlily");
+    }
+
+    private static void addLegacyBlockId(Map<Block, Integer> blockIds, int id, String... names) {
+        for (String name : names) {
+            Block block = Block.REGISTRY.getObject(new ResourceLocation("minecraft", name));
+            if (block != null) {
+                blockIds.putIfAbsent(block, id);
+            }
+        }
+    }
+
+    private static void addPackCompatibilityAliases(Map<Block, Integer> blockIds) {
+        Block portal = Block.REGISTRY.getObject(new ResourceLocation("minecraft", "portal"));
+        if (portal == null || blockIds.containsKey(portal) || !blockIds.containsValue(10090)) {
+            return;
+        }
+
+        blockIds.put(portal, 10090);
+    }
+
+    private static void loadFile(ShaderPack pack, String path, Map<Block, Integer> blockIds, List<StateRule> stateRules) {
+        if (!pack.hasResource(path)) {
+            return;
+        }
+
+        try (InputStream stream = pack.getResourceAsStream(path)) {
+            if (stream == null) {
+                return;
+            }
+
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                Deque<ConditionFrame> conditions = new ArrayDeque<>();
+                boolean enabled = true;
+                StringBuilder continuedLine = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String trimmed = mergeContinuation(continuedLine, line);
+                    if (trimmed == null) {
+                        continue;
+                    }
+
+                    if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                        if (trimmed.startsWith("#if ")) {
+                            boolean condition = evaluateCondition(trimmed.substring("#if ".length()).trim());
+                            conditions.push(new ConditionFrame(enabled, condition));
+                            enabled = enabled && condition;
+                        } else if (trimmed.startsWith("#elif ")) {
+                            if (!conditions.isEmpty()) {
+                                ConditionFrame frame = conditions.pop();
+                                boolean condition = !frame.branchTaken() && evaluateCondition(trimmed.substring("#elif ".length()).trim());
+                                conditions.push(new ConditionFrame(frame.parentEnabled(), frame.branchTaken() || condition));
+                                enabled = frame.parentEnabled() && condition;
+                            }
+                        } else if (trimmed.startsWith("#else")) {
+                            if (!conditions.isEmpty()) {
+                                ConditionFrame frame = conditions.pop();
+                                boolean condition = !frame.branchTaken();
+                                conditions.push(new ConditionFrame(frame.parentEnabled(), true));
+                                enabled = frame.parentEnabled() && condition;
+                            }
+                        } else if (trimmed.startsWith("#endif")) {
+                            if (!conditions.isEmpty()) {
+                                enabled = conditions.pop().parentEnabled();
+                            }
+                        }
+                        continue;
+                    }
+
+                    if (enabled) {
+                        parseBlockLine(trimmed, blockIds, stateRules);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            MainMod.LOGGER.warn("[ShaderBlockIds] Failed to read {}", path, e);
+        }
+    }
+
+    private static boolean evaluateCondition(String expression) {
+        String normalized = expression.replaceAll("\\s+", "");
+        if (normalized.equals("MC_VERSION>=11300")) {
+            return false;
+        }
+        if (normalized.equals("MC_VERSION>=10800")) {
+            return true;
+        }
+        if (normalized.equals("MC_VERSION<11300")) {
+            return true;
+        }
+        return false;
+    }
+
+    private static String mergeContinuation(StringBuilder continuedLine, String line) {
+        String trimmed = line.trim();
+        boolean continues = trimmed.endsWith("\\");
+        if (continues) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1).trim();
+        }
+
+        if (!trimmed.isEmpty()) {
+            if (continuedLine.length() > 0) {
+                continuedLine.append(' ');
+            }
+            continuedLine.append(trimmed);
+        }
+
+        if (continues) {
+            return null;
+        }
+
+        String merged = continuedLine.toString().trim();
+        continuedLine.setLength(0);
+        return merged;
+    }
+
+    private static void parseBlockLine(String line, Map<Block, Integer> blockIds, List<StateRule> stateRules) {
+        int equals = line.indexOf('=');
+        if (equals <= 0) {
+            return;
+        }
+
+        String key = line.substring(0, equals).trim();
+        if (!key.startsWith("block.")) {
+            return;
+        }
+
+        int id;
+        try {
+            id = Integer.parseInt(key.substring("block.".length()));
+        } catch (NumberFormatException e) {
+            return;
+        }
+
+        String values = line.substring(equals + 1);
+        for (String token : values.split("\\s+")) {
+            ParsedBlockToken parsed = parseResource(token);
+            if (parsed == null) {
+                continue;
+            }
+
+            Block block = Block.REGISTRY.getObject(parsed.resource());
+            if (block != null) {
+                if (parsed.hasStatePredicate()) {
+                    stateRules.add(new StateRule(block, parsed.propertyName(), parsed.propertyValue(), id));
+                } else {
+                    blockIds.put(block, id);
+                }
+            }
+
+            for (ResourceLocation alias : legacyAliases(parsed.resource())) {
+                Block aliasBlock = Block.REGISTRY.getObject(alias);
+                if (aliasBlock != null) {
+                    blockIds.put(aliasBlock, id);
+                }
+            }
+        }
+    }
+
+    private static List<ResourceLocation> legacyAliases(ResourceLocation resource) {
+        if (!"minecraft".equals(resource.getNamespace())) {
+            return List.of();
+        }
+
+        return switch (resource.getPath()) {
+            case "grass", "short_grass", "tall_grass", "fern", "large_fern" -> minecraft("tallgrass", "double_plant");
+            case "dead_bush" -> minecraft("deadbush");
+            case "cobweb" -> minecraft("web");
+            case "lily_pad" -> minecraft("waterlily");
+            case "sugar_cane" -> minecraft("reeds");
+            case "dandelion" -> minecraft("yellow_flower");
+            case "poppy", "blue_orchid", "allium", "azure_bluet", "red_tulip", "orange_tulip", "white_tulip", "pink_tulip", "oxeye_daisy" -> minecraft("red_flower");
+            case "sunflower", "lilac", "rose_bush", "peony" -> minecraft("double_plant");
+            case "oak_sapling", "spruce_sapling", "birch_sapling", "jungle_sapling", "acacia_sapling", "dark_oak_sapling" -> minecraft("sapling");
+            case "carrots" -> minecraft("carrots");
+            case "potatoes" -> minecraft("potatoes");
+            case "beetroots" -> minecraft("beetroots");
+            case "nether_wart" -> minecraft("nether_wart");
+            case "chorus_flower" -> minecraft("chorus_flower");
+            case "redstone_ore" -> minecraft("redstone_ore", "lit_redstone_ore");
+            case "glowstone" -> minecraft("glowstone");
+            case "torch" -> minecraft("torch", "redstone_torch", "unlit_redstone_torch");
+            case "water" -> minecraft("water", "flowing_water");
+            case "lava" -> minecraft("lava", "flowing_lava");
+            case "fire" -> minecraft("fire");
+            default -> List.of();
+        };
+    }
+
+    private static List<ResourceLocation> minecraft(String... paths) {
+        return java.util.Arrays.stream(paths)
+                .map(path -> new ResourceLocation("minecraft", path))
+                .toList();
+    }
+
+    private static ParsedBlockToken parseResource(String token) {
+        String trimmed = token.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+
+        String[] parts = trimmed.split(":");
+        if (parts.length == 1) {
+            return new ParsedBlockToken(new ResourceLocation("minecraft", parts[0]), null, null);
+        }
+
+        if (parts.length == 2) {
+            if (isStateSuffix(parts[1])) {
+                return parsedStateToken(new ResourceLocation("minecraft", parts[0]), parts[1]);
+            }
+            if (isMetadataSuffix(parts[1])) {
+                return new ParsedBlockToken(new ResourceLocation("minecraft", parts[0]), null, null);
+            }
+            return new ParsedBlockToken(new ResourceLocation(parts[0], parts[1]), null, null);
+        }
+
+        if (parts[0].isEmpty() || parts[1].isEmpty()) {
+            return null;
+        }
+        ResourceLocation resource = new ResourceLocation(parts[0], parts[1]);
+        if (isStateSuffix(parts[2])) {
+            return parsedStateToken(resource, parts[2]);
+        }
+        return new ParsedBlockToken(resource, null, null);
+    }
+
+    private static ParsedBlockToken parsedStateToken(ResourceLocation resource, String stateSuffix) {
+        int equals = stateSuffix.indexOf('=');
+        if (equals <= 0 || equals >= stateSuffix.length() - 1) {
+            return new ParsedBlockToken(resource, null, null);
+        }
+        return new ParsedBlockToken(resource, stateSuffix.substring(0, equals), stateSuffix.substring(equals + 1));
+    }
+
+    private static boolean isStateSuffix(String value) {
+        return value.indexOf('=') >= 0;
+    }
+
+    private static boolean isMetadataSuffix(String value) {
+        return value.chars().allMatch(Character::isDigit);
+    }
+
+    public record BlockIdRules(Map<Block, Integer> blockIds, List<StateRule> stateRules) {
+        public boolean isEmpty() {
+            return blockIds.isEmpty() && stateRules.isEmpty();
+        }
+
+        public int idFor(IBlockState state) {
+            for (StateRule rule : stateRules) {
+                if (rule.matches(state)) {
+                    return rule.id();
+                }
+            }
+            return blockIds.getOrDefault(state.getBlock(), 0);
+        }
+    }
+
+    public record StateRule(Block block, String propertyName, String propertyValue, int id) {
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        public boolean matches(IBlockState state) {
+            if (state == null || state.getBlock() != block) {
+                return false;
+            }
+
+            for (Map.Entry<IProperty<?>, Comparable<?>> entry : state.getProperties().entrySet()) {
+                IProperty property = entry.getKey();
+                if (property.getName().equals(propertyName)) {
+                    return property.getName(entry.getValue()).equalsIgnoreCase(propertyValue);
+                }
+            }
+            return false;
+        }
+    }
+
+    private record ParsedBlockToken(ResourceLocation resource, String propertyName, String propertyValue) {
+        private boolean hasStatePredicate() {
+            return propertyName != null && propertyValue != null;
+        }
+    }
+
+    private record ConditionFrame(boolean parentEnabled, boolean branchTaken) {
+    }
+}

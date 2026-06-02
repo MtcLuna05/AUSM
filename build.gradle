@@ -1,0 +1,339 @@
+plugins {
+    id 'java'
+    id 'java-library'
+    id 'maven-publish'
+    id 'com.gradleup.shadow' version '9.4.1'
+    id 'org.jetbrains.gradle.plugin.idea-ext' version '1.4.1'
+    id 'xyz.wagyourtail.unimined' version '1.4.18-kappa'
+    id 'net.kyori.blossom' version '2.2.0'
+}
+
+import org.jetbrains.gradle.ext.Gradle
+
+apply from: 'gradle/scripts/helpers.gradle'
+
+// Early Assertions
+assertProperty 'mod_version'
+assertProperty 'root_package'
+assertProperty 'mod_id'
+assertProperty 'mod_name'
+
+assertSubProperties 'use_access_transformer', 'access_transformer_locations'
+assertSubProperties 'is_coremod', 'coremod_includes_mod', 'coremod_plugin_class_name'
+assertSubProperties 'use_asset_mover', 'asset_mover_version'
+
+setDefaultProperty 'generate_sources_jar', true, false
+setDefaultProperty 'generate_javadocs_jar', true, false
+setDefaultProperty 'minecraft_username', true, 'Developer'
+setDefaultProperty 'extra_jvm_args', false, ''
+setDefaultProperty 'jbr_home', false, ''
+setDefaultProperty 'enable_hotswap_helper', false, true
+
+version = propertyString('mod_version')
+group = propertyString('root_package')
+
+base {
+    archivesName = propertyString('mod_id')
+}
+
+ext.resolvePreferredJavaHome = {
+    String configuredHome = propertyString('jbr_home')
+    List<File> candidates = []
+
+    if (configuredHome != null && !configuredHome.trim().isEmpty()) {
+        candidates << file(configuredHome.trim())
+    }
+
+    candidates << file('/usr/lib/jvm/java-25-openjdk')
+
+    File selected = candidates.find { candidate ->
+        File javaBin = new File(candidate, 'bin/java')
+        File releaseFile = new File(candidate, 'release')
+        if (!javaBin.isFile() || !javaBin.canExecute() || !releaseFile.isFile()) {
+            return false
+        }
+
+        String release = releaseFile.text
+        String osArch = System.getProperty('os.arch').toLowerCase(Locale.ROOT)
+        String jdkArch = (release.readLines().find { it.startsWith('OS_ARCH=') } ?: '').toLowerCase(Locale.ROOT)
+
+        boolean hostIsX64 = osArch in ['amd64', 'x86_64']
+        boolean jdkIsX64 = jdkArch.contains('x86_64') || jdkArch.contains('amd64')
+        boolean hostIsArm64 = osArch in ['aarch64', 'arm64']
+        boolean jdkIsArm64 = jdkArch.contains('aarch64') || jdkArch.contains('arm64')
+
+        if ((hostIsX64 && !jdkIsX64) || (hostIsArm64 && !jdkIsArm64)) {
+            logger.warn("Skipping Java runtime at ${candidate}; host architecture is ${osArch}, JDK metadata is ${jdkArch}.")
+            return false
+        }
+
+        return true
+    }
+
+    if (selected == null) {
+        return null
+    }
+
+    return selected
+}
+
+ext.preferredJavaHome = resolvePreferredJavaHome()
+ext.preferredJavaIsJbr = false
+
+if (preferredJavaHome != null) {
+    File releaseFile = new File(preferredJavaHome, 'release')
+    if (releaseFile.isFile()) {
+        preferredJavaIsJbr = releaseFile.text.contains('IMPLEMENTOR="JetBrains')
+    }
+}
+
+if (preferredJavaHome != null) {
+    logger.lifecycle("Using Java runtime for dev tasks: ${preferredJavaHome}")
+} else {
+    logger.warn("No executable JBR/OpenJDK 25 runtime was found; Gradle Java 25 toolchains will be used.")
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    if (propertyBool('generate_sources_jar')) {
+        withSourcesJar()
+    }
+    if (propertyBool('generate_javadocs_jar')) {
+        withJavadocJar()
+    }
+}
+
+configurations {
+    contain
+    implementation.extendsFrom(contain)
+    modCompileOnly
+    compileOnly.extendsFrom(modCompileOnly)
+    modRuntimeOnly
+    runtimeOnly.extendsFrom(modRuntimeOnly)
+}
+
+String remapTaskName = propertyBool('enable_shadow') ? "remapShadowJar" : "remapJar"
+
+unimined.minecraft {
+    version "1.12.2"
+
+    mappings {
+        mcp("stable", "39-1.12")
+    }
+
+    cleanroom {
+        if (propertyBool('use_access_transformer')) {
+            accessTransformer "${rootProject.projectDir}/src/main/resources/${propertyString('access_transformer_locations')}"
+        }
+        loader "0.5.12-alpha"
+        runs.all {
+            if (rootProject.ext.preferredJavaHome != null) {
+                doFirst {
+                    executable = new File(rootProject.ext.preferredJavaHome, 'bin/java').absolutePath
+                }
+            }
+            systemProperty("crl.dev.mixin", "${mod_id}.default.mixin.json,${mod_id}.mod.mixin.json")
+            args += ['--username', minecraft_username]
+            def extraArgs = propertyString('extra_jvm_args')
+            if (extraArgs != null && !extraArgs.trim().isEmpty()) {
+                jvmArgs += extraArgs.split { "\\s+" }.toList()
+            }
+            if (propertyBool('enable_foundation_debug')) {
+                systemProperty("foundation.dump", "true")
+                systemProperty("foundation.verbose", "true")
+            }
+            if (propertyBool('is_coremod')) {
+                systemProperty("fml.coreMods.load", propertyString('coremod_plugin_class_name'))
+            }
+            return
+        }
+    }
+
+    defaultRemapJar = false
+    
+    String jarTaskName = propertyBool('enable_shadow') ? "shadowJar" : "jar"
+    
+    remap(tasks.named(jarTaskName).get()) {
+        mixinRemap {
+            enableBaseMixin()
+            enableMixinExtra()
+        }
+    }
+
+    mods {
+        remap(configurations.modCompileOnly)
+        remap(configurations.modRuntimeOnly)
+    }
+}
+
+tasks.named('runClient').configure {
+    if (propertyBool('enable_hotswap_helper') && rootProject.ext.preferredJavaIsJbr) {
+        jvmArgs += [
+                '-XX:+AllowEnhancedClassRedefinition',
+                '-XX:HotswapAgent=core'
+        ]
+    } else if (propertyBool('enable_hotswap_helper')) {
+        logger.lifecycle("HotSwap helper is enabled, but the selected runClient Java is not JBR; skipping JBR-only VM flags.")
+    }
+}
+
+dependencies {
+    if (propertyBool('use_asset_mover')) {
+        implementation "com.cleanroommc:assetmover:${propertyString('asset_mover_version')}"
+    }
+    if (propertyBool('enable_junit_testing')) {
+        testImplementation 'org.junit.jupiter:junit-jupiter:6.0.3'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+}
+
+apply from: 'gradle/scripts/dependencies.gradle'
+
+processResources {
+    rename '(.+_at.cfg)', 'META-INF/$1'
+}
+
+sourceSets {
+    main {
+        blossom {
+            javaSources {
+                property('mod_id', propertyString('mod_id'))
+                property('mod_name', propertyString('mod_name'))
+                property('mod_version', propertyString('mod_version'))
+                property('package', "${root_package}.${mod_id}")
+            }
+            resources {
+                property('mod_id', propertyString('mod_id'))
+                property('mod_name', propertyString('mod_name'))
+                property('mod_version', propertyString('mod_version'))
+                property('mod_description', propertyString('mod_description'))
+                property('mod_authors', propertyStringList('mod_authors', ',').collect {it.strip()}.join('", "'))
+                property('mod_credits', propertyString('mod_credits'))
+                property('mod_url', propertyString('mod_url'))
+                property('mod_update_json', propertyString('mod_update_json'))
+                property('mod_logo_path', propertyString('mod_logo_path'))
+            }
+        }
+    }
+}
+
+idea {
+    module {
+        inheritOutputDirs = true
+    }
+    project {
+        settings {
+            runConfigurations {
+                '1. Build'(Gradle) {
+                    taskNames = ["build"]
+                }
+                '2. Run Client'(Gradle) {
+                    taskNames = ["runClient"]
+                }
+                '3. Run Server'(Gradle) {
+                    taskNames = ["runServer"]
+                }
+            }
+            compiler.javac {
+                afterEvaluate {
+                    javacAdditionalOptions = '-encoding utf8'
+                    moduleJavacAdditionalOptions = [
+                            (project.name + '.main'): tasks.compileJava.options.compilerArgs.collect { '"' + it + '"' }.join(' ')
+                    ]
+                }
+            }
+        }
+    }
+}
+
+if (!propertyBool('enable_shadow')) {
+    shadowJar.enabled = false
+}
+
+compileJava {
+    sourceCompatibility = targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+    archiveClassifier = 'dev'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    if (configurations.contain.size() > 0) {
+        into('/') {
+            from configurations.contain
+        }
+    }
+    doFirst {
+        manifest {
+            def attribute_map = [:]
+            attribute_map['ModType'] = "CRL"
+            attribute_map['MixinConfigs'] = "${mod_id}.default.mixin.json,${mod_id}.mod.mixin.json"
+            if (configurations.contain.size() > 0) {
+                attribute_map['ContainedDeps'] = configurations.contain.collect { it.name }.join(' ')
+                attribute_map['NonModDeps'] = true
+            }
+            if (propertyBool('is_coremod')) {
+                attribute_map['FMLCorePlugin'] = propertyString('coremod_plugin_class_name')
+                if (propertyBool('coremod_includes_mod')) {
+                    attribute_map['FMLCorePluginContainsFMLMod'] = true
+                }
+            }
+            if (propertyBool('use_access_transformer')) {
+                attribute_map['FMLAT'] = propertyString('access_transformer_locations')
+            }
+            attributes(attribute_map)
+        }
+    }
+    finalizedBy(tasks.named(remapTaskName).get())
+}
+
+
+shadowJar {
+    configurations = [project.configurations.shadow]
+    archiveClassifier = "shadow"
+}
+
+
+tasks.named(remapTaskName).configure {
+    doFirst {
+        logging.captureStandardOutput LogLevel.INFO
+    }
+    doLast {
+        logging.captureStandardOutput LogLevel.QUIET
+    }
+}
+
+compileTestJava {
+    sourceCompatibility = targetCompatibility = JavaVersion.VERSION_21
+}
+
+test {
+    useJUnitPlatform()
+    if (rootProject.ext.preferredJavaHome != null) {
+        doFirst {
+            executable = new File(rootProject.ext.preferredJavaHome, 'bin/java').absolutePath
+        }
+    } else {
+        javaLauncher.set(javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(25)
+        })
+    }
+    if (propertyBool('show_testing_output')) {
+        testLogging {
+            showStandardStreams = true
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+    if (rootProject.ext.preferredJavaHome != null) {
+        options.fork = true
+        options.forkOptions.executable = new File(rootProject.ext.preferredJavaHome, 'bin/javac').absolutePath
+    }
+}
+
+apply from: 'gradle/scripts/publishing.gradle'
+apply from: 'gradle/scripts/extra.gradle'
