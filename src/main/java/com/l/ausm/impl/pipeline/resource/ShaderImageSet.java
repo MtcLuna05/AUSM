@@ -12,6 +12,8 @@ import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL42;
+import org.lwjgl.opengl.GL44;
+import org.lwjgl.opengl.GLContext;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -20,6 +22,7 @@ import java.util.List;
 public final class ShaderImageSet {
     private final List<ShaderImageDirective> images;
     private final List<LoadedImage> loadedImages = new ArrayList<>();
+    private static final ByteBuffer ZERO_CLEAR_VALUE = org.lwjgl.BufferUtils.createByteBuffer(16);
     private int width;
     private int height;
 
@@ -90,13 +93,27 @@ public final class ShaderImageSet {
     public void clearSmallImages() {
         for (LoadedImage image : loadedImages) {
             ShaderImageDirective directive = image.directive();
-            ByteBuffer pixels = image.clearPixels();
-            if (pixels == null) {
+            if (!directive.clear()) {
                 continue;
             }
 
             int pixelFormat = ShaderTextureLoader.pixelFormat(directive.format());
             int pixelType = ShaderTextureLoader.pixelType(directive.pixelType());
+            if (GLContext.getCapabilities().OpenGL44) {
+                ZERO_CLEAR_VALUE.clear();
+                GL44.glClearTexImage(image.textureId(), 0, pixelFormat, pixelType, ZERO_CLEAR_VALUE);
+                int error = GL11.glGetError();
+                if (error != GL11.GL_NO_ERROR) {
+                    MainMod.LOGGER.debug("[ShaderImages] GL error clearing image '{}': 0x{}", directive.name(), Integer.toHexString(error));
+                }
+                continue;
+            }
+
+            ByteBuffer pixels = image.clearPixels();
+            if (pixels == null) {
+                continue;
+            }
+
             pixels.clear();
 
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
@@ -198,7 +215,7 @@ public final class ShaderImageSet {
             return null;
         }
         long size = (long) componentCount(pixelFormat) * byteSize(pixelType) * width * Math.max(1, height) * Math.max(1, depth);
-        return size > 0 && size <= 4L * 1024L * 1024L ? clearPixels : null;
+        return size > 0 && size <= 32L * 1024L * 1024L ? clearPixels : null;
     }
 
     private static ByteBuffer zeroPixels(int pixelFormat, int pixelType, int width, int height, int depth) {
