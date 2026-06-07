@@ -1,78 +1,81 @@
-# CleanroomModTemplate
-Mod development template for Cleanroom, uses a custom [Unimined fork](https://github.com/kappa-maintainer/Unimined) ([original](https://github.com/unimined/Unimined))
+# Actually Usable Shader Mod
 
-### WARNING: Custom Unimined Fork
-May have issues, report here or [here](https://github.com/kappa-maintainer/Unimined) when you encountered impossible field names or impossible Scala compiler errors. 
+AUSM is an experimental shader pipeline for Minecraft 1.12.2 on Cleanroom. It aims to make modern shader-pack behavior usable on the 1.12 rendering stack by combining OptiFine-style shader-pack compatibility with an Iris-inspired pipeline model.
 
-## DOs and DON'Ts
-### Choose Branch
-Choose mixin branch if you want to use Mixin.
+The project is not a finished OptiFine replacement yet. Shader-pack compatibility is improving, but visual parity depends on the pack and on the parts of the Iris/OptiFine feature surface that have already been ported.
 
-Use scala and kotlin branch if you want to use those languages. 
+## What It Does
 
-There are 4 branches available:
-- main
-- mixin
-- scala
-- kotlin
+- Loads shader packs from the normal `shaderpacks/` folder as zip files or unpacked folders.
+- Provides an in-game shader-pack screen with apply, refresh, enable/disable, folder open, drag/drop import, preview hiding, and per-pack settings.
+- Saves the selected pack and enabled state in `config/ausm/shaders.properties`.
+- Saves per-pack option overrides in `config/ausm/shader-options/`.
+- Exposes keybinds for opening the shader UI, reloading shaders, and toggling shaders.
+- Backports an Iris-style render-stage model so shader-facing `renderStage` behavior can line up with modern packs where possible.
+- Parses and applies a growing set of OptiFine/Iris shader-pack metadata, including options, profiles, screens, draw buffers, alpha/blend directives, custom textures, render targets, compute metadata, image declarations, and SSBO declarations.
+- Keeps an auditable Iris migration trail in `IRIS_PORTING_LOG.md`.
 
-If you want to use non-main branches, after clicked *Create a new repository* under *Use this template*, check the *Include all branches* checkbox.
+## Requirements
 
-### Running Client or Server
-If you are using IntelliJ, **DO NOT** use the `Minecraft Client` configure with a blue icon. Just use the `2. Run Client` Gradle task.
+- Minecraft 1.12.2
+- Cleanroom Loader, currently developed against `0.5.12-alpha`
+- A Java runtime compatible with the target modpack and Cleanroom setup
+- For development builds: JDK 25 is used by the Gradle toolchain, with Java 21 bytecode targeting in the current build scripts
 
-### Adding Mod Dependencies
-You can find dependencies block in `gradle/scripts/dependencies.gradle`.
+AUSM is not designed to be installed alongside OptiFine. Both mods target the same shader/rendering surface, so running both together should be treated as unsupported unless you are intentionally debugging a conflict.
 
-No more `rfg.deobf()` or `fg.deobf`. You **MUST** add mods by using `modImplementation` or `modRuntimeOnly`, or the game will crash when running.
+## Installation
 
-### Non-Mod Dependencies
-Two new configuration types `contain` and `shadow` are available, check more details in `dependencies.gradle`.
+1. Download `AUSM-latest.jar` from the latest prerelease on GitHub.
+2. Put the jar in the instance `mods/` folder.
+3. Start the game once so AUSM can create `shaderpacks/` and `config/ausm/` if they do not already exist.
+4. Put shader-pack zip files or folders in `shaderpacks/`.
+5. Open the AUSM shader screen in game and select a pack.
 
-### gradle.properties
-Edit gradle.properties and set your modid, mod version, mod name, package, etc.
+Latest build:
+https://github.com/MtcLuna05/AUSM/releases/tag/latest
 
-If you are writing a coremod, remember to set related settings to true.
+## Controls
 
-### Reference Class
-There will be a `Reference` class under your top package.
+Default keybinds are registered under the `AUSM Shaders` category:
 
-This is used to store mod version so you can fill it to `@Mod` annotation.
+| Key | Action |
+| --- | --- |
+| `O` | Open shader configuration |
+| `R` | Reload the selected shader pack |
+| `K` | Toggle shaders on or off |
 
-You should change its location to fit your new package name.
+These can be changed from Minecraft's normal controls menu.
 
-You can find its template under `src/main/java-templates`.
+## Shader Pack Notes
 
-### Mixin
-1. Rename json config file to include your modid. You will need one json per phase (`PRE_INIT`, `DEFAULT`, `MOD`) 
-2. Add your mixin classes there.
-3. Use `IMixinConfigPlugin` to control if certain mixin should be enabled. You can call `Loader.isModLoaded()` for `MOD` phase mixins.
-4. Don't worry about refmap, Unimined will handle it automatically. You can still `disableRefmap()` manually though
+AUSM accepts both folder shader packs and `.zip` shader packs. The selected pack name is persisted, and missing packs automatically fall back to `OFF` instead of leaving the renderer in a stale state.
 
-### Access Transformer
-You **MUST** write AT file in MCP name. It will be remapped back to SRG name in artifact jar.
+Per-pack settings are read from shader-pack metadata and stored separately from the pack itself. This keeps local overrides out of the shader-pack archive and allows the same pack to be reloaded with different option values.
 
-Rename AT file name to your modid before using it. There's an example entry in AT file, remove it if you want to use AT.
+Compatibility is still under active development. If a pack fails to compile, AUSM reports shader compile failures in chat and logs the compile details. Some modern shader-pack features are parsed before they are fully wired into rendering, so a parsed directive does not always imply complete visual support yet.
 
-### Vanilla Source Code with Comments
-Run `genSources` task in gradle. If it didn't work, run again until a file with `-sources.jar` suffix appeared.
+## Development
 
-If you want to `find usage` from vanilla like RFG, just change the scope in IntelliJ settings.
+Build the mod with:
 
-### GitHub Action
-This template comes with three workflows.
+```bash
+./gradlew --no-daemon build
+```
 
-`build.yml` will build and upload artifact for every commit. Useful when you want to provide test builds for debugging.
+The distributable remapped jar is written to `build/libs/` without the `-dev`, `-sources`, or `-javadoc` classifier. The development jar is also produced and uses the `-dev` classifier.
 
-`release.yml` will make a GitHub release if you pushed a git tag.
+Useful Gradle tasks:
 
-`release-to-cf-mr.yml` can publish your mod to CurseForge and/or Modrinth.
+| Task | Purpose |
+| --- | --- |
+| `build` | Compile, remap, test, and assemble jars |
+| `runClient` | Launch a development client |
+| `runServer` | Launch a development server |
+| `genSources` | Generate Minecraft sources for IDE navigation |
 
-You need to fill in your project IDs and configure your tokens in GitHub repository first.
+The repository uses GitHub Actions to build every push to `master`, upload an `AUSM-latest` artifact, and recreate the `latest` prerelease with `AUSM-latest.jar` attached.
 
-By default, you will need to manually trigger the workflow in web page, but you can also enable tag triggering by merging the third yml into `release.yml`.
+## Repository Hygiene
 
-### Credit
-Thanks @Karnatour for fixing shadow plugin
-
-Thanks @ghostflyby for making kotlin branch
+This repository intentionally does not include decompiled OptiFine source or extracted OptiFine patch trees. Shader-pack compatibility work should be implemented as original AUSM code, documented porting notes, or narrow references that can be audited in `IRIS_PORTING_LOG.md`.
