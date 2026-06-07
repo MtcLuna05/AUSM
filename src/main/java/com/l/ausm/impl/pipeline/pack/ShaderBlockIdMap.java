@@ -37,6 +37,7 @@ public final class ShaderBlockIdMap {
             addLegacyDefaults(blockIds);
         } else {
             addPackCompatibilityAliases(blockIds);
+            addLegacyColorStateRules(blockIds, stateRules);
         }
         return new BlockIdRules(Map.copyOf(blockIds), List.copyOf(stateRules));
     }
@@ -85,6 +86,40 @@ public final class ShaderBlockIdMap {
         }
 
         blockIds.put(portal, 10090);
+    }
+
+    private static void addLegacyColorStateRules(Map<Block, Integer> blockIds, List<StateRule> stateRules) {
+        addLegacyDyeColorRules(blockIds, stateRules, "stained_glass", 31000);
+        addLegacyDyeColorRules(blockIds, stateRules, "stained_glass_pane", 31001);
+    }
+
+    private static void addLegacyDyeColorRules(Map<Block, Integer> blockIds, List<StateRule> stateRules, String blockName, int baseId) {
+        Block block = Block.REGISTRY.getObject(new ResourceLocation("minecraft", blockName));
+        if (block == null) {
+            return;
+        }
+
+        String[] colors = {
+                "white",
+                "orange",
+                "magenta",
+                "light_blue",
+                "yellow",
+                "lime",
+                "pink",
+                "gray",
+                "silver",
+                "cyan",
+                "purple",
+                "blue",
+                "brown",
+                "green",
+                "red",
+                "black"
+        };
+        for (int i = 0; i < colors.length; i++) {
+            stateRules.add(new StateRule(block, "color", colors[i], baseId + i * 2));
+        }
     }
 
     private static void loadFile(ShaderPack pack, String path, Map<Block, Integer> blockIds, List<StateRule> stateRules) {

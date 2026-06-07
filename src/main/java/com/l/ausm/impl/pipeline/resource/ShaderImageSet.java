@@ -144,7 +144,13 @@ public final class ShaderImageSet {
             }
         }
         if (!loadedImages.isEmpty()) {
-            MainMod.LOGGER.debug("[ShaderImages] Allocated {} custom image textures", loadedImages.size());
+            MainMod.LOGGER.debug(
+                    "[ShaderImages] Allocated {} custom image textures: {}",
+                    loadedImages.size(),
+                    loadedImages.stream()
+                            .map(image -> image.directive().name() + "=" + image.width() + "x" + image.height() + "x" + image.depth())
+                            .toList()
+            );
         }
     }
 

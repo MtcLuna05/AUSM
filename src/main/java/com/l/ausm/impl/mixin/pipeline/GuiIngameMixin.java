@@ -4,6 +4,7 @@ import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
+import com.l.ausm.impl.client.ShaderCompileNotifications;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.client.gui.GuiIngame;
 import net.minecraft.client.gui.ScaledResolution;
@@ -29,6 +30,7 @@ public class GuiIngameMixin {
     @Inject(method = "renderGameOverlay(F)V", at = @At("RETURN"))
     private void ausm$afterGameOverlay(float partialTicks, CallbackInfo ci) {
         PipelineContext.getInstance().finishGuiRendering();
+        ShaderCompileNotifications.renderOverlay(new ScaledResolution(net.minecraft.client.Minecraft.getMinecraft()));
     }
 
     @Inject(

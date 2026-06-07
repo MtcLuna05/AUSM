@@ -5,6 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.client.ShaderCompileNotifications;
 import com.l.ausm.impl.pipeline.pack.ShaderPack;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
 import com.l.ausm.impl.pipeline.pack.ShaderPreprocessor;
@@ -119,6 +120,8 @@ public class ShaderCompiler {
             if (OpenGlHelper.glGetShaderi(shaderId, OpenGlHelper.GL_COMPILE_STATUS) == 0) {
                 String log = OpenGlHelper.glGetShaderInfoLog(shaderId, 32768);
                 MainMod.LOGGER.error("[ShaderCompiler] Failed to compile shader '{}': {}", resourcePath, log);
+                ShaderSourceDumper.dumpFailedSource(resourcePath, source);
+                ShaderCompileNotifications.reportFailure(resourcePath);
                 OpenGlHelper.glDeleteShader(shaderId);
                 return -1;
             }
@@ -127,6 +130,7 @@ public class ShaderCompiler {
             return shaderId;
         } catch (IOException e) {
             MainMod.LOGGER.error("[ShaderCompiler] Error reading shader file '{}'", resourcePath, e);
+            ShaderCompileNotifications.reportFailure(resourcePath);
             return -1;
         }
     }
@@ -145,6 +149,8 @@ public class ShaderCompiler {
         if (OpenGlHelper.glGetShaderi(shaderId, OpenGlHelper.GL_COMPILE_STATUS) == 0) {
             String log = OpenGlHelper.glGetShaderInfoLog(shaderId, 32768);
             MainMod.LOGGER.error("[ShaderCompiler] Failed to compile inline shader '{}': {}", name, log);
+            ShaderSourceDumper.dumpFailedSource(name, processed);
+            ShaderCompileNotifications.reportFailure(name);
             OpenGlHelper.glDeleteShader(shaderId);
             return -1;
         }

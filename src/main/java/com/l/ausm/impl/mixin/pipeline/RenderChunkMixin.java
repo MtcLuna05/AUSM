@@ -4,6 +4,7 @@ import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import net.minecraft.client.renderer.chunk.RenderChunk;
 import net.minecraft.client.renderer.vertex.VertexFormat;
@@ -20,7 +21,7 @@ public class RenderChunkMixin {
             index = 0
     )
     private VertexFormat ausm$usePipelineVertexBufferFormat(VertexFormat original) {
-        return ExtendedVertexFormats.PIPELINE_BLOCK;
+        return PipelineContext.getInstance().isActive() ? ExtendedVertexFormats.PIPELINE_BLOCK : original;
     }
 
     @ModifyArg(
@@ -29,6 +30,6 @@ public class RenderChunkMixin {
             index = 1
     )
     private VertexFormat ausm$usePipelineBlockFormat(VertexFormat original) {
-        return ExtendedVertexFormats.PIPELINE_BLOCK;
+        return PipelineContext.getInstance().isActive() ? ExtendedVertexFormats.PIPELINE_BLOCK : original;
     }
 }

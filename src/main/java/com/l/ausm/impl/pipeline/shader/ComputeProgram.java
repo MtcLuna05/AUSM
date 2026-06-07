@@ -2,6 +2,8 @@ package com.l.ausm.impl.pipeline.shader;
 
 import com.l.ausm.api.pipeline.shader.ComputeProgramSource;
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.client.ShaderCompileNotifications;
+import com.l.ausm.impl.pipeline.pack.CustomImageSamplerDeclarationTransformStage;
 import com.l.ausm.impl.pipeline.pack.ShaderPack;
 import com.l.ausm.impl.pipeline.pack.ShaderPreprocessor;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
@@ -42,6 +44,7 @@ public final class ComputeProgram {
             if (processed == null || processed.isBlank()) {
                 return null;
             }
+            processed = CustomImageSamplerDeclarationTransformStage.applyTo(processed);
 
             int shader = OpenGlHelper.glCreateShader(GL43.GL_COMPUTE_SHADER);
             GL20.glShaderSource(shader, processed);
@@ -49,6 +52,8 @@ public final class ComputeProgram {
             if (OpenGlHelper.glGetShaderi(shader, OpenGlHelper.GL_COMPILE_STATUS) == 0) {
                 String log = OpenGlHelper.glGetShaderInfoLog(shader, 32768);
                 MainMod.LOGGER.error("[ShaderCompiler] Failed to compile compute shader '{}': {}", source.path(), log);
+                ShaderSourceDumper.dumpFailedSource(source.path(), processed);
+                ShaderCompileNotifications.reportFailure(source.path());
                 OpenGlHelper.glDeleteShader(shader);
                 return null;
             }
@@ -59,6 +64,7 @@ public final class ComputeProgram {
                 program.delete();
                 OpenGlHelper.glDeleteShader(shader);
                 MainMod.LOGGER.error("[ShaderCompiler] Failed to link compute program '{}'", source.name());
+                ShaderCompileNotifications.reportFailure(source.path());
                 return null;
             }
 
@@ -80,6 +86,7 @@ public final class ComputeProgram {
             return new ComputeProgram(source, program, workGroups, workGroupRelative);
         } catch (IOException e) {
             MainMod.LOGGER.error("[ShaderCompiler] Error reading compute shader '{}'", source.path(), e);
+            ShaderCompileNotifications.reportFailure(source.path());
             return null;
         }
     }
@@ -231,22 +238,98 @@ public final class ComputeProgram {
 
     private static boolean evaluateCondition(String expression, Map<String, String> defines) {
         String normalized = expression.replaceAll("\\s+", "");
-        Matcher equality = Pattern.compile("([A-Za-z_][A-Za-z0-9_]*)==(-?\\d+)").matcher(normalized);
-        if (equality.matches()) {
-            return equality.group(2).equals(defines.get(equality.group(1)));
+        while (normalized.startsWith("(") && normalized.endsWith(")") && balancedParentheses(normalized.substring(1, normalized.length() - 1))) {
+            normalized = normalized.substring(1, normalized.length() - 1);
         }
-        Matcher inequality = Pattern.compile("([A-Za-z_][A-Za-z0-9_]*)!=(-?\\d+)").matcher(normalized);
-        if (inequality.matches()) {
-            return !inequality.group(2).equals(defines.get(inequality.group(1)));
+        if (normalized.startsWith("!")) {
+            return !evaluateCondition(normalized.substring(1), defines);
+        }
+        int orIndex = findTopLevelOperator(normalized, "||");
+        if (orIndex >= 0) {
+            return evaluateCondition(normalized.substring(0, orIndex), defines)
+                    || evaluateCondition(normalized.substring(orIndex + 2), defines);
+        }
+        int andIndex = findTopLevelOperator(normalized, "&&");
+        if (andIndex >= 0) {
+            return evaluateCondition(normalized.substring(0, andIndex), defines)
+                    && evaluateCondition(normalized.substring(andIndex + 2), defines);
+        }
+        Matcher equality = Pattern.compile("([A-Za-z_][A-Za-z0-9_]*)(==|!=|>=|<=|>|<)(-?\\d+)").matcher(normalized);
+        if (equality.matches()) {
+            Integer left = intValue(resolveValue(equality.group(1), defines));
+            Integer right = intValue(equality.group(3));
+            if (left == null || right == null) {
+                return false;
+            }
+            return switch (equality.group(2)) {
+                case "==" -> left.equals(right);
+                case "!=" -> !left.equals(right);
+                case ">=" -> left >= right;
+                case "<=" -> left <= right;
+                case ">" -> left > right;
+                case "<" -> left < right;
+                default -> false;
+            };
         }
         Matcher defined = Pattern.compile("defined\\(?([A-Za-z_][A-Za-z0-9_]*)\\)?").matcher(normalized);
         if (defined.matches()) {
             return defines.containsKey(defined.group(1));
         }
         if (defines.containsKey(normalized)) {
-            return booleanValue(defines.get(normalized));
+            return booleanValue(resolveValue(normalized, defines));
         }
         return booleanValue(normalized);
+    }
+
+    private static int findTopLevelOperator(String expression, String operator) {
+        int depth = 0;
+        for (int i = 0; i <= expression.length() - operator.length(); i++) {
+            char c = expression.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth = Math.max(0, depth - 1);
+            } else if (depth == 0 && expression.startsWith(operator, i)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean balancedParentheses(String expression) {
+        int depth = 0;
+        for (int i = 0; i < expression.length(); i++) {
+            char c = expression.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth < 0) {
+                    return false;
+                }
+            }
+        }
+        return depth == 0;
+    }
+
+    private static String resolveValue(String token, Map<String, String> defines) {
+        String value = token;
+        for (int i = 0; i < 8; i++) {
+            String next = defines.get(value);
+            if (next == null || next.equals(value)) {
+                return value;
+            }
+            value = next;
+        }
+        return value;
+    }
+
+    private static Integer intValue(String value) {
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static String stripLineComment(String line) {

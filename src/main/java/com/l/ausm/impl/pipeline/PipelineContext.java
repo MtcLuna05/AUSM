@@ -5,6 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.client.ShaderCompileNotifications;
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.impl.pipeline.fbo.DeferredFramebuffer;
 import com.l.ausm.impl.pipeline.fbo.PingPongManager;
@@ -121,6 +122,7 @@ public class PipelineContext {
     private static final FloatBuffer IRIS_LIGHTMAP_TEXTURE_MATRIX = createIrisLightmapTextureMatrix();
     private static final Pattern CONST_SETTING_PATTERN = Pattern.compile("^\\s*const\\s+\\w+\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*([^;\\s]+).*$");
     private static final Pattern DEFINE_SETTING_PATTERN = Pattern.compile("^\\s*#define\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s+([^/\\s]+))?.*$");
+    private static final boolean NOTHIRIUM_LOADED = classPresent("meldexun.nothirium.mc.renderer.ChunkRenderManager");
 
     private final PingPongManager pingPongManager = new PingPongManager();
     private final IrisLightmapTexture irisLightmapTexture = new IrisLightmapTexture();
@@ -932,6 +934,7 @@ public class PipelineContext {
 
         Minecraft mc = Minecraft.getMinecraft();
         ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
+        ShaderCompileNotifications.beginReload();
         programSet = ShaderProgramSet.load(pack, properties);
         packDirectives = properties.packDirectives().withComputeDirectives(programSet.computeDirectives());
         rebuildFullscreenProgramArrays();
@@ -1024,6 +1027,7 @@ public class PipelineContext {
         isPipelineActive = pingPongManager.isInitialized();
         long loadedProgramCount = programs.values().stream().filter(PipelineProgram::hasOwnProgram).count();
         MainMod.LOGGER.info("[Pipeline] Initialization complete. Pipeline Active: {}, Loaded Programs: {}", isPipelineActive, loadedProgramCount);
+        ShaderCompileNotifications.finishReload(pack.getName());
         if (mc.renderGlobal != null) {
             mc.renderGlobal.loadRenderers();
         }
@@ -2346,13 +2350,15 @@ public class PipelineContext {
             // The 1.12 equivalent is renderChunksMany; leaving it enabled lets the normal
             // camera visibility graph leak into the light-space pass.
             mc.renderChunksMany = false;
-            mc.renderGlobal.setupTerrain(
-                    viewEntity,
-                    partialTicks,
-                    shadowCamera,
-                    nextShadowFrameCount(),
-                    mc.player != null && mc.player.isSpectator()
-            );
+            if (!NOTHIRIUM_LOADED) {
+                mc.renderGlobal.setupTerrain(
+                        viewEntity,
+                        partialTicks,
+                        shadowCamera,
+                        nextShadowFrameCount(),
+                        mc.player != null && mc.player.isSpectator()
+                );
+            }
 
             if (shaderProperties.renderSettings().shadowTerrain()
                     && !hasShadowTerrainCandidates(mc, viewEntity, partialTicks)) {
@@ -2385,7 +2391,9 @@ public class PipelineContext {
                     || shaderProperties.renderSettings().shadowBlockEntities()
                     || shaderProperties.renderSettings().shadowLightBlockEntities()) {
                 beginPhase(WorldRenderingPhase.ENTITIES);
-                mc.renderGlobal.renderEntities(viewEntity, shadowCamera, partialTicks);
+                // RenderLib replaces RenderGlobal.renderEntities with a queued renderer
+                // that is only prepared during the normal world pass. The shadow pass
+                // has its own camera, so render entities directly here.
                 renderShadowEntitiesDirect(mc, viewEntity, shadowCamera, partialTicks);
                 endPass();
             }
@@ -2513,6 +2521,9 @@ public class PipelineContext {
 
     private int renderShadowBlockLayer(Minecraft mc, BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
         int count = mc.renderGlobal.renderBlockLayer(layer, partialTicks, 2, viewEntity);
+        if (NOTHIRIUM_LOADED) {
+            return count != 0 ? count : 1;
+        }
         if (count != 0) {
             return count;
         }
@@ -2609,6 +2620,15 @@ public class PipelineContext {
             angle -= 1.0F;
         }
         return angle;
+    }
+
+    private static boolean classPresent(String className) {
+        try {
+            Class.forName(className, false, PipelineContext.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
     }
 
     private ICamera createShadowCamera(Entity viewEntity, float partialTicks) {
@@ -3382,7 +3402,9 @@ public class PipelineContext {
         Map<String, Integer> loadedByPath = new HashMap<>();
         Map<ShaderRawTextureDirective, ShaderTextureLoader.RawTexture> loadedRawTextures = new HashMap<>();
         Map<String, Integer> customUnitsBySampler = new HashMap<>();
+        Set<String> failedTexturePaths = new HashSet<>();
         int[] nextCustomUnit = {com.l.ausm.impl.pipeline.shader.ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT};
+        Minecraft mc = Minecraft.getMinecraft();
 
         for (RenderPass pass : RenderPass.values()) {
             List<LoadedCustomTexture> textures = new ArrayList<>();
@@ -3402,7 +3424,8 @@ public class PipelineContext {
                             directive.resourcePath(),
                             textureUnit,
                             rawTexture.textureId(),
-                            rawTexture.textureTarget()
+                            rawTexture.textureTarget(),
+                            true
                     ));
                 } catch (UncheckedIOException e) {
                     MainMod.LOGGER.warn("[ShaderTextures] Failed to load raw {}", directive.resourcePath(), e.getCause());
@@ -3414,6 +3437,19 @@ public class PipelineContext {
                     textureUnit = customUnitsBySampler.computeIfAbsent(binding.samplerName(), ignored -> nextCustomUnit[0]++);
                 }
 
+                int atlasTexture = minecraftBlockAtlasTexture(mc, binding.resourcePath());
+                if (atlasTexture > 0) {
+                    textures.add(new LoadedCustomTexture(binding.samplerName(), binding.samplerName(), binding.resourcePath(), textureUnit, atlasTexture, GL11.GL_TEXTURE_2D, false));
+                    MainMod.LOGGER.debug(
+                            "[ShaderTextures] Prepared Minecraft block atlas for sampler '{}' on unit {} in pass {} as texture {}",
+                            binding.samplerName(),
+                            textureUnit,
+                            pass.getProgramName(),
+                            atlasTexture
+                    );
+                    continue;
+                }
+
                 try {
                     int textureId = loadedByPath.computeIfAbsent(binding.resourcePath(), path -> {
                         try {
@@ -3422,7 +3458,7 @@ public class PipelineContext {
                             throw new UncheckedIOException(e);
                         }
                     });
-                    textures.add(new LoadedCustomTexture(binding.samplerName(), binding.samplerName(), binding.resourcePath(), textureUnit, textureId, GL11.GL_TEXTURE_2D));
+                    textures.add(new LoadedCustomTexture(binding.samplerName(), binding.samplerName(), binding.resourcePath(), textureUnit, textureId, GL11.GL_TEXTURE_2D, true));
                     MainMod.LOGGER.debug(
                             "[ShaderTextures] Prepared {} for sampler '{}' on unit {} in pass {} as texture {}",
                             binding.resourcePath(),
@@ -3432,13 +3468,33 @@ public class PipelineContext {
                             textureId
                     );
                 } catch (UncheckedIOException e) {
-                    MainMod.LOGGER.warn("[ShaderTextures] Failed to load {}", binding.resourcePath(), e.getCause());
+                    if (failedTexturePaths.add(binding.resourcePath())) {
+                        MainMod.LOGGER.warn("[ShaderTextures] Failed to load {}", binding.resourcePath(), e.getCause());
+                    }
                 }
             }
             if (!textures.isEmpty()) {
                 customTextures.put(pass, List.copyOf(textures));
             }
         }
+    }
+
+    private int minecraftBlockAtlasTexture(Minecraft mc, String resourcePath) {
+        if (mc == null || mc.getTextureManager() == null || !isMinecraftBlockAtlasPath(resourcePath)) {
+            return -1;
+        }
+
+        ITextureObject texture = mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+        if (texture == null) {
+            mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+            texture = mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+        }
+        return texture != null ? texture.getGlTextureId() : -1;
+    }
+
+    private static boolean isMinecraftBlockAtlasPath(String resourcePath) {
+        return "minecraft:textures/atlas/blocks.png".equals(resourcePath)
+                || "shaders/minecraft:textures/atlas/blocks.png".equals(resourcePath);
     }
 
     private void bindCustomTextures(RenderPass pass, ShaderProgram program) {
@@ -3466,13 +3522,14 @@ public class PipelineContext {
     private void deleteCustomTextures() {
         customTextures.values().stream()
                 .flatMap(List::stream)
+                .filter(LoadedCustomTexture::deleteOnCleanup)
                 .mapToInt(LoadedCustomTexture::textureId)
                 .distinct()
                 .forEach(GL11::glDeleteTextures);
         customTextures.clear();
     }
 
-    private record LoadedCustomTexture(String samplerName, String replacementSamplerName, String resourcePath, int textureUnit, int textureId, int textureTarget) {
+    private record LoadedCustomTexture(String samplerName, String replacementSamplerName, String resourcePath, int textureUnit, int textureId, int textureTarget, boolean deleteOnCleanup) {
     }
 
     private static ShaderProperties emptyShaderProperties() {

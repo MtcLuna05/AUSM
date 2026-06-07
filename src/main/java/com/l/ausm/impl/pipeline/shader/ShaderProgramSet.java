@@ -60,11 +60,11 @@ public final class ShaderProgramSet {
                     programId,
                     programId.sourceName(),
                     paths.vertexPath(),
-                    read(pack, paths.vertexPath()),
+                    null,
                     paths.geometryPath(),
-                    read(pack, paths.geometryPath()),
+                    null,
                     paths.fragmentPath(),
-                    read(pack, paths.fragmentPath()),
+                    null,
                     properties.directivesFor(programId)
             ));
         }
@@ -123,15 +123,18 @@ public final class ShaderProgramSet {
         for (int index = 0; index < arrayId.programCount(); index++) {
             String name = arrayId.sourcePrefix() + (index == 0 ? "" : Integer.toString(index));
             String base = layout.rootPath(name);
+            String vertexPath = existingPath(pack, base + ".vsh");
+            String geometryPath = existingPath(pack, base + ".gsh");
+            String fragmentPath = existingPath(pack, base + ".fsh");
             ShaderProgramSource source = new ShaderProgramSource(
                     null,
                     name,
-                    existingPath(pack, base + ".vsh"),
-                    read(pack, existingPath(pack, base + ".vsh")),
-                    existingPath(pack, base + ".gsh"),
-                    read(pack, existingPath(pack, base + ".gsh")),
-                    existingPath(pack, base + ".fsh"),
-                    read(pack, existingPath(pack, base + ".fsh")),
+                    vertexPath,
+                    null,
+                    geometryPath,
+                    null,
+                    fragmentPath,
+                    null,
                     null
             );
             sources.add(source);
@@ -164,15 +167,17 @@ public final class ShaderProgramSet {
             List<ComputeProgramSource> sources,
             String name
     ) {
-        if (properties != null && arrayId != null && !properties.isProgramArrayEnabled(arrayId, name)) {
-            return false;
-        }
-
         String path = resolveComputePath(pack, layout, name);
         if (path == null) {
             return false;
         }
-        String source = read(pack, path);
+        if (properties != null && arrayId != null && !properties.isProgramArrayEnabled(arrayId, name)) {
+            MainMod.LOGGER.debug(
+                    "[ShaderProgramSet] Loading compute '{}' despite matching disabled fullscreen program directive.",
+                    name
+            );
+        }
+        String source = readKnownExisting(pack, path);
         sources.add(new ComputeProgramSource(name, path, source, parseWorkGroups(source), parseWorkGroupRelative(source)));
         return true;
     }
@@ -247,6 +252,13 @@ public final class ShaderProgramSet {
 
     private static String read(ShaderPack pack, String path) {
         if (path == null || !pack.hasResource(path)) {
+            return null;
+        }
+        return readKnownExisting(pack, path);
+    }
+
+    private static String readKnownExisting(ShaderPack pack, String path) {
+        if (path == null) {
             return null;
         }
         try (InputStream stream = pack.getResourceAsStream(path)) {

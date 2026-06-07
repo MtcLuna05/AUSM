@@ -4,6 +4,7 @@ import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
@@ -21,6 +22,10 @@ public class VboRenderListMixin {
 
     @Inject(method = "setupArrayPointers", at = @At("HEAD"), cancellable = true)
     private void ausm$setupPipelineArrayPointers(CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         int stride = ExtendedVertexFormats.PIPELINE_BLOCK.getSize();
 
         GlStateManager.glVertexPointer(3, GL11.GL_FLOAT, stride, 0);

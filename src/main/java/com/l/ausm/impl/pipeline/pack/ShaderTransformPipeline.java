@@ -24,6 +24,7 @@ public final class ShaderTransformPipeline {
             new UnderwaterFogCompatibilityTransformStage(),
             new LegacyIntModuloTransformStage(),
             new ImageStoreCompatibilityTransformStage(),
+            new CustomImageSamplerDeclarationTransformStage(),
             new ComplementaryActDetailCompatibilityTransformStage(),
             new CompatibilityTextureFunctionTransformStage(),
             new MidTexCoordAliasTransformStage()

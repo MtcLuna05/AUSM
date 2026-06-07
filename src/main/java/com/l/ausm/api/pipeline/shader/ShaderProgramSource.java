@@ -44,10 +44,10 @@ public record ShaderProgramSource(
     }
 
     public boolean hasAnyStage() {
-        return vertexSource != null || geometrySource != null || fragmentSource != null;
+        return vertexPath != null || geometryPath != null || fragmentPath != null;
     }
 
     public boolean isValid() {
-        return vertexSource != null && fragmentSource != null;
+        return vertexPath != null && fragmentPath != null;
     }
 }

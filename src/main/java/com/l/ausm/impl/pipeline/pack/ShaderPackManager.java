@@ -40,6 +40,7 @@ public class ShaderPackManager implements ShaderPackController {
     private boolean shadersEnabled = false;
     private boolean pendingPipelineReload = false;
     private int compiledDimensionId = Integer.MIN_VALUE;
+    private String compiledPackName = "OFF";
 
     public ShaderPackManager(Path minecraftRunDir) {
         this.shaderpacksDir = minecraftRunDir.resolve("shaderpacks");
@@ -161,11 +162,22 @@ public class ShaderPackManager implements ShaderPackController {
         }
         this.currentPack = newPack;
         this.currentOptionOverrides = loadOptionOverrides(newPack.getName());
-        clearShaderPropertiesCache();
+        clearShaderPropertiesCacheExcept(newPack.getName());
+
+        if (!shadersEnabled && !newPack.getName().equals("(internal)")) {
+            PipelineContext.getInstance().cleanup();
+            this.compiledDimensionId = Integer.MIN_VALUE;
+            this.compiledPackName = "OFF";
+            this.pendingPipelineReload = true;
+            PipelineContext.getInstance().setActive(false);
+            return;
+        }
         
         // Notify the pipeline to reload and compile shaders
-        PipelineContext.getInstance().initialize(this.currentPack, this.currentOptionOverrides);
+        ShaderProperties properties = getShaderProperties(newPack.getName(), currentOptionOverrides);
+        PipelineContext.getInstance().initialize(this.currentPack, this.currentOptionOverrides, properties);
         this.compiledDimensionId = getClientDimensionId();
+        this.compiledPackName = newPack.getName();
         this.pendingPipelineReload = false;
         PipelineContext.getInstance().setActive(shadersEnabled && !selectedPackName.equals("OFF"));
     }
@@ -272,6 +284,17 @@ public class ShaderPackManager implements ShaderPackController {
             return;
         }
 
+        if (!hasDimensionSpecificResources(currentDimensionId)) {
+            MainMod.LOGGER.debug(
+                    "Shader dimension changed from {} to {}, but shaderpack '{}' has no dimension-specific resources; keeping compiled pipeline.",
+                    compiledDimensionId,
+                    currentDimensionId,
+                    selectedPackName
+            );
+            compiledDimensionId = currentDimensionId;
+            return;
+        }
+
         MainMod.LOGGER.info("Shader dimension changed from {} to {}; recompiling shaderpack '{}'",
                 compiledDimensionId, currentDimensionId, selectedPackName);
         reloadPack();
@@ -291,6 +314,7 @@ public class ShaderPackManager implements ShaderPackController {
             ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
             PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides, properties);
             compiledDimensionId = getClientDimensionId();
+            compiledPackName = currentPack.getName();
             pendingPipelineReload = false;
         }
         PipelineContext.getInstance().setActive(shadersEnabled);
@@ -319,7 +343,8 @@ public class ShaderPackManager implements ShaderPackController {
             return cached;
         }
 
-        ShaderPack pack = openPack(packName);
+        boolean useCurrentPack = isCurrentPack(packName) && currentPack != null && !currentPack.getName().equals("(internal)");
+        ShaderPack pack = useCurrentPack ? currentPack : openPack(packName);
         if (pack == null) {
             return ShaderProperties.load(NoneShaderPack.INSTANCE, Map.of());
         }
@@ -329,10 +354,12 @@ public class ShaderPackManager implements ShaderPackController {
             shaderPropertiesCache.put(cacheKey, properties);
             return properties;
         } finally {
-            try {
-                pack.close();
-            } catch (IOException e) {
-                MainMod.LOGGER.error("Failed to close inspected shaderpack '{}'", packName, e);
+            if (!useCurrentPack) {
+                try {
+                    pack.close();
+                } catch (IOException e) {
+                    MainMod.LOGGER.error("Failed to close inspected shaderpack '{}'", packName, e);
+                }
             }
         }
     }
@@ -373,6 +400,7 @@ public class ShaderPackManager implements ShaderPackController {
             }
             PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides, properties);
             compiledDimensionId = getClientDimensionId();
+            compiledPackName = currentPack.getName();
             pendingPipelineReload = false;
             PipelineContext.getInstance().setActive(true);
         }
@@ -409,6 +437,7 @@ public class ShaderPackManager implements ShaderPackController {
             ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
             PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides, properties);
             compiledDimensionId = getClientDimensionId();
+            compiledPackName = currentPack.getName();
             pendingPipelineReload = false;
             PipelineContext.getInstance().setActive(true);
         }
@@ -462,6 +491,14 @@ public class ShaderPackManager implements ShaderPackController {
         shaderPropertiesCache.clear();
     }
 
+    private void clearShaderPropertiesCacheExcept(String packName) {
+        if (packName == null || packName.isBlank()) {
+            clearShaderPropertiesCache();
+            return;
+        }
+        shaderPropertiesCache.keySet().removeIf(key -> !packName.equals(key.packName()));
+    }
+
     private void saveShaderConfig() {
         Properties properties = new Properties();
         properties.setProperty("selectedPack", selectedPackName == null ? "OFF" : selectedPackName);
@@ -491,6 +528,22 @@ public class ShaderPackManager implements ShaderPackController {
 
         Path packPath = shaderpacksDir.resolve(packName);
         return Files.isDirectory(packPath) || Files.isRegularFile(packPath);
+    }
+
+    private boolean hasDimensionSpecificResources(int dimensionId) {
+        if (currentPack == null || currentPack.getName().equals("(internal)") || !currentPack.getName().equals(compiledPackName)) {
+            return true;
+        }
+        String prefix = ShaderPackLayout.detect(currentPack).rootPath("world" + dimensionId + "/");
+        return currentPack.hasResource(prefix + "shaders.properties")
+                || currentPack.hasResource(prefix + "shader.h")
+                || currentPack.hasResource(prefix + "final.fsh")
+                || currentPack.hasResource(prefix + "composite.fsh")
+                || currentPack.hasResource(prefix + "gbuffers_terrain.vsh")
+                || currentPack.hasResource(prefix + "gbuffers_terrain.fsh")
+                || currentPack.hasResource(prefix + "shadow.vsh")
+                || currentPack.hasResource(prefix + "shadow.fsh")
+                || currentPack.hasResource(prefix + "shadowcomp.csh");
     }
 
     private boolean isValidPackPath(Path path) {

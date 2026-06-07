@@ -28,6 +28,7 @@ setDefaultProperty 'minecraft_username', true, 'Developer'
 setDefaultProperty 'extra_jvm_args', false, ''
 setDefaultProperty 'jbr_home', false, ''
 setDefaultProperty 'enable_hotswap_helper', false, true
+setDefaultProperty 'gpu_offload', false, ''
 
 version = propertyString('mod_version')
 group = propertyString('root_package')
@@ -146,6 +147,26 @@ unimined.minecraft {
             }
             if (propertyBool('is_coremod')) {
                 systemProperty("fml.coreMods.load", propertyString('coremod_plugin_class_name'))
+            }
+            def gpuOffload = propertyString('gpu_offload')
+            if (gpuOffload != null && !gpuOffload.trim().isEmpty()) {
+                switch (gpuOffload.trim().toLowerCase(Locale.ROOT)) {
+                    case 'dri_prime':
+                    case 'mesa':
+                    case 'amd':
+                        environment('DRI_PRIME', '1')
+                        break
+                    case 'nvidia':
+                    case 'prime-run':
+                        environment('DRI_PRIME', '1')
+                        environment('__NV_PRIME_RENDER_OFFLOAD', '1')
+                        environment('__GLX_VENDOR_LIBRARY_NAME', 'nvidia')
+                        environment('__VK_LAYER_NV_optimus', 'NVIDIA_only')
+                        break
+                    default:
+                        logger.warn("Unknown gpu_offload value '${gpuOffload}'. Use 'dri_prime' or 'nvidia'.")
+                        break
+                }
             }
             return
         }
