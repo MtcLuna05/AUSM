@@ -1,33 +1,73 @@
-name: Build mod jar
+name: Build
 
 on:
-  [workflow_dispatch, push]
+  push:
+    branches:
+      - master
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
-
+  jar:
+    name: Build jar
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v6
-    - name: Set up JDK
-      uses: actions/setup-java@v5
-      with:
-        java-version: '25'
-        distribution: 'temurin'
-    - uses: gradle/actions/setup-gradle@v6
-      with:
-        gradle-version: 9.5.1
-      name: Set up Gradle
-    - name: Add permission
-      run: chmod +x ./gradlew
-    - name: Execute Gradle build
-      run: ./gradlew build
-        
-    - name: Upload a Build Artifact
-      uses: actions/upload-artifact@v7
-      with:
-        path: build/libs
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        run: ./gradlew --no-daemon build
+
+      - name: Stage jar
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^mod_version[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
+          mod_id="$(sed -n 's/^mod_id[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
+          short_sha="${GITHUB_SHA::7}"
+          mkdir -p dist
+          jar_path="$(find build/libs -maxdepth 1 -type f -name "${mod_id}-*.jar" ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
+          if [[ -z "${jar_path}" ]]; then
+            jar_path="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
+          fi
+          if [[ -z "${jar_path}" ]]; then
+            echo "No distributable AUSM jar found in build/libs" >&2
+            find build/libs -maxdepth 1 -type f -print >&2 || true
+            exit 1
+          fi
+          cp "${jar_path}" "dist/AUSM-${version}+${short_sha}.jar"
+          cp "${jar_path}" "dist/AUSM-latest.jar"
+
+      - name: Upload latest jar artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AUSM-latest
+          path: dist/AUSM-latest.jar
+          if-no-files-found: error
+
+      - name: Publish latest release jar
+        if: github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" 2>/dev/null || true
+          gh release create latest dist/AUSM-latest.jar \
+            --title "AUSM Latest Build" \
+            --notes "Automated latest jar from master commit ${GITHUB_SHA}." \
+            --prerelease \
+            --target "${GITHUB_SHA}"
