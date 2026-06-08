@@ -7,6 +7,10 @@ import com.l.ausm.api.pipeline.pack.*;
 import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.client.renderer.vertex.VertexFormatElement;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL20;
+
+import java.nio.ByteBuffer;
 
 /**
  * Registry for our extended vertex formats containing shader-specific attributes.
@@ -19,6 +23,7 @@ public class ExtendedVertexFormats {
     public static final int MC_MID_TEX_COORD_ATTRIBUTE = 12;
     public static final int AT_TANGENT_ATTRIBUTE = 13;
     public static final int AT_MID_BLOCK_ATTRIBUTE = 14;
+    private static int maxVertexAttribs = -1;
     public static int PIPELINE_BLOCK_NORMAL_OFFSET;
     public static int PIPELINE_BLOCK_MC_ENTITY_OFFSET;
     public static int PIPELINE_BLOCK_MID_TEX_COORD_OFFSET;
@@ -92,5 +97,40 @@ public class ExtendedVertexFormats {
                 && format.getElementCount() == PIPELINE_ENTITY.getElementCount()
                 && format.getSize() == PIPELINE_ENTITY.getSize()
                 && format.getOffset(format.getElementCount() - 1) == PIPELINE_ENTITY_TANGENT_OFFSET;
+    }
+
+    public static void enableAttribute(int index) {
+        if (isValidAttribute(index)) {
+            GL20.glEnableVertexAttribArray(index);
+        }
+    }
+
+    public static void disableAttribute(int index) {
+        if (isValidAttribute(index)) {
+            GL20.glDisableVertexAttribArray(index);
+        }
+    }
+
+    public static void vertexAttribPointer(int index, int size, int type, boolean normalized, int stride, long offset) {
+        if (isValidAttribute(index)) {
+            GL20.glVertexAttribPointer(index, size, type, normalized, stride, offset);
+        }
+    }
+
+    public static void vertexAttribPointer(int index, int size, int type, boolean normalized, int stride, ByteBuffer buffer) {
+        if (isValidAttribute(index)) {
+            GL20.glVertexAttribPointer(index, size, type, normalized, stride, buffer);
+        }
+    }
+
+    private static boolean isValidAttribute(int index) {
+        return index >= 0 && index < maxVertexAttribs();
+    }
+
+    private static int maxVertexAttribs() {
+        if (maxVertexAttribs < 0) {
+            maxVertexAttribs = Math.max(0, GL11.glGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS));
+        }
+        return maxVertexAttribs;
     }
 }

@@ -6,14 +6,18 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
+import com.l.ausm.impl.pipeline.vertex.IPipelineRenderChunk;
 import net.minecraft.client.renderer.chunk.RenderChunk;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
 
 @Mixin(RenderChunk.class)
-public class RenderChunkMixin {
+public class RenderChunkMixin implements IPipelineRenderChunk {
+    @Unique
+    private boolean ausm$pipelineVertexFormat;
 
     @ModifyArg(
             method = "<init>",
@@ -21,7 +25,9 @@ public class RenderChunkMixin {
             index = 0
     )
     private VertexFormat ausm$usePipelineVertexBufferFormat(VertexFormat original) {
-        return PipelineContext.getInstance().isActive() ? ExtendedVertexFormats.PIPELINE_BLOCK : original;
+        boolean pipelineFormat = PipelineContext.getInstance().isActive();
+        ausm$pipelineVertexFormat = pipelineFormat;
+        return pipelineFormat ? ExtendedVertexFormats.PIPELINE_BLOCK : original;
     }
 
     @ModifyArg(
@@ -30,6 +36,13 @@ public class RenderChunkMixin {
             index = 1
     )
     private VertexFormat ausm$usePipelineBlockFormat(VertexFormat original) {
-        return PipelineContext.getInstance().isActive() ? ExtendedVertexFormats.PIPELINE_BLOCK : original;
+        boolean pipelineFormat = PipelineContext.getInstance().isActive();
+        ausm$pipelineVertexFormat = pipelineFormat;
+        return pipelineFormat ? ExtendedVertexFormats.PIPELINE_BLOCK : original;
+    }
+
+    @Override
+    public boolean ausm$usesPipelineVertexFormat() {
+        return ausm$pipelineVertexFormat;
     }
 }

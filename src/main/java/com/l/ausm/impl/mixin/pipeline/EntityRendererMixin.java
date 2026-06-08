@@ -26,11 +26,36 @@ public class EntityRendererMixin {
     protected void renderRainSnow(float partialTicks) {
     }
 
+    @Inject(
+            method = "updateCameraAndRender(FJ)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/gui/GuiScreen;drawScreen(IIF)V",
+                    shift = At.Shift.BEFORE
+            )
+    )
+    private void onBeforeGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
+        PipelineContext.getInstance().beginGuiRendering();
+    }
+
+    @Inject(
+            method = "updateCameraAndRender(FJ)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/gui/GuiScreen;drawScreen(IIF)V",
+                    shift = At.Shift.AFTER
+            )
+    )
+    private void onAfterGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
+        PipelineContext.getInstance().finishGuiRendering();
+    }
+
     @Inject(method = "renderWorldPass", at = @At("HEAD"))
     private void onRenderWorldPassHead(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         MainMod.getShaderPackManager().reloadIfDimensionChanged();
 
         if (!PipelineContext.getInstance().isActive()) {
+            PipelineContext.getInstance().prepareInactiveVanillaFrame();
             return;
         }
 
@@ -100,6 +125,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterSolidTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().endPass();
         PipelineContext.getInstance().restoreTerrainCulling();
     }
@@ -114,6 +143,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeCutoutMippedTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().applyTerrainCulling(WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED);
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED);
     }
@@ -128,6 +161,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterCutoutMippedTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().endPass();
         PipelineContext.getInstance().restoreTerrainCulling();
     }
@@ -142,6 +179,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeCutoutTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().applyTerrainCulling(WorldRenderingPhase.TERRAIN_CUTOUT);
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.TERRAIN_CUTOUT);
     }
@@ -174,6 +215,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeEntities(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.ENTITIES);
     }
 
@@ -186,6 +231,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterEntities(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().endPass();
     }
 
@@ -198,6 +247,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeLitParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().beginTranslucents();
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.PARTICLES);
     }
@@ -211,6 +264,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterLitParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().endPass();
     }
 
@@ -223,6 +280,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.PARTICLES_TRANSLUCENT);
     }
 
@@ -235,6 +296,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().endPass();
     }
 
@@ -247,6 +312,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeBlockDamage(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.DESTROY);
     }
 
@@ -259,6 +328,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterBlockDamage(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().endPass();
     }
 
@@ -292,6 +365,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterWeather(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().endPass();
         PipelineContext.getInstance().restoreWeatherRenderState();
     }
@@ -336,6 +413,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterTranslucentTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().endPass();
         PipelineContext.getInstance().restoreTerrainCulling();
         PipelineContext.getInstance().restoreWaterRenderState();
@@ -350,6 +431,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeHand(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().beginHand();
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.HAND_SOLID);
     }
@@ -363,6 +448,10 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterHand(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
         PipelineContext.getInstance().endPass();
     }
 

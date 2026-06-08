@@ -9,7 +9,6 @@ import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.WorldVertexBufferUploader;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL20;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -40,8 +39,8 @@ public class WorldVertexBufferUploaderMixin {
         GL11.glNormalPointer(GL11.GL_BYTE, format.getSize(), byteBuffer);
 
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET);
-        GL20.glEnableVertexAttribArray(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
-        GL20.glVertexAttribPointer(
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
+        ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE,
                 2,
                 GL11.GL_FLOAT,
@@ -51,8 +50,8 @@ public class WorldVertexBufferUploaderMixin {
         );
 
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_BLOCK_TANGENT_OFFSET);
-        GL20.glEnableVertexAttribArray(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
-        GL20.glVertexAttribPointer(
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
+        ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE,
                 4,
                 GL11.GL_BYTE,
@@ -62,8 +61,8 @@ public class WorldVertexBufferUploaderMixin {
         );
 
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET);
-        GL20.glEnableVertexAttribArray(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
-        GL20.glVertexAttribPointer(
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
+        ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE,
                 4,
                 GL11.GL_SHORT,
@@ -73,8 +72,8 @@ public class WorldVertexBufferUploaderMixin {
         );
 
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET);
-        GL20.glEnableVertexAttribArray(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
-        GL20.glVertexAttribPointer(
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
+        ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE,
                 4,
                 GL11.GL_BYTE,
@@ -91,10 +90,10 @@ public class WorldVertexBufferUploaderMixin {
     private void ausm$disablePipelineAttributes(BufferBuilder bufferBuilder, CallbackInfo ci) {
         if (ExtendedVertexFormats.isPipelineBlock(bufferBuilder.getVertexFormat()) || ExtendedVertexFormats.isPipelineEntity(bufferBuilder.getVertexFormat())) {
             GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
-            GL20.glDisableVertexAttribArray(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
-            GL20.glDisableVertexAttribArray(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
-            GL20.glDisableVertexAttribArray(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
-            GL20.glDisableVertexAttribArray(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
+            ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
+            ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
+            ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
+            ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
         }
     }
 
@@ -105,8 +104,8 @@ public class WorldVertexBufferUploaderMixin {
         GL11.glNormalPointer(GL11.GL_BYTE, format.getSize(), byteBuffer);
 
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_ENTITY_MC_ENTITY_OFFSET);
-        GL20.glEnableVertexAttribArray(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
-        GL20.glVertexAttribPointer(
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
+        ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE,
                 4,
                 GL11.GL_SHORT,
@@ -116,8 +115,8 @@ public class WorldVertexBufferUploaderMixin {
         );
 
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_ENTITY_MID_TEX_COORD_OFFSET);
-        GL20.glEnableVertexAttribArray(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
-        GL20.glVertexAttribPointer(
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
+        ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE,
                 2,
                 GL11.GL_FLOAT,
@@ -127,8 +126,8 @@ public class WorldVertexBufferUploaderMixin {
         );
 
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_ENTITY_TANGENT_OFFSET);
-        GL20.glEnableVertexAttribArray(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
-        GL20.glVertexAttribPointer(
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
+        ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE,
                 4,
                 GL11.GL_BYTE,

@@ -1,17 +1,26 @@
 name: Releases
 
 on:
-  push:
-    tags:
-      - "*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    if: github.actor == 'MtcLuna05'
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
       - name: Set up JDK
         uses: actions/setup-java@v5
         with:
@@ -30,3 +39,5 @@ jobs:
         with:
           artifacts: "build/libs/*"
           generateReleaseNotes: true
+          tag: ${{ inputs.tag }}
+          commit: ${{ inputs.tag }}

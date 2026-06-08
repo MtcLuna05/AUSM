@@ -6,6 +6,7 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.client.ShaderCompileNotifications;
+import com.l.ausm.impl.client.ShaderLoadingScreen;
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.impl.pipeline.fbo.DeferredFramebuffer;
 import com.l.ausm.impl.pipeline.fbo.PingPongManager;
@@ -49,6 +50,7 @@ import com.l.ausm.impl.pipeline.shader.ShaderMap;
 import com.l.ausm.impl.pipeline.shader.ShaderProgramSet;
 import com.l.ausm.impl.pipeline.shader.ShaderProgram;
 import com.l.ausm.impl.pipeline.shader.UniformRegistry;
+import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.block.Block;
 import net.minecraft.block.material.Material;
@@ -88,6 +90,8 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
+import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL43;
@@ -123,6 +127,7 @@ public class PipelineContext {
     private static final Pattern CONST_SETTING_PATTERN = Pattern.compile("^\\s*const\\s+\\w+\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*([^;\\s]+).*$");
     private static final Pattern DEFINE_SETTING_PATTERN = Pattern.compile("^\\s*#define\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s+([^/\\s]+))?.*$");
     private static final boolean NOTHIRIUM_LOADED = classPresent("meldexun.nothirium.mc.renderer.ChunkRenderManager");
+    private static int maxDrawBuffers = -1;
 
     private final PingPongManager pingPongManager = new PingPongManager();
     private final IrisLightmapTexture irisLightmapTexture = new IrisLightmapTexture();
@@ -197,6 +202,7 @@ public class PipelineContext {
     private boolean renderingGui = false;
     private boolean shadowMapPopulated = false;
     private int guiRenderDepth = 0;
+    private int vanillaRecoveryFrames = 0;
     private final IntBuffer viewportBuffer = org.lwjgl.BufferUtils.createIntBuffer(16);
 
     private PipelineContext() {
@@ -932,104 +938,120 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
-        ShaderCompileNotifications.beginReload();
-        programSet = ShaderProgramSet.load(pack, properties);
-        packDirectives = properties.packDirectives().withComputeDirectives(programSet.computeDirectives());
-        rebuildFullscreenProgramArrays();
-        packDirectives = packDirectives.withCapabilities(
-                ShaderPipelineCapabilities.from(packDirectives)
-                        .withExtraProgramArrayEntries(hasExtraProgramArrayEntries())
-        );
-        ShaderLoadingMap loadingMap = new ShaderLoadingMap();
-        shaderProperties = properties;
-        shadowMapDistance = parseFloatSettingWithComment(pack, properties, "shadowDistance", "SHADOWHPL", 128.0f);
-        shadowDistanceRenderMul = parseFloatSetting(pack, properties, "shadowDistanceRenderMul", -1.0f);
-        shadowIntervalSize = parseFloatSetting(pack, properties, "shadowIntervalSize", 2.0f);
-        sunPathRotation = parseFloatSetting(pack, properties, "sunPathRotation", 0.0f);
-        centerDepthHalfLife = parseFloatSetting(pack, properties, "centerDepthHalflife", 1.0f);
-        eyeBrightnessHalfLife = parseFloatSetting(pack, properties, "eyeBrightnessHalflife", 3.0f);
-        wetnessHalfLife = parseFloatSetting(pack, properties, "wetnessHalflife", 600.0f);
-        drynessHalfLife = parseFloatSetting(pack, properties, "drynessHalflife", 200.0f);
-        shadowPolygonOffset = parseBooleanSetting(pack, properties, "shadowPolygonOffset", true);
-        shadowPolygonOffsetFactor = parseFloatSetting(pack, properties, "shadowPolygonOffsetFactor", 1.1f);
-        shadowPolygonOffsetUnits = parseFloatSetting(pack, properties, "shadowPolygonOffsetUnits", 4.0f);
-        shadowFrameCount = 1_000_000;
-        lastShadowFrameId = -1L;
-        pingPongManager.initialize(mc.displayWidth, mc.displayHeight, packDirectives.renderTargets());
-        initializeBlankShadowFramebuffer(pack, properties);
-        MainMod.LOGGER.debug(
-                "[Pipeline] Shadow config: framebuffer={} distance={} renderMul={} interval={} sunPathRotation={} hardwareFiltering={} tex0Nearest={} tex1Nearest={} polygonOffset={} factor={} units={}",
-                shadowFramebuffer != null ? shadowFramebuffer.resolution() : 0,
-                shadowMapDistance,
-                shadowDistanceRenderMul,
-                shadowIntervalSize,
-                sunPathRotation,
-                packDirectives.renderTargets().shadowHardwareFiltering(),
-                packDirectives.renderTargets().shadowDepthNearest(0),
-                packDirectives.renderTargets().shadowDepthNearest(1),
-                shadowPolygonOffset,
-                shadowPolygonOffsetFactor,
-                shadowPolygonOffsetUnits
-        );
-        if (isMakeUpPack()) {
-            MainMod.LOGGER.debug(
-                    "[Pipeline] MakeUp shadow settings detail: shadowDistance={} option={} activeConst={} shadowDistanceRenderMul={} activeConst={} shadowIntervalSize={} option={} activeConst={}",
-                    shadowMapDistance,
-                    optionValue(properties, "shadowDistance"),
-                    activeConstSetting(pack, properties, "shadowDistance"),
-                    shadowDistanceRenderMul,
-                    activeConstSetting(pack, properties, "shadowDistanceRenderMul"),
-                    shadowIntervalSize,
-                    optionValue(properties, "shadowIntervalSize"),
-                    activeConstSetting(pack, properties, "shadowIntervalSize")
+        ShaderLoadingScreen.begin(pack.getName(), 12);
+        try {
+            Minecraft mc = Minecraft.getMinecraft();
+            ShaderLoadingScreen.step("Loading shader properties");
+            ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
+            ShaderCompileNotifications.beginReload();
+            ShaderLoadingScreen.step("Scanning shader programs");
+            programSet = ShaderProgramSet.load(pack, properties);
+            packDirectives = properties.packDirectives().withComputeDirectives(programSet.computeDirectives());
+            rebuildFullscreenProgramArrays();
+            packDirectives = packDirectives.withCapabilities(
+                    ShaderPipelineCapabilities.from(packDirectives)
+                            .withExtraProgramArrayEntries(hasExtraProgramArrayEntries())
             );
-        }
-        if (packDirectives.computeDirectives().hasComputes()) {
+            ShaderLoadingScreen.setTotalSteps(shaderLoadingStepCount(properties));
+            ShaderLoadingMap loadingMap = new ShaderLoadingMap();
+            shaderProperties = properties;
+            shadowMapDistance = parseFloatSettingWithComment(pack, properties, "shadowDistance", "SHADOWHPL", 128.0f);
+            shadowDistanceRenderMul = parseFloatSetting(pack, properties, "shadowDistanceRenderMul", -1.0f);
+            shadowIntervalSize = parseFloatSetting(pack, properties, "shadowIntervalSize", 2.0f);
+            sunPathRotation = parseFloatSetting(pack, properties, "sunPathRotation", 0.0f);
+            centerDepthHalfLife = parseFloatSetting(pack, properties, "centerDepthHalflife", 1.0f);
+            eyeBrightnessHalfLife = parseFloatSetting(pack, properties, "eyeBrightnessHalflife", 3.0f);
+            wetnessHalfLife = parseFloatSetting(pack, properties, "wetnessHalflife", 600.0f);
+            drynessHalfLife = parseFloatSetting(pack, properties, "drynessHalflife", 200.0f);
+            shadowPolygonOffset = parseBooleanSetting(pack, properties, "shadowPolygonOffset", true);
+            shadowPolygonOffsetFactor = parseFloatSetting(pack, properties, "shadowPolygonOffsetFactor", 1.1f);
+            shadowPolygonOffsetUnits = parseFloatSetting(pack, properties, "shadowPolygonOffsetUnits", 4.0f);
+            shadowFrameCount = 1_000_000;
+            lastShadowFrameId = -1L;
+            ShaderLoadingScreen.step("Preparing framebuffers");
+            pingPongManager.initialize(mc.displayWidth, mc.displayHeight, packDirectives.renderTargets());
+            initializeBlankShadowFramebuffer(pack, properties);
             MainMod.LOGGER.debug(
-                    "[Pipeline] Loaded compute metadata: arrays={} shadow={} final={}",
-                    packDirectives.computeDirectives().computeArrays().values().stream().mapToInt(List::size).sum(),
-                    packDirectives.computeDirectives().shadowComputes().size(),
-                    packDirectives.computeDirectives().finalComputes().size()
+                    "[Pipeline] Shadow config: framebuffer={} distance={} renderMul={} interval={} sunPathRotation={} hardwareFiltering={} tex0Nearest={} tex1Nearest={} polygonOffset={} factor={} units={}",
+                    shadowFramebuffer != null ? shadowFramebuffer.resolution() : 0,
+                    shadowMapDistance,
+                    shadowDistanceRenderMul,
+                    shadowIntervalSize,
+                    sunPathRotation,
+                    packDirectives.renderTargets().shadowHardwareFiltering(),
+                    packDirectives.renderTargets().shadowDepthNearest(0),
+                    packDirectives.renderTargets().shadowDepthNearest(1),
+                    shadowPolygonOffset,
+                    shadowPolygonOffsetFactor,
+                    shadowPolygonOffsetUnits
+            );
+            if (isMakeUpPack()) {
+                MainMod.LOGGER.debug(
+                        "[Pipeline] MakeUp shadow settings detail: shadowDistance={} option={} activeConst={} shadowDistanceRenderMul={} activeConst={} shadowIntervalSize={} option={} activeConst={}",
+                        shadowMapDistance,
+                        optionValue(properties, "shadowDistance"),
+                        activeConstSetting(pack, properties, "shadowDistance"),
+                        shadowDistanceRenderMul,
+                        activeConstSetting(pack, properties, "shadowDistanceRenderMul"),
+                        shadowIntervalSize,
+                        optionValue(properties, "shadowIntervalSize"),
+                        activeConstSetting(pack, properties, "shadowIntervalSize")
                 );
-        }
-        shaderImages = ShaderImageSet.load(packDirectives.images());
-        shaderImages.resize(mc.displayWidth, mc.displayHeight);
-        shaderStorageBuffers = ShaderStorageBufferSet.load(pack, packDirectives.storageBuffers());
-        shaderStorageBuffers.resize(mc.displayWidth, mc.displayHeight);
-        compileComputePrograms(pack, properties);
-        logRequestedFeaturesAndCapabilities();
-        initializeNoiseTexture(properties);
-        loadCustomTextures(pack, properties);
-        lastPipelineFrameNanos = System.nanoTime() - 1_000_000_000L;
-        currentFrameTime = 1.0f;
-
-        for (RenderPass pass : RenderPass.values()) {
-            PipelineProgram pipelineProgram = new PipelineProgram(pass, programSet.source(pass.programId()).directives());
-            boolean enabled = properties.isProgramEnabled(pass);
-            pipelineProgram.setEnabled(enabled);
-
-            if (enabled) {
-                ShaderProgram program = ShaderCompiler.compilePass(pack, pass, properties, programSet.source(pass.programId()));
-                if (program != null) {
-                    pipelineProgram.setShaderProgram(program);
-                    loadingMap.put(pipelineProgram.shaderKey(), program);
-                    MainMod.LOGGER.debug("[Pipeline] Added program for pass: {}", pass);
-                }
-            } else {
-                MainMod.LOGGER.debug("[Pipeline] Program disabled by properties: {}", pass.getProgramName());
             }
-            programs.put(pass, pipelineProgram);
-        }
-        shaderMap = new ShaderMap(loadingMap);
+            if (packDirectives.computeDirectives().hasComputes()) {
+                MainMod.LOGGER.debug(
+                        "[Pipeline] Loaded compute metadata: arrays={} shadow={} final={}",
+                        packDirectives.computeDirectives().computeArrays().values().stream().mapToInt(List::size).sum(),
+                        packDirectives.computeDirectives().shadowComputes().size(),
+                        packDirectives.computeDirectives().finalComputes().size()
+                    );
+            }
+            ShaderLoadingScreen.step("Preparing shader resources");
+            shaderImages = ShaderImageSet.load(packDirectives.images());
+            shaderImages.resize(mc.displayWidth, mc.displayHeight);
+            shaderStorageBuffers = ShaderStorageBufferSet.load(pack, packDirectives.storageBuffers());
+            shaderStorageBuffers.resize(mc.displayWidth, mc.displayHeight);
+            ShaderLoadingScreen.step("Compiling compute shaders");
+            compileComputePrograms(pack, properties);
+            logRequestedFeaturesAndCapabilities();
+            ShaderLoadingScreen.step("Loading noise texture");
+            initializeNoiseTexture(properties);
+            ShaderLoadingScreen.step("Loading custom textures");
+            loadCustomTextures(pack, properties);
+            lastPipelineFrameNanos = System.nanoTime() - 1_000_000_000L;
+            currentFrameTime = 1.0f;
 
-        isPipelineActive = pingPongManager.isInitialized();
-        long loadedProgramCount = programs.values().stream().filter(PipelineProgram::hasOwnProgram).count();
-        MainMod.LOGGER.info("[Pipeline] Initialization complete. Pipeline Active: {}, Loaded Programs: {}", isPipelineActive, loadedProgramCount);
-        ShaderCompileNotifications.finishReload(pack.getName());
-        if (mc.renderGlobal != null) {
-            mc.renderGlobal.loadRenderers();
+            for (RenderPass pass : RenderPass.values()) {
+                PipelineProgram pipelineProgram = new PipelineProgram(pass, programSet.source(pass.programId()).directives());
+                boolean enabled = properties.isProgramEnabled(pass);
+                pipelineProgram.setEnabled(enabled);
+
+                if (enabled) {
+                    ShaderLoadingScreen.step("Compiling " + pass.getProgramName());
+                    ShaderProgram program = ShaderCompiler.compilePass(pack, pass, properties, programSet.source(pass.programId()));
+                    if (program != null) {
+                        pipelineProgram.setShaderProgram(program);
+                        loadingMap.put(pipelineProgram.shaderKey(), program);
+                        MainMod.LOGGER.debug("[Pipeline] Added program for pass: {}", pass);
+                    }
+                } else {
+                    MainMod.LOGGER.debug("[Pipeline] Program disabled by properties: {}", pass.getProgramName());
+                }
+                programs.put(pass, pipelineProgram);
+            }
+            ShaderLoadingScreen.step("Building shader pipeline");
+            shaderMap = new ShaderMap(loadingMap);
+
+            isPipelineActive = pingPongManager.isInitialized();
+            long loadedProgramCount = programs.values().stream().filter(PipelineProgram::hasOwnProgram).count();
+            MainMod.LOGGER.info("[Pipeline] Initialization complete. Pipeline Active: {}, Loaded Programs: {}", isPipelineActive, loadedProgramCount);
+            ShaderCompileNotifications.finishReload(pack.getName());
+            if (mc.renderGlobal != null) {
+                ShaderLoadingScreen.step("Rebuilding terrain");
+                mc.renderGlobal.loadRenderers();
+            }
+        } finally {
+            ShaderLoadingScreen.finish();
         }
     }
 
@@ -1494,6 +1516,31 @@ public class PipelineContext {
         return fullscreenProgramArrays.values().stream().anyMatch(FullscreenProgramArray::hasExtraPrograms);
     }
 
+    private int shaderLoadingStepCount(ShaderProperties properties) {
+        return 9 + computeProgramSourceCount(packDirectives.computeDirectives()) + enabledProgramCount(properties);
+    }
+
+    private static int computeProgramSourceCount(ShaderComputeDirectives directives) {
+        if (directives == null) {
+            return 0;
+        }
+        int count = directives.shadowComputes().size() + directives.finalComputes().size();
+        for (List<ComputeProgramSource> sources : directives.computeArrays().values()) {
+            count += sources.size();
+        }
+        return count;
+    }
+
+    private static int enabledProgramCount(ShaderProperties properties) {
+        int count = 0;
+        for (RenderPass pass : RenderPass.values()) {
+            if (properties.isProgramEnabled(pass)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     private void compileComputePrograms(ShaderPack pack, ShaderProperties properties) {
         computeProgramArrays.clear();
         for (ProgramArrayId arrayId : ProgramArrayId.values()) {
@@ -1512,6 +1559,7 @@ public class PipelineContext {
         }
         List<ComputeProgram> compiled = new ArrayList<>();
         for (ComputeProgramSource source : sources) {
+            ShaderLoadingScreen.step("Compiling " + source.name());
             ComputeProgram program = ComputeProgram.compile(pack, properties, source);
             if (program != null) {
                 compiled.add(program);
@@ -1820,14 +1868,14 @@ public class PipelineContext {
                 GL11.GL_ONE,
                 GL11.GL_ONE_MINUS_SRC_ALPHA
         );
-        GL30.glEnablei(GL11.GL_BLEND, Attachment.COLOR.getIndex());
-        GL30.glEnablei(GL11.GL_BLEND, Attachment.DEPTH.getIndex());
-        GL30.glDisablei(GL11.GL_BLEND, Attachment.NORMAL.getIndex());
-        GL30.glDisablei(GL11.GL_BLEND, Attachment.COMPOSITE.getIndex());
-        GL30.glDisablei(GL11.GL_BLEND, Attachment.AUX1.getIndex());
-        GL30.glDisablei(GL11.GL_BLEND, Attachment.AUX2.getIndex());
-        GL30.glDisablei(GL11.GL_BLEND, Attachment.AUX3.getIndex());
-        GL30.glDisablei(GL11.GL_BLEND, Attachment.AUX4.getIndex());
+        setIndexedBlend(Attachment.COLOR.getIndex(), true);
+        setIndexedBlend(Attachment.DEPTH.getIndex(), true);
+        setIndexedBlend(Attachment.NORMAL.getIndex(), false);
+        setIndexedBlend(Attachment.COMPOSITE.getIndex(), false);
+        setIndexedBlend(Attachment.AUX1.getIndex(), false);
+        setIndexedBlend(Attachment.AUX2.getIndex(), false);
+        setIndexedBlend(Attachment.AUX3.getIndex(), false);
+        setIndexedBlend(Attachment.AUX4.getIndex(), false);
         // Final passes reconstruct the current water pixel from depthtex0, so
         // water must update the live depth buffer.
         GlStateManager.depthMask(true);
@@ -1837,14 +1885,14 @@ public class PipelineContext {
         if (!isPipelineActive) {
             return;
         }
-        GL30.glEnablei(GL11.GL_BLEND, Attachment.COLOR.getIndex());
-        GL30.glEnablei(GL11.GL_BLEND, Attachment.DEPTH.getIndex());
-        GL30.glEnablei(GL11.GL_BLEND, Attachment.NORMAL.getIndex());
-        GL30.glEnablei(GL11.GL_BLEND, Attachment.COMPOSITE.getIndex());
-        GL30.glEnablei(GL11.GL_BLEND, Attachment.AUX1.getIndex());
-        GL30.glEnablei(GL11.GL_BLEND, Attachment.AUX2.getIndex());
-        GL30.glEnablei(GL11.GL_BLEND, Attachment.AUX3.getIndex());
-        GL30.glEnablei(GL11.GL_BLEND, Attachment.AUX4.getIndex());
+        setIndexedBlend(Attachment.COLOR.getIndex(), true);
+        setIndexedBlend(Attachment.DEPTH.getIndex(), true);
+        setIndexedBlend(Attachment.NORMAL.getIndex(), true);
+        setIndexedBlend(Attachment.COMPOSITE.getIndex(), true);
+        setIndexedBlend(Attachment.AUX1.getIndex(), true);
+        setIndexedBlend(Attachment.AUX2.getIndex(), true);
+        setIndexedBlend(Attachment.AUX3.getIndex(), true);
+        setIndexedBlend(Attachment.AUX4.getIndex(), true);
         GlStateManager.depthMask(true);
     }
 
@@ -2105,12 +2153,15 @@ public class PipelineContext {
     }
 
     private void applyIndexedBlendMode(int drawBufferIndex, ShaderBlendMode blendMode) {
+        if (drawBufferIndex < 0 || drawBufferIndex >= maxDrawBuffers()) {
+            return;
+        }
         if (!blendMode.enabled()) {
-            GL30.glDisablei(GL11.GL_BLEND, drawBufferIndex);
+            setIndexedBlend(drawBufferIndex, false);
             return;
         }
 
-        GL30.glEnablei(GL11.GL_BLEND, drawBufferIndex);
+        setIndexedBlend(drawBufferIndex, true);
         if (GLContext.getCapabilities().OpenGL40 || GLContext.getCapabilities().GL_ARB_draw_buffers_blend) {
             ARBDrawBuffersBlend.glBlendFuncSeparateiARB(
                     drawBufferIndex,
@@ -2267,6 +2318,14 @@ public class PipelineContext {
             previousCameraPosition[1] = (float) y;
             previousCameraPosition[2] = (float) (z + cameraShiftZ);
         }
+    }
+
+    public void prepareInactiveVanillaFrame() {
+        if (isPipelineActive || vanillaRecoveryFrames <= 0) {
+            return;
+        }
+        vanillaRecoveryFrames--;
+        resetPipelineState();
     }
 
     private static double irisCameraShift(double adjusted, double delta, double absoluteAdjusted) {
@@ -2746,8 +2805,8 @@ public class PipelineContext {
     private void restoreVanillaWorldTextureBindings() {
         Minecraft mc = Minecraft.getMinecraft();
         if (mc.entityRenderer != null) {
-            mc.entityRenderer.enableLightmap();
             DynamicTexture lightmapTexture = ((EntityRendererAccessor) mc.entityRenderer).ausm$getLightmapTexture();
+            restoreVanillaLightmapTexture(mc);
             if (lightmapTexture != null) {
                 int irisLightmapTextureId = irisLightmapTexture.updateFrom(lightmapTexture);
                 if (irisLightmapTextureId > 0) {
@@ -3146,6 +3205,7 @@ public class PipelineContext {
         wetnessSmooth = 0.0f;
         wetnessSmoothInitialized = false;
         passStack.clear();
+        vanillaRecoveryFrames = Math.max(vanillaRecoveryFrames, 6);
     }
 
 
@@ -3176,6 +3236,15 @@ public class PipelineContext {
         }
 
         renderingGui = true;
+        bindGuiTarget();
+        prepareGuiState();
+    }
+
+    public void prepareGuiFramebuffer() {
+        if (!isPipelineActive) {
+            return;
+        }
+
         bindGuiTarget();
         prepareGuiState();
     }
@@ -3235,7 +3304,7 @@ public class PipelineContext {
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        GL30.glEnablei(GL11.GL_BLEND, 0);
+        setIndexedBlend(0, true);
     }
 
     public boolean shouldDirectPresentFramebuffer() {
@@ -3351,6 +3420,7 @@ public class PipelineContext {
                 resizeFramebuffer(mc.displayWidth, mc.displayHeight, true);
             }
         } else {
+            vanillaRecoveryFrames = Math.max(vanillaRecoveryFrames, 6);
             resetPipelineState();
         }
         Minecraft mc = Minecraft.getMinecraft();
@@ -3365,15 +3435,19 @@ public class PipelineContext {
         activePhase = WorldRenderingPhase.NONE;
         overridePhase = null;
         worldFrameActive = false;
+        renderingDeferredIngameHud = false;
+        renderingGui = false;
+        guiRenderDepth = 0;
         passStack.clear();
         currentEntityId = 0;
         currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
+        restoreTerrainCulling();
         OpenGlHelper.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        GlStateManager.bindTexture(0);
+        resetShaderResourceBindings();
         GL11.glColorMask(true, true, true, true);
         GL11.glDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
         GlStateManager.enableTexture2D();
         GlStateManager.disableBlend();
@@ -3383,8 +3457,8 @@ public class PipelineContext {
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        for (int i = 0; i < 8; i++) {
-            GL30.glDisablei(GL11.GL_BLEND, i);
+        for (int i = 0; i < maxDrawBuffers(); i++) {
+            setIndexedBlend(i, false);
         }
         GlStateManager.enableDepth();
         GlStateManager.enableAlpha();
@@ -3393,9 +3467,128 @@ public class PipelineContext {
         Minecraft mc = Minecraft.getMinecraft();
         if (mc != null && mc.getFramebuffer() != null) {
             mc.getFramebuffer().bindFramebuffer(false);
+            GL11.glDrawBuffer(mc.getFramebuffer().framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadBuffer(mc.getFramebuffer().framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
         } else {
             OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, 0);
+            GL11.glDrawBuffer(GL11.GL_BACK);
+            GL11.glReadBuffer(GL11.GL_BACK);
         }
+        restoreVanillaTextureBindingsAfterPipeline();
+        refreshVanillaLightmap(mc);
+        TextureBinder.restoreDefaultTextureUnit();
+    }
+
+    private void resetShaderResourceBindings() {
+        TextureBinder.unbindAllTextureTargets();
+        unbindShaderImages();
+        unbindShaderStorageBuffers();
+        disablePipelineVertexAttributes();
+        TextureBinder.restoreDefaultTextureUnit();
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+    }
+
+    private static void setIndexedBlend(int drawBufferIndex, boolean enabled) {
+        if (!GLContext.getCapabilities().OpenGL30 || drawBufferIndex < 0 || drawBufferIndex >= maxDrawBuffers()) {
+            return;
+        }
+        if (enabled) {
+            GL30.glEnablei(GL11.GL_BLEND, drawBufferIndex);
+        } else {
+            GL30.glDisablei(GL11.GL_BLEND, drawBufferIndex);
+        }
+    }
+
+    private static int maxDrawBuffers() {
+        if (maxDrawBuffers < 0) {
+            maxDrawBuffers = GLContext.getCapabilities().OpenGL20
+                    ? Math.max(1, GL11.glGetInteger(GL20.GL_MAX_DRAW_BUFFERS))
+                    : 1;
+        }
+        return maxDrawBuffers;
+    }
+
+    private void restoreVanillaTextureBindingsAfterPipeline() {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null) {
+            TextureBinder.restoreDefaultTextureUnit();
+            GlStateManager.bindTexture(0);
+            return;
+        }
+
+        restoreVanillaLightmapTexture(mc);
+
+        TextureBinder.restoreDefaultTextureUnit();
+            if (mc.getTextureManager() != null) {
+                mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+                ITextureObject atlasTexture = mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+                if (atlasTexture != null) {
+                    GL11.glBindTexture(GL11.GL_TEXTURE_2D, atlasTexture.getGlTextureId());
+                }
+            } else {
+                GlStateManager.bindTexture(0);
+            }
+        TextureBinder.restoreDefaultTextureUnit();
+    }
+
+    private void restoreVanillaLightmapTexture(Minecraft mc) {
+        if (mc.entityRenderer == null) {
+            return;
+        }
+
+        DynamicTexture lightmapTexture = ((EntityRendererAccessor) mc.entityRenderer).ausm$getLightmapTexture();
+        if (mc.world != null) {
+            mc.entityRenderer.enableLightmap();
+        }
+        GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
+        GlStateManager.enableTexture2D();
+        int textureId = lightmapTexture != null ? lightmapTexture.getGlTextureId() : 0;
+        GlStateManager.bindTexture(textureId);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
+        TextureBinder.restoreDefaultTextureUnit();
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+    }
+
+    private void refreshVanillaLightmap(Minecraft mc) {
+        if (mc == null || mc.world == null || mc.entityRenderer == null) {
+            return;
+        }
+        EntityRendererAccessor accessor = (EntityRendererAccessor) mc.entityRenderer;
+        accessor.ausm$setLightmapUpdateNeeded(true);
+        accessor.ausm$updateLightmap(mc.getRenderPartialTicks());
+        restoreVanillaLightmapTexture(mc);
+    }
+
+    private static void unbindShaderImages() {
+        if (!GLContext.getCapabilities().OpenGL42) {
+            return;
+        }
+
+        int maxImageUnits = Math.max(0, GL11.glGetInteger(GL42.GL_MAX_IMAGE_UNITS));
+        for (int unit = 0; unit < maxImageUnits; unit++) {
+            GL42.glBindImageTexture(unit, 0, 0, false, 0, GL15.GL_READ_ONLY, GL11.GL_RGBA8);
+        }
+    }
+
+    private static void unbindShaderStorageBuffers() {
+        if (!GLContext.getCapabilities().OpenGL43) {
+            return;
+        }
+
+        int maxBindings = Math.max(0, GL11.glGetInteger(GL43.GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS));
+        for (int index = 0; index < maxBindings; index++) {
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, index, 0);
+        }
+        GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
+    private static void disablePipelineVertexAttributes() {
+        GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
+        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
+        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
+        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
+        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
     }
 
     private void loadCustomTextures(ShaderPack pack, ShaderProperties properties) {

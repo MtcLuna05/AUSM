@@ -169,7 +169,7 @@ public class ShaderPackManager implements ShaderPackController {
             this.compiledDimensionId = Integer.MIN_VALUE;
             this.compiledPackName = "OFF";
             this.pendingPipelineReload = true;
-            PipelineContext.getInstance().setActive(false);
+            rebuildInactiveVanillaRenderers();
             return;
         }
         
@@ -317,7 +317,15 @@ public class ShaderPackManager implements ShaderPackController {
             compiledPackName = currentPack.getName();
             pendingPipelineReload = false;
         }
-        PipelineContext.getInstance().setActive(shadersEnabled);
+        if (shadersEnabled) {
+            PipelineContext.getInstance().setActive(true);
+        } else {
+            PipelineContext.getInstance().cleanup();
+            compiledDimensionId = Integer.MIN_VALUE;
+            compiledPackName = "OFF";
+            pendingPipelineReload = currentPack != null && !currentPack.getName().equals("(internal)");
+            rebuildInactiveVanillaRenderers();
+        }
     }
 
     public Map<String, String> getCurrentOptionOverrides() {
@@ -395,7 +403,8 @@ public class ShaderPackManager implements ShaderPackController {
             currentOptionOverrides = copy;
             if (!shadersEnabled) {
                 pendingPipelineReload = true;
-                PipelineContext.getInstance().setActive(false);
+                PipelineContext.getInstance().cleanup();
+                rebuildInactiveVanillaRenderers();
                 return;
             }
             PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides, properties);
@@ -431,7 +440,8 @@ public class ShaderPackManager implements ShaderPackController {
             currentOptionOverrides = Map.of();
             if (!shadersEnabled) {
                 pendingPipelineReload = true;
-                PipelineContext.getInstance().setActive(false);
+                PipelineContext.getInstance().cleanup();
+                rebuildInactiveVanillaRenderers();
                 return;
             }
             ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
@@ -441,6 +451,10 @@ public class ShaderPackManager implements ShaderPackController {
             pendingPipelineReload = false;
             PipelineContext.getInstance().setActive(true);
         }
+    }
+
+    private void rebuildInactiveVanillaRenderers() {
+        PipelineContext.getInstance().setActive(false);
     }
 
     private Map<String, String> loadOptionOverrides(String packName) {

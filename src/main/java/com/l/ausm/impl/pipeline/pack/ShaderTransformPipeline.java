@@ -25,6 +25,7 @@ public final class ShaderTransformPipeline {
             new LegacyIntModuloTransformStage(),
             new ImageStoreCompatibilityTransformStage(),
             new CustomImageSamplerDeclarationTransformStage(),
+            new BslBlocklightColorTableTransformStage(),
             new ComplementaryActDetailCompatibilityTransformStage(),
             new CompatibilityTextureFunctionTransformStage(),
             new MidTexCoordAliasTransformStage()

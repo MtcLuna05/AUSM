@@ -3,7 +3,6 @@ package com.l.ausm.impl.pipeline.shader;
 import com.l.ausm.api.pipeline.shader.ComputeProgramSource;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.client.ShaderCompileNotifications;
-import com.l.ausm.impl.pipeline.pack.CustomImageSamplerDeclarationTransformStage;
 import com.l.ausm.impl.pipeline.pack.ShaderPack;
 import com.l.ausm.impl.pipeline.pack.ShaderPreprocessor;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
@@ -44,7 +43,6 @@ public final class ComputeProgram {
             if (processed == null || processed.isBlank()) {
                 return null;
             }
-            processed = CustomImageSamplerDeclarationTransformStage.applyTo(processed);
 
             int shader = OpenGlHelper.glCreateShader(GL43.GL_COMPUTE_SHADER);
             GL20.glShaderSource(shader, processed);
