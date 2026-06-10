@@ -34,8 +34,8 @@ public class GuiSlotShaders {
         this.slotHeight = slotHeight;
         this.shaderPacks = MainMod.getShaderPackManager().getAvailablePacks();
 
-        String currentPackName = MainMod.getShaderPackManager().getCurrentPack().getName();
-        if (currentPackName.equals("(internal)")) {
+        String currentPackName = MainMod.getShaderPackManager().getSelectedPackName();
+        if (currentPackName == null || currentPackName.equals("(internal)")) {
             currentPackName = "OFF";
         }
 

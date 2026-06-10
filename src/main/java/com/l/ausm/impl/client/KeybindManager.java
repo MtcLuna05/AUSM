@@ -7,6 +7,7 @@ import com.l.ausm.api.pipeline.pack.*;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.Reference;
 import com.l.ausm.impl.client.gui.GuiShaders;
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.settings.KeyBinding;
@@ -28,6 +29,7 @@ public class KeybindManager {
     public static KeyBinding openConfig;
     public static KeyBinding reloadShader;
     public static KeyBinding toggleShader;
+    public static KeyBinding forceLightRecalculation;
 
     /**
      * Initializes and registers the keybinds.
@@ -37,10 +39,12 @@ public class KeybindManager {
         openConfig = new KeyBinding("key.ausm.config", Keyboard.KEY_O, CATEGORY);
         reloadShader = new KeyBinding("key.ausm.reload", Keyboard.KEY_R, CATEGORY);
         toggleShader = new KeyBinding("key.ausm.toggle", Keyboard.KEY_K, CATEGORY);
+        forceLightRecalculation = new KeyBinding("key.ausm.force_light_recalculation", Keyboard.KEY_F8, CATEGORY);
 
         ClientRegistry.registerKeyBinding(openConfig);
         ClientRegistry.registerKeyBinding(reloadShader);
         ClientRegistry.registerKeyBinding(toggleShader);
+        ClientRegistry.registerKeyBinding(forceLightRecalculation);
     }
 
     /**
@@ -67,6 +71,16 @@ public class KeybindManager {
 
             String state = manager.areShadersEnabled() ? "Enabled" : "Disabled";
             sendActionBar(state + " shaders: " + displayPackName(manager.getSelectedPackName()));
+        }
+
+        while (forceLightRecalculation.isPressed()) {
+            MainMod.LOGGER.info("Forcing nearby light recalculation...");
+            PipelineContext.LightRecalculationResult result = PipelineContext.getInstance().forceLightRecalculation();
+            if (result.ran()) {
+                sendActionBar("Forced light recalculation: " + result.blockChecks() + " light checks, " + result.chunks() + " chunks");
+            } else {
+                sendActionBar("No loaded world light data to recalculate");
+            }
         }
     }
 

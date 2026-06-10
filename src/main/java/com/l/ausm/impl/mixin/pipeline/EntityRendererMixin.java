@@ -93,7 +93,28 @@ public class EntityRendererMixin {
             return;
         }
 
-        PipelineContext.getInstance().renderShadowMap(partialTicks);
+        PipelineContext.getInstance().ensureVanillaTerrainRenderer();
+        if (PipelineContext.getInstance().shouldRenderShadowMapBeforeTerrainSetup()) {
+            PipelineContext.getInstance().renderShadowMap(partialTicks);
+        }
+    }
+
+    @Inject(
+            method = "renderWorldPass",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;setupTerrain(Lnet/minecraft/entity/Entity;DLnet/minecraft/client/renderer/culling/ICamera;IZ)V",
+                    shift = At.Shift.AFTER
+            )
+    )
+    private void onRenderWorldPassAfterSetupTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (!PipelineContext.getInstance().isActive()) {
+            return;
+        }
+
+        if (PipelineContext.getInstance().shouldRenderShadowMapAfterTerrainSetup()) {
+            PipelineContext.getInstance().renderShadowMap(partialTicks);
+        }
     }
 
     @Inject(
@@ -204,6 +225,9 @@ public class EntityRendererMixin {
         PipelineContext.getInstance().endPass();
         PipelineContext.getInstance().restoreTerrainCulling();
         PipelineContext.getInstance().snapshotOpaqueTerrainDepth();
+        if (PipelineContext.getInstance().shouldRenderShadowMapAfterOpaqueTerrain()) {
+            PipelineContext.getInstance().renderShadowMap(partialTicks);
+        }
     }
 
     @Inject(

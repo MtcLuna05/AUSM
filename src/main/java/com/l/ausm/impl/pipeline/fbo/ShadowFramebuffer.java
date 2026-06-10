@@ -35,6 +35,7 @@ public final class ShadowFramebuffer {
     private final ShaderRenderTargetSettings settings;
     private final IntBuffer viewportBuffer = org.lwjgl.BufferUtils.createIntBuffer(16);
     private final ByteBuffer colorMaskBuffer = org.lwjgl.BufferUtils.createByteBuffer(4);
+    private final FloatBuffer depthReadBuffer = org.lwjgl.BufferUtils.createFloatBuffer(1);
 
     public ShadowFramebuffer(int resolution, ShaderRenderTargetSettings settings) {
         this.resolution = resolution;
@@ -248,6 +249,48 @@ public final class ShadowFramebuffer {
         previous.restore();
     }
 
+    public DepthStats readDepthStats(int samplesPerAxis) {
+        int samples = Math.max(1, samplesPerAxis);
+        SavedFramebufferState previous = saveFramebufferState();
+        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+
+        float center = readDepthAt(resolution / 2, resolution / 2);
+        float min = center;
+        float max = center;
+        int nonClear = center < 0.9999f ? 1 : 0;
+        int total = samples * samples + 1;
+
+        for (int y = 0; y < samples; y++) {
+            int pixelY = samples == 1 ? resolution / 2 : Math.round((resolution - 1) * (y / (float) (samples - 1)));
+            for (int x = 0; x < samples; x++) {
+                int pixelX = samples == 1 ? resolution / 2 : Math.round((resolution - 1) * (x / (float) (samples - 1)));
+                float depth = readDepthAt(pixelX, pixelY);
+                min = Math.min(min, depth);
+                max = Math.max(max, depth);
+                if (depth < 0.9999f) {
+                    nonClear++;
+                }
+            }
+        }
+
+        previous.restore();
+        return new DepthStats(center, min, max, nonClear, total);
+    }
+
+    private float readDepthAt(int x, int y) {
+        depthReadBuffer.clear();
+        GL11.glReadPixels(
+                Math.max(0, Math.min(resolution - 1, x)),
+                Math.max(0, Math.min(resolution - 1, y)),
+                1,
+                1,
+                GL11.GL_DEPTH_COMPONENT,
+                GL11.GL_FLOAT,
+                depthReadBuffer
+        );
+        return depthReadBuffer.get(0);
+    }
+
     private void generateDepthMipmap(int index, int textureId) {
         if (!settings.shadowDepthMipmap(index)) {
             return;
@@ -315,6 +358,9 @@ public final class ShadowFramebuffer {
 
     public int resolution() {
         return resolution;
+    }
+
+    public record DepthStats(float center, float min, float max, int nonClear, int total) {
     }
 
     public void delete() {

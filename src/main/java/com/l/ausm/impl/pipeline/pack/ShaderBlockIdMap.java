@@ -23,6 +23,43 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class ShaderBlockIdMap {
+    private static final ColorAlias[] MINECRAFT_DYE_COLORS = {
+            new ColorAlias("white", 10900),
+            new ColorAlias("orange", 10904),
+            new ColorAlias("magenta", 10920),
+            new ColorAlias("light_blue", 10914),
+            new ColorAlias("yellow", 10906),
+            new ColorAlias("lime", 10908),
+            new ColorAlias("pink", 10922),
+            new ColorAlias("gray", 10900),
+            new ColorAlias("light_gray", 10900),
+            new ColorAlias("cyan", 10912),
+            new ColorAlias("purple", 10918),
+            new ColorAlias("blue", 10916),
+            new ColorAlias("brown", 10904),
+            new ColorAlias("green", 10910),
+            new ColorAlias("red", 10902),
+            new ColorAlias("black", 10900)
+    };
+
+    private static final ColorAlias[] THAUMCRAFT_COLORS = {
+            new ColorAlias("black", 10900),
+            new ColorAlias("blue", 10916),
+            new ColorAlias("brown", 10904),
+            new ColorAlias("cyan", 10912),
+            new ColorAlias("gray", 10900),
+            new ColorAlias("green", 10910),
+            new ColorAlias("lightblue", 10914),
+            new ColorAlias("lime", 10908),
+            new ColorAlias("magenta", 10920),
+            new ColorAlias("orange", 10904),
+            new ColorAlias("pink", 10922),
+            new ColorAlias("purple", 10918),
+            new ColorAlias("red", 10902),
+            new ColorAlias("silver", 10900),
+            new ColorAlias("white", 10900),
+            new ColorAlias("yellow", 10906)
+    };
 
     private ShaderBlockIdMap() {
     }
@@ -38,6 +75,7 @@ public final class ShaderBlockIdMap {
         } else {
             addPackCompatibilityAliases(blockIds);
             addLegacyColorStateRules(blockIds, stateRules);
+            addModdedColoredLightCompatibility(blockIds, stateRules);
         }
         return new BlockIdRules(Map.copyOf(blockIds), List.copyOf(stateRules));
     }
@@ -91,6 +129,38 @@ public final class ShaderBlockIdMap {
     private static void addLegacyColorStateRules(Map<Block, Integer> blockIds, List<StateRule> stateRules) {
         addLegacyDyeColorRules(blockIds, stateRules, "stained_glass", 31000);
         addLegacyDyeColorRules(blockIds, stateRules, "stained_glass_pane", 31001);
+    }
+
+    private static void addModdedColoredLightCompatibility(Map<Block, Integer> blockIds, List<StateRule> stateRules) {
+        for (ColorAlias color : THAUMCRAFT_COLORS) {
+            addBlockAlias(blockIds, "thaumcraft", "candle_" + color.name(), color.materialId());
+            addBlockAlias(blockIds, "thaumcraft", "nitor_" + color.name(), color.materialId());
+        }
+
+        for (ColorAlias color : MINECRAFT_DYE_COLORS) {
+            addLitStateAlias(stateRules, "bewitchment", color.name() + "_candle", color.materialId());
+        }
+
+        // Seared furnace controllers emit colored light through AUSM's CPU voxel injection.
+        // Do not alias the rendered block ID here, or shader packs treat the whole texture as emissive.
+    }
+
+    private static void addBlockAlias(Map<Block, Integer> blockIds, String namespace, String path, int id) {
+        Block block = Block.REGISTRY.getObject(new ResourceLocation(namespace, path));
+        if (block != null) {
+            blockIds.putIfAbsent(block, id);
+        }
+    }
+
+    private static void addLitStateAlias(List<StateRule> stateRules, String namespace, String path, int id) {
+        addStateAlias(stateRules, namespace, path, "lit", "true", id);
+    }
+
+    private static void addStateAlias(List<StateRule> stateRules, String namespace, String path, String propertyName, String propertyValue, int id) {
+        Block block = Block.REGISTRY.getObject(new ResourceLocation(namespace, path));
+        if (block != null) {
+            stateRules.add(new StateRule(block, propertyName, propertyValue, id));
+        }
     }
 
     private static void addLegacyDyeColorRules(Map<Block, Integer> blockIds, List<StateRule> stateRules, String blockName, int baseId) {
@@ -389,5 +459,8 @@ public final class ShaderBlockIdMap {
     }
 
     private record ConditionFrame(boolean parentEnabled, boolean branchTaken) {
+    }
+
+    private record ColorAlias(String name, int materialId) {
     }
 }

@@ -6,6 +6,7 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
 import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.util.ResourceLocation;
 
 import java.io.BufferedReader;
@@ -17,17 +18,108 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class ShaderItemIdMap {
+    private static final ColorAlias[] THAUMCRAFT_COLORS = {
+            new ColorAlias("black", 44024),
+            new ColorAlias("blue", 44077),
+            new ColorAlias("brown", 44071),
+            new ColorAlias("cyan", 44075),
+            new ColorAlias("gray", 44024),
+            new ColorAlias("green", 44074),
+            new ColorAlias("lightblue", 44076),
+            new ColorAlias("lime", 44073),
+            new ColorAlias("magenta", 44079),
+            new ColorAlias("orange", 44071),
+            new ColorAlias("pink", 44080),
+            new ColorAlias("purple", 44078),
+            new ColorAlias("red", 44070),
+            new ColorAlias("silver", 44024),
+            new ColorAlias("white", 44024),
+            new ColorAlias("yellow", 44072)
+    };
 
     private ShaderItemIdMap() {
     }
 
-    public static Map<Integer, Integer> load(ShaderPack pack, ShaderPackLayout layout) {
+    public static ItemIdRules load(ShaderPack pack, ShaderPackLayout layout) {
         Map<Integer, Integer> itemIds = new LinkedHashMap<>();
-        loadFile(pack, layout.rootPath("item.properties"), itemIds);
-        return Map.copyOf(itemIds);
+        Map<ItemMetadataKey, Integer> metadataIds = new LinkedHashMap<>();
+        String itemPropertiesPath = layout.rootPath("item.properties");
+        boolean hasItemProperties = pack.hasResource(itemPropertiesPath);
+        loadFile(pack, itemPropertiesPath, itemIds, metadataIds);
+        if (hasItemProperties) {
+            addCompatibilityAliases(itemIds, metadataIds);
+        }
+        return new ItemIdRules(Map.copyOf(itemIds), Map.copyOf(metadataIds));
     }
 
-    private static void loadFile(ShaderPack pack, String path, Map<Integer, Integer> itemIds) {
+    private static void addCompatibilityAliases(Map<Integer, Integer> itemIds, Map<ItemMetadataKey, Integer> metadataIds) {
+        addProjectRedIlluminationAliases(metadataIds);
+        addThaumcraftLightAliases(itemIds, metadataIds);
+    }
+
+    private static void addProjectRedIlluminationAliases(Map<ItemMetadataKey, Integer> metadataIds) {
+        addDyeMetadataAliases(metadataIds, "projectred-illumination", "lamp", 0, 15);
+        addDyeMetadataAliases(metadataIds, "projectred-illumination", "lamp", 16, 31);
+        addDyeMetadataAliases(metadataIds, "projectred-illumination", "fixture_light", 0, 15);
+        addDyeMetadataAliases(metadataIds, "projectred-illumination", "inverted_fixture_light", 0, 15);
+        addDyeMetadataAliases(metadataIds, "projectred-illumination", "lantern", 0, 15);
+        addDyeMetadataAliases(metadataIds, "projectred-illumination", "inverted_lantern", 0, 15);
+        addDyeMetadataAliases(metadataIds, "projectred-illumination", "cage_lamp", 0, 15);
+        addDyeMetadataAliases(metadataIds, "projectred-illumination", "inverted_cage_lamp", 0, 15);
+        addDyeMetadataAliases(metadataIds, "projectred-illumination", "fallout_lamp", 0, 15);
+        addDyeMetadataAliases(metadataIds, "projectred-illumination", "inverted_fallout_lamp", 0, 15);
+    }
+
+    private static void addThaumcraftLightAliases(Map<Integer, Integer> itemIds, Map<ItemMetadataKey, Integer> metadataIds) {
+        addThaumcraftColorAliases(itemIds, "candle");
+        addThaumcraftColorAliases(itemIds, "nitor");
+        addDyeMetadataAliases(metadataIds, "thaumcraft", "candle", 0, 15);
+        addDyeMetadataAliases(metadataIds, "thaumcraft", "nitor", 0, 15);
+    }
+
+    private static void addThaumcraftColorAliases(Map<Integer, Integer> itemIds, String prefix) {
+        for (ColorAlias color : THAUMCRAFT_COLORS) {
+            addItemAlias(itemIds, "thaumcraft", prefix + "_" + color.name(), color.itemId());
+        }
+    }
+
+    private static void addDyeMetadataAliases(Map<ItemMetadataKey, Integer> metadataIds, String namespace, String path, int firstMetadata, int lastMetadata) {
+        Item item = Item.REGISTRY.getObject(new ResourceLocation(namespace, path));
+        if (item == null) {
+            return;
+        }
+
+        int itemId = Item.getIdFromItem(item);
+        for (int metadata = firstMetadata; metadata <= lastMetadata; metadata++) {
+            metadataIds.putIfAbsent(new ItemMetadataKey(itemId, metadata), compatItemIdForDye(metadata));
+        }
+    }
+
+    private static void addItemAlias(Map<Integer, Integer> itemIds, String namespace, String path, int aliasId) {
+        Item item = Item.REGISTRY.getObject(new ResourceLocation(namespace, path));
+        if (item != null) {
+            itemIds.putIfAbsent(Item.getIdFromItem(item), aliasId);
+        }
+    }
+
+    private static int compatItemIdForDye(int metadata) {
+        return switch (metadata & 15) {
+            case 1, 12 -> 44071;
+            case 2 -> 44079;
+            case 3 -> 44076;
+            case 4 -> 44072;
+            case 5 -> 44073;
+            case 6 -> 44080;
+            case 9 -> 44075;
+            case 10 -> 44078;
+            case 11 -> 44077;
+            case 13 -> 44074;
+            case 14 -> 44070;
+            default -> 44024;
+        };
+    }
+
+    private static void loadFile(ShaderPack pack, String path, Map<Integer, Integer> itemIds, Map<ItemMetadataKey, Integer> metadataIds) {
         if (!pack.hasResource(path)) {
             return;
         }
@@ -40,7 +132,7 @@ public final class ShaderItemIdMap {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    parseLine(stripComment(line).trim(), itemIds);
+                    parseLine(stripComment(line).trim(), itemIds, metadataIds);
                 }
             }
         } catch (IOException e) {
@@ -48,7 +140,7 @@ public final class ShaderItemIdMap {
         }
     }
 
-    private static void parseLine(String line, Map<Integer, Integer> itemIds) {
+    private static void parseLine(String line, Map<Integer, Integer> itemIds, Map<ItemMetadataKey, Integer> metadataIds) {
         if (line.isEmpty()) {
             return;
         }
@@ -72,28 +164,113 @@ public final class ShaderItemIdMap {
 
         String values = line.substring(equals + 1);
         for (String token : values.split("\\s+")) {
-            Item item = parseItem(token);
-            if (item != null) {
-                itemIds.put(Item.getIdFromItem(item), aliasId);
+            ParsedItemToken parsed = parseItem(token);
+            if (parsed != null) {
+                int itemId = Item.getIdFromItem(parsed.item());
+                if (parsed.hasMetadata()) {
+                    metadataIds.put(new ItemMetadataKey(itemId, parsed.metadata()), aliasId);
+                } else {
+                    itemIds.put(itemId, aliasId);
+                }
             }
         }
     }
 
-    private static Item parseItem(String token) {
+    private static ParsedItemToken parseItem(String token) {
         String trimmed = token.trim();
         if (trimmed.isEmpty()) {
             return null;
         }
 
-        ResourceLocation resource = trimmed.contains(":")
-                ? new ResourceLocation(trimmed)
-                : new ResourceLocation("minecraft", trimmed);
+        ParsedResource parsed = parseResource(trimmed);
+        if (parsed == null) {
+            return null;
+        }
+
+        ResourceLocation resource = parsed.resource();
         Item item = Item.REGISTRY.getObject(resource);
-        return item != null ? item : null;
+        return item != null ? new ParsedItemToken(item, parsed.metadata()) : null;
+    }
+
+    private static ParsedResource parseResource(String token) {
+        String[] parts = token.split(":");
+        if (parts.length == 1) {
+            return new ParsedResource(new ResourceLocation("minecraft", parts[0]), null);
+        }
+
+        if (parts.length == 2) {
+            Integer metadata = parseMetadataSuffix(parts[1]);
+            if (metadata != null) {
+                return new ParsedResource(new ResourceLocation("minecraft", parts[0]), metadata);
+            }
+            return new ParsedResource(new ResourceLocation(parts[0], parts[1]), null);
+        }
+
+        if (parts[0].isEmpty() || parts[1].isEmpty()) {
+            return null;
+        }
+
+        Integer metadata = parseMetadataSuffix(parts[2]);
+        if (metadata == null) {
+            return null;
+        }
+        return new ParsedResource(new ResourceLocation(parts[0], parts[1]), metadata);
+    }
+
+    private static Integer parseMetadataSuffix(String suffix) {
+        String value = suffix;
+        int equals = suffix.indexOf('=');
+        if (equals >= 0) {
+            String key = suffix.substring(0, equals).trim();
+            if (!key.equalsIgnoreCase("metadata") && !key.equalsIgnoreCase("meta") && !key.equalsIgnoreCase("data")) {
+                return null;
+            }
+            value = suffix.substring(equals + 1).trim();
+        }
+
+        if (value.isEmpty() || !value.chars().allMatch(Character::isDigit)) {
+            return null;
+        }
+
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static String stripComment(String line) {
         int comment = line.indexOf('#');
         return comment >= 0 ? line.substring(0, comment) : line;
+    }
+
+    public record ItemIdRules(Map<Integer, Integer> itemIds, Map<ItemMetadataKey, Integer> metadataIds) {
+        public int idFor(ItemStack stack) {
+            if (stack == null || stack.isEmpty()) {
+                return -1;
+            }
+
+            int itemId = Item.getIdFromItem(stack.getItem());
+            Integer metadataId = metadataIds.get(new ItemMetadataKey(itemId, stack.getMetadata()));
+            if (metadataId != null) {
+                return metadataId;
+            }
+            return itemIds.getOrDefault(itemId, 0);
+        }
+    }
+
+    public record ItemMetadataKey(int itemId, int metadata) {
+    }
+
+    private record ParsedResource(ResourceLocation resource, Integer metadata) {
+    }
+
+    private record ParsedItemToken(Item item, Integer metadata) {
+        private boolean hasMetadata() {
+            return metadata != null;
+        }
+    }
+
+    private record ColorAlias(String name, int itemId) {
     }
 }

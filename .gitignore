@@ -28,3 +28,6 @@ gradle-app.setting
 
 # Decompiled/reference drops should not be committed
 DecompOpti/
+
+# Local chat handoff state
+AUSM_RESUME_STATE.json

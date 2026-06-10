@@ -39,7 +39,7 @@ public record ShaderProperties(
         Map<String, String> translations,
         ShaderBlockIdMap.BlockIdRules blockIds,
         Map<ResourceLocation, Integer> entityIds,
-        Map<Integer, Integer> itemIds,
+        ShaderItemIdMap.ItemIdRules itemIds,
         ShaderRenderSettings renderSettings,
         Map<RenderPass, ShaderAlphaTest> alphaTests,
         Map<RenderPass, ShaderBlendMode> blendModes,
@@ -69,7 +69,7 @@ public record ShaderProperties(
         Map<String, String> translations = ShaderLang.load(pack, layout);
         ShaderBlockIdMap.BlockIdRules blockIds = ShaderBlockIdMap.load(pack, layout);
         Map<ResourceLocation, Integer> entityIds = ShaderEntityIdMap.load(pack, layout);
-        Map<Integer, Integer> itemIds = ShaderItemIdMap.load(pack, layout);
+        ShaderItemIdMap.ItemIdRules itemIds = ShaderItemIdMap.load(pack, layout);
         Map<String, String> profiles = loadProfilesInFileOrder(pack, layout);
 
         if (!pack.hasResource(layout.propertiesPath())) {

@@ -76,21 +76,50 @@ public class ShaderPackManager implements ShaderPackController {
             selectedPackName = "OFF";
             shadersEnabled = false;
             saveShaderConfig();
-            setPack(NoneShaderPack.INSTANCE);
+            closeCurrentPack();
+            currentPack = NoneShaderPack.INSTANCE;
+            currentOptionOverrides = Map.of();
+            clearShaderPropertiesCache();
+            compiledDimensionId = Integer.MIN_VALUE;
+            compiledPackName = "OFF";
+            pendingPipelineReload = false;
+            PipelineContext.getInstance().cleanup();
+            rebuildInactiveVanillaRenderers();
             return true;
         }
 
-        ShaderPack newPack = openPack(packName);
-        if (newPack == null) {
+        if (!isPackAvailable(packName)) {
             fallbackToOff("Selected shaderpack '{}' is no longer available; disabling shaders.", packName);
             return false;
         }
 
+        boolean compileNow = shadersEnabled;
         selectedPackName = packName;
-        shadersEnabled = true;
+        currentOptionOverrides = loadOptionOverrides(packName);
+        clearShaderPropertiesCacheExcept(packName);
+        pendingPipelineReload = true;
         saveShaderConfig();
-        setPack(newPack);
-        MainMod.LOGGER.info("Successfully loaded shaderpack: {}", newPack.getName());
+        if (!compileNow) {
+            closeCurrentPack();
+            currentPack = NoneShaderPack.INSTANCE;
+            compiledDimensionId = Integer.MIN_VALUE;
+            compiledPackName = "OFF";
+            PipelineContext.getInstance().cleanup();
+            rebuildInactiveVanillaRenderers();
+            MainMod.LOGGER.info("Selected shaderpack '{}' for manual enable.", packName);
+            return true;
+        }
+
+        if (!ensureSelectedPackLoaded()) {
+            return false;
+        }
+        ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
+        PipelineContext.getInstance().initialize(this.currentPack, this.currentOptionOverrides, properties);
+        this.compiledDimensionId = getClientDimensionId();
+        this.compiledPackName = currentPack.getName();
+        this.pendingPipelineReload = false;
+        PipelineContext.getInstance().setActive(true);
+        MainMod.LOGGER.info("Successfully loaded shaderpack: {}", currentPack.getName());
         return true;
     }
 
@@ -105,21 +134,13 @@ public class ShaderPackManager implements ShaderPackController {
         }
 
         selectedPackName = properties.getProperty("selectedPack", "OFF");
-        shadersEnabled = Boolean.parseBoolean(properties.getProperty("enabled", !selectedPackName.equals("OFF") ? "true" : "false"));
-
-        if (selectedPackName.equalsIgnoreCase("OFF")) {
-            setPack(NoneShaderPack.INSTANCE);
-            return;
-        }
-
-        ShaderPack newPack = openPack(selectedPackName);
-        if (newPack == null) {
-            fallbackToOff("Saved shaderpack '{}' is no longer available; disabling shaders.", selectedPackName);
-            return;
-        }
-
-        setPack(newPack);
-        PipelineContext.getInstance().setActive(shadersEnabled);
+        shadersEnabled = false;
+        currentPack = NoneShaderPack.INSTANCE;
+        currentOptionOverrides = selectedPackName.equalsIgnoreCase("OFF") ? Map.of() : loadOptionOverrides(selectedPackName);
+        pendingPipelineReload = !selectedPackName.equalsIgnoreCase("OFF") && isPackAvailable(selectedPackName);
+        compiledDimensionId = Integer.MIN_VALUE;
+        compiledPackName = "OFF";
+        PipelineContext.getInstance().setActive(false);
     }
 
     private ShaderPack openPack(String packName) {
@@ -152,14 +173,7 @@ public class ShaderPackManager implements ShaderPackController {
             newPack = NoneShaderPack.INSTANCE;
         }
 
-        try {
-            if (this.currentPack != null) {
-                this.currentPack.close();
-            }
-        } catch (IOException e) {
-            String previousName = this.currentPack != null ? this.currentPack.getName() : "<none>";
-            MainMod.LOGGER.error("Failed to close previous shaderpack '{}'", previousName, e);
-        }
+        closeCurrentPack();
         this.currentPack = newPack;
         this.currentOptionOverrides = loadOptionOverrides(newPack.getName());
         clearShaderPropertiesCacheExcept(newPack.getName());
@@ -258,15 +272,21 @@ public class ShaderPackManager implements ShaderPackController {
         }
 
         boolean wasEnabled = shadersEnabled;
-        ShaderPack newPack = openPack(selectedPackName);
-        if (newPack == null) {
-            fallbackToOff("Selected shaderpack '{}' disappeared during reload; disabling shaders.", selectedPackName);
+        if (!ensureSelectedPackLoaded()) {
             return;
         }
-        setPack(newPack);
         shadersEnabled = wasEnabled;
-        pendingPipelineReload = false;
-        PipelineContext.getInstance().setActive(shadersEnabled);
+        if (shadersEnabled) {
+            ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
+            PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides, properties);
+            compiledDimensionId = getClientDimensionId();
+            compiledPackName = currentPack.getName();
+            pendingPipelineReload = false;
+            PipelineContext.getInstance().setActive(true);
+        } else {
+            pendingPipelineReload = true;
+            PipelineContext.getInstance().setActive(false);
+        }
     }
 
     public void reloadIfDimensionChanged() {
@@ -300,6 +320,30 @@ public class ShaderPackManager implements ShaderPackController {
         reloadPack();
     }
 
+    public void preparePipelineForWorldLoad(int dimensionId) {
+        if (selectedPackName == null || selectedPackName.equals("OFF")) {
+            shadersEnabled = false;
+            PipelineContext.getInstance().setActive(false);
+            return;
+        }
+
+        if (!isPackAvailable(selectedPackName)) {
+            fallbackToOff("Selected shaderpack '{}' disappeared during world load; disabling shaders.", selectedPackName);
+            return;
+        }
+
+        if (shadersEnabled || PipelineContext.getInstance().isActive()) {
+            MainMod.LOGGER.info("Forcing shaders inactive on world load; selected shaderpack remains '{}'", selectedPackName);
+        }
+        shadersEnabled = false;
+        pendingPipelineReload = selectedPackName != null && !selectedPackName.equalsIgnoreCase("OFF");
+        compiledDimensionId = Integer.MIN_VALUE;
+        compiledPackName = "OFF";
+        clearShaderPropertiesCache();
+        PipelineContext.getInstance().cleanup();
+        rebuildInactiveVanillaRenderers();
+    }
+
     public void setShadersEnabled(boolean enabled) {
         if (selectedPackName == null || selectedPackName.equals("OFF")) {
             shadersEnabled = false;
@@ -310,7 +354,10 @@ public class ShaderPackManager implements ShaderPackController {
             shadersEnabled = enabled;
         }
         saveShaderConfig();
-        if (shadersEnabled && pendingPipelineReload) {
+        if (shadersEnabled && (pendingPipelineReload || currentPack == null || !selectedPackName.equals(currentPack.getName()))) {
+            if (!ensureSelectedPackLoaded()) {
+                return;
+            }
             ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
             PipelineContext.getInstance().initialize(currentPack, currentOptionOverrides, properties);
             compiledDimensionId = getClientDimensionId();
@@ -455,6 +502,41 @@ public class ShaderPackManager implements ShaderPackController {
 
     private void rebuildInactiveVanillaRenderers() {
         PipelineContext.getInstance().setActive(false);
+    }
+
+    private boolean ensureSelectedPackLoaded() {
+        if (selectedPackName == null || selectedPackName.equalsIgnoreCase("OFF")) {
+            return false;
+        }
+        if (currentPack != null && selectedPackName.equals(currentPack.getName())) {
+            return true;
+        }
+
+        ShaderPack newPack = openPack(selectedPackName);
+        if (newPack == null) {
+            fallbackToOff("Selected shaderpack '{}' is no longer available; disabling shaders.", selectedPackName);
+            return false;
+        }
+
+        closeCurrentPack();
+        currentPack = newPack;
+        currentOptionOverrides = loadOptionOverrides(newPack.getName());
+        clearShaderPropertiesCacheExcept(newPack.getName());
+        pendingPipelineReload = true;
+        compiledDimensionId = Integer.MIN_VALUE;
+        compiledPackName = "OFF";
+        return true;
+    }
+
+    private void closeCurrentPack() {
+        try {
+            if (this.currentPack != null && this.currentPack != NoneShaderPack.INSTANCE) {
+                this.currentPack.close();
+            }
+        } catch (IOException e) {
+            String previousName = this.currentPack != null ? this.currentPack.getName() : "<none>";
+            MainMod.LOGGER.error("Failed to close previous shaderpack '{}'", previousName, e);
+        }
     }
 
     private Map<String, String> loadOptionOverrides(String packName) {

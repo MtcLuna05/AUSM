@@ -63,6 +63,7 @@ public class GuiShaderOptions extends GuiScreen {
     private List<String> hoveredCommentBody = List.of();
     private int page;
     private int sidebarWidth = MIN_SIDEBAR_WIDTH;
+    private int sidebarScrollOffset;
     private int lastMouseX;
     private int lastMouseY;
     private int focusedControl = -1;
@@ -104,6 +105,7 @@ public class GuiShaderOptions extends GuiScreen {
 
         sidebarItems = sidebarItems(properties);
         sidebarWidth = computeSidebarWidth(properties);
+        clampSidebarScroll();
         initSearchField();
         page = Math.min(page, maxPage());
         addCategoryButtons(properties);
@@ -137,22 +139,126 @@ public class GuiShaderOptions extends GuiScreen {
         }
 
         for (GuiButton button : buttonList) {
-            if (activeOptionName != null
-                    && button instanceof GuiShaderOptionDropdown dropdown
-                    && dropdown.option.name().equals(activeOptionName)) {
-                activeDropdown = dropdown;
-                return;
+            if (activeOptionName != null && button instanceof GuiShaderOptionDropdown) {
+                GuiShaderOptionDropdown dropdown = (GuiShaderOptionDropdown) button;
+                if (dropdown.option.name().equals(activeOptionName)) {
+                    activeDropdown = dropdown;
+                    return;
+                }
             }
-            if (profileDropdownOpen && button instanceof GuiShaderProfileDropdown dropdown) {
-                activeProfileDropdown = dropdown;
+            if (profileDropdownOpen && button instanceof GuiShaderProfileDropdown) {
+                activeProfileDropdown = (GuiShaderProfileDropdown) button;
             }
         }
     }
 
+    private int preferredEntryWidth(ShaderOptions options, ShaderScreenEntry entry, int maxWidth) {
+        ShaderScreenEntry.Type type = entry.type();
+        if (type == ShaderScreenEntry.Type.SCREEN) {
+            return Math.max(1, Math.min(maxWidth, contentButtonWidth(label(entry.name()) + "...", 22, 88, maxWidth)));
+        }
+        if (type == ShaderScreenEntry.Type.PROFILE) {
+            int widestProfile = fontRenderer.getStringWidth(profileLabel()) + 30;
+            for (String profile : properties().profiles().keySet()) {
+                widestProfile = Math.max(widestProfile, fontRenderer.getStringWidth(profileName(profile)) + 30);
+            }
+            return Math.max(1, Math.min(maxWidth, clamp(widestProfile, 116, maxWidth)));
+        }
+        if (type == ShaderScreenEntry.Type.OPTION) {
+            ShaderOption option = options.get(entry.name());
+            int preferred;
+            if (option == null) {
+                preferred = contentButtonWidth(entry.name(), 16, 88, maxWidth);
+            } else if (option.slider()) {
+                preferred = sliderButtonWidth(option, maxWidth);
+            } else if (option.choices().size() > 1 && !rendersAsToggle(option)) {
+                preferred = dropdownButtonWidth(option, maxWidth);
+            } else {
+                preferred = contentButtonWidth(optionLabel(option), 16, 88, maxWidth);
+            }
+            return Math.max(1, Math.min(maxWidth, preferred));
+        }
+        return Math.max(1, Math.min(maxWidth, 88));
+    }
+
+    private GuiButton createEntryButton(ShaderOptions options, ShaderScreenEntry entry, int id, int x, int y, int width) {
+        ShaderScreenEntry.Type type = entry.type();
+        if (type == ShaderScreenEntry.Type.SCREEN) {
+            return new GuiFlatButton(id, x, y, width, 20, label(entry.name()) + "...");
+        }
+        if (type == ShaderScreenEntry.Type.PROFILE) {
+            this.profileButton = new GuiShaderProfileDropdown(id, x, y, width, 20);
+            return this.profileButton;
+        }
+        if (type == ShaderScreenEntry.Type.OPTION) {
+            ShaderOption option = options.get(entry.name());
+            if (option == null) {
+                GuiButton missing = new GuiFlatButton(id, x, y, width, 20, entry.name());
+                missing.enabled = false;
+                return missing;
+            }
+            if (option.slider() && option.choices().size() > 1) {
+                return new GuiShaderOptionSlider(id, x, y, width, 20, option, valueFor(option));
+            }
+            if (option.choices().size() > 1 && !rendersAsToggle(option)) {
+                return new GuiShaderOptionDropdown(id, x, y, width, 20, option, valueFor(option));
+            }
+            return new GuiFlatButton(id, x, y, width, 20, optionLabel(option));
+        }
+        return new GuiFlatButton(id, x, y, width, 20, "");
+    }
+
+    private boolean isBooleanChoiceValue(String value) {
+        String lower = value.toLowerCase(java.util.Locale.ROOT);
+        return lower.equals("0")
+                || lower.equals("1")
+                || lower.equals("false")
+                || lower.equals("true")
+                || lower.equals("off")
+                || lower.equals("on");
+    }
+
+    private static final class OptionGrid {
+        private final int columns;
+        private final int rows;
+
+        private OptionGrid(int columns, int rows) {
+            this.columns = columns;
+            this.rows = rows;
+        }
+
+        private int columns() {
+            return columns;
+        }
+
+        private int rows() {
+            return rows;
+        }
+    }
+
+    private static final class SidebarItem {
+        private final String screen;
+        private final int depth;
+
+        private SidebarItem(String screen, int depth) {
+            this.screen = screen;
+            this.depth = depth;
+        }
+
+        private String screen() {
+            return screen;
+        }
+
+        private int depth() {
+            return depth;
+        }
+    }
+
     private void addCategoryButtons(ShaderProperties properties) {
-        int y = 62;
+        int y = sidebarListTop();
         int buttonRight = sidebarButtonRight(properties);
-        for (int i = 0; i < sidebarItems.size(); i++) {
+        int end = Math.min(sidebarItems.size(), sidebarScrollOffset + visibleSidebarRows());
+        for (int i = sidebarScrollOffset; i < end; i++) {
             SidebarItem item = sidebarItems.get(i);
             String label = sidebarLabel(properties, item);
             int x = 12 + item.depth() * 10;
@@ -208,34 +314,6 @@ public class GuiShaderOptions extends GuiScreen {
         return Math.max(1, Math.min(maxWidth, width));
     }
 
-    private int preferredEntryWidth(ShaderOptions options, ShaderScreenEntry entry, int maxWidth) {
-        int preferred = switch (entry.type()) {
-            case SCREEN -> contentButtonWidth(label(entry.name()) + "...", 22, 88, maxWidth);
-            case PROFILE -> {
-                int widestProfile = fontRenderer.getStringWidth(profileLabel()) + 30;
-                for (String profile : properties().profiles().keySet()) {
-                    widestProfile = Math.max(widestProfile, fontRenderer.getStringWidth(profileName(profile)) + 30);
-                }
-                yield clamp(widestProfile, 116, maxWidth);
-            }
-            case OPTION -> {
-                ShaderOption option = options.get(entry.name());
-                if (option == null) {
-                    yield contentButtonWidth(entry.name(), 16, 88, maxWidth);
-                }
-                if (option.slider()) {
-                    yield sliderButtonWidth(option, maxWidth);
-                }
-                if (option.choices().size() > 1 && !rendersAsToggle(option)) {
-                    yield dropdownButtonWidth(option, maxWidth);
-                }
-                yield contentButtonWidth(optionLabel(option), 16, 88, maxWidth);
-            }
-            case EMPTY -> 88;
-        };
-        return Math.max(1, Math.min(maxWidth, preferred));
-    }
-
     private int sliderButtonWidth(ShaderOption option, int maxWidth) {
         int widestValue = 0;
         for (String choice : option.choices()) {
@@ -259,32 +337,6 @@ public class GuiShaderOptions extends GuiScreen {
 
     private int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
-    }
-
-    private GuiButton createEntryButton(ShaderOptions options, ShaderScreenEntry entry, int id, int x, int y, int width) {
-        return switch (entry.type()) {
-            case SCREEN -> new GuiFlatButton(id, x, y, width, 20, label(entry.name()) + "...");
-            case PROFILE -> {
-                this.profileButton = new GuiShaderProfileDropdown(id, x, y, width, 20);
-                yield this.profileButton;
-            }
-            case OPTION -> {
-                ShaderOption option = options.get(entry.name());
-                if (option == null) {
-                    GuiButton missing = new GuiFlatButton(id, x, y, width, 20, entry.name());
-                    missing.enabled = false;
-                    yield missing;
-                }
-                if (option.slider() && option.choices().size() > 1) {
-                    yield new GuiShaderOptionSlider(id, x, y, width, 20, option, valueFor(option));
-                }
-                if (option.choices().size() > 1 && !rendersAsToggle(option)) {
-                    yield new GuiShaderOptionDropdown(id, x, y, width, 20, option, valueFor(option));
-                }
-                yield new GuiFlatButton(id, x, y, width, 20, optionLabel(option));
-            }
-            case EMPTY -> new GuiFlatButton(id, x, y, width, 20, "");
-        };
     }
 
     @Override
@@ -314,6 +366,9 @@ public class GuiShaderOptions extends GuiScreen {
             }
             return;
         }
+        if (isMouseOverSidebar(mouseX, mouseY) && adjustSidebarScroll(direction)) {
+            return;
+        }
         if (!adjustHoveredOption(mouseX, mouseY, wheel > 0 ? 1 : -1)) {
             int nextPage = Math.max(0, Math.min(maxPage(), page + direction));
             if (nextPage != page) {
@@ -335,7 +390,7 @@ public class GuiShaderOptions extends GuiScreen {
                 return;
             }
             if (searchActive()) {
-                searchField.setText("");
+                clearSearch();
                 page = 0;
                 rebuildButtons();
                 return;
@@ -464,7 +519,7 @@ public class GuiShaderOptions extends GuiScreen {
 
         if (searchField != null && mouseButton == 1 && isMouseOverSearchField(mouseX, mouseY)) {
             if (!searchField.getText().isEmpty()) {
-                searchField.setText("");
+                clearSearch();
                 searchField.setFocused(true);
                 page = 0;
                 activeDropdown = null;
@@ -546,7 +601,8 @@ public class GuiShaderOptions extends GuiScreen {
         }
 
         if (entry.type() == ShaderScreenEntry.Type.PROFILE) {
-            if (button instanceof GuiShaderProfileDropdown dropdown) {
+            if (button instanceof GuiShaderProfileDropdown) {
+                GuiShaderProfileDropdown dropdown = (GuiShaderProfileDropdown) button;
                 activeDropdown = null;
                 activeProfileDropdown = activeProfileDropdown == dropdown ? null : dropdown;
                 if (activeProfileDropdown == dropdown) {
@@ -568,14 +624,16 @@ public class GuiShaderOptions extends GuiScreen {
             return;
         }
 
-        if (button instanceof GuiShaderOptionSlider slider) {
+        if (button instanceof GuiShaderOptionSlider) {
+            GuiShaderOptionSlider slider = (GuiShaderOptionSlider) button;
             String value = slider.selectedValue();
             setPendingOptionValue(option, value);
             if (applyButton != null) {
                 applyButton.enabled = true;
             }
             return;
-        } else if (button instanceof GuiShaderOptionDropdown dropdown) {
+        } else if (button instanceof GuiShaderOptionDropdown) {
+            GuiShaderOptionDropdown dropdown = (GuiShaderOptionDropdown) button;
             activeProfileDropdown = null;
             activeDropdown = activeDropdown == dropdown ? null : dropdown;
             if (activeDropdown == dropdown) {
@@ -669,7 +727,8 @@ public class GuiShaderOptions extends GuiScreen {
             return false;
         }
 
-        if (button instanceof GuiShaderOptionSlider slider) {
+        if (button instanceof GuiShaderOptionSlider) {
+            GuiShaderOptionSlider slider = (GuiShaderOptionSlider) button;
             if (isShiftKeyDown()) {
                 slider.stepFine(direction);
             } else {
@@ -677,7 +736,8 @@ public class GuiShaderOptions extends GuiScreen {
             }
             return true;
         }
-        if (button instanceof GuiShaderOptionDropdown dropdown) {
+        if (button instanceof GuiShaderOptionDropdown) {
+            GuiShaderOptionDropdown dropdown = (GuiShaderOptionDropdown) button;
             dropdown.step(direction);
             return true;
         }
@@ -772,13 +832,6 @@ public class GuiShaderOptions extends GuiScreen {
             return false;
         }
         return option.choices().stream().allMatch(this::isBooleanChoiceValue);
-    }
-
-    private boolean isBooleanChoiceValue(String value) {
-        return switch (value.toLowerCase(java.util.Locale.ROOT)) {
-            case "0", "1", "false", "true", "off", "on" -> true;
-            default -> false;
-        };
     }
 
     private boolean isEnumLikeBinaryOption(String name) {
@@ -915,14 +968,6 @@ public class GuiShaderOptions extends GuiScreen {
         return mouseX >= button.x && mouseY >= button.y && mouseX < button.x + button.width && mouseY < button.y + button.height;
     }
 
-    private boolean isMouseOverSearchField(int mouseX, int mouseY) {
-        return searchField != null
-                && mouseX >= searchField.x
-                && mouseY >= searchField.y
-                && mouseX < searchField.x + searchField.width
-                && mouseY < searchField.y + searchField.height;
-    }
-
     private int maxPage() {
         int entriesPerPage = entriesPerPage(optionGrid());
         return Math.max(0, (visibleEntries.size() - 1) / entriesPerPage);
@@ -941,11 +986,50 @@ public class GuiShaderOptions extends GuiScreen {
         return Math.max(1, grid.columns() * grid.rows());
     }
 
-    private record OptionGrid(int columns, int rows) {
-    }
-
     private int optionPanelLeft() {
         return sidebarWidth + 16;
+    }
+
+    private int sidebarListTop() {
+        return 62;
+    }
+
+    private int sidebarListBottom() {
+        return Math.max(sidebarListTop() + 20, this.height - 36);
+    }
+
+    private int visibleSidebarRows() {
+        return Math.max(1, (sidebarListBottom() - sidebarListTop()) / 22);
+    }
+
+    private int maxSidebarScroll() {
+        return Math.max(0, sidebarItems.size() - visibleSidebarRows());
+    }
+
+    private void clampSidebarScroll() {
+        sidebarScrollOffset = clamp(sidebarScrollOffset, 0, maxSidebarScroll());
+    }
+
+    private boolean adjustSidebarScroll(int direction) {
+        int previous = sidebarScrollOffset;
+        sidebarScrollOffset = clamp(sidebarScrollOffset + direction, 0, maxSidebarScroll());
+        if (sidebarScrollOffset != previous) {
+            rebuildButtons();
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isMouseOverSidebar(int mouseX, int mouseY) {
+        return mouseX >= 8 && mouseX < sidebarWidth + 8 && mouseY >= 34 && mouseY < this.height - 34;
+    }
+
+    private boolean isMouseOverSearchField(int mouseX, int mouseY) {
+        return searchField != null
+                && mouseX >= searchField.x
+                && mouseY >= searchField.y
+                && mouseX < searchField.x + searchField.width
+                && mouseY < searchField.y + searchField.height;
     }
 
     private int computeSidebarWidth(ShaderProperties properties) {
@@ -970,14 +1054,20 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     private void navigateToScreen(String screen) {
-        if (screen == null || screen.equals(selectedScreen) || !properties().screens().containsKey(screen)) {
+        if (screen == null || !properties().screens().containsKey(screen)) {
             return;
         }
-        screenHistory.add(selectedScreen);
+        if (!screen.equals(selectedScreen)) {
+            screenHistory.add(selectedScreen);
+        }
         selectedScreen = screen;
         page = 0;
         activeDropdown = null;
         activeProfileDropdown = null;
+        clearSearch();
+        expandSidebarPathTo(screen);
+        sidebarItems = sidebarItems(properties());
+        ensureSelectedSidebarVisible();
         rebuildButtons();
     }
 
@@ -993,6 +1083,9 @@ public class GuiShaderOptions extends GuiScreen {
         page = 0;
         activeDropdown = null;
         activeProfileDropdown = null;
+        expandSidebarPathTo(previous);
+        sidebarItems = sidebarItems(properties());
+        ensureSelectedSidebarVisible();
         rebuildButtons();
         return true;
     }
@@ -1013,10 +1106,85 @@ public class GuiShaderOptions extends GuiScreen {
             if (!expandedSidebarScreens.remove(item.screen())) {
                 expandedSidebarScreens.add(item.screen());
             }
+            clampSidebarScroll();
             rebuildButtons();
             return true;
         }
         return false;
+    }
+
+    private void clearSearch() {
+        if (searchField != null) {
+            searchField.setText("");
+            searchField.setFocused(false);
+        }
+    }
+
+    private void ensureSelectedSidebarVisible() {
+        for (int i = 0; i < sidebarItems.size(); i++) {
+            if (!sidebarItems.get(i).screen().equals(selectedScreen)) {
+                continue;
+            }
+            if (i < sidebarScrollOffset) {
+                sidebarScrollOffset = i;
+            } else if (i >= sidebarScrollOffset + visibleSidebarRows()) {
+                sidebarScrollOffset = i - visibleSidebarRows() + 1;
+            }
+            clampSidebarScroll();
+            return;
+        }
+    }
+
+    private void expandSidebarPathTo(String targetScreen) {
+        List<String> path = findScreenPath(properties(), targetScreen);
+        if (path.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < path.size() - 1; i++) {
+            expandedSidebarScreens.add(path.get(i));
+        }
+    }
+
+    private List<String> findScreenPath(ShaderProperties properties, String targetScreen) {
+        if (properties.screens().containsKey("screen")) {
+            List<String> path = findScreenPath(properties, "screen", targetScreen, new HashSet<>());
+            if (!path.isEmpty()) {
+                return path;
+            }
+        }
+        for (String screen : properties.screens().keySet()) {
+            List<String> path = findScreenPath(properties, screen, targetScreen, new HashSet<>());
+            if (!path.isEmpty()) {
+                return path;
+            }
+        }
+        return List.of();
+    }
+
+    private List<String> findScreenPath(ShaderProperties properties, String currentScreen, String targetScreen, Set<String> visited) {
+        if (!visited.add(currentScreen)) {
+            return List.of();
+        }
+        if (currentScreen.equals(targetScreen)) {
+            return new ArrayList<>(List.of(currentScreen));
+        }
+        ShaderScreen screen = properties.screens().get(currentScreen);
+        if (screen == null) {
+            return List.of();
+        }
+        for (ShaderScreenEntry entry : screen.entries()) {
+            if (entry.type() != ShaderScreenEntry.Type.SCREEN || !properties.screens().containsKey(entry.name())) {
+                continue;
+            }
+            List<String> childPath = findScreenPath(properties, entry.name(), targetScreen, visited);
+            if (!childPath.isEmpty()) {
+                List<String> path = new ArrayList<>();
+                path.add(currentScreen);
+                path.addAll(childPath);
+                return path;
+            }
+        }
+        return List.of();
     }
 
     private List<SidebarItem> sidebarItems(ShaderProperties properties) {
@@ -1079,9 +1247,6 @@ public class GuiShaderOptions extends GuiScreen {
         return properties().translate("screen." + id, id.replace('_', ' '));
     }
 
-    private record SidebarItem(String screen, int depth) {
-    }
-
     private String optionName(String id) {
         return properties().translate("option." + id, id.replace('_', ' '));
     }
@@ -1120,6 +1285,7 @@ public class GuiShaderOptions extends GuiScreen {
                 fontRenderer.drawString("Search options", searchField.x + 4, searchField.y + 5, 0xFF6F7E8D);
             }
         }
+        drawSidebarScrollbar();
         boolean dropdownOpen = activeDropdown != null || activeProfileDropdown != null;
         super.drawScreen(dropdownOpen ? -1 : mouseX, dropdownOpen ? -1 : mouseY, partialTicks);
         drawFocusedButtonOutline();
@@ -1131,6 +1297,23 @@ public class GuiShaderOptions extends GuiScreen {
         }
         drawShaderTooltip(mouseX, mouseY);
         drawBottomCommentPanel();
+    }
+
+    private void drawSidebarScrollbar() {
+        int maxScroll = maxSidebarScroll();
+        if (maxScroll <= 0) {
+            return;
+        }
+
+        int trackLeft = sidebarWidth;
+        int trackRight = sidebarWidth + 4;
+        int trackTop = sidebarListTop();
+        int trackBottom = sidebarListBottom() - 2;
+        int trackHeight = Math.max(1, trackBottom - trackTop);
+        int thumbHeight = Math.max(12, trackHeight * visibleSidebarRows() / Math.max(visibleSidebarRows(), sidebarItems.size()));
+        int thumbY = trackTop + (trackHeight - thumbHeight) * sidebarScrollOffset / maxScroll;
+        drawRect(trackLeft, trackTop, trackRight, trackBottom, 0x55182026);
+        drawRect(trackLeft, thumbY, trackRight, thumbY + thumbHeight, 0xAA6E8197);
     }
 
     private void drawShaderTooltip(int mouseX, int mouseY) {
@@ -1155,9 +1338,11 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     private void setHoveredComment(GuiButton button, List<String> tooltip) {
-        if (button instanceof GuiShaderOptionSlider slider) {
+        if (button instanceof GuiShaderOptionSlider) {
+            GuiShaderOptionSlider slider = (GuiShaderOptionSlider) button;
             hoveredCommentTitle = List.of(optionName(slider.option.name()));
-        } else if (button instanceof GuiShaderOptionDropdown dropdown) {
+        } else if (button instanceof GuiShaderOptionDropdown) {
+            GuiShaderOptionDropdown dropdown = (GuiShaderOptionDropdown) button;
             hoveredCommentTitle = List.of(optionName(dropdown.option.name()));
         } else if (button instanceof GuiShaderProfileDropdown) {
             hoveredCommentTitle = List.of("Profile");
@@ -1250,9 +1435,11 @@ public class GuiShaderOptions extends GuiScreen {
         }
         if (keyCode == Keyboard.KEY_LEFT) {
             GuiButton button = focusedButton();
-            if (button instanceof GuiShaderOptionSlider slider) {
+            if (button instanceof GuiShaderOptionSlider) {
+                GuiShaderOptionSlider slider = (GuiShaderOptionSlider) button;
                 slider.step(-1);
-            } else if (button instanceof GuiShaderOptionDropdown dropdown) {
+            } else if (button instanceof GuiShaderOptionDropdown) {
+                GuiShaderOptionDropdown dropdown = (GuiShaderOptionDropdown) button;
                 dropdown.step(-1);
             } else if (button instanceof GuiShaderProfileDropdown) {
                 applyProfile(properties(), -1);
@@ -1264,9 +1451,11 @@ public class GuiShaderOptions extends GuiScreen {
         }
         if (keyCode == Keyboard.KEY_RIGHT) {
             GuiButton button = focusedButton();
-            if (button instanceof GuiShaderOptionSlider slider) {
+            if (button instanceof GuiShaderOptionSlider) {
+                GuiShaderOptionSlider slider = (GuiShaderOptionSlider) button;
                 slider.step(1);
-            } else if (button instanceof GuiShaderOptionDropdown dropdown) {
+            } else if (button instanceof GuiShaderOptionDropdown) {
+                GuiShaderOptionDropdown dropdown = (GuiShaderOptionDropdown) button;
                 dropdown.step(1);
             } else if (button instanceof GuiShaderProfileDropdown) {
                 applyProfile(properties(), 1);
@@ -1400,9 +1589,11 @@ public class GuiShaderOptions extends GuiScreen {
         String comment = null;
         if (button instanceof GuiShaderProfileDropdown) {
             comment = translationOrNull("profile.comment");
-        } else if (button instanceof GuiShaderOptionSlider slider) {
+        } else if (button instanceof GuiShaderOptionSlider) {
+            GuiShaderOptionSlider slider = (GuiShaderOptionSlider) button;
             comment = optionComment(slider.option.name());
-        } else if (button instanceof GuiShaderOptionDropdown dropdown) {
+        } else if (button instanceof GuiShaderOptionDropdown) {
+            GuiShaderOptionDropdown dropdown = (GuiShaderOptionDropdown) button;
             comment = optionComment(dropdown.option.name());
         } else if (button.id >= OPTION_BASE_ID) {
             int index = button.id - OPTION_BASE_ID;

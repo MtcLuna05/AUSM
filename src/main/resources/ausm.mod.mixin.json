@@ -2,9 +2,15 @@
   "required": true,
   "minVersion": "0.8",
   "package": "com.l.ausm.impl.mixin",
+  "plugin": "com.l.ausm.impl.MainMixinConfigPlugin",
   "refmap": "ausm.refmap.json",
   "compatibilityLevel": "JAVA_8",
   "mixins": [
+    "compat.ProjectRedLampRendererMixin",
+    "compat.ProjectRedRenderHaloMixin",
+    "compat.LumenizedRegionRenderCacheBuilderMixin",
+    "compat.LumenizedBloomTargetMixin",
+    "compat.NetherPortalLayerMixin",
     "gui.GuiVideoSettingsMixin",
     "pipeline.EntityRendererAccessor",
     "pipeline.EntityRendererMixin",
@@ -33,6 +39,9 @@
     "pipeline.WorldVertexBufferUploaderMixin"
   ],
   "client": [
+    "compat.NothiriumSectionRenderCacheDynamicLightMixin",
+    "pipeline.ChunkCacheDynamicLightMixin",
+    "pipeline.WorldDynamicLightMixin"
   ],
   "server": [
   ]

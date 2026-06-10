@@ -180,6 +180,13 @@ public class DeferredFramebuffer {
         GL11.glViewport(0, 0, width, height);
     }
 
+    public void bindAsExternalTarget(Attachment attachment, boolean setViewport) {
+        bindPipelineFramebuffer(fboId, true, true, attachment);
+        if (setViewport) {
+            GL11.glViewport(0, 0, getAttachmentWidth(attachment), getAttachmentHeight(attachment));
+        }
+    }
+
     public void bindForFullscreenWrite(Attachment... drawTargets) {
         bindPipelineFramebuffer(fullscreenFboId, false, false, drawTargets);
     }

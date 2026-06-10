@@ -1,9 +1,5 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.client.renderer.BlockModelRenderer;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -15,7 +11,6 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 
 @Mixin(BlockModelRenderer.class)
 public class BlockModelRendererMixin {
-
     @Redirect(
             method = {"renderQuadsSmooth", "renderQuadsFlat"},
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/BufferBuilder;putColorMultiplier(FFFI)V")

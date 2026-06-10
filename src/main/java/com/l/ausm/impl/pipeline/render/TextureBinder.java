@@ -43,7 +43,6 @@ public class TextureBinder {
     private static int fallbackNormalTexture = -1;
     private static int fallbackSpecularTexture = -1;
     private static int maxCombinedTextureUnits = -1;
-    private static final int VANILLA_TRACKED_TEXTURE_UNITS = 8;
 
     /**
      * Binds the multiple render targets (MRTs) from the "read" framebuffer 
@@ -220,31 +219,15 @@ public class TextureBinder {
         if (!isValidTextureUnit(textureUnitIndex)) {
             return;
         }
-        if (isVanillaTrackedTextureUnit(textureUnitIndex)) {
-            GlStateManager.setActiveTexture(GL13.GL_TEXTURE0 + textureUnitIndex);
-        } else {
-            GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnitIndex);
-        }
-        if (textureTarget == GL11.GL_TEXTURE_2D && isVanillaTrackedTextureUnit(textureUnitIndex)) {
-            GlStateManager.bindTexture(textureId);
-            GL11.glBindTexture(textureTarget, textureId);
-        } else {
-            GL11.glBindTexture(textureTarget, textureId);
-        }
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnitIndex);
+        GL11.glBindTexture(textureTarget, textureId);
     }
 
     public static void unbindAllTextureTargets() {
         int maxUnits = maxCombinedTextureUnits();
         for (int unit = 0; unit < maxUnits; unit++) {
-            if (isVanillaTrackedTextureUnit(unit)) {
-                GlStateManager.setActiveTexture(GL13.GL_TEXTURE0 + unit);
-            } else {
-                GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
-            }
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
             GL11.glBindTexture(GL11.GL_TEXTURE_1D, 0);
-            if (isVanillaTrackedTextureUnit(unit)) {
-                GlStateManager.bindTexture(0);
-            }
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
             GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
         }
@@ -253,10 +236,6 @@ public class TextureBinder {
 
     private static boolean isValidTextureUnit(int textureUnitIndex) {
         return textureUnitIndex >= 0 && textureUnitIndex < maxCombinedTextureUnits();
-    }
-
-    private static boolean isVanillaTrackedTextureUnit(int textureUnitIndex) {
-        return textureUnitIndex >= 0 && textureUnitIndex < VANILLA_TRACKED_TEXTURE_UNITS;
     }
 
     private static int maxCombinedTextureUnits() {

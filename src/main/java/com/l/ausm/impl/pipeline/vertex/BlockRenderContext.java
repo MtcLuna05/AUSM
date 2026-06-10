@@ -53,6 +53,10 @@ public final class BlockRenderContext {
         CURRENT_BLOCK_EMISSION.set(Math.max(0, Math.min(15, blockEmission)));
     }
 
+    public static int blockEmission() {
+        return CURRENT_BLOCK_EMISSION.get();
+    }
+
     public static int midBlock(float x, float y, float z) {
         return packMidBlock(
                 CURRENT_LOCAL_X.get() + 0.5f - x,

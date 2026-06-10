@@ -75,18 +75,8 @@ public class BufferBuilderMixin {
         source.order(byteBuffer.order());
         int sourceBytes = source.remaining();
         int targetStride = vertexFormat.getSize();
-        if (sourceBytes % targetStride == 0) {
-            return;
-        }
-
-        int optifineStride = 14 * Integer.BYTES;
-        int vanillaStride = 7 * Integer.BYTES;
-        int sourceStride;
-        if (sourceBytes % optifineStride == 0) {
-            sourceStride = optifineStride;
-        } else if (sourceBytes % vanillaStride == 0) {
-            sourceStride = vanillaStride;
-        } else {
+        int sourceStride = ausm$pipelineBlockBulkStride(sourceBytes, targetStride);
+        if (sourceStride < 0) {
             return;
         }
 
@@ -137,14 +127,8 @@ public class BufferBuilderMixin {
         }
 
         int targetStride = vertexFormat.getIntegerSize();
-        int sourceStride;
-        if (vertexData.length % targetStride == 0) {
-            sourceStride = targetStride;
-        } else if (vertexData.length % 14 == 0) {
-            sourceStride = 14;
-        } else if (vertexData.length % 7 == 0) {
-            sourceStride = 7;
-        } else {
+        int sourceStride = ausm$pipelineBlockVertexStride(vertexData.length, targetStride);
+        if (sourceStride < 0) {
             return;
         }
 
@@ -175,6 +159,44 @@ public class BufferBuilderMixin {
 
         ausm$resetPipelineVertexCursor();
         ci.cancel();
+    }
+
+    private static int ausm$pipelineBlockVertexStride(int sourceInts, int targetStride) {
+        if (sourceInts <= 0) {
+            return -1;
+        }
+
+        // BakedQuad is four vertices. A vanilla 1.12 quad is 28 ints, which is
+        // also divisible by the 14-int pipeline stride, so classify by quad
+        // vertex count before using divisibility.
+        if (sourceInts % 4 == 0) {
+            int quadStride = sourceInts / 4;
+            if (quadStride == 7 || quadStride == 14 || quadStride == targetStride) {
+                return quadStride;
+            }
+        }
+        if (sourceInts % 7 == 0 && sourceInts % targetStride != 0) {
+            return 7;
+        }
+        if (sourceInts % 14 == 0) {
+            return 14;
+        }
+        return sourceInts % targetStride == 0 ? targetStride : -1;
+    }
+
+    private static int ausm$pipelineBlockBulkStride(int sourceBytes, int targetStride) {
+        int vanillaStride = 7 * Integer.BYTES;
+        int optifineStride = 14 * Integer.BYTES;
+        if (sourceBytes == 4 * vanillaStride) {
+            return vanillaStride;
+        }
+        if (sourceBytes % optifineStride == 0) {
+            return optifineStride;
+        }
+        if (sourceBytes % vanillaStride == 0) {
+            return vanillaStride;
+        }
+        return sourceBytes % targetStride == 0 ? targetStride : -1;
     }
 
     @Inject(method = "endVertex", at = @At("HEAD"))

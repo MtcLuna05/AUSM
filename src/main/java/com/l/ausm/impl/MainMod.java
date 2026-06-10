@@ -5,6 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.api.shader.ShaderPackController;
+import com.l.ausm.impl.client.dynamic.DynamicLightConfig;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.proxy.IProxy;
@@ -25,9 +26,14 @@ public class MainMod {
     public static IProxy proxy;
 
     private static ShaderPackManager shaderPackManager;
+    private static DynamicLightConfig dynamicLightConfig;
 
     public static ShaderPackManager getShaderPackManager() {
         return shaderPackManager;
+    }
+
+    public static DynamicLightConfig getDynamicLightConfig() {
+        return dynamicLightConfig;
     }
 
     public static ShaderPackController getShaderApi() {
@@ -40,6 +46,9 @@ public class MainMod {
 
         // Initialize custom vertex formats for the shaders
         ExtendedVertexFormats.initialize();
+
+        dynamicLightConfig = new DynamicLightConfig(Minecraft.getMinecraft().gameDir.toPath());
+        dynamicLightConfig.load();
 
         shaderPackManager = new ShaderPackManager(Minecraft.getMinecraft().gameDir.toPath());
 

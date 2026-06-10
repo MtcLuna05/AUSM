@@ -16,6 +16,7 @@ import org.lwjgl.opengl.GL44;
 import org.lwjgl.opengl.GLContext;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -23,6 +24,7 @@ public final class ShaderImageSet {
     private final List<ShaderImageDirective> images;
     private final List<LoadedImage> loadedImages = new ArrayList<>();
     private static final ByteBuffer ZERO_CLEAR_VALUE = org.lwjgl.BufferUtils.createByteBuffer(16);
+    private final ByteBuffer singleUintPixel = org.lwjgl.BufferUtils.createByteBuffer(4).order(ByteOrder.nativeOrder());
     private int width;
     private int height;
 
@@ -92,44 +94,123 @@ public final class ShaderImageSet {
 
     public void clearSmallImages() {
         for (LoadedImage image : loadedImages) {
-            ShaderImageDirective directive = image.directive();
-            if (!directive.clear()) {
-                continue;
-            }
+            clearImage(image, false);
+        }
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+        TextureBinder.restoreDefaultTextureUnit();
+    }
 
-            int pixelFormat = ShaderTextureLoader.pixelFormat(directive.format());
-            int pixelType = ShaderTextureLoader.pixelType(directive.pixelType());
-            if (GLContext.getCapabilities().OpenGL44) {
-                ZERO_CLEAR_VALUE.clear();
-                GL44.glClearTexImage(image.textureId(), 0, pixelFormat, pixelType, ZERO_CLEAR_VALUE);
-                int error = GL11.glGetError();
-                if (error != GL11.GL_NO_ERROR) {
-                    MainMod.LOGGER.debug("[ShaderImages] GL error clearing image '{}': 0x{}", directive.name(), Integer.toHexString(error));
-                }
-                continue;
-            }
-
-            ByteBuffer pixels = image.clearPixels();
-            if (pixels == null) {
-                continue;
-            }
-
-            pixels.clear();
-
-            GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            GL11.glBindTexture(image.textureTarget(), image.textureId());
-            switch (directive.target()) {
-                case TEXTURE_1D -> GL11.glTexSubImage1D(image.textureTarget(), 0, 0, image.width(), pixelFormat, pixelType, pixels);
-                case TEXTURE_2D -> GL11.glTexSubImage2D(image.textureTarget(), 0, 0, 0, image.width(), image.height(), pixelFormat, pixelType, pixels);
-                case TEXTURE_3D -> GL12.glTexSubImage3D(image.textureTarget(), 0, 0, 0, 0, image.width(), image.height(), image.depth(), pixelFormat, pixelType, pixels);
-            }
-            int error = GL11.glGetError();
-            if (error != GL11.GL_NO_ERROR) {
-                MainMod.LOGGER.debug("[ShaderImages] GL error clearing image '{}': 0x{}", directive.name(), Integer.toHexString(error));
+    public void clearNamedImages(String... names) {
+        if (names == null || names.length == 0) {
+            return;
+        }
+        for (LoadedImage image : loadedImages) {
+            if (matchesName(image, names)) {
+                clearImage(image, true);
             }
         }
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
         TextureBinder.restoreDefaultTextureUnit();
+    }
+
+    public int[] dimensions(String... names) {
+        LoadedImage image = findImage(names);
+        if (image == null) {
+            return null;
+        }
+        return new int[]{image.width(), image.height(), image.depth()};
+    }
+
+    public boolean writeRedInteger3D(int x, int y, int z, int value, String... names) {
+        LoadedImage image = findImage(names);
+        if (image == null
+                || image.textureTarget() != GL12.GL_TEXTURE_3D
+                || x < 0 || y < 0 || z < 0
+                || x >= image.width() || y >= image.height() || z >= image.depth()) {
+            return false;
+        }
+
+        ShaderImageDirective directive = image.directive();
+        int pixelFormat = ShaderTextureLoader.pixelFormat(directive.format());
+        int pixelType = ShaderTextureLoader.pixelType(directive.pixelType());
+        if (pixelFormat != org.lwjgl.opengl.GL30.GL_RED_INTEGER || pixelType != GL11.GL_UNSIGNED_INT) {
+            return false;
+        }
+
+        singleUintPixel.clear();
+        singleUintPixel.putInt(value).flip();
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(image.textureTarget(), image.textureId());
+        GL12.glTexSubImage3D(image.textureTarget(), 0, x, y, z, 1, 1, 1, pixelFormat, pixelType, singleUintPixel);
+        GL11.glBindTexture(image.textureTarget(), 0);
+        TextureBinder.restoreDefaultTextureUnit();
+        return GL11.glGetError() == GL11.GL_NO_ERROR;
+    }
+
+    private LoadedImage findImage(String... names) {
+        if (names == null || names.length == 0) {
+            return null;
+        }
+        for (LoadedImage image : loadedImages) {
+            if (matchesName(image, names)) {
+                return image;
+            }
+        }
+        return null;
+    }
+
+    private static boolean matchesName(LoadedImage image, String... names) {
+        ShaderImageDirective directive = image.directive();
+        for (String name : names) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            if (name.equals(directive.name()) || name.equals(directive.samplerName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void clearImage(LoadedImage image, boolean force) {
+        ShaderImageDirective directive = image.directive();
+        if (!force && !directive.clear()) {
+            return;
+        }
+
+        int pixelFormat = ShaderTextureLoader.pixelFormat(directive.format());
+        int pixelType = ShaderTextureLoader.pixelType(directive.pixelType());
+        if (GLContext.getCapabilities().OpenGL44) {
+            ZERO_CLEAR_VALUE.clear();
+            GL44.glClearTexImage(image.textureId(), 0, pixelFormat, pixelType, ZERO_CLEAR_VALUE);
+            int error = GL11.glGetError();
+            if (error != GL11.GL_NO_ERROR) {
+                MainMod.LOGGER.debug("[ShaderImages] GL error clearing image '{}': 0x{}", directive.name(), Integer.toHexString(error));
+            }
+            return;
+        }
+
+        ByteBuffer pixels = image.clearPixels();
+        if (pixels == null && force) {
+            pixels = zeroPixels(pixelFormat, pixelType, image.width(), image.height(), image.depth());
+        }
+        if (pixels == null) {
+            return;
+        }
+
+        pixels.clear();
+
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(image.textureTarget(), image.textureId());
+        switch (directive.target()) {
+            case TEXTURE_1D -> GL11.glTexSubImage1D(image.textureTarget(), 0, 0, image.width(), pixelFormat, pixelType, pixels);
+            case TEXTURE_2D -> GL11.glTexSubImage2D(image.textureTarget(), 0, 0, 0, image.width(), image.height(), pixelFormat, pixelType, pixels);
+            case TEXTURE_3D -> GL12.glTexSubImage3D(image.textureTarget(), 0, 0, 0, 0, image.width(), image.height(), image.depth(), pixelFormat, pixelType, pixels);
+        }
+        int error = GL11.glGetError();
+        if (error != GL11.GL_NO_ERROR) {
+            MainMod.LOGGER.debug("[ShaderImages] GL error clearing image '{}': 0x{}", directive.name(), Integer.toHexString(error));
+        }
     }
 
     private void allocate(int width, int height) {

@@ -6,9 +6,11 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import net.minecraft.client.renderer.BufferBuilder;
+import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.WorldVertexBufferUploader;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL15;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -18,6 +20,22 @@ import java.nio.ByteBuffer;
 
 @Mixin(WorldVertexBufferUploader.class)
 public class WorldVertexBufferUploaderMixin {
+
+    @Inject(method = "draw", at = @At("HEAD"))
+    private void ausm$unbindArrayBufferForClientDraw(BufferBuilder bufferBuilder, CallbackInfo ci) {
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
+        GL11.glDisableClientState(GL11.GL_COLOR_ARRAY);
+        GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
+        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
+        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
+        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
+    }
 
     @Inject(
             method = "draw",
