@@ -8,6 +8,7 @@ import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.client.ShaderCompileNotifications;
 import com.l.ausm.impl.client.ShaderLoadingScreen;
 import com.l.ausm.api.pipeline.fbo.Attachment;
+import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.compat.LumenizedBloomTarget;
 import com.l.ausm.impl.pipeline.compat.NothiriumBypass;
 import com.l.ausm.impl.pipeline.compat.NothiriumShadowRenderer;
@@ -17,6 +18,7 @@ import com.l.ausm.impl.pipeline.fbo.PingPongManager;
 import com.l.ausm.impl.pipeline.fbo.ShadowFramebuffer;
 import com.l.ausm.impl.pipeline.matrix.MatrixState;
 import com.l.ausm.impl.mixin.pipeline.EntityRendererAccessor;
+import com.l.ausm.impl.mixin.pipeline.RenderChunkAccessor;
 import com.l.ausm.impl.mixin.pipeline.RenderGlobalAccessor;
 import com.l.ausm.api.pipeline.pack.ShaderAlphaTest;
 import com.l.ausm.api.pipeline.pack.ShaderBlendMode;
@@ -28,6 +30,7 @@ import com.l.ausm.impl.pipeline.pack.ShaderItemIdMap;
 import com.l.ausm.impl.pipeline.pack.ShaderPackLayout;
 import com.l.ausm.impl.pipeline.pack.ShaderPackDirectives;
 import com.l.ausm.impl.pipeline.pack.ShaderPipelineCapabilities;
+import com.l.ausm.impl.pipeline.pack.ShaderFeatureValidator;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
 import com.l.ausm.impl.pipeline.resource.ShaderImageSet;
 import com.l.ausm.impl.pipeline.resource.ShaderStorageBufferSet;
@@ -40,6 +43,7 @@ import com.l.ausm.impl.pipeline.render.ShaderTextureLoader;
 import com.l.ausm.impl.pipeline.render.TextureBinder;
 import com.l.ausm.impl.pipeline.shader.ComputeProgram;
 import com.l.ausm.impl.pipeline.shader.CustomUniformSet;
+import com.l.ausm.impl.pipeline.shader.FullscreenArrayProgram;
 import com.l.ausm.impl.pipeline.shader.FullscreenProgramArray;
 import com.l.ausm.impl.pipeline.shader.PipelineProgram;
 import com.l.ausm.api.pipeline.shader.FogMode;
@@ -67,6 +71,7 @@ import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.ChunkRenderContainer;
 import net.minecraft.client.renderer.RenderList;
+import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.RenderHelper;
 import net.minecraft.client.renderer.ActiveRenderInfo;
@@ -107,6 +112,7 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.World;
+import net.minecraft.world.biome.Biome;
 import net.minecraft.world.chunk.Chunk;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
@@ -141,6 +147,8 @@ import java.util.Deque;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -170,10 +178,21 @@ public class PipelineContext {
     private static final int MAX_SYNTHETIC_LIGHT_RANGE_REFRESH_VOLUME = 4096;
     private static final int MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME = 128;
     private static final int MAX_COLORED_LIGHT_AUDIT_LOGS = 512;
+    private static final int BIOME_NETHER_WASTES_ID = 100_000;
+    private static final int BIOME_CRIMSON_FOREST_ID = 100_001;
+    private static final int BIOME_WARPED_FOREST_ID = 100_002;
+    private static final int BIOME_BASALT_DELTAS_ID = 100_003;
+    private static final int BIOME_SOUL_SAND_VALLEY_ID = 100_004;
+    private static final int BIOME_PALE_GARDEN_ID = 100_005;
     private static final int FORCE_LIGHT_RECALC_MIN_RADIUS = 16;
     private static final int FORCE_LIGHT_RECALC_MAX_RADIUS = 32;
     private static final int WORLD_LOAD_FORCE_LIGHT_RECALC_ATTEMPTS = 12;
     private static final int WORLD_LOAD_FORCE_LIGHT_RECALC_DELAY_FRAMES = 10;
+    private static final int WORLD_LOAD_LIGHT_REFRESH_RADIUS = 16;
+    private static final int COMPILED_PIPELINE_CACHE_LIMIT = 3;
+    private static final ShaderBlendMode OIT_COEFFICIENT_BLEND = new ShaderBlendMode(true, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
+    private static final float PORTAL_NETHER_FOG_DENSITY = 0.08f;
+    private static final float[] PORTAL_NETHER_FOG_COLOR = {0.20f, 0.03f, 0.03f};
     private static int maxDrawBuffers = -1;
     private static boolean celeritasShadowCameraWarningLogged;
 
@@ -197,9 +216,24 @@ public class PipelineContext {
     private List<ComputeProgram> shadowComputePrograms = List.of();
     private List<ComputeProgram> finalComputePrograms = List.of();
     private final Map<ProgramArrayId, FullscreenProgramArray> fullscreenProgramArrays = new EnumMap<>(ProgramArrayId.class);
+    private final Map<ProgramArrayId, List<FullscreenArrayProgram>> fullscreenArrayPrograms = new EnumMap<>(ProgramArrayId.class);
+    private final Map<RenderGlobal, Map<World, ViewFrustum>> vanillaViewFrustums = new IdentityHashMap<>();
+    private final Deque<VanillaViewFrustumState> vanillaViewFrustumStateStack = new ArrayDeque<>();
+    private final Map<String, CompiledPipelineState> compiledPipelineCache = new LinkedHashMap<>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, CompiledPipelineState> eldest) {
+            if (size() <= COMPILED_PIPELINE_CACHE_LIMIT) {
+                return false;
+            }
+            eldest.getValue().delete();
+            MainMod.LOGGER.info("[Pipeline] Evicted cached compiled shader programs: {}", eldest.getKey());
+            return true;
+        }
+    };
     private final NothiriumShadowRenderer nothiriumShadowRenderer = new NothiriumShadowRenderer();
     private int pendingWorldLoadLightRecalculationAttempts = 0;
     private int pendingWorldLoadLightRecalculationDelay = 0;
+    private String activeCompiledPipelineCacheKey;
     private boolean lumenizedBloomTargetLogged;
 
     private final Deque<PassScope> passStack = new ArrayDeque<>();
@@ -250,13 +284,19 @@ public class PipelineContext {
     private boolean deferredPassesRenderedThisFrame = false;
     private boolean preTranslucentDepthCopiedThisFrame = false;
     private boolean preHandDepthCopiedThisFrame = false;
+    private boolean setupComputePending = false;
     private boolean terrainCullOverrideActive = false;
     private boolean previousTerrainCullEnabled = true;
     private boolean worldFrameActive = false;
+    private Framebuffer externalWorldFramebufferTarget = null;
     private boolean renderingShadowMap = false;
     private boolean renderingDeferredIngameHud = false;
     private boolean renderingGui = false;
     private boolean shadowMapPopulated = false;
+    private RenderGlobal activeVanillaViewFrustumRenderGlobal = null;
+    private World activeVanillaViewFrustumWorld = null;
+    private boolean betterPortalsViewFrustumUpdateWarningLogged = false;
+    private boolean betterPortalsChunkUpdateWarningLogged = false;
     private boolean shadowHealthLogged = false;
     private int shadowHealthLogAttempts = 0;
     private int guiRenderDepth = 0;
@@ -297,6 +337,49 @@ public class PipelineContext {
         }
     }
 
+    private record VanillaViewFrustumState(RenderGlobal renderGlobal, ViewFrustum viewFrustum) {
+    }
+
+    private static final class CompiledPipelineState {
+        private final ShaderProgramSet programSet;
+        private final ShaderMap shaderMap;
+        private final Map<RenderPass, PipelineProgram> programs;
+        private final Map<ProgramArrayId, List<ComputeProgram>> computeProgramArrays;
+        private final List<ComputeProgram> shadowComputePrograms;
+        private final List<ComputeProgram> finalComputePrograms;
+        private final Map<ProgramArrayId, List<FullscreenArrayProgram>> fullscreenArrayPrograms;
+
+        private CompiledPipelineState(
+                ShaderProgramSet programSet,
+                ShaderMap shaderMap,
+                Map<RenderPass, PipelineProgram> programs,
+                Map<ProgramArrayId, List<ComputeProgram>> computeProgramArrays,
+                List<ComputeProgram> shadowComputePrograms,
+                List<ComputeProgram> finalComputePrograms,
+                Map<ProgramArrayId, List<FullscreenArrayProgram>> fullscreenArrayPrograms
+        ) {
+            this.programSet = programSet;
+            this.shaderMap = shaderMap;
+            this.programs = new EnumMap<>(programs);
+            this.computeProgramArrays = new EnumMap<>(computeProgramArrays);
+            this.shadowComputePrograms = List.copyOf(shadowComputePrograms);
+            this.finalComputePrograms = List.copyOf(finalComputePrograms);
+            this.fullscreenArrayPrograms = new EnumMap<>(fullscreenArrayPrograms);
+        }
+
+        private void delete() {
+            programs.values().forEach(PipelineProgram::delete);
+            computeProgramArrays.values().stream()
+                    .flatMap(List::stream)
+                    .forEach(ComputeProgram::delete);
+            shadowComputePrograms.forEach(ComputeProgram::delete);
+            finalComputePrograms.forEach(ComputeProgram::delete);
+            fullscreenArrayPrograms.values().stream()
+                    .flatMap(List::stream)
+                    .forEach(FullscreenArrayProgram::delete);
+        }
+    }
+
     public static PipelineContext getInstance() {
         return INSTANCE;
     }
@@ -306,40 +389,44 @@ public class PipelineContext {
 
         // --- 1. Global / Engine Uniforms ---
         uniformRegistry.registerInt("worldTime", () -> {
-            if (mc.world != null) {
-                return (int) (mc.world.getWorldTime() % 24000L);
+            World world = renderWorld(mc);
+            if (world != null) {
+                return (int) (world.getWorldTime() % 24000L);
             }
             return 0;
         });
 
-        uniformRegistry.registerFloat("viewWidth", () -> (float) mc.displayWidth);
-        uniformRegistry.registerFloat("viewHeight", () -> (float) mc.displayHeight);
-        uniformRegistry.registerFloat("pixelSizeX", () -> 1.0f / Math.max(1, mc.displayWidth));
-        uniformRegistry.registerFloat("pixelSizeY", () -> 1.0f / Math.max(1, mc.displayHeight));
-        uniformRegistry.registerFloat("aspectRatio", () -> (float) mc.displayWidth / (float) mc.displayHeight);
-        uniformRegistry.registerFloat("aspectRatioInverse", () -> (float) mc.displayHeight / (float) mc.displayWidth);
+        uniformRegistry.registerFloat("viewWidth", () -> (float) worldTargetWidth(mc));
+        uniformRegistry.registerFloat("viewHeight", () -> (float) worldTargetHeight(mc));
+        uniformRegistry.registerFloat("pixelSizeX", () -> 1.0f / worldTargetWidth(mc));
+        uniformRegistry.registerFloat("pixelSizeY", () -> 1.0f / worldTargetHeight(mc));
+        uniformRegistry.registerFloat("aspectRatio", () -> (float) worldTargetWidth(mc) / (float) worldTargetHeight(mc));
+        uniformRegistry.registerFloat("aspectRatioInverse", () -> (float) worldTargetHeight(mc) / (float) worldTargetWidth(mc));
         uniformRegistry.registerFloat("screenBrightness", () -> mc.gameSettings.gammaSetting);
         uniformRegistry.registerInt("hideGUI", () -> mc.gameSettings.hideGUI ? 1 : 0);
         uniformRegistry.registerInt("isRightHanded", () -> mc.gameSettings.mainHand == EnumHandSide.RIGHT ? 1 : 0);
         uniformRegistry.registerInt("firstPersonCamera", () -> mc.gameSettings.thirdPersonView == 0 ? 1 : 0);
         uniformRegistry.registerFloat("near", () -> 0.05f);
         uniformRegistry.registerFloat("far", () -> (float) Math.max(16, mc.gameSettings.renderDistanceChunks * 16));
-        uniformRegistry.registerFloat("fogStart", () -> GL11.glGetFloat(GL11.GL_FOG_START));
-        uniformRegistry.registerFloat("fogEnd", () -> GL11.glGetFloat(GL11.GL_FOG_END));
-        uniformRegistry.registerFloat("fogDensity", () -> GL11.glGetFloat(GL11.GL_FOG_DENSITY));
-        uniformRegistry.registerFloat("iris_FogStart", () -> GL11.glGetFloat(GL11.GL_FOG_START));
-        uniformRegistry.registerFloat("iris_FogEnd", () -> GL11.glGetFloat(GL11.GL_FOG_END));
-        uniformRegistry.registerFloat("iris_FogDensity", () -> Math.max(0.0f, GL11.glGetFloat(GL11.GL_FOG_DENSITY)));
-        uniformRegistry.registerInt("fogMode", () -> switch (GL11.glGetInteger(GL11.GL_FOG_MODE)) {
-            case GL11.GL_LINEAR -> 0;
-            case GL11.GL_EXP -> 1;
-            case GL11.GL_EXP2 -> 2;
-            default -> -1;
-        });
+        uniformRegistry.registerFloat("fogStart", () -> effectiveFogStart(mc));
+        uniformRegistry.registerFloat("fogEnd", () -> effectiveFogEnd(mc));
+        uniformRegistry.registerFloat("fogDensity", () -> effectiveFogDensity(mc));
+        uniformRegistry.registerFloat("iris_FogStart", () -> effectiveFogStart(mc));
+        uniformRegistry.registerFloat("iris_FogEnd", () -> effectiveFogEnd(mc));
+        uniformRegistry.registerFloat("iris_FogDensity", () -> Math.max(0.0f, effectiveFogDensity(mc)));
+        uniformRegistry.registerInt("fogMode", () -> effectiveFogMode(mc));
         uniformRegistry.registerInt("fogShape", () -> 1);
-        uniformRegistry.registerFloat("rainStrength", () -> mc.world != null ? mc.world.getRainStrength(mc.getRenderPartialTicks()) : 0.0f);
-        uniformRegistry.registerFloat("thunderStrength", () -> mc.world != null ? mc.world.getThunderStrength(mc.getRenderPartialTicks()) : 0.0f);
+        uniformRegistry.registerFloat("rainStrength", () -> renderWorld(mc) != null ? renderWorld(mc).getRainStrength(mc.getRenderPartialTicks()) : 0.0f);
+        uniformRegistry.registerFloat("thunderStrength", () -> renderWorld(mc) != null ? renderWorld(mc).getThunderStrength(mc.getRenderPartialTicks()) : 0.0f);
         uniformRegistry.registerFloat("wetness", () -> wetnessSmooth);
+        uniformRegistry.registerInt("biome", () -> currentBiomeExpressionId(mc));
+        uniformRegistry.registerInt("biome_precipitation", () -> currentBiomePrecipitation(mc));
+        uniformRegistry.registerInt("BIOME_NETHER_WASTES", () -> BIOME_NETHER_WASTES_ID);
+        uniformRegistry.registerInt("BIOME_CRIMSON_FOREST", () -> BIOME_CRIMSON_FOREST_ID);
+        uniformRegistry.registerInt("BIOME_WARPED_FOREST", () -> BIOME_WARPED_FOREST_ID);
+        uniformRegistry.registerInt("BIOME_BASALT_DELTAS", () -> BIOME_BASALT_DELTAS_ID);
+        uniformRegistry.registerInt("BIOME_SOUL_SAND_VALLEY", () -> BIOME_SOUL_SAND_VALLEY_ID);
+        uniformRegistry.registerInt("BIOME_PALE_GARDEN", () -> BIOME_PALE_GARDEN_ID);
         uniformRegistry.registerFloat("blindness", () -> blindness(mc));
         uniformRegistry.registerFloat("darknessFactor", () -> 0.0f);
         uniformRegistry.registerFloat("darknessLightFactor", () -> 0.0f);
@@ -360,14 +447,14 @@ public class PipelineContext {
         uniformRegistry.registerFloat("centerDepth", () -> centerDepth);
         uniformRegistry.registerFloat("centerDepthSmooth", () -> centerDepthSmooth);
         uniformRegistry.registerInt("iris_centerDepthSmooth", () -> TextureBinder.CENTER_DEPTH_SMOOTH_TEXTURE_UNIT);
-        uniformRegistry.registerInt("moonPhase", () -> mc.world != null ? mc.world.getMoonPhase() : 0);
+        uniformRegistry.registerInt("moonPhase", () -> renderWorld(mc) != null ? renderWorld(mc).getMoonPhase() : 0);
         uniformRegistry.registerInt("frameCounter", () -> (int) (pipelineFrameId % 720720L));
         uniformRegistry.registerInt("frameMod", () -> (int) (pipelineFrameId & 15L));
         uniformRegistry.registerFloat("framemod2", () -> (float) (pipelineFrameId & 1L));
         uniformRegistry.registerVec2("taaOffset", () -> taaOffset(mc));
-        uniformRegistry.registerInt("worldDay", () -> mc.world != null ? (int) (mc.world.getWorldTime() / 24000L) : 0);
+        uniformRegistry.registerInt("worldDay", () -> renderWorld(mc) != null ? (int) (renderWorld(mc).getWorldTime() / 24000L) : 0);
         uniformRegistry.registerInt("isSpectator", () -> mc.player != null && mc.player.isSpectator() ? 1 : 0);
-        uniformRegistry.registerInt("seaLevel", () -> mc.world != null ? mc.world.getSeaLevel() : 63);
+        uniformRegistry.registerInt("seaLevel", () -> renderWorld(mc) != null ? renderWorld(mc).getSeaLevel() : 63);
         uniformRegistry.registerInt("renderStage", () -> getPhase().ordinal());
         uniformRegistry.registerFloat("dayMoment", () -> dayMoment(mc));
         uniformRegistry.registerFloat("timeAngle", () -> dayMoment(mc));
@@ -534,27 +621,11 @@ public class PipelineContext {
         uniformRegistry.registerFloat("velocity", this::cameraVelocity);
 
         uniformRegistry.registerVec3("upPosition", PipelineContext::upPosition);
-        uniformRegistry.registerVec3("skyColor", () -> {
-            Entity viewEntity = mc.getRenderViewEntity();
-            if (mc.world != null && viewEntity != null) {
-                return vec3(mc.world.getSkyColor(viewEntity, mc.getRenderPartialTicks()));
-            }
-            return new float[]{0.5f, 0.7f, 1.0f};
-        });
-        uniformRegistry.registerVec3("fogColor", () -> {
-            Entity viewEntity = mc.getRenderViewEntity();
-            if (mc.world != null && viewEntity != null) {
-                return vec3(mc.world.getSkyColor(viewEntity, mc.getRenderPartialTicks()));
-            }
-            return new float[]{0.5f, 0.7f, 1.0f};
-        });
+        uniformRegistry.registerVec3("skyColor", () -> skyColor(mc));
+        uniformRegistry.registerVec3("fogColor", () -> effectiveFogColor(mc));
         uniformRegistry.registerVec4("iris_FogColor", () -> {
-            Entity viewEntity = mc.getRenderViewEntity();
-            if (mc.world != null && viewEntity != null) {
-                float[] color = vec3(mc.world.getSkyColor(viewEntity, mc.getRenderPartialTicks()));
-                return new float[]{color[0], color[1], color[2], 1.0f};
-            }
-            return new float[]{0.5f, 0.7f, 1.0f, 1.0f};
+            float[] color = effectiveFogColor(mc);
+            return new float[]{color[0], color[1], color[2], 1.0f};
         });
 
         // --- Sun & Moon Position ---
@@ -562,20 +633,21 @@ public class PipelineContext {
         uniformRegistry.registerFloat("shadowAngle", () -> shadowAngle(mc));
         uniformRegistry.registerVec3("endFlashPosition", () -> new float[]{0.0f, 0.0f, 0.0f});
         uniformRegistry.registerVec3("sunPosition", () -> {
-            if (mc.world != null) {
+            if (renderWorld(mc) != null) {
                 return shaderLightPosition(mc, false);
             }
             return new float[]{0, 100, 0};
         });
         uniformRegistry.registerVec3("moonPosition", () -> {
-            if (mc.world != null) {
+            if (renderWorld(mc) != null) {
                 return shaderLightPosition(mc, true);
             }
             return new float[]{0, -100, 0};
         });
         uniformRegistry.registerVec3("shadowLightPosition", () -> {
-            if (mc.world != null) {
-                float celestialAngle = mc.world.getCelestialAngle(mc.getRenderPartialTicks());
+            World world = renderWorld(mc);
+            if (world != null) {
+                float celestialAngle = world.getCelestialAngle(mc.getRenderPartialTicks());
                 float sunAngle = celestialAngle < 0.75F ? celestialAngle + 0.25F : celestialAngle - 0.75F;
                 return legacyShadowLightVector(mc, sunAngle > 0.5F);
             }
@@ -604,10 +676,48 @@ public class PipelineContext {
         uniformRegistry.registerVec2i("depthtex2Size", () -> framebufferSize());
     }
 
+    private Framebuffer currentWorldFramebufferTarget(Minecraft mc) {
+        return externalWorldFramebufferTarget != null ? externalWorldFramebufferTarget : mc != null ? mc.getFramebuffer() : null;
+    }
+
+    private static World renderWorld(Minecraft mc) {
+        WorldClient renderPassWorld = BetterPortalsCompat.currentRenderPassWorld();
+        if (renderPassWorld != null) {
+            return renderPassWorld;
+        }
+        return mc != null ? mc.world : null;
+    }
+
+    private boolean isExternalWorldFramebufferTarget(Framebuffer target) {
+        return externalWorldFramebufferTarget != null && target == externalWorldFramebufferTarget;
+    }
+
+    private boolean isBetterPortalsExternalWorldTarget() {
+        return externalWorldFramebufferTarget != null && isRenderingBetterPortalsNestedView();
+    }
+
+    private int worldTargetWidth(Minecraft mc) {
+        Framebuffer target = externalWorldFramebufferTarget;
+        return target != null ? Math.max(1, target.framebufferWidth) : Math.max(1, mc.displayWidth);
+    }
+
+    private int worldTargetHeight(Minecraft mc) {
+        Framebuffer target = externalWorldFramebufferTarget;
+        return target != null ? Math.max(1, target.framebufferHeight) : Math.max(1, mc.displayHeight);
+    }
+
+    private int framebufferWidth(Framebuffer target, Minecraft mc) {
+        return target != null ? Math.max(1, target.framebufferWidth) : Math.max(1, mc.displayWidth);
+    }
+
+    private int framebufferHeight(Framebuffer target, Minecraft mc) {
+        return target != null ? Math.max(1, target.framebufferHeight) : Math.max(1, mc.displayHeight);
+    }
+
     private int[] attachmentSize(Attachment attachment) {
         if (!pingPongManager.isInitialized()) {
             Minecraft mc = Minecraft.getMinecraft();
-            return new int[]{Math.max(1, mc.displayWidth), Math.max(1, mc.displayHeight)};
+            return new int[]{worldTargetWidth(mc), worldTargetHeight(mc)};
         }
         return new int[]{
                 Math.max(1, pingPongManager.attachmentWidth(attachment)),
@@ -618,7 +728,7 @@ public class PipelineContext {
     private int[] framebufferSize() {
         if (!pingPongManager.isInitialized()) {
             Minecraft mc = Minecraft.getMinecraft();
-            return new int[]{Math.max(1, mc.displayWidth), Math.max(1, mc.displayHeight)};
+            return new int[]{worldTargetWidth(mc), worldTargetHeight(mc)};
         }
         return new int[]{Math.max(1, pingPongManager.width()), Math.max(1, pingPongManager.height())};
     }
@@ -634,18 +744,150 @@ public class PipelineContext {
 
     private static int[] eyeBrightness(Minecraft mc) {
         Entity viewEntity = mc.getRenderViewEntity();
-        if (mc.world == null || viewEntity == null) {
+        World world = renderWorld(mc);
+        if (world == null || viewEntity == null) {
             return new int[]{0, 0};
         }
 
         BlockPos pos = new BlockPos(viewEntity.posX, viewEntity.posY + viewEntity.getEyeHeight(), viewEntity.posZ);
-        int combinedLight = mc.world.getCombinedLight(pos, 0);
+        int combinedLight = world.getCombinedLight(pos, 0);
         int block = combinedLight >> 4 & 0xF;
         int sky = combinedLight >> 20 & 0xF;
         if (eyeFluidState(mc) == 1) {
-            sky = underwaterSurfaceSkyLight(mc.world, pos, sky);
+            sky = underwaterSurfaceSkyLight(world, pos, sky);
         }
         return new int[]{block * 16, sky * 16};
+    }
+
+    private static float[] skyColor(Minecraft mc) {
+        Entity viewEntity = mc == null ? null : mc.getRenderViewEntity();
+        World world = renderWorld(mc);
+        if (mc != null && world != null && viewEntity != null) {
+            return vec3(world.getSkyColor(viewEntity, mc.getRenderPartialTicks()));
+        }
+        return new float[]{0.5f, 0.7f, 1.0f};
+    }
+
+    private float effectiveFogStart(Minecraft mc) {
+        if (!shouldUseNestedPortalFogFallback(mc)) {
+            return GL11.glGetFloat(GL11.GL_FOG_START);
+        }
+        return isNetherRenderWorld(mc) ? 0.0f : portalFogFar(mc) * 0.75f;
+    }
+
+    private float effectiveFogEnd(Minecraft mc) {
+        if (!shouldUseNestedPortalFogFallback(mc)) {
+            return GL11.glGetFloat(GL11.GL_FOG_END);
+        }
+        return portalFogFar(mc);
+    }
+
+    private float effectiveFogDensity(Minecraft mc) {
+        if (!shouldUseNestedPortalFogFallback(mc)) {
+            return GL11.glGetFloat(GL11.GL_FOG_DENSITY);
+        }
+        return isNetherRenderWorld(mc) ? PORTAL_NETHER_FOG_DENSITY : 0.0f;
+    }
+
+    private int effectiveFogMode(Minecraft mc) {
+        if (GL11.glIsEnabled(GL11.GL_FOG)) {
+            return currentGlFogMode();
+        }
+        if (!shouldUseNestedPortalFogFallback(mc)) {
+            return currentGlFogMode();
+        }
+        return isNetherRenderWorld(mc) ? 2 : 0;
+    }
+
+    private float[] effectiveFogColor(Minecraft mc) {
+        if (shouldUseNestedPortalFogFallback(mc) && isNetherRenderWorld(mc)) {
+            return PORTAL_NETHER_FOG_COLOR.clone();
+        }
+        return skyColor(mc);
+    }
+
+    private boolean shouldUseNestedPortalFogFallback(Minecraft mc) {
+        return isBetterPortalsExternalWorldTarget()
+                && !GL11.glIsEnabled(GL11.GL_FOG)
+                && renderWorld(mc) != null;
+    }
+
+    private boolean isNetherRenderWorld(Minecraft mc) {
+        return safeDimensionId(renderWorld(mc)) == -1;
+    }
+
+    private float portalFogFar(Minecraft mc) {
+        return (float) Math.max(16, mc != null ? mc.gameSettings.renderDistanceChunks * 16 : 16);
+    }
+
+    private static int currentGlFogMode() {
+        return switch (GL11.glGetInteger(GL11.GL_FOG_MODE)) {
+            case GL11.GL_LINEAR -> 0;
+            case GL11.GL_EXP -> 1;
+            case GL11.GL_EXP2 -> 2;
+            default -> -1;
+        };
+    }
+
+    private int currentBiomeExpressionId(Minecraft mc) {
+        Biome biome = currentCameraBiome(mc);
+        if (biome == null) {
+            return -1;
+        }
+        int irisId = irisBiomeId(biome);
+        return irisId >= 0 ? irisId : Biome.getIdForBiome(biome);
+    }
+
+    private int currentBiomePrecipitation(Minecraft mc) {
+        Biome biome = currentCameraBiome(mc);
+        if (biome == null) {
+            return 0;
+        }
+
+        BlockPos pos = currentCameraBlockPos();
+        if (biome.getEnableSnow() || biome.isSnowyBiome() || (biome.canRain() && biome.getTemperature(pos) < 0.15f)) {
+            return 2;
+        }
+        return biome.canRain() ? 1 : 0;
+    }
+
+    private Biome currentCameraBiome(Minecraft mc) {
+        World world = renderWorld(mc);
+        if (mc == null || world == null) {
+            return null;
+        }
+        return world.getBiome(currentCameraBlockPos());
+    }
+
+    private BlockPos currentCameraBlockPos() {
+        return new BlockPos(cameraPositionUnshifted[0], cameraPositionUnshifted[1], cameraPositionUnshifted[2]);
+    }
+
+    private static int irisBiomeId(Biome biome) {
+        ResourceLocation name = biome.getRegistryName();
+        if (name == null) {
+            return -1;
+        }
+        String path = name.getPath().toLowerCase(java.util.Locale.ROOT);
+        if ("hell".equals(path) || "nether".equals(path) || "nether_wastes".equals(path)) {
+            return BIOME_NETHER_WASTES_ID;
+        }
+        if (path.contains("crimson") && path.contains("forest")) {
+            return BIOME_CRIMSON_FOREST_ID;
+        }
+        if (path.contains("warped") && path.contains("forest")) {
+            return BIOME_WARPED_FOREST_ID;
+        }
+        if (path.contains("basalt") && path.contains("delta")) {
+            return BIOME_BASALT_DELTAS_ID;
+        }
+        if ((path.contains("soul") && path.contains("valley")) || path.contains("soulsand_valley")) {
+            return BIOME_SOUL_SAND_VALLEY_ID;
+        }
+        if (path.contains("pale") && path.contains("garden")) {
+            return BIOME_PALE_GARDEN_ID;
+        }
+        return -1;
     }
 
     private static int underwaterSurfaceSkyLight(World world, BlockPos eyePos, int fallbackSky) {
@@ -710,7 +952,8 @@ public class PipelineContext {
     }
 
     private void updateSmoothedWetness(Minecraft mc) {
-        float current = mc.world != null ? mc.world.getRainStrength(mc.getRenderPartialTicks()) : 0.0f;
+        World world = renderWorld(mc);
+        float current = world != null ? world.getRainStrength(mc.getRenderPartialTicks()) : 0.0f;
         if (!wetnessSmoothInitialized) {
             wetnessSmooth = current;
             wetnessSmoothInitialized = true;
@@ -810,10 +1053,11 @@ public class PipelineContext {
 
     private int currentSelectedBlockId(Minecraft mc) {
         BlockPos pos = currentSelectedBlockPosition(mc);
-        if (mc.world == null || pos == null) {
+        World world = renderWorld(mc);
+        if (world == null || pos == null) {
             return 0;
         }
-        return blockEntityId(mc.world.getBlockState(pos));
+        return blockEntityId(world.getBlockState(pos));
     }
 
     private static float[] currentSelectedBlockPos(Minecraft mc) {
@@ -873,8 +1117,8 @@ public class PipelineContext {
         };
         float[] offset = offsets[(int) (pipelineFrameId & 15L)];
         return new float[]{
-                offset[0] / Math.max(1, mc.displayWidth),
-                offset[1] / Math.max(1, mc.displayHeight)
+                offset[0] / worldTargetWidth(mc),
+                offset[1] / worldTargetHeight(mc)
         };
     }
 
@@ -892,7 +1136,11 @@ public class PipelineContext {
     }
 
     private float[] worldSpaceLightVector(Minecraft mc, boolean moon) {
-        float skyAngle = mc.world.getCelestialAngle(mc.getRenderPartialTicks()) * (float) (Math.PI * 2.0);
+        World world = renderWorld(mc);
+        if (world == null) {
+            return new float[]{0.0f, moon ? -100.0f : 100.0f, 0.0f};
+        }
+        float skyAngle = world.getCelestialAngle(mc.getRenderPartialTicks()) * (float) (Math.PI * 2.0);
         if (moon) {
             skyAngle += (float) Math.PI;
         }
@@ -915,10 +1163,11 @@ public class PipelineContext {
     }
 
     private float sunAngle(Minecraft mc) {
-        if (mc.world == null) {
+        World world = renderWorld(mc);
+        if (world == null) {
             return 0.0f;
         }
-        float angle = mc.world.getCelestialAngle(mc.getRenderPartialTicks()) + 0.25f;
+        float angle = world.getCelestialAngle(mc.getRenderPartialTicks()) + 0.25f;
         if (angle >= 1.0f) {
             angle -= 1.0f;
         }
@@ -926,7 +1175,7 @@ public class PipelineContext {
     }
 
     private float shadowAngle(Minecraft mc) {
-        if (mc.world == null) {
+        if (renderWorld(mc) == null) {
             return 0.0f;
         }
         float angle = sunAngle(mc);
@@ -943,14 +1192,16 @@ public class PipelineContext {
     }
 
     private float dayMoment(Minecraft mc) {
-        if (mc.world == null) {
+        World world = renderWorld(mc);
+        if (world == null) {
             return 0.25f;
         }
-        return (float) ((mc.world.getWorldTime() % 24000L) / 24000.0);
+        return (float) ((world.getWorldTime() % 24000L) / 24000.0);
     }
 
     private float adjustedDayTime(Minecraft mc) {
-        return Math.abs(((((mc.world != null ? mc.world.getWorldTime() % 24000L : 0L) / 1000.0f) + 6.0f) % 24.0f) - 12.0f);
+        World world = renderWorld(mc);
+        return Math.abs(((((world != null ? world.getWorldTime() % 24000L : 0L) / 1000.0f) + 6.0f) % 24.0f) - 12.0f);
     }
 
     private float dayHelper(Minecraft mc) {
@@ -972,10 +1223,11 @@ public class PipelineContext {
     }
 
     private float dayNightMix(Minecraft mc) {
-        if (mc.world == null) {
+        World world = renderWorld(mc);
+        if (world == null) {
             return 1.0f;
         }
-        float worldTime = mc.world.getWorldTime() % 24000L;
+        float worldTime = world.getWorldTime() % 24000L;
         float day = worldTime < 12485.0f || worldTime >= 23515.0f ? 1.0f : 0.0f;
         float dusk = worldTime >= 12485.0f && worldTime < 13085.0f
                 ? 1.0f - ((worldTime - 12485.0f) * 0.0016666667f)
@@ -1017,7 +1269,29 @@ public class PipelineContext {
 
     public void initialize(ShaderPack pack, Map<String, String> optionOverrides, ShaderProperties preloadedProperties,
                            ShaderLoadingScreen.BackgroundMode loadingBackgroundMode) {
-        cleanup(); // Clear previous state
+        initializeInternal(null, pack, optionOverrides, preloadedProperties, loadingBackgroundMode);
+    }
+
+    public void initializeCached(String cacheKey, ShaderPack pack, Map<String, String> optionOverrides, ShaderProperties preloadedProperties) {
+        initializeInternal(cacheKey, pack, optionOverrides, preloadedProperties, ShaderLoadingScreen.BackgroundMode.SNAPSHOT);
+    }
+
+    private void initializeInternal(String cacheKey, ShaderPack pack, Map<String, String> optionOverrides, ShaderProperties preloadedProperties,
+                                    ShaderLoadingScreen.BackgroundMode loadingBackgroundMode) {
+        boolean wasPipelineActive = isPipelineActive;
+        boolean replacingActiveCacheKey = cacheKey != null && cacheKey.equals(activeCompiledPipelineCacheKey);
+        CompiledPipelineState cachedPrograms = replacingActiveCacheKey ? null : removeCachedCompiledPipeline(cacheKey);
+        if (cacheKey == null) {
+            cleanupRuntimeState(true, true);
+        } else {
+            if (replacingActiveCacheKey) {
+                deleteCachedCompiledPipeline(cacheKey);
+                activeCompiledPipelineCacheKey = null;
+            } else {
+                cacheActiveCompiledPipeline();
+            }
+            cleanupRuntimeState(true, false, !wasPipelineActive);
+        }
         shaderProperties = emptyShaderProperties();
         activePackName = pack.getName();
 
@@ -1028,22 +1302,34 @@ public class PipelineContext {
             return;
         }
 
-        ShaderLoadingScreen.begin(pack.getName(), 12, loadingBackgroundMode);
+        boolean usingCachedPrograms = cachedPrograms != null;
+        boolean restoredCachedPrograms = false;
+        ShaderLoadingScreen.begin(pack.getName(), usingCachedPrograms ? 9 : 12, loadingBackgroundMode);
         try {
             Minecraft mc = Minecraft.getMinecraft();
             ShaderLoadingScreen.step("Loading shader properties");
             ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
             ShaderCompileNotifications.beginReload();
             ShaderLoadingScreen.step("Scanning shader programs");
-            programSet = ShaderProgramSet.load(pack, properties);
+            programSet = usingCachedPrograms ? cachedPrograms.programSet : ShaderProgramSet.load(pack, properties);
             packDirectives = properties.packDirectives().withComputeDirectives(programSet.computeDirectives());
             rebuildFullscreenProgramArrays();
             packDirectives = packDirectives.withCapabilities(
                     ShaderPipelineCapabilities.from(packDirectives)
                             .withExtraProgramArrayEntries(hasExtraProgramArrayEntries())
             );
-            ShaderLoadingScreen.setTotalSteps(shaderLoadingStepCount(properties));
-            ShaderLoadingMap loadingMap = new ShaderLoadingMap();
+            ShaderFeatureValidator.Result featureValidation = ShaderFeatureValidator.validate(packDirectives);
+            for (String warning : featureValidation.warnings()) {
+                MainMod.LOGGER.warn("[Pipeline] {}", warning);
+            }
+            if (!featureValidation.supported()) {
+                String summary = featureValidation.summary();
+                MainMod.LOGGER.error("[Pipeline] Shaderpack '{}' disabled: {}", pack.getName(), summary);
+                ShaderCompileNotifications.reportLoadFailure(pack.getName(), summary);
+                return;
+            }
+            ShaderLoadingScreen.setTotalSteps(usingCachedPrograms ? 9 : shaderLoadingStepCount(properties));
+            ShaderLoadingMap loadingMap = usingCachedPrograms ? null : new ShaderLoadingMap();
             shaderProperties = properties;
             shadowMapDistance = parseFloatSettingWithComment(pack, properties, "shadowDistance", "SHADOWHPL", 128.0f);
             shadowDistanceRenderMul = parseFloatSetting(pack, properties, "shadowDistanceRenderMul", -1.0f);
@@ -1104,8 +1390,11 @@ public class PipelineContext {
             clearColoredLightImages();
             shaderStorageBuffers = ShaderStorageBufferSet.load(pack, packDirectives.storageBuffers());
             shaderStorageBuffers.resize(mc.displayWidth, mc.displayHeight);
-            ShaderLoadingScreen.step("Compiling compute shaders");
-            compileComputePrograms(pack, properties);
+            if (!usingCachedPrograms) {
+                ShaderLoadingScreen.step("Compiling compute shaders");
+                compileComputePrograms(pack, properties);
+                setupComputePending = !computeProgramArrays.getOrDefault(ProgramArrayId.SETUP, List.of()).isEmpty();
+            }
             logRequestedFeaturesAndCapabilities();
             ShaderLoadingScreen.step("Loading noise texture");
             initializeNoiseTexture(properties);
@@ -1114,42 +1403,197 @@ public class PipelineContext {
             lastPipelineFrameNanos = System.nanoTime() - 1_000_000_000L;
             currentFrameTime = 1.0f;
 
-            for (RenderPass pass : RenderPass.values()) {
-                PipelineProgram pipelineProgram = new PipelineProgram(pass, programSet.source(pass.programId()).directives());
-                boolean enabled = properties.isProgramEnabled(pass);
-                pipelineProgram.setEnabled(enabled);
+            if (usingCachedPrograms) {
+                ShaderLoadingScreen.step("Restoring cached shader programs");
+                restoreCompiledPipeline(cachedPrograms);
+                restoredCachedPrograms = true;
+                MainMod.LOGGER.info("[Pipeline] Reused cached compiled shader programs for pack: {}", pack.getName());
+            } else {
+                for (RenderPass pass : RenderPass.values()) {
+                    PipelineProgram pipelineProgram = new PipelineProgram(pass, programSet.source(pass.programId()).directives());
+                    boolean enabled = properties.isProgramEnabled(pass);
+                    pipelineProgram.setEnabled(enabled);
 
-                if (enabled) {
-                    ShaderLoadingScreen.step("Compiling " + pass.getProgramName());
-                    ShaderProgram program = ShaderCompiler.compilePass(pack, pass, properties, programSet.source(pass.programId()));
-                    if (program != null) {
-                        pipelineProgram.setShaderProgram(program);
-                        loadingMap.put(pipelineProgram.shaderKey(), program);
-                        MainMod.LOGGER.debug("[Pipeline] Added program for pass: {}", pass);
+                    if (enabled) {
+                        ShaderLoadingScreen.step("Compiling " + pass.getProgramName());
+                        ShaderProgram program = ShaderCompiler.compilePass(pack, pass, properties, programSet.source(pass.programId()));
+                        if (program != null) {
+                            pipelineProgram.setShaderProgram(program);
+                            loadingMap.put(pipelineProgram.shaderKey(), program);
+                            MainMod.LOGGER.debug("[Pipeline] Added program for pass: {}", pass);
+                        }
+                    } else {
+                        MainMod.LOGGER.debug("[Pipeline] Program disabled by properties: {}", pass.getProgramName());
                     }
-                } else {
-                    MainMod.LOGGER.debug("[Pipeline] Program disabled by properties: {}", pass.getProgramName());
+                    programs.put(pass, pipelineProgram);
                 }
-                programs.put(pass, pipelineProgram);
+                compileFullscreenArrayPrograms(pack, properties);
+                ShaderLoadingScreen.step("Building shader pipeline");
+                shaderMap = new ShaderMap(loadingMap);
             }
-            ShaderLoadingScreen.step("Building shader pipeline");
-            shaderMap = new ShaderMap(loadingMap);
+            setupComputePending = hasSetupPrograms();
 
             isPipelineActive = pingPongManager.isInitialized();
+            activeCompiledPipelineCacheKey = cacheKey;
             long loadedProgramCount = programs.values().stream().filter(PipelineProgram::hasOwnProgram).count();
-            MainMod.LOGGER.info("[Pipeline] Initialization complete. Pipeline Active: {}, Loaded Programs: {}", isPipelineActive, loadedProgramCount);
+            long loadedArrayProgramCount = fullscreenArrayPrograms.values().stream()
+                    .flatMap(List::stream)
+                    .filter(FullscreenArrayProgram::hasProgram)
+                    .count();
+            MainMod.LOGGER.info(
+                    "[Pipeline] Initialization complete. Pipeline Active: {}, Loaded Programs: {} (+{} indexed fullscreen)",
+                    isPipelineActive,
+                    loadedProgramCount,
+                    loadedArrayProgramCount
+            );
             ShaderCompileNotifications.finishReload(pack.getName());
-            ShaderLoadingScreen.step("Rebuilding terrain");
             syntheticLightCandidates.clear();
             resetColoredLightAudit();
-            rebuildTerrainRenderers();
+            if (wasPipelineActive) {
+                ShaderLoadingScreen.step("Keeping terrain cache");
+            } else {
+                ShaderLoadingScreen.step("Rebuilding terrain");
+                rebuildTerrainRenderers();
+            }
         } finally {
+            if (cachedPrograms != null && !restoredCachedPrograms) {
+                cachedPrograms.delete();
+            }
             ShaderLoadingScreen.finish();
         }
     }
 
     public ShaderProperties getShaderProperties() {
         return shaderProperties;
+    }
+
+    public boolean activateCachedCompiledPipeline(String cacheKey, ShaderPack pack, Map<String, String> optionOverrides,
+                                                  ShaderProperties preloadedProperties) {
+        if (cacheKey == null || cacheKey.isBlank()) {
+            return false;
+        }
+        if (cacheKey.equals(activeCompiledPipelineCacheKey) && programSet != null && shaderMap != null && isPipelineActive) {
+            return true;
+        }
+        if (!pingPongManager.isInitialized()) {
+            return false;
+        }
+
+        CompiledPipelineState cachedPrograms = removeCachedCompiledPipeline(cacheKey);
+        if (cachedPrograms == null) {
+            return false;
+        }
+
+        try {
+            cacheActiveCompiledPipeline();
+            ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
+            programSet = cachedPrograms.programSet;
+            shaderProperties = properties;
+            packDirectives = properties.packDirectives().withComputeDirectives(programSet.computeDirectives());
+            rebuildFullscreenProgramArrays();
+            packDirectives = packDirectives.withCapabilities(
+                    ShaderPipelineCapabilities.from(packDirectives)
+                            .withExtraProgramArrayEntries(hasExtraProgramArrayEntries())
+            );
+            restoreCompiledPipeline(cachedPrograms);
+            activePackName = pack.getName();
+            activeCompiledPipelineCacheKey = cacheKey;
+            setupComputePending = hasSetupPrograms();
+            resetTransientWorldRenderState();
+            isPipelineActive = true;
+            MainMod.LOGGER.debug("[Pipeline] Activated cached compiled shader programs: {}", cacheKey);
+            return true;
+        } catch (RuntimeException e) {
+            MainMod.LOGGER.warn("[Pipeline] Failed to activate cached compiled shader programs: {}", cacheKey, e);
+            cachedPrograms.delete();
+            return false;
+        }
+    }
+
+    public void clearCompiledPipelineCache() {
+        deleteCachedCompiledPipelines();
+        activeCompiledPipelineCacheKey = null;
+    }
+
+    private void cacheActiveCompiledPipeline() {
+        if (activeCompiledPipelineCacheKey == null || programSet == null || shaderMap == null || isInternalPipelinePack()) {
+            return;
+        }
+
+        CompiledPipelineState previous = compiledPipelineCache.put(activeCompiledPipelineCacheKey, detachCompiledPipeline());
+        if (previous != null) {
+            previous.delete();
+        }
+        MainMod.LOGGER.debug("[Pipeline] Cached compiled shader programs: {}", activeCompiledPipelineCacheKey);
+        activeCompiledPipelineCacheKey = null;
+    }
+
+    private CompiledPipelineState detachCompiledPipeline() {
+        CompiledPipelineState state = new CompiledPipelineState(
+                programSet,
+                shaderMap,
+                programs,
+                computeProgramArrays,
+                shadowComputePrograms,
+                finalComputePrograms,
+                fullscreenArrayPrograms
+        );
+        programs.clear();
+        computeProgramArrays.clear();
+        shadowComputePrograms = List.of();
+        finalComputePrograms = List.of();
+        fullscreenArrayPrograms.clear();
+        programSet = null;
+        shaderMap = null;
+        setupComputePending = false;
+        return state;
+    }
+
+    private void restoreCompiledPipeline(CompiledPipelineState state) {
+        programs.clear();
+        programs.putAll(state.programs);
+        computeProgramArrays.clear();
+        computeProgramArrays.putAll(state.computeProgramArrays);
+        shadowComputePrograms = state.shadowComputePrograms;
+        finalComputePrograms = state.finalComputePrograms;
+        fullscreenArrayPrograms.clear();
+        fullscreenArrayPrograms.putAll(state.fullscreenArrayPrograms);
+        programSet = state.programSet;
+        shaderMap = state.shaderMap;
+    }
+
+    private CompiledPipelineState removeCachedCompiledPipeline(String cacheKey) {
+        return cacheKey == null ? null : compiledPipelineCache.remove(cacheKey);
+    }
+
+    private void deleteCachedCompiledPipeline(String cacheKey) {
+        CompiledPipelineState state = removeCachedCompiledPipeline(cacheKey);
+        if (state != null) {
+            state.delete();
+        }
+    }
+
+    private void deleteCachedCompiledPipelines() {
+        compiledPipelineCache.values().forEach(CompiledPipelineState::delete);
+        compiledPipelineCache.clear();
+    }
+
+    private boolean isInternalPipelinePack() {
+        return "(internal)".equals(activePackName);
+    }
+
+    private void resetTransientWorldRenderState() {
+        activePass = null;
+        activeShaderKey = null;
+        activePhase = WorldRenderingPhase.NONE;
+        overridePhase = null;
+        passStack.clear();
+        worldFrameActive = false;
+        deferredPassesRenderedThisFrame = false;
+        preTranslucentDepthCopiedThisFrame = false;
+        preHandDepthCopiedThisFrame = false;
+        renderingShadowMap = false;
+        renderingDeferredIngameHud = false;
     }
 
     private void initializeBlankShadowFramebuffer(ShaderPack pack, ShaderProperties properties) {
@@ -1615,7 +2059,7 @@ public class PipelineContext {
         for (ProgramArrayId arrayId : ProgramArrayId.values()) {
             FullscreenProgramArray array = FullscreenProgramArray.fromProgramSet(arrayId, programSet);
             fullscreenProgramArrays.put(arrayId, array);
-            if (array.hasExtraPrograms()) {
+            if (!supportsIndexedFullscreenArray(arrayId) && array.hasExtraPrograms()) {
                 MainMod.LOGGER.debug(
                         "[Pipeline] Program array {} declares {} programs; current 1.12 adapter exposes {} fixed slots.",
                         arrayId.sourcePrefix(),
@@ -1627,11 +2071,15 @@ public class PipelineContext {
     }
 
     private boolean hasExtraProgramArrayEntries() {
-        return fullscreenProgramArrays.values().stream().anyMatch(FullscreenProgramArray::hasExtraPrograms);
+        return fullscreenProgramArrays.values().stream()
+                .anyMatch(array -> !supportsIndexedFullscreenArray(array.arrayId()) && array.hasExtraPrograms());
     }
 
     private int shaderLoadingStepCount(ShaderProperties properties) {
-        return 9 + computeProgramSourceCount(packDirectives.computeDirectives()) + enabledProgramCount(properties);
+        return 9
+                + computeProgramSourceCount(packDirectives.computeDirectives())
+                + enabledProgramCount(properties)
+                + enabledFullscreenArrayProgramSourceCount(properties);
     }
 
     private static int computeProgramSourceCount(ShaderComputeDirectives directives) {
@@ -1641,6 +2089,24 @@ public class PipelineContext {
         int count = directives.shadowComputes().size() + directives.finalComputes().size();
         for (List<ComputeProgramSource> sources : directives.computeArrays().values()) {
             count += sources.size();
+        }
+        return count;
+    }
+
+    private int enabledFullscreenArrayProgramSourceCount(ShaderProperties properties) {
+        if (programSet == null) {
+            return 0;
+        }
+        int count = 0;
+        for (ProgramArrayId arrayId : ProgramArrayId.values()) {
+            if (!supportsIndexedFullscreenArray(arrayId)) {
+                continue;
+            }
+            for (ShaderProgramSource source : programSet.programArray(arrayId)) {
+                if (source.hasAnyStage() && properties.isProgramArrayEnabled(arrayId, source.name())) {
+                    count++;
+                }
+            }
         }
         return count;
     }
@@ -1667,6 +2133,92 @@ public class PipelineContext {
         finalComputePrograms = compileComputeList(pack, properties, packDirectives.computeDirectives().finalComputes());
     }
 
+    private void compileFullscreenArrayPrograms(ShaderPack pack, ShaderProperties properties) {
+        fullscreenArrayPrograms.clear();
+        for (ProgramArrayId arrayId : ProgramArrayId.values()) {
+            if (!supportsIndexedFullscreenArray(arrayId)) {
+                continue;
+            }
+
+            List<FullscreenArrayProgram> compiled = compileFullscreenArrayList(pack, properties, arrayId);
+            if (!compiled.isEmpty()) {
+                fullscreenArrayPrograms.put(arrayId, compiled);
+            }
+        }
+    }
+
+    private List<FullscreenArrayProgram> compileFullscreenArrayList(
+            ShaderPack pack,
+            ShaderProperties properties,
+            ProgramArrayId arrayId
+    ) {
+        List<ShaderProgramSource> sources = programSet.programArray(arrayId);
+        if (sources.isEmpty()) {
+            return List.of();
+        }
+
+        List<FullscreenArrayProgram> compiled = new ArrayList<>();
+        RenderPass bindingPass = fullscreenArrayBindingPass(arrayId);
+        for (ShaderProgramSource source : sources) {
+            if (!source.hasAnyStage()) {
+                continue;
+            }
+            if (!properties.isProgramArrayEnabled(arrayId, source.name())) {
+                MainMod.LOGGER.debug("[Pipeline] Program array source disabled by properties: {}", source.name());
+                continue;
+            }
+
+            FullscreenArrayProgram arrayProgram = new FullscreenArrayProgram(
+                    arrayId,
+                    indexForFullscreenArraySource(arrayId, source.name()),
+                    source.name(),
+                    bindingPass,
+                    properties.directivesFor(arrayId, source.name())
+            );
+            ShaderLoadingScreen.step("Compiling " + source.name());
+            ShaderProgram shaderProgram = ShaderCompiler.compileSource(pack, properties, source, bindingPass);
+            if (shaderProgram != null) {
+                arrayProgram.setShaderProgram(shaderProgram);
+                compiled.add(arrayProgram);
+                MainMod.LOGGER.debug("[Pipeline] Added indexed fullscreen program: {}", source.name());
+            }
+        }
+        return List.copyOf(compiled);
+    }
+
+    private static int indexForFullscreenArraySource(ProgramArrayId arrayId, String sourceName) {
+        ShaderProperties.ProgramArrayKey key = ShaderProperties.ProgramArrayKey.parse(sourceName);
+        if (key == null || key.arrayId() != arrayId) {
+            return 0;
+        }
+        return key.index();
+    }
+
+    private static boolean supportsIndexedFullscreenArray(ProgramArrayId arrayId) {
+        return arrayId == ProgramArrayId.SETUP || arrayId == ProgramArrayId.BEGIN;
+    }
+
+    private static RenderPass fullscreenArrayBindingPass(ProgramArrayId arrayId) {
+        if (arrayId == ProgramArrayId.SETUP || arrayId == ProgramArrayId.BEGIN || arrayId == ProgramArrayId.PREPARE) {
+            return RenderPass.PREPARE;
+        }
+        if (arrayId == ProgramArrayId.DEFERRED) {
+            return RenderPass.DEFERRED;
+        }
+        if (arrayId == ProgramArrayId.COMPOSITE) {
+            return RenderPass.COMPOSITE;
+        }
+        if (arrayId == ProgramArrayId.SHADOWCOMP) {
+            return RenderPass.SHADOW;
+        }
+        return RenderPass.FINAL;
+    }
+
+    private boolean hasSetupPrograms() {
+        return !computeProgramArrays.getOrDefault(ProgramArrayId.SETUP, List.of()).isEmpty()
+                || !fullscreenArrayPrograms.getOrDefault(ProgramArrayId.SETUP, List.of()).isEmpty();
+    }
+
     private static List<ComputeProgram> compileComputeList(ShaderPack pack, ShaderProperties properties, List<ComputeProgramSource> sources) {
         if (sources.isEmpty()) {
             return List.of();
@@ -1688,6 +2240,12 @@ public class PipelineContext {
                 .forEach(ComputeProgram::delete);
         shadowComputePrograms.forEach(ComputeProgram::delete);
         finalComputePrograms.forEach(ComputeProgram::delete);
+    }
+
+    private void deleteFullscreenArrayPrograms() {
+        fullscreenArrayPrograms.values().stream()
+                .flatMap(List::stream)
+                .forEach(FullscreenArrayProgram::delete);
     }
 
     private void logRequestedFeaturesAndCapabilities() {
@@ -1746,12 +2304,18 @@ public class PipelineContext {
         if (pos == null) {
             return;
         }
+        if (isBetterPortalsExternalWorldTarget()) {
+            return;
+        }
         if (!canTrackSyntheticLights() || state == null || blockAccess == null) {
             syntheticLightCandidates.remove(pos.toLong());
             return;
         }
         SyntheticLightInfo lightInfo = syntheticLightInfo(state, blockAccess, pos);
         if (lightInfo.voxelId <= 0 || lightInfo.emission <= 0) {
+            if (recordProjectRedSyntheticLightCandidate(blockAccess, pos, "block_render_te")) {
+                return;
+            }
             auditSyntheticLight("block_render", pos, lightInfo, "skip:" + lightInfo.reason);
             return;
         }
@@ -1970,6 +2534,34 @@ public class PipelineContext {
         String diagnosis = ProjectRedIlluminationCompat.diagnoseHost(tileEntity);
         if (diagnosis != null) {
             auditProjectRedDiagnosis(tileEntity, voxelIds, count, result, diagnosis);
+        }
+    }
+
+    private boolean recordProjectRedSyntheticLightCandidate(IBlockAccess blockAccess, BlockPos pos, String result) {
+        TileEntity tileEntity = tileEntityAt(blockAccess, pos);
+        if (tileEntity == null) {
+            return false;
+        }
+
+        int[] voxelIds = new int[8];
+        int count = ProjectRedIlluminationCompat.collectVoxelIds(tileEntity, voxelIds);
+        if (count <= 0) {
+            return false;
+        }
+
+        putSyntheticLightCandidate(pos, true);
+        auditProjectRedLight(tileEntity, voxelIds, count, result);
+        return true;
+    }
+
+    private TileEntity tileEntityAt(IBlockAccess blockAccess, BlockPos pos) {
+        if (blockAccess == null || pos == null) {
+            return null;
+        }
+        try {
+            return blockAccess.getTileEntity(pos);
+        } catch (RuntimeException ignored) {
+            return null;
         }
     }
 
@@ -2384,14 +2976,14 @@ public class PipelineContext {
         if (!isPipelineActive) {
             return;
         }
-        setIndexedBlend(Attachment.COLOR.getIndex(), true);
-        setIndexedBlend(Attachment.DEPTH.getIndex(), true);
-        setIndexedBlend(Attachment.NORMAL.getIndex(), true);
-        setIndexedBlend(Attachment.COMPOSITE.getIndex(), true);
-        setIndexedBlend(Attachment.AUX1.getIndex(), true);
-        setIndexedBlend(Attachment.AUX2.getIndex(), true);
-        setIndexedBlend(Attachment.AUX3.getIndex(), true);
-        setIndexedBlend(Attachment.AUX4.getIndex(), true);
+        GlStateManager.disableBlend();
+        resetIndexedBlendState();
+        GlStateManager.tryBlendFuncSeparate(
+                GL11.GL_SRC_ALPHA,
+                GL11.GL_ONE_MINUS_SRC_ALPHA,
+                GL11.GL_ONE,
+                GL11.GL_ZERO
+        );
         GlStateManager.depthMask(true);
     }
 
@@ -2485,6 +3077,8 @@ public class PipelineContext {
         applyAlphaTest(pass);
         List<Attachment> drawBuffers = effectiveDrawBuffersForCurrentPhase(pipelineProgram);
         applyBlendMode(pass, drawBuffers);
+        applyOitDepthState(pass);
+        applyHandRenderState(pass);
         configureGbufferDrawBuffers(pipelineProgram, drawBuffers);
         if (pipelineProgram.stage() == ProgramStage.GBUFFERS) {
             restoreVanillaWorldTextureBindings();
@@ -2601,6 +3195,10 @@ public class PipelineContext {
     }
 
     private void applyBlendMode(RenderPass pass, List<Attachment> drawBuffers) {
+        if (applyOitBlendMode(pass, drawBuffers)) {
+            return;
+        }
+
         PipelineProgram pipelineProgram = programs.get(pass);
         ShaderBlendMode blendMode = pipelineProgram == null ? null : pipelineProgram.directives().blendModeOverride();
         if (blendMode == null) {
@@ -2660,6 +3258,72 @@ public class PipelineContext {
         return attachmentModes == null ? Map.of() : attachmentModes;
     }
 
+    private boolean applyOitBlendMode(RenderPass pass, List<Attachment> drawBuffers) {
+        if (!isOitGbufferPass(pass) || drawBuffers.isEmpty()) {
+            return false;
+        }
+
+        ShaderOitSettings oitSettings = shaderProperties.oitSettings();
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
+        for (int drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); drawBufferIndex++) {
+            Attachment attachment = drawBuffers.get(drawBufferIndex);
+            if (oitSettings.coefficientBuffer(attachment)) {
+                applyIndexedBlendMode(drawBufferIndex, OIT_COEFFICIENT_BLEND);
+            } else {
+                setIndexedBlend(drawBufferIndex, false);
+            }
+        }
+        return true;
+    }
+
+    private void applyHandRenderState(RenderPass pass) {
+        if (pass != RenderPass.GBUFFERS_HAND) {
+            return;
+        }
+        GlStateManager.disableBlend();
+        resetIndexedBlendState();
+        GlStateManager.enableDepth();
+        GlStateManager.depthMask(true);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glColorMask(true, true, true, true);
+    }
+
+    private void applyOitDepthState(RenderPass pass) {
+        if (!isOitGbufferPass(pass)) {
+            return;
+        }
+        GlStateManager.enableDepth();
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GlStateManager.depthMask(false);
+    }
+
+    private boolean isOitGbufferPass(RenderPass pass) {
+        if (pass == null || pass.stage() != ProgramStage.GBUFFERS || !shaderProperties.oitSettings().activeForGbuffers()) {
+            return false;
+        }
+
+        WorldRenderingPhase phase = getPhase();
+        if (phase != WorldRenderingPhase.NONE) {
+            return isOitPhase(phase);
+        }
+        return pass == RenderPass.GBUFFERS_ENTITIES_TRANSLUCENT
+                || pass == RenderPass.GBUFFERS_BLOCK_TRANSLUCENT
+                || pass == RenderPass.GBUFFERS_PARTICLES_TRANSLUCENT
+                || pass == RenderPass.GBUFFERS_WEATHER
+                || pass == RenderPass.GBUFFERS_CLOUDS
+                || pass == RenderPass.GBUFFERS_LIGHTNING
+                || pass == RenderPass.GBUFFERS_BEACONBEAM;
+    }
+
+    private static boolean isOitPhase(WorldRenderingPhase phase) {
+        return switch (phase) {
+            case TRIPWIRE, ENTITIES_TRANSLUCENT, BLOCK_ENTITIES_TRANSLUCENT,
+                    PARTICLES_TRANSLUCENT, RAIN_SNOW, CLOUDS, LIGHTNING, BEACON_BEAM -> true;
+            default -> false;
+        };
+    }
+
     private void applyIndexedBlendMode(int drawBufferIndex, ShaderBlendMode blendMode) {
         if (drawBufferIndex < 0 || drawBufferIndex >= maxDrawBuffers()) {
             return;
@@ -2716,6 +3380,10 @@ public class PipelineContext {
             program.unbind();
         }
 
+        if (isOitGbufferPass(activePass)) {
+            resetOitRenderState();
+        }
+
         activePass = null;
         activeShaderKey = null;
         if (scope.previousPass() != null) {
@@ -2730,7 +3398,7 @@ public class PipelineContext {
             return;
         }
         Minecraft mc = Minecraft.getMinecraft();
-        if (mc.world == null) {
+        if (mc == null || mc.world == null) {
             return;
         }
         resizeFramebuffer(width, height, true);
@@ -2738,34 +3406,44 @@ public class PipelineContext {
 
     public void beginFrame() {
         if (!isPipelineActive) {
+            externalWorldFramebufferTarget = null;
             return;
         }
 
         Minecraft mc = Minecraft.getMinecraft();
-        if (mc.world == null) {
+        if (mc == null || mc.world == null) {
+            externalWorldFramebufferTarget = null;
             return;
         }
         worldFrameActive = true;
-        if (pingPongManager.width() != mc.displayWidth || pingPongManager.height() != mc.displayHeight) {
-            resizeFramebuffer(mc.displayWidth, mc.displayHeight, true);
+        externalWorldFramebufferTarget = BetterPortalsCompat.currentShaderRenderPassFramebuffer();
+        boolean betterPortalsExternalTarget = isBetterPortalsExternalWorldTarget();
+        int targetWidth = worldTargetWidth(mc);
+        int targetHeight = worldTargetHeight(mc);
+        if (pingPongManager.width() != targetWidth || pingPongManager.height() != targetHeight) {
+            resizeFramebuffer(targetWidth, targetHeight, true);
         }
 
-        long now = System.nanoTime();
         boolean paused = mc.isGamePaused();
-        currentFrameTime = paused ? 0.0f : Math.min(Math.max((now - lastPipelineFrameNanos) / 1_000_000_000.0f, 0.001f), 1.0f);
-        lastPipelineFrameNanos = now;
-        if (!paused) {
-            pipelineFrameId++;
-            frameTimeCounter += currentFrameTime;
-            if (frameTimeCounter >= 3600.0f) {
-                frameTimeCounter = 0.0f;
+        if (betterPortalsExternalTarget) {
+            currentFrameTime = 0.0f;
+        } else {
+            long now = System.nanoTime();
+            currentFrameTime = paused ? 0.0f : Math.min(Math.max((now - lastPipelineFrameNanos) / 1_000_000_000.0f, 0.001f), 1.0f);
+            lastPipelineFrameNanos = now;
+            if (!paused) {
+                pipelineFrameId++;
+                frameTimeCounter += currentFrameTime;
+                if (frameTimeCounter >= 3600.0f) {
+                    frameTimeCounter = 0.0f;
+                }
             }
         }
         deferredPassesRenderedThisFrame = false;
         preTranslucentDepthCopiedThisFrame = false;
         preHandDepthCopiedThisFrame = false;
         updateCameraPosition(mc);
-        if (paused) {
+        if (paused || betterPortalsExternalTarget) {
             System.arraycopy(cameraPosition, 0, previousCameraPosition, 0, 3);
             System.arraycopy(cameraPositionUnshifted, 0, previousCameraPositionUnshifted, 0, 3);
         } else {
@@ -2774,6 +3452,9 @@ public class PipelineContext {
             updateSmoothedWetness(mc);
         }
         pingPongManager.beginFrame(frameClearAttachments());
+        runSetupComputesIfNeeded();
+        runFullscreenPasses(ProgramArrayId.BEGIN);
+        bindWorldFramebuffer();
     }
 
     private void updateCameraPosition(Minecraft mc) {
@@ -2836,6 +3517,45 @@ public class PipelineContext {
         resetPipelineState();
     }
 
+    private void restoreVanillaWorldPassState(boolean bindMinecraftFramebuffer, boolean resetPortalMasks) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (bindMinecraftFramebuffer && mc != null && mc.getFramebuffer() != null) {
+            mc.getFramebuffer().bindFramebuffer(false);
+        }
+
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        disablePipelineVertexAttributes();
+
+        GL11.glColorMask(true, true, true, true);
+        GL11.glDepthMask(true);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glPolygonOffset(0.0F, 0.0F);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+
+        if (resetPortalMasks) {
+            GL11.glStencilMask(0xFF);
+            GL11.glStencilFunc(GL11.GL_ALWAYS, 0, 0xFF);
+            GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_KEEP);
+            GL11.glDisable(GL11.GL_STENCIL_TEST);
+            GL11.glDisable(GL11.GL_SCISSOR_TEST);
+            for (int i = 0; i < 6; i++) {
+                GL11.glDisable(GL11.GL_CLIP_PLANE0 + i);
+            }
+        }
+
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        GlStateManager.enableTexture2D();
+        bindBlockAtlas();
+        GlStateManager.enableDepth();
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GlStateManager.enableCull();
+        GlStateManager.disableLighting();
+        GlStateManager.disableColorMaterial();
+        GlStateManager.disableBlend();
+    }
+
     private static double irisCameraShift(double adjusted, double delta, double absoluteAdjusted) {
         final double walkRange = 30000.0;
         final double teleportRange = 1000.0;
@@ -2857,6 +3577,7 @@ public class PipelineContext {
         }
         shaderImages.resize(width, height);
         shaderStorageBuffers.resize(width, height);
+        setupComputePending = true;
     }
 
     private Attachment[] frameClearAttachments() {
@@ -2884,14 +3605,23 @@ public class PipelineContext {
     }
 
     public boolean shouldRenderShadowMapBeforeTerrainSetup() {
+        if (isBetterPortalsExternalWorldTarget() || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
+            return false;
+        }
         return !shouldUseNothiriumShadowBridge() && !shouldReuseMainTerrainForShadowMap();
     }
 
     public boolean shouldRenderShadowMapAfterTerrainSetup() {
+        if (isBetterPortalsExternalWorldTarget() || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
+            return false;
+        }
         return shouldReuseMainTerrainForShadowMap();
     }
 
     public boolean shouldRenderShadowMapAfterOpaqueTerrain() {
+        if (isBetterPortalsExternalWorldTarget() || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
+            return false;
+        }
         return shouldUseNothiriumShadowBridge();
     }
 
@@ -2904,22 +3634,103 @@ public class PipelineContext {
     }
 
     public void ensureVanillaTerrainRenderer() {
-        if (!isPipelineActive || !NothiriumBypass.shouldBypass()) {
+        Minecraft mc = Minecraft.getMinecraft();
+        World world = BetterPortalsCompat.currentRenderPassWorld();
+        ensureVanillaTerrainRenderer(world != null ? world : (mc != null ? mc.world : null));
+    }
+
+    private void pushVanillaTerrainRendererState() {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.renderGlobal == null || !(mc.renderGlobal instanceof RenderGlobalAccessor renderGlobal)) {
+            vanillaViewFrustumStateStack.push(new VanillaViewFrustumState(null, null));
+            return;
+        }
+
+        vanillaViewFrustumStateStack.push(new VanillaViewFrustumState(mc.renderGlobal, renderGlobal.ausm$viewFrustum()));
+    }
+
+    private void popVanillaTerrainRendererState() {
+        VanillaViewFrustumState state = vanillaViewFrustumStateStack.poll();
+        if (state == null || state.renderGlobal() == null || !(state.renderGlobal() instanceof RenderGlobalAccessor renderGlobal)) {
+            return;
+        }
+
+        if (state.viewFrustum() == null) {
+            Minecraft mc = Minecraft.getMinecraft();
+            if (mc != null && mc.world != null && renderGlobal.ausm$viewFrustum() == null) {
+                ensureVanillaTerrainRenderer(mc.world, true);
+            }
+            activeVanillaViewFrustumRenderGlobal = null;
+            activeVanillaViewFrustumWorld = null;
+            return;
+        }
+
+        if (renderGlobal.ausm$viewFrustum() != state.viewFrustum()) {
+            renderGlobal.ausm$setViewFrustum(state.viewFrustum());
+            renderGlobal.ausm$setDisplayListEntitiesDirty(true);
+        }
+        activeVanillaViewFrustumRenderGlobal = null;
+        activeVanillaViewFrustumWorld = null;
+    }
+
+    public void ensureVanillaTerrainRenderer(World world) {
+        ensureVanillaTerrainRenderer(world, false);
+    }
+
+    public void ensureRenderGlobalViewFrustum(RenderGlobal renderGlobal) {
+        if (!(renderGlobal instanceof RenderGlobalAccessor accessor) || accessor.ausm$viewFrustum() != null) {
             return;
         }
 
         Minecraft mc = Minecraft.getMinecraft();
-        if (mc.world == null || mc.renderGlobal == null) {
+        if (mc == null || mc.world == null || mc.renderGlobal != renderGlobal) {
             return;
         }
 
-        RenderGlobalAccessor renderGlobal = (RenderGlobalAccessor) mc.renderGlobal;
-        if (renderGlobal.ausm$viewFrustum() != null
-                && renderGlobal.ausm$renderContainer() != null
-                && renderGlobal.ausm$renderChunkFactory() != null
-                && renderGlobal.ausm$renderDispatcher() != null) {
+        ensureVanillaTerrainRenderer(mc.world, true);
+    }
+
+    public void handleBetterPortalsMainViewSwap() {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.world == null) {
             return;
         }
+
+        BetterPortalsCompat.beginMainViewSwapHandling();
+        try {
+            externalWorldFramebufferTarget = null;
+            worldFrameActive = false;
+            passStack.clear();
+            activePass = null;
+            activeShaderKey = null;
+            activePhase = WorldRenderingPhase.NONE;
+            overridePhase = null;
+            deferredPassesRenderedThisFrame = false;
+            preTranslucentDepthCopiedThisFrame = false;
+            preHandDepthCopiedThisFrame = false;
+
+            BetterPortalsCompat.startMainViewSwapRecovery(mc.world);
+            BetterPortalsCompat.logMainViewSwapRecoveryIfNeeded(mc.world);
+            ensureVanillaTerrainRenderer(mc.world, true);
+            vanillaRecoveryFrames = Math.max(vanillaRecoveryFrames, 6);
+        } finally {
+            BetterPortalsCompat.endMainViewSwapHandling();
+        }
+    }
+
+    private void ensureVanillaTerrainRenderer(World world, boolean force) {
+        if (!force && !NothiriumBypass.shouldBypass()) {
+            return;
+        }
+
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || world == null || mc.renderGlobal == null) {
+            return;
+        }
+
+        RenderGlobal currentRenderGlobal = mc.renderGlobal;
+        RenderGlobalAccessor renderGlobal = (RenderGlobalAccessor) currentRenderGlobal;
+        ViewFrustum activeViewFrustum = renderGlobal.ausm$viewFrustum();
 
         boolean useVbo = OpenGlHelper.useVbo();
         if (renderGlobal.ausm$renderDispatcher() == null) {
@@ -2934,22 +3745,77 @@ public class PipelineContext {
             renderGlobal.ausm$setRenderContainer(useVbo ? new VboRenderList() : new RenderList());
         }
 
-        ViewFrustum oldViewFrustum = renderGlobal.ausm$viewFrustum();
-        if (oldViewFrustum != null) {
-            oldViewFrustum.deleteGlResources();
-        }
-        ViewFrustum viewFrustum = new ViewFrustum(
-                mc.world,
-                mc.gameSettings.renderDistanceChunks,
-                mc.renderGlobal,
-                renderChunkFactory
+        Map<World, ViewFrustum> rendererViewFrustums = vanillaViewFrustums.computeIfAbsent(
+                currentRenderGlobal,
+                ignored -> new IdentityHashMap<>()
         );
-        Entity viewEntity = mc.getRenderViewEntity();
-        if (viewEntity != null) {
-            viewFrustum.updateChunkPositions(viewEntity.posX, viewEntity.posZ);
+        ViewFrustum viewFrustum = rendererViewFrustums.get(world);
+        if (viewFrustum == null) {
+            if (activeVanillaViewFrustumRenderGlobal == currentRenderGlobal
+                    && activeVanillaViewFrustumWorld == world
+                    && activeViewFrustum != null) {
+                viewFrustum = activeViewFrustum;
+            } else {
+                viewFrustum = new ViewFrustum(
+                        world,
+                        mc.gameSettings.renderDistanceChunks,
+                        mc.renderGlobal,
+                        renderChunkFactory
+                );
+            }
+            rendererViewFrustums.put(world, viewFrustum);
         }
-        renderGlobal.ausm$setViewFrustum(viewFrustum);
+
+        updateVanillaViewFrustumChunkPositions(viewFrustum, mc.getRenderViewEntity());
+        if (activeViewFrustum != viewFrustum) {
+            renderGlobal.ausm$setViewFrustum(viewFrustum);
+        }
+        activeVanillaViewFrustumRenderGlobal = currentRenderGlobal;
+        activeVanillaViewFrustumWorld = world;
         renderGlobal.ausm$setDisplayListEntitiesDirty(true);
+    }
+
+    private void updateVanillaViewFrustumChunkPositions(ViewFrustum viewFrustum, Entity viewEntity) {
+        if (viewFrustum == null || viewEntity == null) {
+            return;
+        }
+
+        if (BetterPortalsCompat.isMainViewSwapHandling() || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
+            return;
+        }
+
+        try {
+            viewFrustum.updateChunkPositions(viewEntity.posX, viewEntity.posZ);
+        } catch (NullPointerException e) {
+            if (!BetterPortalsCompat.isInstalled()) {
+                throw e;
+            }
+            if (!betterPortalsViewFrustumUpdateWarningLogged) {
+                betterPortalsViewFrustumUpdateWarningLogged = true;
+                MainMod.LOGGER.warn("[BetterPortalsCompat] Deferred vanilla ViewFrustum chunk-position update because Better Portals has no active render pass", e);
+            }
+        }
+    }
+
+    private void deleteCachedVanillaTerrainRenderers() {
+        if (vanillaViewFrustums.isEmpty()) {
+            activeVanillaViewFrustumRenderGlobal = null;
+            activeVanillaViewFrustumWorld = null;
+            return;
+        }
+
+        Set<ViewFrustum> uniqueViewFrustums = new HashSet<>();
+        for (Map<World, ViewFrustum> rendererViewFrustums : vanillaViewFrustums.values()) {
+            uniqueViewFrustums.addAll(rendererViewFrustums.values());
+        }
+        for (ViewFrustum viewFrustum : uniqueViewFrustums) {
+            if (viewFrustum != null) {
+                viewFrustum.deleteGlResources();
+            }
+        }
+        vanillaViewFrustums.clear();
+        activeVanillaViewFrustumRenderGlobal = null;
+        activeVanillaViewFrustumWorld = null;
     }
 
     public void renderShadowMap(float partialTicks) {
@@ -2961,8 +3827,12 @@ public class PipelineContext {
         }
 
         Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null) {
+            return;
+        }
         Entity viewEntity = mc.getRenderViewEntity();
-        if (mc.world == null || viewEntity == null || mc.renderGlobal == null) {
+        World world = renderWorld(mc);
+        if (world == null || viewEntity == null || mc.renderGlobal == null) {
             return;
         }
 
@@ -3083,7 +3953,8 @@ public class PipelineContext {
     }
 
     private void injectMappedTileEntityVoxels(Minecraft mc) {
-        if (!ENABLE_CPU_LIGHT_INJECTION || !shaderImages.active() || mc.world == null) {
+        World world = renderWorld(mc);
+        if (!ENABLE_CPU_LIGHT_INJECTION || !shaderImages.active() || world == null) {
             return;
         }
 
@@ -3099,7 +3970,7 @@ public class PipelineContext {
         int[] projectRedVoxelIds = new int[8];
         Set<Long> writtenVoxels = new HashSet<>();
 
-        for (TileEntity tileEntity : mc.world.loadedTileEntityList) {
+        for (TileEntity tileEntity : world.loadedTileEntityList) {
             if (injected >= MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME) {
                 break;
             }
@@ -3126,8 +3997,8 @@ public class PipelineContext {
                 continue;
             }
 
-            IBlockState state = actualLightState(mc.world.getBlockState(pos), mc.world, pos);
-            if (state == null || state.getRenderType() != EnumBlockRenderType.INVISIBLE || state.getLightValue(mc.world, pos) <= 0) {
+            IBlockState state = actualLightState(world.getBlockState(pos), world, pos);
+            if (state == null || state.getRenderType() != EnumBlockRenderType.INVISIBLE || state.getLightValue(world, pos) <= 0) {
                 continue;
             }
 
@@ -3138,14 +4009,14 @@ public class PipelineContext {
 
             if (injectVoxelAt(pos, voxelId, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ, writtenVoxels)) {
                 injected++;
-                auditSyntheticLight("tile_entity", pos, new SyntheticLightInfo(state, state, shaderProperties.blockIds().idFor(state), voxelId, state.getLightValue(mc.world, pos), "ok"), "injected");
+                auditSyntheticLight("tile_entity", pos, new SyntheticLightInfo(state, state, shaderProperties.blockIds().idFor(state), voxelId, state.getLightValue(world, pos), "ok"), "injected");
             } else {
-                auditSyntheticLight("tile_entity", pos, new SyntheticLightInfo(state, state, shaderProperties.blockIds().idFor(state), voxelId, state.getLightValue(mc.world, pos), "ok"), "write_failed");
+                auditSyntheticLight("tile_entity", pos, new SyntheticLightInfo(state, state, shaderProperties.blockIds().idFor(state), voxelId, state.getLightValue(world, pos), "ok"), "write_failed");
             }
         }
 
         injected += injectRecordedSyntheticLightVoxels(
-                mc.world,
+                world,
                 dimensions,
                 cameraFloorX,
                 cameraFloorY,
@@ -3305,7 +4176,9 @@ public class PipelineContext {
             return true;
         }
 
-        RenderGlobalAccessor renderGlobal = (RenderGlobalAccessor) mc.renderGlobal;
+        if (mc == null || viewEntity == null || !(mc.renderGlobal instanceof RenderGlobalAccessor renderGlobal)) {
+            return true;
+        }
         ViewFrustum viewFrustum = renderGlobal.ausm$viewFrustum();
         if (viewFrustum == null || viewFrustum.renderChunks == null) {
             return true;
@@ -3351,6 +4224,57 @@ public class PipelineContext {
         GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
     }
 
+    public int renderLumenizedBloomStandalone(RenderGlobal renderGlobal, double partialTicks, int pass, Entity entity) {
+        if (renderingGuiScreen() || isRenderingBetterPortalsNestedView()) {
+            return 0;
+        }
+        if (lumenizedBloomTarget == null) {
+            lumenizedBloomTarget = new LumenizedBloomTarget();
+        }
+
+        try {
+            if (isPipelineActive && worldFrameActive && pingPongManager.isInitialized()) {
+                int rendered = lumenizedBloomTarget.renderIntoPipeline(
+                        renderGlobal,
+                        partialTicks,
+                        pass,
+                        entity,
+                        pingPongManager.getReadBuffer()
+                );
+                bindWorldFramebuffer();
+                return rendered;
+            }
+
+            Minecraft mc = Minecraft.getMinecraft();
+            Framebuffer minecraftFramebuffer = mc != null ? mc.getFramebuffer() : null;
+            int rendered = lumenizedBloomTarget.renderIntoMinecraft(
+                    renderGlobal,
+                    partialTicks,
+                    pass,
+                    entity,
+                    minecraftFramebuffer
+            );
+            if (minecraftFramebuffer != null) {
+                minecraftFramebuffer.bindFramebuffer(false);
+            }
+            return rendered;
+        } catch (RuntimeException e) {
+            MainMod.LOGGER.warn("[LumenizedBloom] AUSM standalone bloom render failed; skipping this frame", e);
+            return 0;
+        }
+    }
+
+    public Framebuffer lumenizedBloomTargetFramebuffer() {
+        return null;
+    }
+
+    public void finishLumenizedBloomTarget() {
+    }
+
+    public boolean isLumenizedBloomTargetActive() {
+        return false;
+    }
+
     private int renderShadowTerrainLayer(Minecraft mc, WorldRenderingPhase phase, BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
         beginPhase(phase);
         configureShadowTerrainRenderState();
@@ -3384,6 +4308,9 @@ public class PipelineContext {
     }
 
     private int renderShadowBlockLayer(Minecraft mc, BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
+        if (mc == null || viewEntity == null) {
+            return 0;
+        }
         if (shouldUseNothiriumShadowBridge()) {
             double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
             double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
@@ -3391,6 +4318,9 @@ public class PipelineContext {
             return nothiriumShadowRenderer.renderLayer(layer, cameraX, cameraY, cameraZ, shadowRenderCullDistance());
         }
 
+        if (mc.renderGlobal == null) {
+            return 0;
+        }
         int count = mc.renderGlobal.renderBlockLayer(layer, partialTicks, 2, viewEntity);
         if (count != 0) {
             return count;
@@ -3430,7 +4360,9 @@ public class PipelineContext {
     }
 
     private int renderShadowBlockLayerFromViewFrustum(Minecraft mc, BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
-        RenderGlobalAccessor renderGlobal = (RenderGlobalAccessor) mc.renderGlobal;
+        if (mc == null || viewEntity == null || !(mc.renderGlobal instanceof RenderGlobalAccessor renderGlobal)) {
+            return 0;
+        }
         ViewFrustum viewFrustum = renderGlobal.ausm$viewFrustum();
         ChunkRenderContainer renderContainer = renderGlobal.ausm$renderContainer();
         if (viewFrustum == null || viewFrustum.renderChunks == null || renderContainer == null) {
@@ -3494,7 +4426,8 @@ public class PipelineContext {
         GL11.glTranslatef(0.0F, 0.0F, -100.0F);
         GL11.glRotatef(90.0F, 1.0F, 0.0F, 0.0F);
 
-        float celestialAngle = Minecraft.getMinecraft().world.getCelestialAngle(partialTicks);
+        World world = renderWorld(Minecraft.getMinecraft());
+        float celestialAngle = world != null ? world.getCelestialAngle(partialTicks) : 0.0F;
         float sunAngle = celestialAngle < 0.75F ? celestialAngle + 0.25F : celestialAngle - 0.75F;
         float angle = celestialAngle * -360.0F;
         if (sunAngle <= 0.5F) {
@@ -3513,7 +4446,8 @@ public class PipelineContext {
     }
 
     private static float shadowAngle(float partialTicks) {
-        float celestialAngle = Minecraft.getMinecraft().world.getCelestialAngle(partialTicks);
+        World world = renderWorld(Minecraft.getMinecraft());
+        float celestialAngle = world != null ? world.getCelestialAngle(partialTicks) : 0.0F;
         float angle = celestialAngle + 0.25F;
         if (angle >= 1.0F) {
             angle -= 1.0F;
@@ -3617,12 +4551,19 @@ public class PipelineContext {
             return;
         }
 
+        World world = renderWorld(mc);
+        if (mc == null || world == null || viewEntity == null || shadowCamera == null || mc.entityRenderer == null) {
+            return;
+        }
         RenderManager renderManager = mc.getRenderManager();
+        if (renderManager == null) {
+            return;
+        }
         double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
         double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
         double cameraZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
 
-        renderManager.cacheActiveRenderInfo(mc.world, mc.fontRenderer, viewEntity, mc.pointedEntity, mc.gameSettings, partialTicks);
+        renderManager.cacheActiveRenderInfo(world, mc.fontRenderer, viewEntity, mc.pointedEntity, mc.gameSettings, partialTicks);
         renderManager.setRenderPosition(cameraX, cameraY, cameraZ);
         mc.entityRenderer.enableLightmap();
         RenderHelper.enableStandardItemLighting();
@@ -3632,8 +4573,12 @@ public class PipelineContext {
         GlStateManager.enableDepth();
         GlStateManager.depthMask(true);
 
-        for (Entity entity : mc.world.getLoadedEntityList()) {
-            if (!shouldRenderEntityInShadowMap(mc, renderManager, entity, viewEntity, shadowCamera, cameraX, cameraY, cameraZ)) {
+        List<Entity> loadedEntities = world.getLoadedEntityList();
+        if (loadedEntities == null) {
+            return;
+        }
+        for (Entity entity : loadedEntities) {
+            if (!shouldRenderEntityInShadowMap(mc, world, renderManager, entity, viewEntity, shadowCamera, cameraX, cameraY, cameraZ)) {
                 continue;
             }
 
@@ -3644,9 +4589,9 @@ public class PipelineContext {
         }
     }
 
-    private boolean shouldRenderEntityInShadowMap(Minecraft mc, RenderManager renderManager, Entity entity, Entity viewEntity,
+    private boolean shouldRenderEntityInShadowMap(Minecraft mc, World world, RenderManager renderManager, Entity entity, Entity viewEntity,
                                                   ICamera shadowCamera, double cameraX, double cameraY, double cameraZ) {
-        if (entity == null || entity.isDead || !entity.shouldRenderInPass(0)) {
+        if (mc == null || world == null || renderManager == null || entity == null || entity.isDead || !entity.shouldRenderInPass(0)) {
             return false;
         }
         if (entity instanceof AbstractClientPlayer player && player.isSpectator()) {
@@ -3664,7 +4609,7 @@ public class PipelineContext {
                 && (mc.player == null || !entity.isRidingOrBeingRiddenBy(mc.player))) {
             return false;
         }
-        if (entity.posY >= 0.0D && entity.posY < 256.0D && !mc.world.isBlockLoaded(new BlockPos(entity))) {
+        if (entity.posY >= 0.0D && entity.posY < 256.0D && !world.isBlockLoaded(new BlockPos(entity))) {
             return false;
         }
         return entity.isInRangeToRender3d(cameraX, cameraY, cameraZ);
@@ -3675,13 +4620,17 @@ public class PipelineContext {
     }
 
     private static int eyeFluidState(Minecraft mc) {
+        if (mc == null) {
+            return 0;
+        }
         Entity viewEntity = mc.getRenderViewEntity();
-        if (mc.world == null || viewEntity == null) {
+        World world = renderWorld(mc);
+        if (world == null || viewEntity == null) {
             return 0;
         }
 
         Material cameraMaterial = ActiveRenderInfo
-                .getBlockStateAtEntityViewpoint(mc.world, viewEntity, mc.getRenderPartialTicks())
+                .getBlockStateAtEntityViewpoint(world, viewEntity, mc.getRenderPartialTicks())
                 .getMaterial();
         if (cameraMaterial == Material.WATER) {
             return 1;
@@ -3711,57 +4660,32 @@ public class PipelineContext {
         GL11.glColorMask(true, true, true, true);
     }
 
-    public Framebuffer lumenizedBloomTargetFramebuffer() {
-        if (!isPipelineActive || !worldFrameActive || !pingPongManager.isInitialized()) {
-            return null;
-        }
-
-        DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
-        if (framebuffer == null) {
-            return null;
-        }
-
-        if (lumenizedBloomTarget == null) {
-            lumenizedBloomTarget = new LumenizedBloomTarget();
-        }
-        Framebuffer view = lumenizedBloomTarget.prepare(framebuffer);
-        if (view == null) {
-            return null;
-        }
-
-        if (!lumenizedBloomTargetLogged) {
-            lumenizedBloomTargetLogged = true;
-            MainMod.LOGGER.info(
-                    "[LumenizedBloom] Redirecting bloom target to isolated AUSM bridge fbo={} sourceColorTex={} depthTex={} size={}x{}",
-                    view.framebufferObject,
-                    framebuffer.getReadTexture(Attachment.COLOR),
-                    framebuffer.getDepthTexture(),
-                    view.framebufferWidth,
-                    view.framebufferHeight
-            );
-        }
-        return view;
-    }
-
-    public void finishLumenizedBloomTarget() {
-        if (!isPipelineActive || !worldFrameActive || !pingPongManager.isInitialized()) {
+    public void prepareExternalWorldOverlayRender() {
+        if (!isPipelineActive || !pingPongManager.isInitialized()) {
             return;
         }
-        if (lumenizedBloomTarget != null) {
-            lumenizedBloomTarget.blendInto(pingPongManager.getReadBuffer());
-        }
-    }
 
-    public boolean isLumenizedBloomTargetActive() {
-        return isPipelineActive
-                && worldFrameActive
-                && lumenizedBloomTarget != null
-                && lumenizedBloomTarget.isPrepared();
+        if (worldFrameActive) {
+            pingPongManager.bindForGbuffers(Attachment.COLOR);
+        }
+        OpenGlHelper.glUseProgram(0);
+        resetIndexedBlendState();
+        disablePipelineVertexAttributes();
+        unbindShaderStorageBuffers();
+        TextureBinder.restoreDefaultTextureUnit();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        GL11.glColorMask(true, true, true, true);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GlStateManager.enableDepth();
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     private void restoreVanillaWorldTextureBindings() {
         Minecraft mc = Minecraft.getMinecraft();
-        if (mc.entityRenderer != null) {
+        if (mc != null && mc.entityRenderer != null) {
             DynamicTexture lightmapTexture = ((EntityRendererAccessor) mc.entityRenderer).ausm$getLightmapTexture();
             restoreVanillaLightmapTexture(mc);
             if (lightmapTexture != null) {
@@ -3781,7 +4705,7 @@ public class PipelineContext {
     }
 
     public void renderPreparePass() {
-        if (!isPipelineActive || !pingPongManager.isInitialized()) {
+        if (!isPipelineActive || !pingPongManager.isInitialized() || isBetterPortalsExternalWorldTarget()) {
             return;
         }
 
@@ -3789,11 +4713,15 @@ public class PipelineContext {
     }
 
     public void snapshotOpaqueTerrainDepth() {
-        if (!isPipelineActive || !pingPongManager.isInitialized()) {
+        if (!isPipelineActive || !pingPongManager.isInitialized() || isBetterPortalsExternalWorldTarget()) {
             return;
         }
 
-        centerDepth = pingPongManager.getReadBuffer().readCenterDepth();
+        DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
+        if (framebuffer == null) {
+            return;
+        }
+        centerDepth = framebuffer.readCenterDepth();
         if (Float.isFinite(centerDepth)) {
             centerDepthSmooth += (centerDepth - centerDepthSmooth) * smoothingFactor(centerDepthHalfLife, currentFrameTime);
             if (Math.abs(centerDepth - centerDepthSmooth) < 0.00001f) {
@@ -3873,7 +4801,10 @@ public class PipelineContext {
     }
 
     public void beginTranslucents() {
-        if (!isPipelineActive || !pingPongManager.isInitialized() || deferredPassesRenderedThisFrame) {
+        if (!isPipelineActive || !pingPongManager.isInitialized()) {
+            return;
+        }
+        if (deferredPassesRenderedThisFrame) {
             return;
         }
 
@@ -3885,7 +4816,7 @@ public class PipelineContext {
 
     public void beginHand() {
         beginTranslucents();
-        if (!isPipelineActive || !pingPongManager.isInitialized() || preHandDepthCopiedThisFrame) {
+        if (!isPipelineActive || !pingPongManager.isInitialized() || preHandDepthCopiedThisFrame || isBetterPortalsExternalWorldTarget()) {
             return;
         }
 
@@ -3894,40 +4825,68 @@ public class PipelineContext {
     }
 
     public void blitWorldFramebufferToMinecraft() {
-        if (!isPipelineActive || !pingPongManager.isInitialized()) {
+        if (!isPipelineActive || !pingPongManager.isInitialized() || !worldFrameActive) {
             return;
         }
 
+        DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
+        if (readBuffer == null) {
+            resetPipelineState();
+            return;
+        }
         Minecraft mc = Minecraft.getMinecraft();
-        Framebuffer target = mc.getFramebuffer();
-
+        Framebuffer target = currentWorldFramebufferTarget(mc);
+        if (target == null) {
+            resetPipelineState();
+            return;
+        }
+        boolean externalTarget = isExternalWorldFramebufferTarget(target);
         beginTranslucents();
         runFullscreenPasses(ProgramArrayId.COMPOSITE);
+        if (externalTarget && isRenderingBetterPortalsNestedView()) {
+            readBuffer = pingPongManager.getReadBuffer();
+            if (readBuffer == null) {
+                resetPipelineState(target);
+                return;
+            }
+            readBuffer.blitTo(
+                    target.framebufferObject,
+                    target.framebufferWidth,
+                    target.framebufferHeight
+            );
+            target.bindFramebuffer(false);
+            GlStateManager.viewport(0, 0, framebufferWidth(target, mc), framebufferHeight(target, mc));
+            finishWorldFramebuffer(target, true);
+            return;
+        }
+
         runComputePrograms(finalComputePrograms, RenderPass.FINAL);
 
         PipelineProgram finalProgram = programs.get(RenderPass.FINAL);
         if (finalProgram != null && finalProgram.hasOwnProgram()) {
             renderFinalPass(target);
-            finishWorldFramebuffer(target);
+            finishWorldFramebuffer(target, externalTarget);
             return;
         }
 
-        pingPongManager.getReadBuffer().blitTo(
+        readBuffer.blitTo(
                 target.framebufferObject,
                 target.framebufferWidth,
                 target.framebufferHeight
         );
 
         target.bindFramebuffer(false);
-        GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
-        finishWorldFramebuffer(target);
+        GlStateManager.viewport(0, 0, framebufferWidth(target, mc), framebufferHeight(target, mc));
+        finishWorldFramebuffer(target, externalTarget);
     }
 
-    private void finishWorldFramebuffer(Framebuffer target) {
+    private void finishWorldFramebuffer(Framebuffer target, boolean externalTarget) {
         target.bindFramebuffer(false);
-        GlStateManager.clearDepth(1.0);
-        GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
-        resetPipelineState();
+        if (!externalTarget) {
+            GlStateManager.clearDepth(1.0);
+            GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
+        }
+        resetPipelineState(target);
         worldFrameActive = false;
     }
 
@@ -3942,6 +4901,11 @@ public class PipelineContext {
 
     private void runFullscreenPasses(ProgramArrayId arrayId) {
         runComputePrograms(computeProgramArrays.getOrDefault(arrayId, List.of()), computeBindingPass(arrayId));
+        for (FullscreenArrayProgram program : fullscreenArrayPrograms.getOrDefault(arrayId, List.of())) {
+            if (program.hasProgram()) {
+                runFullscreenArrayProgram(program);
+            }
+        }
         FullscreenProgramArray array = fullscreenProgramArrays.get(arrayId);
         if (array == null) {
             return;
@@ -3954,8 +4918,16 @@ public class PipelineContext {
         }
     }
 
+    private void runSetupComputesIfNeeded() {
+        if (!setupComputePending) {
+            return;
+        }
+        setupComputePending = false;
+        runFullscreenPasses(ProgramArrayId.SETUP);
+    }
+
     private RenderPass computeBindingPass(ProgramArrayId arrayId) {
-        if (arrayId == ProgramArrayId.PREPARE) {
+        if (arrayId == ProgramArrayId.SETUP || arrayId == ProgramArrayId.BEGIN || arrayId == ProgramArrayId.PREPARE) {
             return RenderPass.PREPARE;
         }
         if (arrayId == ProgramArrayId.DEFERRED) {
@@ -3970,15 +4942,107 @@ public class PipelineContext {
         return RenderPass.FINAL;
     }
 
+    private void runFullscreenArrayProgram(FullscreenArrayProgram program) {
+        List<Attachment> drawBuffers = program.drawBuffers();
+        Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
+
+        pingPongManager.bindForFullscreenWrite(drawBufferArray);
+        generateReadMipmaps(program.directives());
+
+        RenderPass previousPass = activePass;
+        ShaderKey previousShaderKey = activeShaderKey;
+        WorldRenderingPhase previousPhase = activePhase;
+        setupFullscreenState();
+        try {
+            applyFullscreenViewport(program.name(), program.directives(), drawBuffers);
+            applyFullscreenArrayRenderState(program.directives(), drawBuffers);
+            bindFullscreenArrayProgram(program);
+            FullscreenQuad.draw();
+        } finally {
+            if (program.shaderProgram() != null) {
+                program.shaderProgram().unbind();
+            }
+            restoreFullscreenState();
+            activePass = previousPass;
+            activeShaderKey = previousShaderKey;
+            activePhase = previousPhase;
+            TextureBinder.restoreDefaultTextureUnit();
+        }
+
+        Attachment[] flippedAttachments = program.directives().flippedAttachments(drawBuffers);
+        pingPongManager.flipWrittenTextures(flippedAttachments);
+        generateWrittenMipmaps(program.directives(), flippedAttachments);
+    }
+
+    private void bindFullscreenArrayProgram(FullscreenArrayProgram program) {
+        ShaderProgram shaderProgram = program.shaderProgram();
+        if (shaderProgram == null) {
+            return;
+        }
+
+        RenderPass bindingPass = program.bindingPass();
+        activePass = bindingPass;
+        activeShaderKey = ShaderKey.fromRenderPass(bindingPass);
+        activePhase = WorldRenderingPhase.NONE;
+        TextureBinder.bindDeferredTextures();
+        TextureBinder.bindShadowTextures();
+        shaderProgram.bind();
+        bindProgramResources(bindingPass, shaderProgram);
+    }
+
+    private void applyFullscreenArrayRenderState(ShaderProgramDirectives directives, List<Attachment> drawBuffers) {
+        ShaderAlphaTest alphaTest = directives.alphaTestOverride();
+        if (alphaTest != null) {
+            currentAlphaTestReference = alphaTest.reference();
+            if (alphaTest.function() == GL11.GL_ALWAYS) {
+                GlStateManager.disableAlpha();
+            } else {
+                GlStateManager.enableAlpha();
+            }
+            GlStateManager.alphaFunc(alphaTest.function(), alphaTest.reference());
+        }
+
+        ShaderBlendMode blendMode = directives.blendModeOverride();
+        Map<Attachment, ShaderBlendMode> attachmentModes = directives.attachmentBlendModes();
+        if (blendMode == null && attachmentModes.isEmpty()) {
+            return;
+        }
+        if (blendMode != null && !blendMode.enabled()) {
+            GlStateManager.disableBlend();
+            resetIndexedBlendState();
+            return;
+        }
+
+        GlStateManager.enableBlend();
+        if (blendMode != null) {
+            GlStateManager.tryBlendFuncSeparate(
+                    blendMode.srcRgb(),
+                    blendMode.dstRgb(),
+                    blendMode.srcAlpha(),
+                    blendMode.dstAlpha()
+            );
+        }
+        for (int drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); drawBufferIndex++) {
+            ShaderBlendMode attachmentMode = attachmentModes.get(drawBuffers.get(drawBufferIndex));
+            if (attachmentMode != null) {
+                applyIndexedBlendMode(drawBufferIndex, attachmentMode);
+            }
+        }
+    }
+
     private void runComputePrograms(List<ComputeProgram> computes, RenderPass bindingPass) {
         if (computes == null || computes.isEmpty()) {
             return;
         }
         applyShaderMemoryBarrier();
         DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
-        int width = framebuffer != null ? framebuffer.getWidth() : Minecraft.getMinecraft().displayWidth;
-        int height = framebuffer != null ? framebuffer.getHeight() : Minecraft.getMinecraft().displayHeight;
+        Minecraft mc = Minecraft.getMinecraft();
+        int width = framebuffer != null ? framebuffer.getWidth() : mc != null ? mc.displayWidth : 1;
+        int height = framebuffer != null ? framebuffer.getHeight() : mc != null ? mc.displayHeight : 1;
         for (ComputeProgram compute : computes) {
+            if (compute == null) {
+                continue;
+            }
             compute.bind();
             TextureBinder.bindDeferredTextures();
             TextureBinder.bindShadowTextures();
@@ -4020,12 +5084,22 @@ public class PipelineContext {
     }
 
     private void applyViewportScale(PipelineProgram program, int width, int height) {
-        ShaderViewportScale scale = program.directives().viewportScale();
+        applyViewportScale(program.directives().viewportScale(), width, height);
+    }
+
+    private void applyViewportScale(ShaderViewportScale scale, int width, int height) {
         GlStateManager.viewport(scale.x(width), scale.y(height), scale.width(width), scale.height(height));
     }
 
     private void applyFullscreenViewport(PipelineProgram program, List<Attachment> drawBuffers) {
+        applyFullscreenViewport(program.pass().getProgramName(), program.directives(), drawBuffers);
+    }
+
+    private void applyFullscreenViewport(String programName, ShaderProgramDirectives directives, List<Attachment> drawBuffers) {
         DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
+        if (framebuffer == null) {
+            return;
+        }
         int width = framebuffer.getWidth();
         int height = framebuffer.getHeight();
         if (!drawBuffers.isEmpty()) {
@@ -4035,18 +5109,22 @@ public class PipelineContext {
             for (Attachment attachment : drawBuffers) {
                 if (framebuffer.getAttachmentWidth(attachment) != width || framebuffer.getAttachmentHeight(attachment) != height) {
                     MainMod.LOGGER.warn("[Pipeline] Pass {} writes differently sized buffers; using {} size {}x{} for viewport",
-                            program.pass().getProgramName(), first, width, height);
+                            programName, first, width, height);
                     break;
                 }
             }
         }
-        applyViewportScale(program, width, height);
+        applyViewportScale(directives.viewportScale(), width, height);
     }
 
     private void renderFinalPass(Framebuffer target) {
-        Minecraft mc = Minecraft.getMinecraft();
+        DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
+        PipelineProgram finalProgram = programs.get(RenderPass.FINAL);
+        if (target == null || readBuffer == null || finalProgram == null) {
+            return;
+        }
 
-        pingPongManager.getReadBuffer().blitDepthTo(
+        readBuffer.blitDepthTo(
                 target.framebufferObject,
                 target.framebufferWidth,
                 target.framebufferHeight
@@ -4056,7 +5134,6 @@ public class PipelineContext {
         GL11.glDrawBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
         GL11.glColorMask(true, true, true, true);
         GlStateManager.viewport(0, 0, target.framebufferWidth, target.framebufferHeight);
-        PipelineProgram finalProgram = programs.get(RenderPass.FINAL);
         generateReadMipmaps(finalProgram);
 
         setupFullscreenState();
@@ -4068,28 +5145,45 @@ public class PipelineContext {
 
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
         TextureBinder.restoreDefaultTextureUnit();
-        GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
+        GlStateManager.viewport(0, 0, target.framebufferWidth, target.framebufferHeight);
     }
 
     private void generateReadMipmaps(PipelineProgram program) {
-        if (program != null && !program.directives().mipmappedBuffers().isEmpty()) {
-            pingPongManager.getReadBuffer().generateMipmaps(program.directives().mipmappedBuffers());
+        if (program != null) {
+            generateReadMipmaps(program.directives());
+        }
+    }
+
+    private void generateReadMipmaps(ShaderProgramDirectives directives) {
+        DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
+        if (directives != null && readBuffer != null && !directives.mipmappedBuffers().isEmpty()) {
+            readBuffer.generateMipmaps(directives.mipmappedBuffers());
             TextureBinder.restoreDefaultTextureUnit();
         }
     }
 
     private void generateWrittenMipmaps(PipelineProgram program, Attachment[] flippedAttachments) {
-        if (program == null || flippedAttachments.length == 0 || program.directives().mipmappedBuffers().isEmpty()) {
+        if (program == null) {
+            return;
+        }
+        generateWrittenMipmaps(program.directives(), flippedAttachments);
+    }
+
+    private void generateWrittenMipmaps(ShaderProgramDirectives directives, Attachment[] flippedAttachments) {
+        if (directives == null || flippedAttachments.length == 0 || directives.mipmappedBuffers().isEmpty()) {
             return;
         }
         EnumSet<Attachment> mipmappedWrittenAttachments = EnumSet.noneOf(Attachment.class);
         for (Attachment attachment : flippedAttachments) {
-            if (program.directives().mipmappedBuffers().contains(attachment)) {
+            if (directives.mipmappedBuffers().contains(attachment)) {
                 mipmappedWrittenAttachments.add(attachment);
             }
         }
         if (!mipmappedWrittenAttachments.isEmpty()) {
-            pingPongManager.getReadBuffer().generateMipmaps(mipmappedWrittenAttachments);
+            DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
+            if (readBuffer != null) {
+                readBuffer.generateMipmaps(mipmappedWrittenAttachments);
+            }
             TextureBinder.restoreDefaultTextureUnit();
         }
     }
@@ -4126,6 +5220,14 @@ public class PipelineContext {
     }
 
     public void cleanup() {
+        cleanupRuntimeState(true, true);
+    }
+
+    private void cleanupRuntimeState(boolean deleteActiveCompiledPrograms, boolean deleteCachedCompiledPrograms) {
+        cleanupRuntimeState(deleteActiveCompiledPrograms, deleteCachedCompiledPrograms, true);
+    }
+
+    private void cleanupRuntimeState(boolean deleteActiveCompiledPrograms, boolean deleteCachedCompiledPrograms, boolean deleteVanillaTerrainRenderers) {
         resetPipelineState();
         OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, 0);
 
@@ -4138,27 +5240,39 @@ public class PipelineContext {
         deleteCenterDepthSmoothTexture();
         deleteNoiseTexture();
         deleteCustomTextures();
-        shaderImages.delete();
-        shaderImages = ShaderImageSet.empty();
-        shaderStorageBuffers.delete();
-        shaderStorageBuffers = ShaderStorageBufferSet.empty();
+        if (deleteVanillaTerrainRenderers) {
+            deleteCachedVanillaTerrainRenderers();
+            vanillaViewFrustumStateStack.clear();
+        }
         if (lumenizedBloomTarget != null) {
             lumenizedBloomTarget.delete();
             lumenizedBloomTarget = null;
         }
         lumenizedBloomTargetLogged = false;
-        deleteComputePrograms();
-        for (PipelineProgram program : programs.values()) {
-            program.delete();
+        shaderImages.delete();
+        shaderImages = ShaderImageSet.empty();
+        shaderStorageBuffers.delete();
+        shaderStorageBuffers = ShaderStorageBufferSet.empty();
+        if (deleteActiveCompiledPrograms) {
+            deleteComputePrograms();
+            deleteFullscreenArrayPrograms();
+            for (PipelineProgram program : programs.values()) {
+                program.delete();
+            }
+        }
+        if (deleteCachedCompiledPrograms) {
+            deleteCachedCompiledPipelines();
         }
         programs.clear();
         programSet = null;
         shaderMap = null;
         shaderProperties = emptyShaderProperties();
         fullscreenProgramArrays.clear();
+        fullscreenArrayPrograms.clear();
         computeProgramArrays.clear();
         shadowComputePrograms = List.of();
         finalComputePrograms = List.of();
+        setupComputePending = false;
         syntheticLightCandidates.clear();
         resetColoredLightAudit();
         packDirectives = emptyShaderProperties().packDirectives();
@@ -4166,6 +5280,7 @@ public class PipelineContext {
         activePackName = "(internal)";
         activePass = null;
         activeShaderKey = null;
+        activeCompiledPipelineCacheKey = null;
         activePhase = WorldRenderingPhase.NONE;
         overridePhase = null;
         worldFrameActive = false;
@@ -4205,13 +5320,186 @@ public class PipelineContext {
         return isPipelineActive;
     }
 
-    public void prepareFramebufferPresentation() {
-        if (!isPipelineActive) {
+    public boolean isRenderingBetterPortalsNestedView() {
+        return BetterPortalsCompat.isRenderingNestedView();
+    }
+
+    public boolean shouldRenderBetterPortalsNestedViewWithShaders() {
+        return isPipelineActive
+                && BetterPortalsCompat.shouldRenderNestedViewWithShaders()
+                && BetterPortalsCompat.currentShaderRenderPassFramebuffer() != null;
+    }
+
+    public boolean shouldBypassWorldPassRendering() {
+        return !isPipelineActive
+                || (isRenderingBetterPortalsNestedView() && !shouldRenderBetterPortalsNestedViewWithShaders());
+    }
+
+    public boolean prepareRenderGlobalChunkUpdates(RenderGlobal renderGlobal) {
+        if (renderGlobal == null) {
+            return false;
+        }
+
+        if (BetterPortalsCompat.isInstalled() && BetterPortalsCompat.isRenderingNestedView()) {
+            if (renderGlobal instanceof RenderGlobalAccessor accessor) {
+                clearRenderGlobalChunkUpdates(accessor);
+            }
+            return false;
+        }
+
+        boolean betterPortalsProtectedPass = BetterPortalsCompat.isInstalled()
+                && (BetterPortalsCompat.isRenderingNestedView()
+                || BetterPortalsCompat.isMainViewSwapRecoveryActive());
+        if (!betterPortalsProtectedPass) {
+            return true;
+        }
+
+        if (!(renderGlobal instanceof RenderGlobalAccessor accessor)) {
+            return true;
+        }
+
+        World renderPassWorld = BetterPortalsCompat.currentRenderPassWorld();
+        if (renderPassWorld == null) {
+            Minecraft mc = Minecraft.getMinecraft();
+            renderPassWorld = mc != null ? mc.world : null;
+        }
+        if (renderPassWorld == null || accessor.ausm$world() == null) {
+            MainMod.LOGGER.debug("[BetterPortalsCompat] Skipped chunk updates with no active render-pass world");
+            return false;
+        }
+        if (accessor.ausm$world() != renderPassWorld) {
+            MainMod.LOGGER.debug("[BetterPortalsCompat] Skipped chunk updates for mismatched render-pass world: renderGlobal={} pass={}",
+                    safeDimensionId(accessor.ausm$world()),
+                    safeDimensionId(renderPassWorld));
+            clearRenderGlobalChunkUpdates(accessor);
+            return false;
+        }
+
+        ensureVanillaTerrainRenderer(renderPassWorld);
+
+        return filterBetterPortalsChunkUpdates(accessor, renderPassWorld);
+    }
+
+    public boolean handleBetterPortalsChunkUpdateFailure(RenderGlobal renderGlobal, NullPointerException exception) {
+        if (!BetterPortalsCompat.isInstalled()
+                || !BetterPortalsCompat.isRenderingNestedView()
+                || !(renderGlobal instanceof RenderGlobalAccessor accessor)) {
+            return false;
+        }
+
+        clearRenderGlobalChunkUpdates(accessor);
+        if (!betterPortalsChunkUpdateWarningLogged) {
+            betterPortalsChunkUpdateWarningLogged = true;
+            MainMod.LOGGER.warn("[BetterPortalsCompat] Dropped stale nested chunk update after Better Portals exposed a RenderChunk with no world", exception);
+        }
+        return true;
+    }
+
+    private boolean filterBetterPortalsChunkUpdates(RenderGlobalAccessor accessor, World allowedWorld) {
+        Set<RenderChunk> chunksToUpdate = accessor.ausm$chunksToUpdate();
+        if (chunksToUpdate == null || chunksToUpdate.isEmpty()) {
+            return false;
+        }
+
+        int before = chunksToUpdate.size();
+        chunksToUpdate.removeIf(chunk -> !isValidBetterPortalsChunkUpdate(chunk, allowedWorld));
+        int removed = before - chunksToUpdate.size();
+        if (removed > 0) {
+            MainMod.LOGGER.debug("[BetterPortalsCompat] Removed {} stale chunk update(s) from Better Portals render pass", removed);
+        }
+        return !chunksToUpdate.isEmpty();
+    }
+
+    private boolean isValidBetterPortalsChunkUpdate(RenderChunk chunk, World allowedWorld) {
+        if (chunk == null) {
+            return false;
+        }
+
+        World chunkWorld = renderChunkWorld(chunk);
+        if (chunkWorld == null) {
+            return assignRenderChunkWorld(chunk, allowedWorld);
+        }
+        return chunkWorld == allowedWorld;
+    }
+
+    private World renderChunkWorld(RenderChunk chunk) {
+        if (chunk instanceof RenderChunkAccessor accessor) {
+            return accessor.ausm$world();
+        }
+        return chunk.getWorld();
+    }
+
+    private boolean assignRenderChunkWorld(RenderChunk chunk, World world) {
+        if (chunk == null || world == null || !(chunk instanceof RenderChunkAccessor accessor)) {
+            return false;
+        }
+        try {
+            accessor.ausm$setWorld(world);
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private void clearRenderGlobalChunkUpdates(RenderGlobalAccessor accessor) {
+        Set<RenderChunk> chunksToUpdate = accessor.ausm$chunksToUpdate();
+        if (chunksToUpdate != null && !chunksToUpdate.isEmpty()) {
+            chunksToUpdate.clear();
+        }
+    }
+
+    private int safeDimensionId(World world) {
+        return world != null && world.provider != null ? world.provider.getDimension() : Integer.MIN_VALUE;
+    }
+
+    public void prepareBypassedWorldPassRendering() {
+        boolean nestedBetterPortalsView = isRenderingBetterPortalsNestedView();
+        boolean useNestedVanillaRenderer = nestedBetterPortalsView
+                && BetterPortalsCompat.shouldUseVanillaRenderGlobalForNestedView();
+        if (!isPipelineActive && !nestedBetterPortalsView) {
+            prepareInactiveVanillaFrame();
+        }
+        if (useNestedVanillaRenderer) {
+            pushVanillaTerrainRendererState();
+        }
+        if (!nestedBetterPortalsView || useNestedVanillaRenderer) {
+            Minecraft mc = Minecraft.getMinecraft();
+            World world = BetterPortalsCompat.currentRenderPassWorld();
+            ensureVanillaTerrainRenderer(world != null ? world : (mc != null ? mc.world : null));
+        }
+
+        restoreVanillaWorldPassState(!nestedBetterPortalsView, !nestedBetterPortalsView);
+    }
+
+    public void finishBypassedWorldPassRendering() {
+        restoreVanillaWorldPassState(false, false);
+        popVanillaTerrainRendererState();
+        restoreActiveWorldPassAfterExternalShader();
+    }
+
+    public void restoreActiveWorldPassAfterExternalShader() {
+        if (!isPipelineActive || !worldFrameActive || activePass == null || renderingGuiScreen()) {
             return;
         }
 
+        RenderPass pass = activePass;
+        WorldRenderingPhase phase = activePhase;
+        bindWorldFramebuffer();
+        bindPass(pass);
+        activePhase = phase;
+    }
+
+    public void prepareFramebufferPresentation() {
+        if (!isPipelineActive || externalWorldFramebufferTarget != null || isRenderingBetterPortalsNestedView()) {
+            return;
+        }
+
+        if (worldFrameActive) {
+            blitWorldFramebufferToMinecraft();
+        }
+
         Minecraft mc = Minecraft.getMinecraft();
-        if (mc.entityRenderer != null) {
+        if (mc != null && mc.entityRenderer != null) {
             mc.entityRenderer.disableLightmap();
         }
         OpenGlHelper.glUseProgram(0);
@@ -4223,7 +5511,7 @@ public class PipelineContext {
     }
 
     public void prepareGuiRendering() {
-        if (!isPipelineActive) {
+        if (!isPipelineActive || externalWorldFramebufferTarget != null || isRenderingBetterPortalsNestedView()) {
             return;
         }
 
@@ -4233,7 +5521,7 @@ public class PipelineContext {
     }
 
     public void prepareGuiFramebuffer() {
-        if (!isPipelineActive) {
+        if (!isPipelineActive || externalWorldFramebufferTarget != null || isRenderingBetterPortalsNestedView()) {
             return;
         }
 
@@ -4242,7 +5530,7 @@ public class PipelineContext {
     }
 
     public void beginGuiRendering() {
-        if (!isPipelineActive) {
+        if (!isPipelineActive || externalWorldFramebufferTarget != null || isRenderingBetterPortalsNestedView()) {
             return;
         }
 
@@ -4261,6 +5549,9 @@ public class PipelineContext {
 
     private void bindGuiTarget() {
         Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null) {
+            return;
+        }
         if (renderingDeferredIngameHud) {
             OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, 0);
             GL11.glDrawBuffer(GL11.GL_BACK);
@@ -4274,7 +5565,7 @@ public class PipelineContext {
 
     private void prepareGuiState() {
         Minecraft mc = Minecraft.getMinecraft();
-        if (mc.entityRenderer != null) {
+        if (mc != null && mc.entityRenderer != null) {
             mc.entityRenderer.disableLightmap();
         }
         OpenGlHelper.glUseProgram(0);
@@ -4301,12 +5592,17 @@ public class PipelineContext {
 
     public boolean shouldDirectPresentFramebuffer() {
         Minecraft mc = Minecraft.getMinecraft();
-        return isPipelineActive && mc.gameSettings.thirdPersonView != 0;
+        return isPipelineActive
+                && mc != null
+                && mc.gameSettings != null
+                && externalWorldFramebufferTarget == null
+                && !isRenderingBetterPortalsNestedView()
+                && mc.gameSettings.thirdPersonView != 0;
     }
 
     public boolean shouldDeferIngameHud() {
         Minecraft mc = Minecraft.getMinecraft();
-        return shouldDirectPresentFramebuffer() && mc.currentScreen == null && !renderingDeferredIngameHud;
+        return mc != null && shouldDirectPresentFramebuffer() && mc.currentScreen == null && !renderingDeferredIngameHud;
     }
 
     public void beginDeferredIngameHud() {
@@ -4324,12 +5620,12 @@ public class PipelineContext {
     }
 
     public void presentFramebufferDirectly(Framebuffer target, int width, int height) {
-        if (!isPipelineActive) {
+        if (!isPipelineActive || externalWorldFramebufferTarget != null || isRenderingBetterPortalsNestedView()) {
             return;
         }
 
         Minecraft mc = Minecraft.getMinecraft();
-        if (target != mc.getFramebuffer()) {
+        if (mc == null || target == null || target != mc.getFramebuffer()) {
             return;
         }
 
@@ -4398,6 +5694,14 @@ public class PipelineContext {
         return shadowFramebuffer != null ? shadowFramebuffer.colorTextureId() : -1;
     }
 
+    public boolean shouldUseNeutralShadowTextures() {
+        return isBetterPortalsExternalWorldTarget();
+    }
+
+    public boolean shouldUseShadowHardwareFiltering() {
+        return packDirectives.renderTargets().shadowHardwareFiltering();
+    }
+
     public void configureShadowDepthTextureCompareMode() {
         if (shadowFramebuffer != null) {
             shadowFramebuffer.configureDepthTextureCompareMode();
@@ -4405,23 +5709,25 @@ public class PipelineContext {
     }
 
     public void setActive(boolean active) {
+        boolean wasPipelineActive = isPipelineActive;
         isPipelineActive = active && pingPongManager.isInitialized();
         if (isPipelineActive) {
             Minecraft mc = Minecraft.getMinecraft();
-            if (mc.world != null) {
+            if (mc != null && mc.world != null) {
                 resizeFramebuffer(mc.displayWidth, mc.displayHeight, true);
             }
         } else {
             vanillaRecoveryFrames = Math.max(vanillaRecoveryFrames, 6);
             resetPipelineState();
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        rebuildTerrainRenderers();
+        if (wasPipelineActive != isPipelineActive) {
+            rebuildTerrainRenderers();
+        }
     }
 
     public void rebuildTerrainRenderers() {
         Minecraft mc = Minecraft.getMinecraft();
-        if (mc.renderGlobal == null) {
+        if (mc == null || mc.renderGlobal == null) {
             return;
         }
         if (isPipelineActive) {
@@ -4479,6 +5785,11 @@ public class PipelineContext {
         pendingWorldLoadLightRecalculationDelay = WORLD_LOAD_FORCE_LIGHT_RECALC_DELAY_FRAMES;
     }
 
+    public void clearScheduledWorldLoadLightRecalculation() {
+        pendingWorldLoadLightRecalculationAttempts = 0;
+        pendingWorldLoadLightRecalculationDelay = 0;
+    }
+
     public void runScheduledWorldLoadLightRecalculation() {
         if (pendingWorldLoadLightRecalculationAttempts <= 0) {
             return;
@@ -4490,12 +5801,31 @@ public class PipelineContext {
 
         pendingWorldLoadLightRecalculationAttempts--;
         pendingWorldLoadLightRecalculationDelay = WORLD_LOAD_FORCE_LIGHT_RECALC_DELAY_FRAMES;
-        LightRecalculationResult result = forceLightRecalculation();
-        if (result.ran()) {
+        if (refreshWorldLoadLightState()) {
             pendingWorldLoadLightRecalculationAttempts = 0;
             pendingWorldLoadLightRecalculationDelay = 0;
-            MainMod.LOGGER.info("[Lighting] Applied scheduled world-load light recalculation.");
+            MainMod.LOGGER.info("[Lighting] Refreshed scheduled world-load light state.");
         }
+    }
+
+    private boolean refreshWorldLoadLightState() {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.world == null || mc.player == null) {
+            return false;
+        }
+
+        refreshVanillaLightmap(mc);
+        BlockPos center = new BlockPos(mc.player);
+        int radius = WORLD_LOAD_LIGHT_REFRESH_RADIUS;
+        mc.world.markBlockRangeForRenderUpdate(
+                center.getX() - radius,
+                Math.max(0, center.getY() - radius),
+                center.getZ() - radius,
+                center.getX() + radius,
+                Math.min(255, center.getY() + radius),
+                center.getZ() + radius
+        );
+        return true;
     }
 
     private int forceChunkLightingRefresh(World world, int minX, int maxX, int minZ, int maxZ) {
@@ -4574,6 +5904,10 @@ public class PipelineContext {
     }
 
     private void resetPipelineState() {
+        resetPipelineState(null);
+    }
+
+    private void resetPipelineState(Framebuffer preferredTarget) {
         activePass = null;
         activeShaderKey = null;
         activePhase = WorldRenderingPhase.NONE;
@@ -4609,18 +5943,21 @@ public class PipelineContext {
         GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
 
         Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.getFramebuffer() != null) {
-            mc.getFramebuffer().bindFramebuffer(false);
-            GL11.glDrawBuffer(mc.getFramebuffer().framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GL11.glReadBuffer(mc.getFramebuffer().framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
+        Framebuffer target = preferredTarget != null ? preferredTarget : mc != null ? mc.getFramebuffer() : null;
+        if (target != null) {
+            target.bindFramebuffer(false);
+            GL11.glDrawBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GlStateManager.viewport(0, 0, framebufferWidth(target, mc), framebufferHeight(target, mc));
         } else {
             OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, 0);
             GL11.glDrawBuffer(GL11.GL_BACK);
             GL11.glReadBuffer(GL11.GL_BACK);
         }
+        externalWorldFramebufferTarget = null;
         restoreVanillaTextureBindingsAfterPipeline();
         refreshVanillaLightmap(mc);
+        disableVanillaLightmap(mc);
         TextureBinder.restoreDefaultTextureUnit();
     }
 
@@ -4646,6 +5983,23 @@ public class PipelineContext {
         }
     }
 
+    private static void resetIndexedBlendState() {
+        for (int i = 0; i < maxDrawBuffers(); i++) {
+            setIndexedBlend(i, false);
+        }
+    }
+
+    private static void resetOitRenderState() {
+        GlStateManager.depthMask(true);
+        resetIndexedBlendState();
+        GlStateManager.tryBlendFuncSeparate(
+                GL11.GL_SRC_ALPHA,
+                GL11.GL_ONE_MINUS_SRC_ALPHA,
+                GL11.GL_ONE,
+                GL11.GL_ZERO
+        );
+    }
+
     private static int maxDrawBuffers() {
         if (maxDrawBuffers < 0) {
             maxDrawBuffers = GLContext.getCapabilities().OpenGL20
@@ -4666,34 +6020,41 @@ public class PipelineContext {
         restoreVanillaLightmapTexture(mc);
 
         TextureBinder.restoreDefaultTextureUnit();
-            if (mc.getTextureManager() != null) {
-                mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
-                ITextureObject atlasTexture = mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
-                if (atlasTexture != null) {
-                    GL11.glBindTexture(GL11.GL_TEXTURE_2D, atlasTexture.getGlTextureId());
-                }
-            } else {
-                GlStateManager.bindTexture(0);
+        if (mc.getTextureManager() != null) {
+            mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+            ITextureObject atlasTexture = mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+            if (atlasTexture != null) {
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, atlasTexture.getGlTextureId());
             }
+        } else {
+            GlStateManager.bindTexture(0);
+        }
         TextureBinder.restoreDefaultTextureUnit();
     }
 
     private void restoreVanillaLightmapTexture(Minecraft mc) {
-        if (mc.entityRenderer == null) {
+        if (mc == null || mc.entityRenderer == null) {
             return;
         }
 
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
         DynamicTexture lightmapTexture = ((EntityRendererAccessor) mc.entityRenderer).ausm$getLightmapTexture();
-        if (mc.world != null) {
-            mc.entityRenderer.enableLightmap();
+        try {
+            GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
+            boolean lightmapTextureEnabled = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
+            int textureId = lightmapTexture != null ? lightmapTexture.getGlTextureId() : 0;
+            GlStateManager.bindTexture(textureId);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
+            if (lightmapTextureEnabled) {
+                GlStateManager.enableTexture2D();
+            } else {
+                GlStateManager.disableTexture2D();
+            }
+        } finally {
+            GL13.glActiveTexture(previousActiveTexture);
+            TextureBinder.restoreDefaultTextureUnit();
+            OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
         }
-        GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
-        GlStateManager.enableTexture2D();
-        int textureId = lightmapTexture != null ? lightmapTexture.getGlTextureId() : 0;
-        GlStateManager.bindTexture(textureId);
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
-        TextureBinder.restoreDefaultTextureUnit();
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
     }
 
     private void refreshVanillaLightmap(Minecraft mc) {
@@ -4704,6 +6065,15 @@ public class PipelineContext {
         accessor.ausm$setLightmapUpdateNeeded(true);
         accessor.ausm$updateLightmap(mc.getRenderPartialTicks());
         restoreVanillaLightmapTexture(mc);
+    }
+
+    private void disableVanillaLightmap(Minecraft mc) {
+        if (mc == null || mc.entityRenderer == null) {
+            return;
+        }
+        mc.entityRenderer.disableLightmap();
+        TextureBinder.restoreDefaultTextureUnit();
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
     }
 
     private static void unbindShaderImages() {
@@ -5016,6 +6386,8 @@ public class PipelineContext {
                         Map.of(),
                         CustomUniformSet.empty()
                 ),
+                ShaderOitSettings.empty(),
+                Map.of(),
                 Map.of()
         );
     }

@@ -92,6 +92,33 @@ public final class ShaderImageSet {
         TextureBinder.restoreDefaultTextureUnit();
     }
 
+    public void bindDisabled(ShaderProgram program) {
+        for (LoadedImage image : loadedImages) {
+            ShaderImageDirective directive = image.directive();
+            GL42.glBindImageTexture(
+                    image.unit(),
+                    0,
+                    0,
+                    false,
+                    0,
+                    GL15.GL_READ_WRITE,
+                    image.internalFormat()
+            );
+            int imageLocation = program.getUniformLocation(directive.name());
+            if (imageLocation != -1) {
+                OpenGlHelper.glUniform1i(imageLocation, image.unit());
+            }
+            if (directive.samplerName() != null && !directive.samplerName().isBlank()) {
+                TextureBinder.bindTexture(image.textureTarget(), image.samplerUnit(), 0);
+                int location = program.getUniformLocation(directive.samplerName());
+                if (location != -1) {
+                    OpenGlHelper.glUniform1i(location, image.samplerUnit());
+                }
+            }
+        }
+        TextureBinder.restoreDefaultTextureUnit();
+    }
+
     public void clearSmallImages() {
         for (LoadedImage image : loadedImages) {
             clearImage(image, false);

@@ -11,7 +11,6 @@ import com.l.ausm.api.pipeline.shader.ProgramId;
 import com.l.ausm.api.pipeline.shader.ProgramStage;
 import com.l.ausm.api.pipeline.shader.RenderPass;
 import com.l.ausm.impl.MainMod;
-import net.minecraft.client.Minecraft;
 import net.minecraft.util.ResourceLocation;
 
 import java.io.BufferedReader;
@@ -22,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 
@@ -48,6 +48,8 @@ public record ShaderProperties(
         ShaderTextureDirectives textureDirectives,
         CustomUniformSet customUniforms,
         ShaderPackDirectives packDirectives,
+        ShaderOitSettings oitSettings,
+        Map<ProgramArrayKey, ShaderProgramDirectives> programArrayDirectives,
         Map<ProgramArrayKey, String> programArrayEnabledExpressions
 ) {
 
@@ -58,10 +60,13 @@ public record ShaderProperties(
     public static ShaderProperties load(ShaderPack pack, Map<String, String> optionOverrides) {
         Map<RenderPass, List<Attachment>> drawBuffers = new EnumMap<>(RenderPass.class);
         Map<ProgramId, List<Attachment>> programDrawBuffers = new EnumMap<>(ProgramId.class);
+        Map<ProgramArrayKey, List<Attachment>> programArrayDrawBuffers = new java.util.LinkedHashMap<>();
         Map<RenderPass, Map<Attachment, Boolean>> explicitFlips = new EnumMap<>(RenderPass.class);
         Map<ProgramId, Map<Attachment, Boolean>> programExplicitFlips = new EnumMap<>(ProgramId.class);
+        Map<ProgramArrayKey, Map<Attachment, Boolean>> programArrayExplicitFlips = new java.util.LinkedHashMap<>();
         Map<RenderPass, ShaderViewportScale> viewportScales = new EnumMap<>(RenderPass.class);
         Map<ProgramId, ShaderViewportScale> programViewportScales = new EnumMap<>(ProgramId.class);
+        Map<ProgramArrayKey, ShaderViewportScale> programArrayViewportScales = new java.util.LinkedHashMap<>();
         Map<ProgramKey, String> programEnabledExpressions = new java.util.LinkedHashMap<>();
         Map<ProgramArrayKey, String> programArrayEnabledExpressions = new java.util.LinkedHashMap<>();
         Map<String, ShaderScreen> screens = new java.util.LinkedHashMap<>();
@@ -77,6 +82,7 @@ public record ShaderProperties(
             programDrawBuffers.putAll(ShaderDrawBuffersScanner.scanProgramIds(pack, layout, options));
             adaptProgramDrawBuffers(programDrawBuffers, drawBuffers);
             ShaderRenderTargetSettings renderTargets = ShaderBufferFormatScanner.scan(pack, options);
+            ShaderOitSettings oitSettings = ShaderOitSettings.empty();
             Map<ProgramId, ShaderProgramDirectives> programDirectives = inheritProgramDirectiveFallbacks(
                     buildProgramDirectives(programDrawBuffers, Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), renderTargets)
             );
@@ -118,6 +124,8 @@ public record ShaderProperties(
                     ShaderTextureDirectives.empty(),
                     CustomUniformSet.empty(),
                     packDirectives,
+                    oitSettings,
+                    Map.of(),
                     Map.of()
             );
         }
@@ -140,7 +148,16 @@ public record ShaderProperties(
                 RenderPass pass = resolveProgramName(programName);
                 ProgramId programId = resolveProgramId(programName);
                 if (programId == null) {
-                    MainMod.LOGGER.warn("[ShaderProperties] Ignoring drawBuffers for unknown program: {}", programName);
+                    ProgramArrayKey arrayKey = ProgramArrayKey.parse(programName);
+                    if (arrayKey == null) {
+                        MainMod.LOGGER.warn("[ShaderProperties] Ignoring drawBuffers for unknown program: {}", programName);
+                        continue;
+                    }
+                    List<Attachment> attachments = parseDrawBuffers(properties.getProperty(key));
+                    if (!attachments.isEmpty()) {
+                        programArrayDrawBuffers.put(arrayKey, attachments);
+                        MainMod.LOGGER.debug("[ShaderProperties] {} draw buffers: {}", programName, attachments);
+                    }
                     continue;
                 }
 
@@ -156,12 +173,12 @@ public record ShaderProperties(
             }
 
             if (key.startsWith("flip.")) {
-                parseExplicitFlip(key, properties.getProperty(key), explicitFlips, programExplicitFlips);
+                parseExplicitFlip(key, properties.getProperty(key), explicitFlips, programExplicitFlips, programArrayExplicitFlips);
                 continue;
             }
 
             if (key.startsWith("scale.")) {
-                parseViewportScale(key, properties.getProperty(key), viewportScales, programViewportScales);
+                parseViewportScale(key, properties.getProperty(key), viewportScales, programViewportScales, programArrayViewportScales);
                 continue;
             }
 
@@ -228,7 +245,11 @@ public record ShaderProperties(
 
         BlendModes blendModes = parseBlendModes(properties, options);
         AlphaTests alphaTests = parseAlphaTests(properties, options);
-        ShaderRenderTargetSettings renderTargets = ShaderBufferFormatScanner.scan(pack, options);
+        ShaderOitSettings oitSettings = parseOitSettings(properties);
+        ShaderRenderTargetSettings renderTargets = applyOitRenderTargets(
+                ShaderBufferFormatScanner.scan(pack, options),
+                oitSettings
+        );
         Map<ProgramId, ShaderProgramDirectives> programDirectives = inheritProgramDirectiveFallbacks(buildProgramDirectives(
                 programDrawBuffers,
                 programViewportScales,
@@ -238,6 +259,15 @@ public record ShaderProperties(
                 copyProgramFlipMap(programExplicitFlips),
                 renderTargets
         ));
+        Map<ProgramArrayKey, ShaderProgramDirectives> programArrayDirectives = buildProgramArrayDirectives(
+                programArrayDrawBuffers,
+                programArrayViewportScales,
+                alphaTests.arrayModes(),
+                blendModes.arrayModes(),
+                blendModes.arrayAttachmentModes(),
+                copyProgramArrayFlipMap(programArrayExplicitFlips),
+                renderTargets
+        );
         ShaderRenderSettings renderSettings = ShaderRenderSettings.parse(properties);
         CustomUniformSet customUniforms = parseCustomUniforms(properties);
         List<ShaderImageDirective> images = parseImages(properties);
@@ -282,6 +312,8 @@ public record ShaderProperties(
                 textureDirectives,
                 customUniforms,
                 packDirectives,
+                oitSettings,
+                programArrayDirectives,
                 Map.copyOf(programArrayEnabledExpressions)
         );
     }
@@ -295,7 +327,13 @@ public record ShaderProperties(
     }
 
     public boolean isProgramEnabled(RenderPass pass) {
-        String expression = programEnabledExpressions.get(new ProgramKey(currentDimensionId(), pass.programId()));
+        String expression = null;
+        for (int dimensionId : dimensionFallbackOrder(ShaderDimensionContext.currentDimensionId())) {
+            expression = programEnabledExpressions.get(new ProgramKey(dimensionId, pass.programId()));
+            if (expression != null) {
+                break;
+            }
+        }
         if (expression == null) {
             expression = programEnabledExpressions.get(new ProgramKey(null, pass.programId()));
         }
@@ -305,7 +343,13 @@ public record ShaderProperties(
     public boolean isProgramArrayEnabled(ProgramArrayId arrayId, String sourceName) {
         ProgramArrayKey sourceKey = ProgramArrayKey.parse(sourceName);
         int index = sourceKey == null ? 0 : sourceKey.index();
-        String expression = programArrayEnabledExpressions.get(new ProgramArrayKey(currentDimensionId(), arrayId, index));
+        String expression = null;
+        for (int dimensionId : dimensionFallbackOrder(ShaderDimensionContext.currentDimensionId())) {
+            expression = programArrayEnabledExpressions.get(new ProgramArrayKey(dimensionId, arrayId, index));
+            if (expression != null) {
+                break;
+            }
+        }
         if (expression == null) {
             expression = programArrayEnabledExpressions.get(new ProgramArrayKey(null, arrayId, index));
         }
@@ -325,12 +369,31 @@ public record ShaderProperties(
         return directives == null ? ShaderProgramDirectives.empty(requestedProgramId) : directives;
     }
 
-    private static int currentDimensionId() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.world.provider == null) {
-            return 0;
+    public ShaderProgramDirectives directivesFor(ProgramArrayId arrayId, String sourceName) {
+        if (arrayId == null) {
+            return ShaderProgramDirectives.empty(ProgramId.PREPARE);
         }
-        return mc.world.provider.getDimension();
+
+        ProgramArrayKey sourceKey = ProgramArrayKey.parse(sourceName == null ? arrayId.sourcePrefix() : sourceName);
+        int index = sourceKey == null ? 0 : sourceKey.index();
+        ShaderProgramDirectives directives = null;
+        for (int dimensionId : dimensionFallbackOrder(ShaderDimensionContext.currentDimensionId())) {
+            directives = programArrayDirectives.get(new ProgramArrayKey(dimensionId, arrayId, index));
+            if (directives != null) {
+                break;
+            }
+        }
+        if (directives == null) {
+            directives = programArrayDirectives.get(new ProgramArrayKey(null, arrayId, index));
+        }
+        return directives == null ? ShaderProgramDirectives.empty(bindingPassForProgramArray(arrayId).programId()) : directives;
+    }
+
+    private static int[] dimensionFallbackOrder(int dimensionId) {
+        if (dimensionId == 0) {
+            return new int[]{0};
+        }
+        return new int[]{dimensionId, 0};
     }
 
     private static RenderPass resolveProgramName(String programName) {
@@ -362,7 +425,8 @@ public record ShaderProperties(
             String key,
             String value,
             Map<RenderPass, Map<Attachment, Boolean>> explicitFlips,
-            Map<ProgramId, Map<Attachment, Boolean>> programExplicitFlips
+            Map<ProgramId, Map<Attachment, Boolean>> programExplicitFlips,
+            Map<ProgramArrayKey, Map<Attachment, Boolean>> programArrayExplicitFlips
     ) {
         String suffix = key.substring("flip.".length());
         int dot = suffix.lastIndexOf('.');
@@ -374,8 +438,9 @@ public record ShaderProperties(
         String programName = suffix.substring(0, dot);
         RenderPass pass = resolveProgramName(programName);
         ProgramId programId = resolveProgramId(programName);
+        ProgramArrayKey arrayKey = programId == null ? ProgramArrayKey.parse(programName) : null;
         Attachment attachment = Attachment.fromName(suffix.substring(dot + 1));
-        if (programId == null || attachment == null) {
+        if ((programId == null && arrayKey == null) || attachment == null) {
             MainMod.LOGGER.warn("[ShaderProperties] Ignoring flip directive for unknown target: {}", key);
             return;
         }
@@ -386,21 +451,29 @@ public record ShaderProperties(
                     .computeIfAbsent(pass, ignored -> new EnumMap<>(Attachment.class))
                     .put(attachment, parsedValue);
         }
-        programExplicitFlips
-                .computeIfAbsent(programId, ignored -> new EnumMap<>(Attachment.class))
-                .put(attachment, parsedValue);
+        if (programId != null) {
+            programExplicitFlips
+                    .computeIfAbsent(programId, ignored -> new EnumMap<>(Attachment.class))
+                    .put(attachment, parsedValue);
+        } else {
+            programArrayExplicitFlips
+                    .computeIfAbsent(arrayKey, ignored -> new EnumMap<>(Attachment.class))
+                    .put(attachment, parsedValue);
+        }
     }
 
     private static void parseViewportScale(
             String key,
             String value,
             Map<RenderPass, ShaderViewportScale> viewportScales,
-            Map<ProgramId, ShaderViewportScale> programViewportScales
+            Map<ProgramId, ShaderViewportScale> programViewportScales,
+            Map<ProgramArrayKey, ShaderViewportScale> programArrayViewportScales
     ) {
         String programName = key.substring("scale.".length());
         RenderPass pass = resolveProgramName(programName);
         ProgramId programId = resolveProgramId(programName);
-        if (programId == null) {
+        ProgramArrayKey arrayKey = programId == null ? ProgramArrayKey.parse(programName) : null;
+        if (programId == null && arrayKey == null) {
             MainMod.LOGGER.warn("[ShaderProperties] Ignoring scale directive for unknown program: {}", key);
             return;
         }
@@ -414,7 +487,11 @@ public record ShaderProperties(
             if (pass != null) {
                 viewportScales.put(pass, viewportScale);
             }
-            programViewportScales.put(programId, viewportScale);
+            if (programId != null) {
+                programViewportScales.put(programId, viewportScale);
+            } else {
+                programArrayViewportScales.put(arrayKey, viewportScale);
+            }
         } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
             MainMod.LOGGER.warn("[ShaderProperties] Ignoring malformed scale directive: {}={}", key, value);
         }
@@ -423,6 +500,7 @@ public record ShaderProperties(
     private static AlphaTests parseAlphaTests(Properties properties, ShaderOptions options) {
         Map<RenderPass, ShaderAlphaTest> alphaTests = new EnumMap<>(RenderPass.class);
         Map<ProgramId, ShaderAlphaTest> programAlphaTests = new EnumMap<>(ProgramId.class);
+        Map<ProgramArrayKey, ShaderAlphaTest> arrayAlphaTests = new java.util.LinkedHashMap<>();
         for (String key : properties.stringPropertyNames()) {
             if (!key.startsWith("alphaTest.")) {
                 continue;
@@ -431,17 +509,22 @@ public record ShaderProperties(
             String programName = key.substring("alphaTest.".length());
             RenderPass pass = resolveProgramName(programName);
             ProgramId programId = resolveProgramId(programName);
+            ProgramArrayKey arrayKey = programId == null ? ProgramArrayKey.parse(programName) : null;
             ShaderAlphaTest alphaTest = ShaderAlphaTest.parse(properties.getProperty(key), options);
-            if (programId == null || alphaTest == null) {
+            if ((programId == null && arrayKey == null) || alphaTest == null) {
                 MainMod.LOGGER.warn("[ShaderProperties] Ignoring malformed alphaTest directive: {}={}", key, properties.getProperty(key));
                 continue;
             }
             if (pass != null) {
                 alphaTests.put(pass, alphaTest);
             }
-            programAlphaTests.put(programId, alphaTest);
+            if (programId != null) {
+                programAlphaTests.put(programId, alphaTest);
+            } else {
+                arrayAlphaTests.put(arrayKey, alphaTest);
+            }
         }
-        return new AlphaTests(Map.copyOf(alphaTests), Map.copyOf(programAlphaTests));
+        return new AlphaTests(Map.copyOf(alphaTests), Map.copyOf(programAlphaTests), Map.copyOf(arrayAlphaTests));
     }
 
     private static BlendModes parseBlendModes(Properties properties, ShaderOptions options) {
@@ -449,6 +532,8 @@ public record ShaderProperties(
         Map<RenderPass, Map<Attachment, ShaderBlendMode>> attachmentModes = new EnumMap<>(RenderPass.class);
         Map<ProgramId, ShaderBlendMode> programBlendModes = new EnumMap<>(ProgramId.class);
         Map<ProgramId, Map<Attachment, ShaderBlendMode>> programAttachmentModes = new EnumMap<>(ProgramId.class);
+        Map<ProgramArrayKey, ShaderBlendMode> arrayBlendModes = new java.util.LinkedHashMap<>();
+        Map<ProgramArrayKey, Map<Attachment, ShaderBlendMode>> arrayAttachmentModes = new java.util.LinkedHashMap<>();
         for (String key : properties.stringPropertyNames()) {
             if (!key.startsWith("blend.")) {
                 continue;
@@ -459,8 +544,12 @@ public record ShaderProperties(
             String programName = targetSeparator < 0 ? suffix : suffix.substring(0, targetSeparator);
             RenderPass pass = resolveProgramName(programName);
             ProgramId programId = resolveProgramId(programName);
+            ProgramArrayKey arrayKey = programId == null ? ProgramArrayKey.parse(programName) : null;
             ShaderBlendMode blendMode = ShaderBlendMode.parse(properties.getProperty(key), options);
-            if (programId == null || blendMode == null) {
+            if (programId == null && programName.startsWith("clrwl_")) {
+                continue;
+            }
+            if ((programId == null && arrayKey == null) || blendMode == null) {
                 MainMod.LOGGER.warn("[ShaderProperties] Ignoring malformed blend directive: {}={}", key, properties.getProperty(key));
                 continue;
             }
@@ -469,7 +558,11 @@ public record ShaderProperties(
                 if (pass != null) {
                     blendModes.put(pass, blendMode);
                 }
-                programBlendModes.put(programId, blendMode);
+                if (programId != null) {
+                    programBlendModes.put(programId, blendMode);
+                } else {
+                    arrayBlendModes.put(arrayKey, blendMode);
+                }
                 continue;
             }
 
@@ -483,11 +576,127 @@ public record ShaderProperties(
                         .computeIfAbsent(pass, ignored -> new EnumMap<>(Attachment.class))
                         .put(attachment, blendMode);
             }
-            programAttachmentModes
-                    .computeIfAbsent(programId, ignored -> new EnumMap<>(Attachment.class))
-                    .put(attachment, blendMode);
+            if (programId != null) {
+                programAttachmentModes
+                        .computeIfAbsent(programId, ignored -> new EnumMap<>(Attachment.class))
+                        .put(attachment, blendMode);
+            } else {
+                arrayAttachmentModes
+                        .computeIfAbsent(arrayKey, ignored -> new EnumMap<>(Attachment.class))
+                        .put(attachment, blendMode);
+            }
         }
-        return new BlendModes(Map.copyOf(blendModes), copyBlendAttachmentMap(attachmentModes), Map.copyOf(programBlendModes), copyProgramBlendAttachmentMap(programAttachmentModes));
+        return new BlendModes(
+                Map.copyOf(blendModes),
+                copyBlendAttachmentMap(attachmentModes),
+                Map.copyOf(programBlendModes),
+                copyProgramBlendAttachmentMap(programAttachmentModes),
+                Map.copyOf(arrayBlendModes),
+                copyProgramArrayBlendAttachmentMap(arrayAttachmentModes)
+        );
+    }
+
+    private static ShaderOitSettings parseOitSettings(Properties properties) {
+        boolean enabled = parseBooleanProperty(properties.getProperty("oit"), false);
+        List<Integer> coefficientRanks = parseIntegerList(properties.getProperty("oit.gbuffers.coefficientRanks"));
+        Map<Attachment, ShaderOitSettings.BufferMode> gbufferBuffers = new EnumMap<>(Attachment.class);
+        Map<Attachment, ColorBufferFormat> gbufferFormats = new EnumMap<>(Attachment.class);
+
+        for (String key : properties.stringPropertyNames()) {
+            if (!key.startsWith("oit.gbuffers.colortex")) {
+                continue;
+            }
+
+            String targetName = key.substring("oit.gbuffers.".length());
+            boolean formatDirective = targetName.endsWith(".format");
+            if (formatDirective) {
+                targetName = targetName.substring(0, targetName.length() - ".format".length());
+            }
+
+            Attachment attachment = Attachment.fromName(targetName);
+            if (attachment == null) {
+                MainMod.LOGGER.warn("[ShaderProperties] Ignoring OIT directive for unknown target: {}", key);
+                continue;
+            }
+
+            String value = properties.getProperty(key, "").trim();
+            if (formatDirective) {
+                ColorBufferFormat format = ColorBufferFormat.fromName(value.toUpperCase(Locale.ROOT));
+                if (format == null) {
+                    MainMod.LOGGER.warn("[ShaderProperties] Ignoring OIT format directive with unknown format: {}={}", key, value);
+                    continue;
+                }
+                gbufferFormats.put(attachment, format);
+                continue;
+            }
+
+            if ("frontmost".equalsIgnoreCase(value)) {
+                gbufferBuffers.put(attachment, ShaderOitSettings.BufferMode.frontmost());
+                continue;
+            }
+
+            try {
+                gbufferBuffers.put(attachment, ShaderOitSettings.BufferMode.coefficient(Integer.parseInt(value)));
+            } catch (NumberFormatException e) {
+                MainMod.LOGGER.warn("[ShaderProperties] Ignoring malformed OIT buffer directive: {}={}", key, value);
+            }
+        }
+
+        if (!gbufferBuffers.isEmpty()) {
+            enabled = enabled || parseBooleanProperty(properties.getProperty("oit.gbuffers"), false);
+        }
+        return new ShaderOitSettings(
+                enabled,
+                List.copyOf(coefficientRanks),
+                Map.copyOf(gbufferBuffers),
+                Map.copyOf(gbufferFormats)
+        );
+    }
+
+    private static ShaderRenderTargetSettings applyOitRenderTargets(ShaderRenderTargetSettings renderTargets, ShaderOitSettings oitSettings) {
+        if (oitSettings == null || !oitSettings.activeForGbuffers()) {
+            return renderTargets;
+        }
+
+        Map<Attachment, float[]> clearColors = new EnumMap<>(Attachment.class);
+        oitSettings.gbufferBuffers().forEach((attachment, mode) -> {
+            if (mode.type() == ShaderOitSettings.BufferMode.Type.COEFFICIENT) {
+                clearColors.put(attachment, new float[]{0.0f, 0.0f, 0.0f, 0.0f});
+            }
+        });
+        return renderTargets
+                .withFormats(oitSettings.gbufferFormats())
+                .withClearColors(clearColors);
+    }
+
+    private static boolean parseBooleanProperty(String value, boolean fallback) {
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        return switch (value.trim().toLowerCase(Locale.ROOT)) {
+            case "true", "on", "1", "yes" -> true;
+            case "false", "off", "0", "no" -> false;
+            default -> fallback;
+        };
+    }
+
+    private static List<Integer> parseIntegerList(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+
+        List<Integer> parsed = new ArrayList<>();
+        for (String part : value.trim().split("[,\\s]+")) {
+            if (part.isBlank()) {
+                continue;
+            }
+            try {
+                parsed.add(Integer.parseInt(part));
+            } catch (NumberFormatException e) {
+                MainMod.LOGGER.warn("[ShaderProperties] Ignoring malformed OIT coefficient rank: {}", part);
+            }
+        }
+        return parsed;
     }
 
     private static Map<RenderPass, Map<Attachment, ShaderBlendMode>> copyBlendAttachmentMap(Map<RenderPass, Map<Attachment, ShaderBlendMode>> source) {
@@ -650,17 +859,32 @@ public record ShaderProperties(
         return Map.copyOf(copy);
     }
 
+    private static Map<ProgramArrayKey, Map<Attachment, ShaderBlendMode>> copyProgramArrayBlendAttachmentMap(
+            Map<ProgramArrayKey, Map<Attachment, ShaderBlendMode>> source
+    ) {
+        Map<ProgramArrayKey, Map<Attachment, ShaderBlendMode>> copy = new java.util.LinkedHashMap<>();
+        source.forEach((arrayKey, modes) -> {
+            if (!modes.isEmpty()) {
+                copy.put(arrayKey, Map.copyOf(modes));
+            }
+        });
+        return Map.copyOf(copy);
+    }
+
     private record BlendModes(
             Map<RenderPass, ShaderBlendMode> passModes,
             Map<RenderPass, Map<Attachment, ShaderBlendMode>> attachmentModes,
             Map<ProgramId, ShaderBlendMode> programModes,
-            Map<ProgramId, Map<Attachment, ShaderBlendMode>> programAttachmentModes
+            Map<ProgramId, Map<Attachment, ShaderBlendMode>> programAttachmentModes,
+            Map<ProgramArrayKey, ShaderBlendMode> arrayModes,
+            Map<ProgramArrayKey, Map<Attachment, ShaderBlendMode>> arrayAttachmentModes
     ) {
     }
 
     private record AlphaTests(
             Map<RenderPass, ShaderAlphaTest> passModes,
-            Map<ProgramId, ShaderAlphaTest> programModes
+            Map<ProgramId, ShaderAlphaTest> programModes,
+            Map<ProgramArrayKey, ShaderAlphaTest> arrayModes
     ) {
     }
 
@@ -690,6 +914,50 @@ public record ShaderProperties(
             directives.merge(programId, next, ShaderProperties::mergeProgramDirectives);
         }
         return Map.copyOf(directives);
+    }
+
+    private static Map<ProgramArrayKey, ShaderProgramDirectives> buildProgramArrayDirectives(
+            Map<ProgramArrayKey, List<Attachment>> drawBuffers,
+            Map<ProgramArrayKey, ShaderViewportScale> viewportScales,
+            Map<ProgramArrayKey, ShaderAlphaTest> alphaTests,
+            Map<ProgramArrayKey, ShaderBlendMode> blendModes,
+            Map<ProgramArrayKey, Map<Attachment, ShaderBlendMode>> attachmentBlendModes,
+            Map<ProgramArrayKey, Map<Attachment, Boolean>> explicitFlips,
+            ShaderRenderTargetSettings renderTargets
+    ) {
+        java.util.LinkedHashSet<ProgramArrayKey> keys = new java.util.LinkedHashSet<>();
+        keys.addAll(drawBuffers.keySet());
+        keys.addAll(viewportScales.keySet());
+        keys.addAll(alphaTests.keySet());
+        keys.addAll(blendModes.keySet());
+        keys.addAll(attachmentBlendModes.keySet());
+        keys.addAll(explicitFlips.keySet());
+
+        Map<ProgramArrayKey, ShaderProgramDirectives> directives = new java.util.LinkedHashMap<>();
+        for (ProgramArrayKey key : keys) {
+            RenderPass bindingPass = bindingPassForProgramArray(key.arrayId());
+            directives.put(key, new ShaderProgramDirectives(
+                    bindingPass.programId(),
+                    drawBuffers.getOrDefault(key, List.of()),
+                    viewportScales.getOrDefault(key, ShaderViewportScale.DEFAULT),
+                    alphaTests.get(key),
+                    blendModes.get(key),
+                    attachmentBlendModes.getOrDefault(key, Map.of()),
+                    renderTargets.clearDisabledForPass(bindingPass),
+                    renderTargets.mipmapEnabled(bindingPass),
+                    explicitFlips.getOrDefault(key, Map.of())
+            ));
+        }
+        return Map.copyOf(directives);
+    }
+
+    private static RenderPass bindingPassForProgramArray(ProgramArrayId arrayId) {
+        return switch (arrayId) {
+            case SETUP, BEGIN, PREPARE -> RenderPass.PREPARE;
+            case DEFERRED -> RenderPass.DEFERRED;
+            case COMPOSITE -> RenderPass.COMPOSITE;
+            case SHADOWCOMP -> RenderPass.SHADOW;
+        };
     }
 
     private static Map<ProgramId, ShaderProgramDirectives> inheritProgramDirectiveFallbacks(Map<ProgramId, ShaderProgramDirectives> source) {
@@ -771,7 +1039,7 @@ public record ShaderProperties(
     }
 
     public record ProgramArrayKey(Integer dimensionId, ProgramArrayId arrayId, int index) {
-        private static ProgramArrayKey parse(String rawName) {
+        public static ProgramArrayKey parse(String rawName) {
             int dimensionId = Integer.MIN_VALUE;
             String programName = rawName;
             if (rawName.startsWith("world")) {
@@ -1235,6 +1503,18 @@ public record ShaderProperties(
         source.forEach((programId, flips) -> {
             if (!flips.isEmpty()) {
                 copy.put(programId, Map.copyOf(flips));
+            }
+        });
+        return Map.copyOf(copy);
+    }
+
+    private static Map<ProgramArrayKey, Map<Attachment, Boolean>> copyProgramArrayFlipMap(
+            Map<ProgramArrayKey, Map<Attachment, Boolean>> source
+    ) {
+        Map<ProgramArrayKey, Map<Attachment, Boolean>> copy = new java.util.LinkedHashMap<>();
+        source.forEach((arrayKey, flips) -> {
+            if (!flips.isEmpty()) {
+                copy.put(arrayKey, Map.copyOf(flips));
             }
         });
         return Map.copyOf(copy);

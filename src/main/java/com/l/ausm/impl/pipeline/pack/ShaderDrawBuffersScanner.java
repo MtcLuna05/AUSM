@@ -8,7 +8,6 @@ import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.api.pipeline.shader.ProgramId;
 import com.l.ausm.api.pipeline.shader.RenderPass;
-import net.minecraft.client.Minecraft;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -59,14 +58,9 @@ public final class ShaderDrawBuffersScanner {
 
     public static Map<ProgramId, List<Attachment>> scanProgramIds(ShaderPack pack, ShaderPackLayout layout, ShaderOptions options) {
         Map<ProgramId, List<Attachment>> result = new EnumMap<>(ProgramId.class);
-        int dimensionId = currentDimensionId();
-        boolean hasAnyDimensionPrograms = hasAnyDimensionPrograms(pack, layout, dimensionId);
+        int dimensionId = ShaderDimensionContext.currentDimensionId();
 
         for (ProgramId programId : ProgramId.values()) {
-            if (hasAnyDimensionPrograms && !hasDimensionPrograms(pack, layout, dimensionId)) {
-                continue;
-            }
-
             List<String> values = scanProgram(pack, layout, dimensionId, programId, options);
             if (values.size() == 1) {
                 String value = values.get(0);
@@ -119,10 +113,12 @@ public final class ShaderDrawBuffersScanner {
     }
 
     private static String resolveStage(ShaderPack pack, ShaderPackLayout layout, int dimensionId, ProgramId programId, String extension) {
-        for (String dimensionBase : layout.dimensionProgramBaseAliases(dimensionId, programId)) {
-            String path = dimensionBase + extension;
-            if (pack.hasResource(path)) {
-                return path;
+        for (int candidateDimensionId : dimensionFallbackOrder(dimensionId)) {
+            for (String dimensionBase : layout.dimensionProgramBaseAliases(candidateDimensionId, programId)) {
+                String path = dimensionBase + extension;
+                if (pack.hasResource(path)) {
+                    return path;
+                }
             }
         }
 
@@ -135,30 +131,11 @@ public final class ShaderDrawBuffersScanner {
         return null;
     }
 
-    private static boolean hasDimensionPrograms(ShaderPack pack, ShaderPackLayout layout, int dimensionId) {
-        for (ProgramId programId : ProgramId.values()) {
-            for (String base : layout.dimensionProgramBaseAliases(dimensionId, programId)) {
-                if (pack.hasResource(base + ".vsh") || pack.hasResource(base + ".fsh") || pack.hasResource(base + ".gsh")) {
-                    return true;
-                }
-            }
+    private static int[] dimensionFallbackOrder(int dimensionId) {
+        if (dimensionId == 0) {
+            return new int[]{0};
         }
-        return false;
-    }
-
-    private static boolean hasAnyDimensionPrograms(ShaderPack pack, ShaderPackLayout layout, int currentDimensionId) {
-        return hasDimensionPrograms(pack, layout, currentDimensionId)
-                || hasDimensionPrograms(pack, layout, -1)
-                || hasDimensionPrograms(pack, layout, 0)
-                || hasDimensionPrograms(pack, layout, 1);
-    }
-
-    private static int currentDimensionId() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.world.provider == null) {
-            return 0;
-        }
-        return mc.world.provider.getDimension();
+        return new int[]{dimensionId, 0};
     }
 
     private static void scanFile(ShaderPack pack, String path, List<String> values, Set<String> visited, ScanState state) {

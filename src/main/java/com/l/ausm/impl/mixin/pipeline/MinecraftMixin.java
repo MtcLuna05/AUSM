@@ -6,10 +6,12 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.shader.Framebuffer;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -19,6 +21,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(Minecraft.class)
 public class MinecraftMixin {
+
+    @Unique
+    private boolean ausm$hadWorldBeforeLoad;
+
+    @Unique
+    private int ausm$previousWorldDimensionId = Integer.MIN_VALUE;
 
     // Minecraft 1.12.2 handles resizing via 'resize(int width, int height)'
     @Inject(method = "resize(II)V", at = @At("RETURN"))
@@ -38,6 +46,8 @@ public class MinecraftMixin {
 
     @Inject(method = "runGameLoop", at = @At("HEAD"))
     private void ausm$runScheduledWork(CallbackInfo ci) {
+        BetterPortalsCompat.tickMainViewSwapRecovery();
+        MainMod.getShaderPackManager().runPendingBetterPortalsDimensionCompile();
         PipelineContext.getInstance().runScheduledWorldLoadLightRecalculation();
     }
 
@@ -58,14 +68,43 @@ public class MinecraftMixin {
         }
     }
 
+    @Inject(method = "loadWorld(Lnet/minecraft/client/multiplayer/WorldClient;Ljava/lang/String;)V", at = @At("HEAD"))
+    private void ausm$captureWorldBeforeLoad(WorldClient worldClient, String loadingMessage, CallbackInfo ci) {
+        WorldClient currentWorld = ((Minecraft) (Object) this).world;
+        ausm$hadWorldBeforeLoad = currentWorld != null;
+        ausm$previousWorldDimensionId = ausm$dimensionId(currentWorld);
+    }
+
     @Inject(method = "loadWorld(Lnet/minecraft/client/multiplayer/WorldClient;Ljava/lang/String;)V", at = @At("RETURN"))
     private void ausm$scheduleLightRefreshAfterWorldLoad(WorldClient worldClient, String loadingMessage, CallbackInfo ci) {
-        if (worldClient != null) {
-            if (MainMod.getShaderPackManager() != null) {
-                int dimensionId = worldClient.provider != null ? worldClient.provider.getDimension() : Integer.MIN_VALUE;
-                MainMod.getShaderPackManager().preparePipelineForWorldLoad(dimensionId);
-            }
-            PipelineContext.getInstance().scheduleWorldLoadLightRecalculation();
+        if (worldClient == null) {
+            PipelineContext.getInstance().clearScheduledWorldLoadLightRecalculation();
+            return;
         }
+        if (MainMod.getShaderPackManager() != null) {
+            int dimensionId = ausm$dimensionId(worldClient);
+            boolean dimensionSwitch = ausm$isDimensionSwitch(dimensionId);
+            if (!dimensionSwitch) {
+                MainMod.getShaderPackManager().preparePipelineForWorldLoad(dimensionId);
+                PipelineContext.getInstance().scheduleWorldLoadLightRecalculation();
+            } else {
+                PipelineContext.getInstance().clearScheduledWorldLoadLightRecalculation();
+            }
+        }
+    }
+
+    @Unique
+    private boolean ausm$isDimensionSwitch(int dimensionId) {
+        return ausm$hadWorldBeforeLoad
+                && ausm$previousWorldDimensionId != Integer.MIN_VALUE
+                && dimensionId != Integer.MIN_VALUE
+                && ausm$previousWorldDimensionId != dimensionId;
+    }
+
+    @Unique
+    private int ausm$dimensionId(WorldClient worldClient) {
+        return worldClient != null && worldClient.provider != null
+                ? worldClient.provider.getDimension()
+                : Integer.MIN_VALUE;
     }
 }

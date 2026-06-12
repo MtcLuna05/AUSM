@@ -35,6 +35,7 @@ public final class ShadowFramebuffer {
     private final ShaderRenderTargetSettings settings;
     private final IntBuffer viewportBuffer = org.lwjgl.BufferUtils.createIntBuffer(16);
     private final ByteBuffer colorMaskBuffer = org.lwjgl.BufferUtils.createByteBuffer(4);
+    private final FloatBuffer clearColorBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
     private final FloatBuffer depthReadBuffer = org.lwjgl.BufferUtils.createFloatBuffer(1);
 
     public ShadowFramebuffer(int resolution, ShaderRenderTargetSettings settings) {
@@ -304,6 +305,8 @@ public final class ShadowFramebuffer {
         GL11.glGetInteger(GL11.GL_VIEWPORT, viewportBuffer);
         colorMaskBuffer.clear();
         GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, colorMaskBuffer);
+        clearColorBuffer.clear();
+        GL11.glGetFloat(GL11.GL_COLOR_CLEAR_VALUE, clearColorBuffer);
         return new SavedFramebufferState(
                 GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING),
                 GL11.glGetInteger(GL11.GL_DRAW_BUFFER),
@@ -316,7 +319,11 @@ public final class ShadowFramebuffer {
                 viewportBuffer.get(0),
                 viewportBuffer.get(1),
                 viewportBuffer.get(2),
-                viewportBuffer.get(3)
+                viewportBuffer.get(3),
+                clearColorBuffer.get(0),
+                clearColorBuffer.get(1),
+                clearColorBuffer.get(2),
+                clearColorBuffer.get(3)
         );
     }
 
@@ -332,7 +339,11 @@ public final class ShadowFramebuffer {
             int viewportX,
             int viewportY,
             int viewportWidth,
-            int viewportHeight
+            int viewportHeight,
+            float clearRed,
+            float clearGreen,
+            float clearBlue,
+            float clearAlpha
     ) {
         private void restore() {
             OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, framebuffer);
@@ -341,6 +352,7 @@ public final class ShadowFramebuffer {
             GL11.glDepthMask(depthMask);
             GL11.glColorMask(redMask, greenMask, blueMask, alphaMask);
             GL11.glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
+            GlStateManager.clearColor(clearRed, clearGreen, clearBlue, clearAlpha);
         }
     }
 

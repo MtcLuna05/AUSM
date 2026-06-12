@@ -5,11 +5,11 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.pipeline.pack.ShaderDimensionContext;
 import com.l.ausm.impl.pipeline.pack.ShaderPack;
 import com.l.ausm.impl.pipeline.pack.ShaderPackLayout;
 import com.l.ausm.api.pipeline.pack.ShaderComputeDirectives;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
-import net.minecraft.client.Minecraft;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -183,10 +183,12 @@ public final class ShaderProgramSet {
     }
 
     private static String resolveComputePath(ShaderPack pack, ShaderPackLayout layout, String name) {
-        int dimensionId = currentDimensionId();
-        String dimensionPath = existingPath(pack, layout.rootPath("world" + dimensionId + "/" + name + ".csh"));
-        if (dimensionPath != null) {
-            return dimensionPath;
+        int dimensionId = ShaderDimensionContext.currentDimensionId();
+        for (int candidateDimensionId : dimensionFallbackOrder(dimensionId)) {
+            String dimensionPath = existingPath(pack, layout.rootPath("world" + candidateDimensionId + "/" + name + ".csh"));
+            if (dimensionPath != null) {
+                return dimensionPath;
+            }
         }
         String rootPath = existingPath(pack, layout.rootPath(name + ".csh"));
         if (rootPath != null) {
@@ -195,12 +197,11 @@ public final class ShaderProgramSet {
         return null;
     }
 
-    private static int currentDimensionId() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.world.provider == null) {
-            return 0;
+    private static int[] dimensionFallbackOrder(int dimensionId) {
+        if (dimensionId == 0) {
+            return new int[]{0};
         }
-        return mc.world.provider.getDimension();
+        return new int[]{dimensionId, 0};
     }
 
     private static int[] parseWorkGroups(String source) {

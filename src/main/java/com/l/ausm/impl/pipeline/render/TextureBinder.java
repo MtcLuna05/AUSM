@@ -13,9 +13,11 @@ import net.minecraft.client.renderer.OpenGlHelper;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL20;
 
 import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
 
 /**
  * Handles binding the G-Buffer textures into the correct OpenGL Texture Units
@@ -42,6 +44,8 @@ public class TextureBinder {
     private static int fallbackBlackTexture = -1;
     private static int fallbackNormalTexture = -1;
     private static int fallbackSpecularTexture = -1;
+    private static int neutralShadowDepthTexture = -1;
+    private static int neutralShadowColorTexture = -1;
     private static int maxCombinedTextureUnits = -1;
 
     /**
@@ -100,14 +104,20 @@ public class TextureBinder {
     }
 
     public static void bindShadowTextures() {
-        int shadowDepthTexture = PipelineContext.getInstance().getShadowDepthTexture();
-        int shadowDepthSnapshotTexture = PipelineContext.getInstance().getShadowDepthSnapshotTexture();
-        int shadowColorTexture = PipelineContext.getInstance().getShadowColor0Texture();
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldUseNeutralShadowTextures()) {
+            bindNeutralShadowTextures(context.shouldUseShadowHardwareFiltering());
+            return;
+        }
+
+        int shadowDepthTexture = context.getShadowDepthTexture();
+        int shadowDepthSnapshotTexture = context.getShadowDepthSnapshotTexture();
+        int shadowColorTexture = context.getShadowColor0Texture();
         if (shadowDepthTexture == -1 || shadowDepthSnapshotTexture == -1) {
             return;
         }
 
-        PipelineContext.getInstance().configureShadowDepthTextureCompareMode();
+        context.configureShadowDepthTextureCompareMode();
         bindRawTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture);
         bindRawTexture(SHADOWTEX1_TEXTURE_UNIT, shadowDepthSnapshotTexture);
         if (shadowColorTexture != -1) {
@@ -123,10 +133,15 @@ public class TextureBinder {
     }
 
     public static void mirrorVanillaLightmapToIrisUnit() {
-        GL13.glActiveTexture(GL13.GL_TEXTURE0 + 1);
-        int lightmapTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-        if (lightmapTexture > 0) {
-            bindIrisLightmap(lightmapTexture);
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        try {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + 1);
+            int lightmapTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            if (lightmapTexture > 0) {
+                bindIrisLightmap(lightmapTexture);
+            }
+        } finally {
+            GL13.glActiveTexture(previousActiveTexture);
         }
     }
 
@@ -278,6 +293,59 @@ public class TextureBinder {
 
         fallbackSpecularTexture = createFallbackTexture((byte) 0, (byte) 0, (byte) 0, (byte) 255);
         return fallbackSpecularTexture;
+    }
+
+    private static void bindNeutralShadowTextures(boolean hardwareFiltering) {
+        int depthTexture = neutralShadowDepthTexture(hardwareFiltering);
+        int colorTexture = neutralShadowColorTexture();
+        bindRawTexture(SHADOWTEX0_TEXTURE_UNIT, depthTexture);
+        bindRawTexture(SHADOWTEX1_TEXTURE_UNIT, depthTexture);
+        bindRawTexture(SHADOWCOLOR0_TEXTURE_UNIT, colorTexture);
+        restoreDefaultTextureUnit();
+    }
+
+    private static int neutralShadowDepthTexture(boolean hardwareFiltering) {
+        if (neutralShadowDepthTexture == -1) {
+            neutralShadowDepthTexture = GL11.glGenTextures();
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowDepthTexture);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_DEPTH_TEXTURE_MODE, GL11.GL_LUMINANCE);
+            FloatBuffer depth = org.lwjgl.BufferUtils.createFloatBuffer(1);
+            depth.put(1.0f).flip();
+            GL11.glTexImage2D(
+                    GL11.GL_TEXTURE_2D,
+                    0,
+                    GL14.GL_DEPTH_COMPONENT32,
+                    1,
+                    1,
+                    0,
+                    GL11.GL_DEPTH_COMPONENT,
+                    GL11.GL_FLOAT,
+                    depth
+            );
+        } else {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowDepthTexture);
+        }
+        GL11.glTexParameteri(
+                GL11.GL_TEXTURE_2D,
+                GL14.GL_TEXTURE_COMPARE_MODE,
+                hardwareFiltering ? GL14.GL_COMPARE_R_TO_TEXTURE : GL11.GL_NONE
+        );
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
+        return neutralShadowDepthTexture;
+    }
+
+    private static int neutralShadowColorTexture() {
+        if (neutralShadowColorTexture != -1) {
+            return neutralShadowColorTexture;
+        }
+
+        neutralShadowColorTexture = createFallbackTexture((byte) 255, (byte) 255, (byte) 255, (byte) 255);
+        return neutralShadowColorTexture;
     }
 
     private static int createFallbackTexture(byte r, byte g, byte b, byte a) {

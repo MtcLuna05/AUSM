@@ -31,3 +31,6 @@ DecompOpti/
 
 # Local chat handoff state
 AUSM_RESUME_STATE.json
+
+# Local vision/watch helper scripts
+tools/

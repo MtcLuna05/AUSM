@@ -174,11 +174,37 @@ public class UniformRegistry {
             Object value = binding.value();
             if (value instanceof Number number) {
                 values.put(binding.name, new float[]{number.floatValue()});
+            } else if (value instanceof float[] vector) {
+                addVectorScalarValues(values, binding.name, vector);
+            } else if (value instanceof int[] vector) {
+                addVectorScalarValues(values, binding.name, vector);
             } else if (value instanceof FloatBuffer matrix) {
                 addMatrixScalarValues(values, binding.name, matrix);
             }
         }
         return values;
+    }
+
+    private static void addVectorScalarValues(Map<String, float[]> values, String name, float[] vector) {
+        values.put(name, vector.clone());
+        int count = Math.min(vector.length, 4);
+        for (int i = 0; i < count; i++) {
+            addVectorComponent(values, name, i, vector[i]);
+        }
+    }
+
+    private static void addVectorScalarValues(Map<String, float[]> values, String name, int[] vector) {
+        float[] floatVector = new float[vector.length];
+        for (int i = 0; i < vector.length; i++) {
+            floatVector[i] = vector[i];
+        }
+        addVectorScalarValues(values, name, floatVector);
+    }
+
+    private static void addVectorComponent(Map<String, float[]> values, String name, int index, float value) {
+        values.put(name + "." + index, new float[]{value});
+        values.put(name + "." + "xyzw".charAt(index), new float[]{value});
+        values.put(name + "." + "rgba".charAt(index), new float[]{value});
     }
 
     private static void addMatrixScalarValues(Map<String, float[]> values, String name, FloatBuffer matrix) {

@@ -6,7 +6,6 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.api.pipeline.shader.RenderPass;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
-import net.minecraft.client.Minecraft;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -290,21 +289,13 @@ public class ShaderPreprocessor {
                 #define IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE
                 """);
 
-        switch (currentDimensionId()) {
+        switch (ShaderDimensionContext.currentDimensionId()) {
             case -1 -> defines.append("#define NETHER\n");
             case 1 -> defines.append("#define THE_END\n");
             default -> defines.append("#define OVERWORLD\n");
         }
 
         return defines.toString();
-    }
-
-    private static int currentDimensionId() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.world.provider == null) {
-            return 0;
-        }
-        return mc.world.provider.getDimension();
     }
 
     static String extractIncludePath(String includeLine, String currentFile) {

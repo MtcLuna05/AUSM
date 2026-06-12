@@ -35,19 +35,37 @@ public class ShaderCompiler {
 
     public static ShaderProgram compilePass(ShaderPack pack, RenderPass pass, ShaderProperties properties, ShaderProgramSource source) {
         ShaderProgramSource sources = source != null ? source : sourceFromResolver(pack, pass, properties);
+        return compileSource(pack, properties, sources, pass, pass.getProgramName());
+    }
 
+    public static ShaderProgram compileSource(
+            ShaderPack pack,
+            ShaderProperties properties,
+            ShaderProgramSource source,
+            RenderPass bindingPass
+    ) {
+        return compileSource(pack, properties, source, bindingPass, source.name());
+    }
+
+    private static ShaderProgram compileSource(
+            ShaderPack pack,
+            ShaderProperties properties,
+            ShaderProgramSource sources,
+            RenderPass bindingPass,
+            String programName
+    ) {
         int vertexShader = sources.vertexPath() == null && sources.fragmentPath() != null
-                ? compileInlineShaderTarget(legacyVertexSource(), pass.getProgramName() + " legacy vertex", OpenGlHelper.GL_VERTEX_SHADER, pass)
-                : compileShaderTarget(pack, sources.vertexPath(), OpenGlHelper.GL_VERTEX_SHADER, properties, pass);
-        int fragmentShader = compileShaderTarget(pack, sources.fragmentPath(), OpenGlHelper.GL_FRAGMENT_SHADER, properties, pass);
+                ? compileInlineShaderTarget(legacyVertexSource(), programName + " legacy vertex", OpenGlHelper.GL_VERTEX_SHADER, bindingPass)
+                : compileShaderTarget(pack, sources.vertexPath(), OpenGlHelper.GL_VERTEX_SHADER, properties, bindingPass);
+        int fragmentShader = compileShaderTarget(pack, sources.fragmentPath(), OpenGlHelper.GL_FRAGMENT_SHADER, properties, bindingPass);
         
         // Geometry shaders use GL32, ensure compatibility
-        int geometryShader = compileShaderTarget(pack, sources.geometryPath(), GL32.GL_GEOMETRY_SHADER, properties, pass);
+        int geometryShader = compileShaderTarget(pack, sources.geometryPath(), GL32.GL_GEOMETRY_SHADER, properties, bindingPass);
 
         if (failedExistingStage(sources.vertexPath(), vertexShader)
                 || failedExistingStage(sources.fragmentPath(), fragmentShader)
                 || failedExistingStage(sources.geometryPath(), geometryShader)) {
-            MainMod.LOGGER.error("[ShaderCompiler] Program '{}' disabled because at least one declared stage failed to compile.", pass.getProgramName());
+            MainMod.LOGGER.error("[ShaderCompiler] Program '{}' disabled because at least one declared stage failed to compile.", programName);
             if (vertexShader != -1) OpenGlHelper.glDeleteShader(vertexShader);
             if (fragmentShader != -1) OpenGlHelper.glDeleteShader(fragmentShader);
             if (geometryShader != -1) OpenGlHelper.glDeleteShader(geometryShader);
@@ -56,11 +74,11 @@ public class ShaderCompiler {
 
         // If neither VSH nor FSH exists, this pass is effectively disabled in the pack
         if (vertexShader == -1 && fragmentShader == -1) {
-            MainMod.LOGGER.debug("[ShaderCompiler] Pass '{}' disabled (no files found).", pass.getProgramName());
+            MainMod.LOGGER.debug("[ShaderCompiler] Pass '{}' disabled (no files found).", programName);
             return null;
         }
 
-        ShaderProgram program = new ShaderProgram(pass.getProgramName());
+        ShaderProgram program = new ShaderProgram(programName);
 
         if (vertexShader != -1) program.attachShader(vertexShader);
         if (fragmentShader != -1) program.attachShader(fragmentShader);
@@ -68,7 +86,7 @@ public class ShaderCompiler {
 
         if (!program.link()) {
             program.delete();
-            MainMod.LOGGER.error("[ShaderCompiler] Failed to link program '{}'", pass.getProgramName());
+            MainMod.LOGGER.error("[ShaderCompiler] Failed to link program '{}'", programName);
             return null;
         }
 
@@ -77,7 +95,7 @@ public class ShaderCompiler {
         if (fragmentShader != -1) OpenGlHelper.glDeleteShader(fragmentShader);
         if (geometryShader != -1) OpenGlHelper.glDeleteShader(geometryShader);
 
-        MainMod.LOGGER.debug("[ShaderCompiler] Successfully compiled and linked program: {}", pass.getProgramName());
+        MainMod.LOGGER.debug("[ShaderCompiler] Successfully compiled and linked program: {}", programName);
         return program;
     }
 

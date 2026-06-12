@@ -1,9 +1,5 @@
 package com.l.ausm.impl;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 /**
  * Tags storage class, you can change at will
  */

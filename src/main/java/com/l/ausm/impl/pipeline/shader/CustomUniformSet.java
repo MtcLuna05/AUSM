@@ -8,6 +8,7 @@ import com.l.ausm.impl.MainMod;
 import org.lwjgl.opengl.GL20;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,13 +21,36 @@ import java.util.Map;
  * literals, arithmetic, parentheses, booleans, vec constructors, and variables
  * declared with {@code variable.<type>.<name>}.</p>
  */
-public record CustomUniformSet(
-        Map<String, String> expressions,
-        List<CustomUniform> uniforms,
-        Map<String, String> variables
-) {
+public final class CustomUniformSet {
+    private final Map<String, String> expressions;
+    private final List<CustomUniform> uniforms;
+    private final Map<String, String> variables;
+    private final Map<Integer, SmoothState> smoothStates = new HashMap<>();
+
+    public CustomUniformSet(
+            Map<String, String> expressions,
+            List<CustomUniform> uniforms,
+            Map<String, String> variables
+    ) {
+        this.expressions = expressions;
+        this.uniforms = uniforms;
+        this.variables = variables;
+    }
+
     public static CustomUniformSet empty() {
         return new CustomUniformSet(Map.of(), List.of(), Map.of());
+    }
+
+    public Map<String, String> expressions() {
+        return expressions;
+    }
+
+    public List<CustomUniform> uniforms() {
+        return uniforms;
+    }
+
+    public Map<String, String> variables() {
+        return variables;
     }
 
     public static CustomUniformSet parse(Map<String, String> expressions) {
@@ -34,29 +58,18 @@ public record CustomUniformSet(
             return empty();
         }
 
-        List<CustomUniform> uniforms = new ArrayList<>();
-        List<RawUniform> rawUniforms = new ArrayList<>();
         Map<String, String> variables = new LinkedHashMap<>();
         expressions.forEach((key, expression) -> {
             ParsedKey parsed = ParsedKey.parse(key);
             if (parsed == null) {
                 return;
             }
-            if (parsed.uniform()) {
-                rawUniforms.add(new RawUniform(parsed.type(), parsed.name(), expression));
-            } else {
+            if (!parsed.uniform()) {
                 variables.put(parsed.name(), expression);
             }
         });
 
-        Map<String, float[]> resolvedVariables = resolveVariables(variables, Map.of());
-        for (RawUniform rawUniform : rawUniforms) {
-            CustomUniform uniform = CustomUniform.parse(rawUniform.type(), rawUniform.name(), rawUniform.expression(), resolvedVariables);
-            if (uniform != null) {
-                uniforms.add(uniform);
-            }
-        }
-        return new CustomUniformSet(Map.copyOf(expressions), List.copyOf(uniforms), Map.copyOf(variables));
+        return new CustomUniformSet(Map.copyOf(expressions), List.of(), Map.copyOf(variables));
     }
 
     public void upload(ShaderProgram program, Map<String, float[]> builtins) {
@@ -79,9 +92,9 @@ public record CustomUniformSet(
         });
 
         Map<String, float[]> resolved = new LinkedHashMap<>(builtins);
-        resolved.putAll(resolveVariables(variableExpressions, resolved));
+        resolved.putAll(resolveVariables(variableExpressions, resolved, smoothStates));
         for (RawUniform rawUniform : rawUniforms) {
-            CustomUniform uniform = CustomUniform.parse(rawUniform.type(), rawUniform.name(), rawUniform.expression(), resolved);
+            CustomUniform uniform = CustomUniform.parse(rawUniform.type(), rawUniform.name(), rawUniform.expression(), resolved, smoothStates);
             if (uniform != null) {
                 uniform.upload(program);
             }
@@ -115,7 +128,11 @@ public record CustomUniformSet(
         }
     }
 
-    private static Map<String, float[]> resolveVariables(Map<String, String> variables, Map<String, float[]> baseVariables) {
+    private static Map<String, float[]> resolveVariables(
+            Map<String, String> variables,
+            Map<String, float[]> baseVariables,
+            Map<Integer, SmoothState> smoothStates
+    ) {
         if (variables.isEmpty()) {
             return Map.of();
         }
@@ -127,7 +144,7 @@ public record CustomUniformSet(
             var iterator = unresolved.entrySet().iterator();
             while (iterator.hasNext()) {
                 Map.Entry<String, String> entry = iterator.next();
-                float[] values = ExpressionEvaluator.tryEvaluateAny(entry.getValue(), resolved);
+                float[] values = ExpressionEvaluator.tryEvaluateAny(entry.getValue(), resolved, smoothStates);
                 if (values.length == 0) {
                     continue;
                 }
@@ -137,19 +154,22 @@ public record CustomUniformSet(
             }
         } while (progressed && !unresolved.isEmpty());
 
-        unresolved.forEach((name, expression) ->
-                MainMod.LOGGER.debug("[CustomUniforms] Deferring unsupported variable {}={}", name, expression));
         Map<String, float[]> ownVariables = new LinkedHashMap<>(resolved);
         baseVariables.keySet().forEach(ownVariables::remove);
         return Map.copyOf(ownVariables);
     }
 
     public record CustomUniform(String type, String name, float[] values) {
-        private static CustomUniform parse(String type, String name, String expression, Map<String, float[]> variables) {
+        private static CustomUniform parse(
+                String type,
+                String name,
+                String expression,
+                Map<String, float[]> variables,
+                Map<Integer, SmoothState> smoothStates
+        ) {
             int expected = expectedValues(type);
-            float[] values = ExpressionEvaluator.tryEvaluate(expression, expected, variables);
+            float[] values = ExpressionEvaluator.tryEvaluate(expression, expected, variables, smoothStates);
             if (values.length == 0) {
-                MainMod.LOGGER.debug("[CustomUniforms] Deferring unsupported uniform {}.{}={}", type, name, expression);
                 return null;
             }
             if (expected > 0 && values.length < expected) {
@@ -192,10 +212,27 @@ public record CustomUniformSet(
         }
 
         static float[] tryEvaluateAny(String expression, Map<String, float[]> variables) {
-            return tryEvaluate(expression, -1, variables);
+            return tryEvaluate(expression, -1, variables, new HashMap<>());
+        }
+
+        static float[] tryEvaluateAny(
+                String expression,
+                Map<String, float[]> variables,
+                Map<Integer, SmoothState> smoothStates
+        ) {
+            return tryEvaluate(expression, -1, variables, smoothStates);
         }
 
         static float[] tryEvaluate(String expression, int expectedValues, Map<String, float[]> variables) {
+            return tryEvaluate(expression, expectedValues, variables, new HashMap<>());
+        }
+
+        static float[] tryEvaluate(
+                String expression,
+                int expectedValues,
+                Map<String, float[]> variables,
+                Map<Integer, SmoothState> smoothStates
+        ) {
             if (expression == null) {
                 return new float[0];
             }
@@ -209,19 +246,23 @@ public record CustomUniformSet(
                 return directVariable.clone();
             }
 
-            float[] vector = tryEvaluateVector(trimmed, variables);
+            float[] vector = tryEvaluateVector(trimmed, variables, smoothStates);
             if (vector.length > 0) {
                 return expectedValues <= 0 || vector.length >= expectedValues ? vector : new float[0];
             }
 
             try {
-                return new float[]{new ScalarParser(trimmed, variables).parse()};
+                return new float[]{new ScalarParser(trimmed, variables, smoothStates).parse()};
             } catch (IllegalArgumentException e) {
                 return new float[0];
             }
         }
 
-        private static float[] tryEvaluateVector(String expression, Map<String, float[]> variables) {
+        private static float[] tryEvaluateVector(
+                String expression,
+                Map<String, float[]> variables,
+                Map<Integer, SmoothState> smoothStates
+        ) {
             String body = constructorBody(expression);
             if (body == null && expression.indexOf(',') < 0) {
                 return new float[0];
@@ -234,7 +275,7 @@ public record CustomUniformSet(
             float[] values = new float[parts.size()];
             for (int i = 0; i < parts.size(); i++) {
                 try {
-                    values[i] = new ScalarParser(parts.get(i), variables).parse();
+                    values[i] = new ScalarParser(parts.get(i), variables, smoothStates).parse();
                 } catch (IllegalArgumentException e) {
                     return new float[0];
                 }
@@ -274,11 +315,17 @@ public record CustomUniformSet(
     private static final class ScalarParser {
         private final String expression;
         private final Map<String, float[]> variables;
+        private final Map<Integer, SmoothState> smoothStates;
         private int index;
 
-        private ScalarParser(String expression, Map<String, float[]> variables) {
+        private ScalarParser(
+                String expression,
+                Map<String, float[]> variables,
+                Map<Integer, SmoothState> smoothStates
+        ) {
             this.expression = expression;
             this.variables = variables;
+            this.smoothStates = smoothStates;
         }
 
         private float parse() {
@@ -360,6 +407,8 @@ public record CustomUniformSet(
                     value *= parseFactor();
                 } else if (match('/')) {
                     value /= parseFactor();
+                } else if (match('%')) {
+                    value %= parseFactor();
                 } else {
                     return value;
                 }
@@ -490,6 +539,26 @@ public record CustomUniformSet(
                     requireArguments(identifier, arguments, 3);
                     yield Math.max(arguments.get(1), Math.min(arguments.get(2), arguments.get(0)));
                 }
+                case "in" -> {
+                    if (arguments.size() < 2) {
+                        throw new IllegalArgumentException("Function in expects at least two arguments");
+                    }
+                    float needle = arguments.get(0);
+                    boolean found = false;
+                    for (int i = 1; i < arguments.size(); i++) {
+                        if (Math.abs(needle - arguments.get(i)) <= 0.000001f) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    yield found ? 1.0f : 0.0f;
+                }
+                case "smooth" -> {
+                    if (arguments.size() != 4) {
+                        throw new IllegalArgumentException("Function smooth expects id, value, fadeUp, fadeDown");
+                    }
+                    yield smooth(arguments.get(0), arguments.get(1), arguments.get(2), arguments.get(3));
+                }
                 case "fmod", "mod" -> {
                     requireArguments(identifier, arguments, 2);
                     yield arguments.get(0) % arguments.get(1);
@@ -501,6 +570,27 @@ public record CustomUniformSet(
                 case "sqrt" -> {
                     requireArguments(identifier, arguments, 1);
                     yield (float) Math.sqrt(arguments.get(0));
+                }
+                case "floor" -> {
+                    requireArguments(identifier, arguments, 1);
+                    yield (float) Math.floor(arguments.get(0));
+                }
+                case "ceil" -> {
+                    requireArguments(identifier, arguments, 1);
+                    yield (float) Math.ceil(arguments.get(0));
+                }
+                case "round" -> {
+                    requireArguments(identifier, arguments, 1);
+                    yield Math.round(arguments.get(0));
+                }
+                case "fract" -> {
+                    requireArguments(identifier, arguments, 1);
+                    float value = arguments.get(0);
+                    yield value - (float) Math.floor(value);
+                }
+                case "sign" -> {
+                    requireArguments(identifier, arguments, 1);
+                    yield Math.signum(arguments.get(0));
                 }
                 case "pow" -> {
                     requireArguments(identifier, arguments, 2);
@@ -524,6 +614,41 @@ public record CustomUniformSet(
                 }
                 default -> throw new IllegalArgumentException("Unknown function");
             };
+        }
+
+        private float smooth(float rawId, float target, float fadeUp, float fadeDown) {
+            int id = Math.round(rawId);
+            float currentFrame = scalarVariable("frameCounter", 0.0f);
+            float frameTime = scalarVariable("frameTime", 0.05f);
+            SmoothState state = smoothStates.get(id);
+            if (state == null) {
+                smoothStates.put(id, new SmoothState(target, currentFrame));
+                return target;
+            }
+
+            if (state.frame == currentFrame) {
+                return state.value;
+            }
+
+            float fade = target > state.value ? fadeUp : fadeDown;
+            float next;
+            if (fade <= 0.0f || frameTime <= 0.0f) {
+                next = target;
+            } else {
+                float alpha = Math.min(1.0f, frameTime / fade);
+                next = state.value + (target - state.value) * alpha;
+            }
+            state.value = next;
+            state.frame = currentFrame;
+            return next;
+        }
+
+        private float scalarVariable(String name, float fallback) {
+            float[] value = variables.get(name);
+            if (value == null || value.length == 0) {
+                return fallback;
+            }
+            return value[0];
         }
 
         private void requireArguments(String identifier, List<Float> arguments, int count) {
@@ -558,6 +683,16 @@ public record CustomUniformSet(
             while (index < expression.length() && Character.isWhitespace(expression.charAt(index))) {
                 index++;
             }
+        }
+    }
+
+    private static final class SmoothState {
+        private float value;
+        private float frame;
+
+        private SmoothState(float value, float frame) {
+            this.value = value;
+            this.frame = frame;
         }
     }
 }

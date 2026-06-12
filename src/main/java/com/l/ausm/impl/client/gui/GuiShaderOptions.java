@@ -1,9 +1,5 @@
 package com.l.ausm.impl.client.gui;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.pack.ShaderOption;
 import com.l.ausm.api.pipeline.pack.ShaderOptions;
@@ -31,6 +27,12 @@ import java.util.Objects;
 import java.util.Set;
 
 public class GuiShaderOptions extends GuiScreen {
+    private static final int ID_DONE = 200;
+    private static final int ID_APPLY = 201;
+    private static final int ID_RESET = 202;
+    private static final int ID_PREVIOUS_PAGE = 203;
+    private static final int ID_NEXT_PAGE = 204;
+    private static final int ID_PREVIEW = 205;
 
     private static final int CATEGORY_BASE_ID = 1000;
     private static final int OPTION_BASE_ID = 3000;
@@ -112,16 +114,16 @@ public class GuiShaderOptions extends GuiScreen {
         addOptionButtons(properties);
 
         int bottom = this.height - 28;
-        this.buttonList.add(new GuiFlatButton(200, this.width - 92, bottom, 82, 20, I18n.format("gui.done")));
-        this.applyButton = new GuiFlatButton(201, this.width - 180, bottom, 82, 20, "Apply");
+        this.buttonList.add(new GuiFlatButton(ID_DONE, this.width - 92, bottom, 82, 20, I18n.format("gui.done")));
+        this.applyButton = new GuiFlatButton(ID_APPLY, this.width - 180, bottom, 82, 20, "Apply");
         this.applyButton.enabled = isDirty();
         this.buttonList.add(this.applyButton);
-        this.buttonList.add(new GuiFlatButton(202, 12, bottom, 82, 20, "Reset"));
-        this.previewButton = new GuiFlatButton(205, 100, bottom, 82, 20, "Preview");
+        this.buttonList.add(new GuiFlatButton(ID_RESET, 12, bottom, 82, 20, "Reset"));
+        this.previewButton = new GuiFlatButton(ID_PREVIEW, 100, bottom, 82, 20, "Preview");
         this.buttonList.add(this.previewButton);
 
-        this.previousPageButton = new GuiFlatButton(203, this.width / 2 - 56, bottom, 24, 20, "<");
-        this.nextPageButton = new GuiFlatButton(204, this.width / 2 + 32, bottom, 24, 20, ">");
+        this.previousPageButton = new GuiFlatButton(ID_PREVIOUS_PAGE, this.width / 2 - 56, bottom, 24, 20, "<");
+        this.nextPageButton = new GuiFlatButton(ID_NEXT_PAGE, this.width / 2 + 32, bottom, 24, 20, ">");
         int maxPage = maxPage();
         this.previousPageButton.enabled = page > 0;
         this.nextPageButton.enabled = page < maxPage;
@@ -381,7 +383,7 @@ public class GuiShaderOptions extends GuiScreen {
     @Override
     protected void keyTyped(char typedChar, int keyCode) throws IOException {
         if (keyCode == Keyboard.KEY_ESCAPE) {
-            if (isShiftKeyDown()) {
+            if (GuiControlHints.isShiftDown()) {
                 this.mc.displayGuiScreen(null);
                 return;
             }
@@ -436,11 +438,11 @@ public class GuiShaderOptions extends GuiScreen {
             return;
         }
 
-        if (button.id == 200) {
+        if (button.id == ID_DONE) {
             this.mc.displayGuiScreen(parent);
             return;
         }
-        if (button.id == 201) {
+        if (button.id == ID_APPLY) {
             MainMod.getShaderPackManager().setShaderOptions(packName, pendingValues);
             savedValues.clear();
             savedValues.putAll(pendingValues);
@@ -450,7 +452,7 @@ public class GuiShaderOptions extends GuiScreen {
             rebuildButtons();
             return;
         }
-        if (button.id == 202) {
+        if (button.id == ID_RESET) {
             String resetProfile = resetProfile(properties());
             pendingValues.clear();
             if (resetProfile != null) {
@@ -465,16 +467,16 @@ public class GuiShaderOptions extends GuiScreen {
             rebuildButtons();
             return;
         }
-        if (button.id == 205) {
+        if (button.id == ID_PREVIEW) {
             setPreviewHidden(!previewHidden);
             return;
         }
-        if (button.id == 203) {
+        if (button.id == ID_PREVIOUS_PAGE) {
             page = Math.max(0, page - 1);
             rebuildButtons();
             return;
         }
-        if (button.id == 204) {
+        if (button.id == ID_NEXT_PAGE) {
             page = Math.min(maxPage(), page + 1);
             rebuildButtons();
             return;
@@ -502,7 +504,7 @@ public class GuiShaderOptions extends GuiScreen {
 
     private void updatePreviewVisibility() {
         for (GuiButton button : this.buttonList) {
-            button.visible = !previewHidden || button.id == 205;
+            button.visible = !previewHidden || button.id == ID_PREVIEW;
         }
         if (previewButton != null) {
             previewButton.displayString = previewHidden ? "Show GUI" : "Preview";
@@ -965,7 +967,7 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     private boolean isMouseOver(GuiButton button, int mouseX, int mouseY) {
-        return mouseX >= button.x && mouseY >= button.y && mouseX < button.x + button.width && mouseY < button.y + button.height;
+        return GuiControlHints.isMouseOverButton(button, mouseX, mouseY);
     }
 
     private int maxPage() {
@@ -1297,6 +1299,7 @@ public class GuiShaderOptions extends GuiScreen {
         }
         drawShaderTooltip(mouseX, mouseY);
         drawBottomCommentPanel();
+        drawEscapeHintTooltip(mouseX, mouseY);
     }
 
     private void drawSidebarScrollbar() {
@@ -1540,7 +1543,7 @@ public class GuiShaderOptions extends GuiScreen {
 
     private void ensureFocusedControl() {
         if (previewHidden) {
-            focusedControl = indexOfButton(205);
+            focusedControl = indexOfButton(ID_PREVIEW);
             return;
         }
         if (focusedControl >= buttonList.size() || focusedControl >= 0 && !isFocusable(buttonList.get(focusedControl))) {
@@ -1562,7 +1565,7 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     private boolean isFocusable(GuiButton button) {
-        return button.visible && button.enabled;
+        return GuiControlHints.isFocusable(button);
     }
 
     private int indexOfButton(int id) {
@@ -1575,14 +1578,14 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     private void drawFocusedButtonOutline() {
-        GuiButton button = focusedButton();
-        if (button == null) {
-            return;
+        GuiControlHints.drawFocusedButtonOutline(focusedButton());
+    }
+
+    private void drawEscapeHintTooltip(int mouseX, int mouseY) {
+        GuiControlHints.drawEscapeHintLabel(this.fontRenderer, this.width);
+        if (GuiControlHints.isMouseOverEscapeHint(this.fontRenderer, this.width, mouseX, mouseY)) {
+            drawHoveringText(GuiControlHints.escapeTooltip(), mouseX, mouseY);
         }
-        drawRect(button.x - 2, button.y - 2, button.x + button.width + 2, button.y - 1, 0xFFFFD27D);
-        drawRect(button.x - 2, button.y + button.height + 1, button.x + button.width + 2, button.y + button.height + 2, 0xFFFFD27D);
-        drawRect(button.x - 2, button.y - 2, button.x - 1, button.y + button.height + 2, 0xFFFFD27D);
-        drawRect(button.x + button.width + 1, button.y - 2, button.x + button.width + 2, button.y + button.height + 2, 0xFFFFD27D);
     }
 
     private List<String> tooltipFor(GuiButton button) {

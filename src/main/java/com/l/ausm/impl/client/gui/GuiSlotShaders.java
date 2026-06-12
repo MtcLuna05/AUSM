@@ -1,9 +1,5 @@
 package com.l.ausm.impl.client.gui;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.MainMod;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.input.Mouse;
@@ -87,11 +83,12 @@ public class GuiSlotShaders {
         int first = scrollOffset;
         int visibleRows = Math.max(0, (bottom - top) / slotHeight);
         int last = Math.min(shaderPacks.size(), first + visibleRows);
+        int hoveredIndex = slotIndexAt(mouseX, mouseY);
 
         for (int index = first; index < last; index++) {
             int y = top + (index - first) * slotHeight;
             boolean selected = index == selectedIndex;
-            boolean hovered = slotIndexAt(mouseX, mouseY) == index;
+            boolean hovered = hoveredIndex == index;
 
             if (selected) {
                 drawRect(panelLeft + 14, y, panelRight - 14, y + slotHeight - 2, 0x88000000);

@@ -1,10 +1,7 @@
 package com.l.ausm.impl;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.api.shader.ShaderPackController;
+import com.l.ausm.impl.client.ClientSettingsConfig;
 import com.l.ausm.impl.client.dynamic.DynamicLightConfig;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
@@ -27,6 +24,7 @@ public class MainMod {
 
     private static ShaderPackManager shaderPackManager;
     private static DynamicLightConfig dynamicLightConfig;
+    private static ClientSettingsConfig clientSettingsConfig;
 
     public static ShaderPackManager getShaderPackManager() {
         return shaderPackManager;
@@ -34,6 +32,10 @@ public class MainMod {
 
     public static DynamicLightConfig getDynamicLightConfig() {
         return dynamicLightConfig;
+    }
+
+    public static ClientSettingsConfig getClientSettingsConfig() {
+        return clientSettingsConfig;
     }
 
     public static ShaderPackController getShaderApi() {
@@ -49,6 +51,9 @@ public class MainMod {
 
         dynamicLightConfig = new DynamicLightConfig(Minecraft.getMinecraft().gameDir.toPath());
         dynamicLightConfig.load();
+
+        clientSettingsConfig = new ClientSettingsConfig(Minecraft.getMinecraft().gameDir.toPath());
+        clientSettingsConfig.load();
 
         shaderPackManager = new ShaderPackManager(Minecraft.getMinecraft().gameDir.toPath());
 

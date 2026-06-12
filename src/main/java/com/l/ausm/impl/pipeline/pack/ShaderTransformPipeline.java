@@ -18,6 +18,7 @@ public final class ShaderTransformPipeline {
             new GbuffersBuiltinTransformStage(),
             new EntityAdvancedMaterialFallbackTransformStage(),
             new ComplementaryBlockIpbrTransformStage(),
+            new ComplementaryWaterVersionTransformStage(),
             new FullscreenBuiltinTransformStage(),
             new CompositeDepthSmoothTransformStage(),
             new MakeUpVolumetricLightTransformStage(),

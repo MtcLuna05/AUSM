@@ -13,7 +13,9 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.Properties;
+import java.util.Set;
 
 final class ShaderPropertiesPreprocessor {
 
@@ -22,19 +24,40 @@ final class ShaderPropertiesPreprocessor {
 
     static Properties load(ShaderPack pack, ShaderPackLayout layout, ShaderOptions options) {
         Properties properties = new Properties();
-        if (!pack.hasResource(layout.propertiesPath())) {
+        StringBuilder activeProperties = new StringBuilder();
+        Set<String> visited = new HashSet<>();
+        appendActiveProperties(pack, layout, layout.propertiesPath(), options, activeProperties, visited);
+        appendActiveProperties(pack, layout, layout.rootPath("colorwheel.properties"), options, activeProperties, visited);
+        if (activeProperties.isEmpty()) {
             return properties;
         }
+        try {
+            properties.load(new java.io.StringReader(activeProperties.toString()));
+        } catch (IOException e) {
+            MainMod.LOGGER.error("[ShaderProperties] Failed to parse preprocessed shader properties", e);
+        }
+        return properties;
+    }
 
-        try (InputStream stream = pack.getResourceAsStream(layout.propertiesPath())) {
+    private static void appendActiveProperties(
+            ShaderPack pack,
+            ShaderPackLayout layout,
+            String path,
+            ShaderOptions options,
+            StringBuilder activeProperties,
+            Set<String> visited
+    ) {
+        if (path == null || !visited.add(path) || !pack.hasResource(path)) {
+            return;
+        }
+
+        try (InputStream stream = pack.getResourceAsStream(path)) {
             if (stream == null) {
-                return properties;
+                return;
             }
 
-            StringBuilder activeProperties = new StringBuilder();
             Deque<ConditionFrame> conditions = new ArrayDeque<>();
             boolean enabled = true;
-
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
@@ -84,17 +107,22 @@ final class ShaderPropertiesPreprocessor {
                         continue;
                     }
 
+                    if (enabled && trimmed.startsWith("#include ")) {
+                        String includePath = ShaderPreprocessor.extractIncludePath(trimmed, path);
+                        if (includePath != null && !includePath.isBlank()) {
+                            appendActiveProperties(pack, layout, includePath, options, activeProperties, visited);
+                        }
+                        continue;
+                    }
+
                     if (enabled) {
                         activeProperties.append(line).append('\n');
                     }
                 }
             }
-
-            properties.load(new java.io.StringReader(activeProperties.toString()));
         } catch (IOException e) {
-            MainMod.LOGGER.error("[ShaderProperties] Failed to read {}", layout.propertiesPath(), e);
+            MainMod.LOGGER.error("[ShaderProperties] Failed to read {}", path, e);
         }
-        return properties;
     }
 
     private static boolean evaluate(String expression, ShaderOptions options) {

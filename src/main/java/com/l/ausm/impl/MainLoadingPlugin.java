@@ -1,9 +1,5 @@
 package com.l.ausm.impl;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import net.minecraft.launchwrapper.Launch;
 import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin;
 import org.jetbrains.annotations.Nullable;
@@ -25,7 +21,8 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
             "mrtjp/projectred/illumination/LampRenderer$.class",
             "mrtjp/projectred/illumination/LightFactory$$anon$1.class",
             "mrtjp/projectred/illumination/ButtonItemRenderer$.class",
-            "codechicken/lib/render/item/CCRenderItem.class"
+            "codechicken/lib/render/item/CCRenderItem.class",
+            "gregtech/client/utils/BloomEffectUtil.class"
     };
     private static final Set<String> EXPOSED_COMPAT_JARS = new HashSet<>();
 

@@ -6,6 +6,8 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.Reference;
+import com.l.ausm.impl.client.dynamic.DynamicLightConfig;
+import com.l.ausm.impl.client.dynamic.DynamicLightManager;
 import com.l.ausm.impl.client.gui.GuiShaders;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
@@ -30,6 +32,7 @@ public class KeybindManager {
     public static KeyBinding reloadShader;
     public static KeyBinding toggleShader;
     public static KeyBinding forceLightRecalculation;
+    public static KeyBinding toggleDynamicLights;
 
     /**
      * Initializes and registers the keybinds.
@@ -40,11 +43,13 @@ public class KeybindManager {
         reloadShader = new KeyBinding("key.ausm.reload", Keyboard.KEY_R, CATEGORY);
         toggleShader = new KeyBinding("key.ausm.toggle", Keyboard.KEY_K, CATEGORY);
         forceLightRecalculation = new KeyBinding("key.ausm.force_light_recalculation", Keyboard.KEY_F8, CATEGORY);
+        toggleDynamicLights = new KeyBinding("key.ausm.toggle_dynamic_lights", Keyboard.KEY_F9, CATEGORY);
 
         ClientRegistry.registerKeyBinding(openConfig);
         ClientRegistry.registerKeyBinding(reloadShader);
         ClientRegistry.registerKeyBinding(toggleShader);
         ClientRegistry.registerKeyBinding(forceLightRecalculation);
+        ClientRegistry.registerKeyBinding(toggleDynamicLights);
     }
 
     /**
@@ -52,8 +57,18 @@ public class KeybindManager {
      */
     @SubscribeEvent
     public static void onKeyInput(InputEvent.KeyInputEvent event) {
+        Minecraft minecraft = Minecraft.getMinecraft();
+        if (minecraft == null
+                || openConfig == null
+                || reloadShader == null
+                || toggleShader == null
+                || forceLightRecalculation == null
+                || toggleDynamicLights == null) {
+            return;
+        }
+
         while (openConfig.isPressed()) {
-            Minecraft.getMinecraft().displayGuiScreen(new GuiShaders(null));
+            minecraft.displayGuiScreen(new GuiShaders(null));
         }
 
         while (reloadShader.isPressed()) {
@@ -82,10 +97,34 @@ public class KeybindManager {
                 sendActionBar("No loaded world light data to recalculate");
             }
         }
+
+        while (toggleDynamicLights.isPressed()) {
+            toggleDynamicLights();
+        }
+    }
+
+    private static void toggleDynamicLights() {
+        DynamicLightConfig config = MainMod.getDynamicLightConfig();
+        if (config == null) {
+            sendActionBar("Dynamic lights config unavailable");
+            return;
+        }
+        if (!config.available()) {
+            String reason = config.unavailableReason();
+            sendActionBar(reason.isEmpty() ? "Dynamic lights unavailable" : reason);
+            return;
+        }
+
+        boolean enabled = !config.enabled();
+        config.setEnabled(enabled);
+        DynamicLightManager.refreshAfterConfigChange();
+        MainMod.LOGGER.info("Dynamic lights toggled via keybind: {}", enabled);
+        sendActionBar(enabled ? "Dynamic lights enabled" : "Dynamic lights disabled");
     }
 
     private static void sendActionBar(String message) {
-        EntityPlayerSP player = Minecraft.getMinecraft().player;
+        Minecraft minecraft = Minecraft.getMinecraft();
+        EntityPlayerSP player = minecraft != null ? minecraft.player : null;
         if (player != null) {
             player.sendStatusMessage(new TextComponentString(message), true);
         }

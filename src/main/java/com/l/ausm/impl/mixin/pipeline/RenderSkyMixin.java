@@ -17,6 +17,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(RenderGlobal.class)
 public class RenderSkyMixin {
+    @Inject(method = "markBlocksForUpdate", at = @At("HEAD"))
+    private void ausm$ensureViewFrustumBeforeBlockUpdate(int minX, int minY, int minZ,
+                                                         int maxX, int maxY, int maxZ,
+                                                         boolean updateImmediately,
+                                                         CallbackInfo ci) {
+        PipelineContext.getInstance().ensureRenderGlobalViewFrustum((RenderGlobal) (Object) this);
+    }
 
     @Inject(method = "renderSky(FI)V", at = @At("HEAD"), cancellable = true)
     private void onRenderSkyHead(float partialTicks, int pass, CallbackInfo ci) {

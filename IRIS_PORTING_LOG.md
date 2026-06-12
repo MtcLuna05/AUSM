@@ -1314,6 +1314,30 @@ Reference source used: local checkout at `/tmp/iris-ausm-ref`.
     `mc_midTexCoord = gl_MultiTexCoord0` and a neutral tangent. This preserves
     stable entity rendering until a dedicated extended entity layout exists for
     each vanilla source order.
+    Follow-up: optimized uniform uploads by scanning each linked program's
+    active uniform names once and using that set to skip absent built-in,
+    custom-uniform, sampler, and resource uniforms. This removes the expected
+    `Uniform ... not found` debug flood during shader reloads and avoids many
+    first-use `glGetUniformLocation` calls without changing shader-visible
+    behavior.
+    Follow-up: added Better Portals compatibility without taking a hard
+    dependency on Better Portals classes. AUSM now leaves Better Portals'
+    nested view render passes on the vanilla path so looking through a portal
+    does not trigger shaderpack dimension reloads or clobber the main world
+    deferred frame. After Better Portals portal entities draw their own
+    `ShaderManager` program, AUSM restores the active world pass before later
+    entity rendering continues. Nothirium is no longer bypassed inside Better
+    Portals child views, avoiding vanilla terrain setup against Better Portals'
+    null child-view `ViewFrustum`. The vanilla nether portal block is only
+    kept out of the late translucent/water layer while AUSM shaders are active;
+    shaderless Better Portals keeps ownership of its own portal surface.
+    Follow-up: split the Nothirium bypass used by `markBlocksForUpdate` from
+    the terrain render bypass. Block-update invalidation now stays on
+    Nothirium when Better Portals has no vanilla `ViewFrustum`, which covers
+    child-view data handling and main-view portal swaps during teleport. Better
+    Portals portal entities also get a conservative post-render GL cleanup even
+    when AUSM shaders are disabled, preventing portal shader state from leaking
+    into shaderless vanilla/Nothirium rendering.
 
 Future entries should document:
 

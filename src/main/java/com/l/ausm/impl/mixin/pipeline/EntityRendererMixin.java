@@ -9,6 +9,7 @@ import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.matrix.MatrixState;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.renderer.EntityRenderer;
+import net.minecraft.client.renderer.RenderGlobal;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -52,14 +53,15 @@ public class EntityRendererMixin {
 
     @Inject(method = "renderWorldPass", at = @At("HEAD"))
     private void onRenderWorldPassHead(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
         MainMod.getShaderPackManager().reloadIfDimensionChanged();
 
-        if (!PipelineContext.getInstance().isActive()) {
-            PipelineContext.getInstance().prepareInactiveVanillaFrame();
+        if (context.shouldBypassWorldPassRendering()) {
+            context.prepareBypassedWorldPassRendering();
             return;
         }
 
-        PipelineContext.getInstance().beginFrame();
+        context.beginFrame();
     }
 
     @Inject(
@@ -71,7 +73,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterCameraTransform(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -89,7 +91,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeSetupTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -108,7 +110,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterSetupTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -127,7 +129,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeSolidTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -146,7 +148,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterSolidTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -164,7 +166,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeCutoutMippedTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -182,7 +184,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterCutoutMippedTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -200,7 +202,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeCutoutTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -218,7 +220,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterCutoutTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -239,7 +241,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeEntities(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -255,7 +257,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterEntities(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -271,7 +273,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeLitParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -288,7 +290,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterLitParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -304,7 +306,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -320,7 +322,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -336,7 +338,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeBlockDamage(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -352,7 +354,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterBlockDamage(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -368,7 +370,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeWeather(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
         if (!PipelineContext.getInstance().shouldRenderWeather()) {
@@ -389,7 +391,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterWeather(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -407,6 +409,23 @@ public class EntityRendererMixin {
         }
     }
 
+    @Redirect(
+            method = "renderWorldPass",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;updateChunks(J)V")
+    )
+    private void ausm$skipBetterPortalsNestedChunkUpdates(RenderGlobal renderGlobal, long finishTimeNano) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.prepareRenderGlobalChunkUpdates(renderGlobal)) {
+            try {
+                renderGlobal.updateChunks(finishTimeNano);
+            } catch (NullPointerException e) {
+                if (!context.handleBetterPortalsChunkUpdateFailure(renderGlobal, e)) {
+                    throw e;
+                }
+            }
+        }
+    }
+
     @Inject(
             method = "renderWorldPass",
             at = @At(
@@ -417,7 +436,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeTranslucentTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -437,7 +456,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterTranslucentTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -455,7 +474,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeHand(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -472,7 +491,7 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterHand(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
 
@@ -481,7 +500,8 @@ public class EntityRendererMixin {
 
     @Inject(method = "renderWorldPass", at = @At("RETURN"))
     private void onRenderWorldPassReturn(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (!PipelineContext.getInstance().isActive()) {
+        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+            PipelineContext.getInstance().finishBypassedWorldPassRendering();
             return;
         }
 

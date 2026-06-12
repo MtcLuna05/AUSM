@@ -4,6 +4,7 @@ import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
+import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.renderer.entity.Render;
@@ -22,7 +23,14 @@ public class RenderManagerMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/entity/Render;doRender(Lnet/minecraft/entity/Entity;DDDFF)V", shift = At.Shift.BEFORE)
     )
     private void ausm$beforeRenderEntity(Entity entity, double x, double y, double z, float entityYaw, float partialTicks, boolean debugBoundingBox, CallbackInfo ci) {
-        PipelineContext.getInstance().setCurrentEntity(entity);
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.shouldBypassWorldPassRendering()) {
+            if (BetterPortalsCompat.isPortalEntity(entity)) {
+                context.prepareExternalWorldOverlayRender();
+                return;
+            }
+            context.setCurrentEntity(entity);
+        }
     }
 
     @Inject(
@@ -30,7 +38,15 @@ public class RenderManagerMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/entity/Render;doRender(Lnet/minecraft/entity/Entity;DDDFF)V", shift = At.Shift.AFTER)
     )
     private void ausm$afterRenderEntity(Entity entity, double x, double y, double z, float entityYaw, float partialTicks, boolean debugBoundingBox, CallbackInfo ci) {
-        PipelineContext.getInstance().clearCurrentEntity();
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
+            return;
+        }
+        boolean portalEntity = BetterPortalsCompat.isPortalEntity(entity);
+        if (portalEntity) {
+            context.restoreActiveWorldPassAfterExternalShader();
+        }
+        context.clearCurrentEntity();
     }
 
     @Inject(
@@ -38,8 +54,16 @@ public class RenderManagerMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/entity/Render;renderMultipass(Lnet/minecraft/entity/Entity;DDDFF)V", shift = At.Shift.BEFORE)
     )
     private void ausm$beforeRenderMultipass(Entity entity, float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().setCurrentEntity(entity);
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.ENTITIES_TRANSLUCENT);
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
+            return;
+        }
+        if (BetterPortalsCompat.isPortalEntity(entity)) {
+            context.prepareExternalWorldOverlayRender();
+            return;
+        }
+        context.setCurrentEntity(entity);
+        context.beginPhase(WorldRenderingPhase.ENTITIES_TRANSLUCENT);
     }
 
     @Inject(
@@ -47,7 +71,17 @@ public class RenderManagerMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/entity/Render;renderMultipass(Lnet/minecraft/entity/Entity;DDDFF)V", shift = At.Shift.AFTER)
     )
     private void ausm$afterRenderMultipass(Entity entity, float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().clearCurrentEntity();
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
+            return;
+        }
+        boolean portalEntity = BetterPortalsCompat.isPortalEntity(entity);
+        if (portalEntity) {
+            context.restoreActiveWorldPassAfterExternalShader();
+            context.clearCurrentEntity();
+            return;
+        }
+        context.endPass();
+        context.clearCurrentEntity();
     }
 }

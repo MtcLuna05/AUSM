@@ -98,9 +98,8 @@ public final class DynamicLightManager {
             return 0;
         }
 
-        int configured = MainMod.getDynamicLightConfig() != null
-                ? MainMod.getDynamicLightConfig().configuredLight(stack)
-                : 0;
+        DynamicLightConfig config = MainMod.getDynamicLightConfig();
+        int configured = config != null ? config.configuredLight(stack) : 0;
         return Math.max(configured, blockItemLight(stack));
     }
 
@@ -110,9 +109,8 @@ public final class DynamicLightManager {
             return 0;
         }
 
-        double multiplier = MainMod.getDynamicLightConfig() != null
-                ? MainMod.getDynamicLightConfig().lightMultiplier()
-                : 0.5D;
+        DynamicLightConfig config = MainMod.getDynamicLightConfig();
+        double multiplier = config != null ? config.lightMultiplier() : 0.5D;
         return clampLight((int) Math.ceil(light * multiplier));
     }
 
@@ -164,9 +162,8 @@ public final class DynamicLightManager {
         if (minecraft == null || minecraft.world == null) {
             return false;
         }
-        if (MainMod.getDynamicLightConfig() == null
-                || !MainMod.getDynamicLightConfig().available()
-                || !MainMod.getDynamicLightConfig().enabled()) {
+        DynamicLightConfig config = MainMod.getDynamicLightConfig();
+        if (config == null || !config.available() || !config.enabled()) {
             return false;
         }
         if (MainMod.getShaderPackManager() != null && MainMod.getShaderPackManager().areShadersEnabled()) {

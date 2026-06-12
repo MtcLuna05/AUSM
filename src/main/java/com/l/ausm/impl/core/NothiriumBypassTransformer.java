@@ -4,7 +4,6 @@ import net.minecraft.launchwrapper.IClassTransformer;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
-import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.InsnList;
@@ -29,7 +28,6 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
 
     private static final String TARGET = "meldexun.nothirium.mc.mixin.MixinRenderGlobal";
     private static final String BYPASS_OWNER = "com/l/ausm/impl/pipeline/compat/NothiriumBypass";
-    private static final String CALLBACK_INFO = "org/spongepowered/asm/mixin/injection/callback/CallbackInfo";
     private static final String MARK_BLOCKS_FOR_UPDATE = "markBlocksForUpdate(IIIIIIZLorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V";
     private static final Set<String> VOID_HANDLERS = new HashSet<>();
 
@@ -61,9 +59,10 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         for (MethodNode method : classNode.methods) {
             String signature = method.name + method.desc;
             if (MARK_BLOCKS_FOR_UPDATE.equals(signature)) {
-                changed |= insertBypassBeforeCancel(method);
+                insertBypassGuard(method, "shouldBypassBlockUpdates");
+                changed = true;
             } else if (VOID_HANDLERS.contains(signature)) {
-                insertBypassGuard(method);
+                insertBypassGuard(method, "shouldBypass");
                 changed = true;
             }
         }
@@ -77,13 +76,13 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         return writer.toByteArray();
     }
 
-    private static void insertBypassGuard(MethodNode method) {
+    private static void insertBypassGuard(MethodNode method, String bypassMethodName) {
         LabelNode continueLabel = new LabelNode();
         InsnList guard = new InsnList();
         guard.add(new MethodInsnNode(
                 Opcodes.INVOKESTATIC,
                 BYPASS_OWNER,
-                "shouldBypass",
+                bypassMethodName,
                 "()Z",
                 false
         ));
@@ -92,42 +91,6 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         guard.add(continueLabel);
         guard.add(new FrameNode(Opcodes.F_SAME, 0, null, 0, null));
         method.instructions.insert(guard);
-    }
-
-    private static boolean insertBypassBeforeCancel(MethodNode method) {
-        for (AbstractInsnNode instruction = method.instructions.getFirst(); instruction != null; instruction = instruction.getNext()) {
-            if (!(instruction instanceof MethodInsnNode methodInsn)) {
-                continue;
-            }
-            if (methodInsn.getOpcode() != Opcodes.INVOKEVIRTUAL
-                    || !CALLBACK_INFO.equals(methodInsn.owner)
-                    || !"cancel".equals(methodInsn.name)
-                    || !"()V".equals(methodInsn.desc)) {
-                continue;
-            }
-
-            AbstractInsnNode insertionPoint = instruction.getPrevious();
-            if (insertionPoint == null) {
-                insertionPoint = instruction;
-            }
-
-            LabelNode continueLabel = new LabelNode();
-            InsnList guard = new InsnList();
-            guard.add(new MethodInsnNode(
-                    Opcodes.INVOKESTATIC,
-                    BYPASS_OWNER,
-                    "shouldBypass",
-                    "()Z",
-                    false
-            ));
-            guard.add(new JumpInsnNode(Opcodes.IFEQ, continueLabel));
-            guard.add(new InsnNode(Opcodes.RETURN));
-            guard.add(continueLabel);
-            guard.add(new FrameNode(Opcodes.F_SAME, 0, null, 0, null));
-            method.instructions.insertBefore(insertionPoint, guard);
-            return true;
-        }
-        return false;
     }
 
     private static final class SafeClassWriter extends ClassWriter {

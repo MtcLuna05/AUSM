@@ -33,6 +33,17 @@ public final class ShaderCompileNotifications {
         }
     }
 
+    public static void reportLoadFailure(String packName, String reason) {
+        String message = "Shaderpack cannot be loaded: " + (reason == null || reason.isBlank() ? "unsupported features" : reason);
+        showOverlayMessage(message);
+        MainMod.LOGGER.warn("[ShaderCompiler] Shaderpack '{}' rejected before compilation: {}", packName, reason);
+
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc != null && mc.ingameGUI != null && mc.ingameGUI.getChatGUI() != null) {
+            mc.ingameGUI.getChatGUI().printChatMessage(new TextComponentString("[AUSM] " + message));
+        }
+    }
+
     public static void finishReload(String packName) {
         if (FAILURES.isEmpty()) {
             return;
@@ -40,14 +51,18 @@ public final class ShaderCompileNotifications {
 
         String detail = FAILURES.size() == 1 ? FAILURES.get(0) : FAILURES.size() + " shaders";
         String message = "Shader failed to compile: " + detail + ". Check latest.log for details.";
-        overlayText = message;
-        overlayTicks = 20 * 8;
+        showOverlayMessage(message);
         MainMod.LOGGER.warn("[ShaderCompiler] Shaderpack '{}' loaded with compile failures: {}", packName, FAILURES);
 
         Minecraft mc = Minecraft.getMinecraft();
         if (mc != null && mc.ingameGUI != null && mc.ingameGUI.getChatGUI() != null) {
             mc.ingameGUI.getChatGUI().printChatMessage(new TextComponentString("[AUSM] " + message));
         }
+    }
+
+    private static void showOverlayMessage(String message) {
+        overlayText = message;
+        overlayTicks = 20 * 8;
     }
 
     public static void renderOverlay(ScaledResolution resolution) {

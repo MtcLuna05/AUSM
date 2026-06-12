@@ -4,6 +4,10 @@ key.ausm.config=Open Shader Config
 key.ausm.reload=Reload Shaders
 key.ausm.toggle=Toggle Shaders
 key.ausm.force_light_recalculation=Force Light Recalculation
+key.ausm.toggle_dynamic_lights=Toggle Dynamic Lights
 
 tooltip.ausm.reloadedShader=Reloaded Shaders
 tooltip.ausm.toggledShader=Toggled Shaders
+gui.ausm.controls=Controls
+tooltip.ausm.controls.esc=Esc: back
+tooltip.ausm.controls.shift_esc=Shift + Esc: close screen

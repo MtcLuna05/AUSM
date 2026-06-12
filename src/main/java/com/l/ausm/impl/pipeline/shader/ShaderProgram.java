@@ -10,7 +10,9 @@ import net.minecraft.client.renderer.OpenGlHelper;
 import org.lwjgl.opengl.GL20;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Represents a compiled and linked OpenGL Shader Program.
@@ -22,6 +24,8 @@ public class ShaderProgram {
     
     // Caches uniform locations to avoid costly GL lookups every frame
     private final Map<String, Integer> uniformLocations = new HashMap<>();
+    private final Set<String> activeUniformNames = new HashSet<>();
+    private boolean activeUniformNamesAvailable;
 
     public ShaderProgram(String name) {
         this.name = name;
@@ -47,6 +51,7 @@ public class ShaderProgram {
             MainMod.LOGGER.error("Failed to link shader program '{}': {}", name, log);
             return false;
         }
+        scanActiveUniformNames();
         return true;
     }
 
@@ -63,16 +68,29 @@ public class ShaderProgram {
             OpenGlHelper.glDeleteProgram(programId);
             programId = -1;
         }
+        uniformLocations.clear();
+        activeUniformNames.clear();
+        activeUniformNamesAvailable = false;
     }
 
     public int getUniformLocation(String uniformName) {
-        return uniformLocations.computeIfAbsent(uniformName, key -> {
-            int loc = OpenGlHelper.glGetUniformLocation(programId, key);
-            if (loc == -1) {
-                MainMod.LOGGER.debug("Uniform '{}' not found in program '{}'", key, name);
-            }
-            return loc;
-        });
+        if (programId == -1 || uniformName == null || uniformName.isEmpty()) {
+            return -1;
+        }
+
+        Integer cached = uniformLocations.get(uniformName);
+        if (cached != null) {
+            return cached;
+        }
+
+        if (activeUniformNamesAvailable && !couldBeActiveUniform(uniformName)) {
+            uniformLocations.put(uniformName, -1);
+            return -1;
+        }
+
+        int loc = OpenGlHelper.glGetUniformLocation(programId, uniformName);
+        uniformLocations.put(uniformName, loc);
+        return loc;
     }
 
     public String getName() {
@@ -81,5 +99,66 @@ public class ShaderProgram {
     
     public int getId() {
         return programId;
+    }
+
+    private void scanActiveUniformNames() {
+        uniformLocations.clear();
+        activeUniformNames.clear();
+        activeUniformNamesAvailable = false;
+
+        try {
+            int count = GL20.glGetProgrami(programId, GL20.GL_ACTIVE_UNIFORMS);
+            int maxLength = Math.max(1, GL20.glGetProgrami(programId, GL20.GL_ACTIVE_UNIFORM_MAX_LENGTH));
+            for (int i = 0; i < count; i++) {
+                addActiveUniformName(GL20.glGetActiveUniform(programId, i, maxLength));
+            }
+            activeUniformNamesAvailable = true;
+            MainMod.LOGGER.debug("[ShaderProgram] Program '{}' has {} active uniforms", name, activeUniformNames.size());
+        } catch (RuntimeException e) {
+            MainMod.LOGGER.debug(
+                    "[ShaderProgram] Failed to scan active uniforms for '{}'; falling back to lazy uniform queries",
+                    name,
+                    e
+            );
+        }
+    }
+
+    private void addActiveUniformName(String activeName) {
+        String normalized = normalizeActiveUniformName(activeName);
+        if (normalized.isEmpty()) {
+            return;
+        }
+        activeUniformNames.add(normalized);
+        if (!normalized.equals(activeName)) {
+            activeUniformNames.add(activeName);
+        }
+    }
+
+    private boolean couldBeActiveUniform(String uniformName) {
+        if (activeUniformNames.contains(uniformName)) {
+            return true;
+        }
+
+        String normalized = normalizeActiveUniformName(uniformName);
+        if (activeUniformNames.contains(normalized)) {
+            return true;
+        }
+
+        int arrayIndex = uniformName.indexOf('[');
+        return arrayIndex > 0 && activeUniformNames.contains(uniformName.substring(0, arrayIndex));
+    }
+
+    static String normalizeActiveUniformName(String uniformName) {
+        if (uniformName == null) {
+            return "";
+        }
+
+        int nullTerminator = uniformName.indexOf('\0');
+        String normalized = nullTerminator >= 0 ? uniformName.substring(0, nullTerminator) : uniformName;
+        normalized = normalized.trim();
+        if (normalized.endsWith("[0]")) {
+            return normalized.substring(0, normalized.length() - 3);
+        }
+        return normalized;
     }
 }

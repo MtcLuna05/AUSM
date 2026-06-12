@@ -43,6 +43,10 @@ public record ShaderFeatureSet(
     }
 
     private static String normalize(String value) {
-        return value.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        String normalized = value.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        if ("tesselation_shaders".equals(normalized)) {
+            return "tessellation_shaders";
+        }
+        return normalized;
     }
 }

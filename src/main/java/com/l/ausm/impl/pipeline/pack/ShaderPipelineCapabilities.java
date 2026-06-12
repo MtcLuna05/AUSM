@@ -10,6 +10,7 @@ public record ShaderPipelineCapabilities(
         boolean storageBuffers,
         boolean customUniforms,
         boolean customTextures,
+        boolean perBufferBlending,
         boolean extraProgramArrayEntries
 ) {
     public static ShaderPipelineCapabilities from(ShaderPackDirectives directives) {
@@ -21,11 +22,12 @@ public record ShaderPipelineCapabilities(
                 !directives.textureDirectives().globalTextures().isEmpty()
                         || directives.textureDirectives().programTextures().values().stream().anyMatch(list -> !list.isEmpty())
                         || directives.textureDirectives().rawTextureCount() > 0,
+                directives.programDirectives().values().stream().anyMatch(directivesForProgram -> !directivesForProgram.attachmentBlendModes().isEmpty()),
                 false
         );
     }
 
     public ShaderPipelineCapabilities withExtraProgramArrayEntries(boolean value) {
-        return new ShaderPipelineCapabilities(compute, images, storageBuffers, customUniforms, customTextures, value);
+        return new ShaderPipelineCapabilities(compute, images, storageBuffers, customUniforms, customTextures, perBufferBlending, value);
     }
 }

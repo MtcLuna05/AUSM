@@ -1,9 +1,5 @@
 package com.l.ausm.api.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.api.pipeline.fbo.ColorBufferFormat;
 import com.l.ausm.api.pipeline.shader.RenderPass;
@@ -28,6 +24,56 @@ public record ShaderRenderTargetSettings(
 ) {
     public static ShaderRenderTargetSettings empty() {
         return new ShaderRenderTargetSettings(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), false);
+    }
+
+    public ShaderRenderTargetSettings withFormats(Map<Attachment, ColorBufferFormat> overrides) {
+        if (overrides == null || overrides.isEmpty()) {
+            return this;
+        }
+
+        EnumMap<Attachment, ColorBufferFormat> mergedFormats = new EnumMap<>(Attachment.class);
+        mergedFormats.putAll(formats);
+        mergedFormats.putAll(overrides);
+        return new ShaderRenderTargetSettings(
+                Map.copyOf(mergedFormats),
+                clearDisabledByPass,
+                mipmapEnabledByPass,
+                textureScales,
+                clearColors,
+                shadowDepthNearest,
+                shadowDepthMipmap,
+                shadowColorClear,
+                shadowColorNearest,
+                shadowColorMipmap,
+                shadowHardwareFiltering
+        );
+    }
+
+    public ShaderRenderTargetSettings withClearColors(Map<Attachment, float[]> overrides) {
+        if (overrides == null || overrides.isEmpty()) {
+            return this;
+        }
+
+        EnumMap<Attachment, float[]> mergedClearColors = new EnumMap<>(Attachment.class);
+        clearColors.forEach((attachment, color) -> mergedClearColors.put(attachment, new float[]{color[0], color[1], color[2], color[3]}));
+        overrides.forEach((attachment, color) -> {
+            if (color != null && color.length >= 4) {
+                mergedClearColors.put(attachment, new float[]{color[0], color[1], color[2], color[3]});
+            }
+        });
+        return new ShaderRenderTargetSettings(
+                formats,
+                clearDisabledByPass,
+                mipmapEnabledByPass,
+                textureScales,
+                Map.copyOf(mergedClearColors),
+                shadowDepthNearest,
+                shadowDepthMipmap,
+                shadowColorClear,
+                shadowColorNearest,
+                shadowColorMipmap,
+                shadowHardwareFiltering
+        );
     }
 
     public Set<Attachment> clearDisabled() {

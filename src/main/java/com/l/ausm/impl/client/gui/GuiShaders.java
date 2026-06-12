@@ -1,12 +1,8 @@
 package com.l.ausm.impl.client.gui;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.MainMod;
-import com.l.ausm.impl.client.dynamic.DynamicLightManager;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
 import net.minecraft.client.gui.GuiButton;
@@ -28,6 +24,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class GuiShaders extends GuiScreen {
+    private static final int ID_DONE = 200;
+    private static final int ID_APPLY = 201;
+    private static final int ID_REFRESH = 202;
+    private static final int ID_OPTIONS = 203;
+    private static final int ID_TOGGLE_ENABLED = 204;
+    private static final int ID_PREVIEW = 205;
+    private static final int ID_OPEN_FOLDER = 206;
+    private static final int ID_CANCEL = 207;
+    private static final int ID_SETTINGS = 208;
 
     private final GuiScreen parentScreen;
     private GuiSlotShaders shaderList;
@@ -36,7 +41,7 @@ public class GuiShaders extends GuiScreen {
     private GuiButton refreshButton;
     private GuiButton optionsButton;
     private GuiButton toggleEnabledButton;
-    private GuiButton dynamicLightsButton;
+    private GuiButton settingsButton;
     private GuiButton previewButton;
     private GuiButton openFolderButton;
     private boolean previewHidden;
@@ -70,37 +75,37 @@ public class GuiShaders extends GuiScreen {
         int bottomButtonWidth = 100;
         int bottomGap = 4;
         int bottomStart = (this.width - bottomButtonWidth * 3 - bottomGap * 2) / 2;
-        this.buttonList.add(new GuiFlatButton(207, bottomStart, bottom, bottomButtonWidth, 20, "Cancel"));
+        this.buttonList.add(new GuiFlatButton(ID_CANCEL, bottomStart, bottom, bottomButtonWidth, 20, "Cancel"));
 
-        this.applyButton = new GuiFlatButton(201, bottomStart + bottomButtonWidth + bottomGap, bottom, bottomButtonWidth, 20, "Apply");
+        this.applyButton = new GuiFlatButton(ID_APPLY, bottomStart + bottomButtonWidth + bottomGap, bottom, bottomButtonWidth, 20, "Apply");
         this.applyButton.enabled = false;
         this.buttonList.add(this.applyButton);
 
-        this.buttonList.add(new GuiFlatButton(200, bottomStart + (bottomButtonWidth + bottomGap) * 2, bottom, bottomButtonWidth, 20, I18n.format("gui.done")));
+        this.buttonList.add(new GuiFlatButton(ID_DONE, bottomStart + (bottomButtonWidth + bottomGap) * 2, bottom, bottomButtonWidth, 20, I18n.format("gui.done")));
 
         int utilityY = this.height - 51;
         int bottomCenter = this.width / 2;
-        this.openFolderButton = new GuiFlatButton(206, bottomCenter - 156, utilityY, 152, 20, "Open Shader Pack Folder...");
+        this.openFolderButton = new GuiFlatButton(ID_OPEN_FOLDER, bottomCenter - 156, utilityY, 152, 20, "Open Shader Pack Folder...");
         this.buttonList.add(this.openFolderButton);
 
-        this.optionsButton = new GuiFlatButton(203, bottomCenter + 4, utilityY, 152, 20, "Shader Pack Settings...");
+        this.optionsButton = new GuiFlatButton(ID_OPTIONS, bottomCenter + 4, utilityY, 152, 20, "Shader Pack Settings...");
         this.optionsButton.enabled = canConfigure(shaderList.getSelectedPackName());
         this.buttonList.add(this.optionsButton);
 
-        this.refreshButton = new GuiFlatButton(202, leftPanelRight - 66, 53, 54, 16, "Refresh");
+        this.refreshButton = new GuiFlatButton(ID_REFRESH, leftPanelRight - 66, 53, 54, 16, "Refresh");
         this.buttonList.add(this.refreshButton);
 
-        this.toggleEnabledButton = new GuiFlatButton(204, 20, 53, 74, 16, MainMod.getShaderPackManager().areShadersEnabled() ? "Disable" : "Enable");
+        this.toggleEnabledButton = new GuiFlatButton(ID_TOGGLE_ENABLED, 20, 53, 74, 16, MainMod.getShaderPackManager().areShadersEnabled() ? "Disable" : "Enable");
         this.toggleEnabledButton.enabled = canConfigure(MainMod.getShaderPackManager().getSelectedPackName());
         this.buttonList.add(this.toggleEnabledButton);
 
-        this.dynamicLightsButton = new GuiFlatButton(208, 98, 53, 116, 16, dynamicLightsLabel());
-        this.buttonList.add(this.dynamicLightsButton);
+        this.settingsButton = new GuiFlatButton(ID_SETTINGS, 98, 53, 116, 16, settingsLabel());
+        this.buttonList.add(this.settingsButton);
 
-        this.previewButton = new GuiFlatButton(205, this.width - 90, utilityY, 80, 20, "Preview");
+        this.previewButton = new GuiFlatButton(ID_PREVIEW, this.width - 90, utilityY, 80, 20, "Preview");
         this.buttonList.add(this.previewButton);
         updateSelectedProperties();
-        updateDynamicLightsButton();
+        updateSettingsButton();
         updatePreviewVisibility();
         ensureFocusedControl();
     }
@@ -135,7 +140,7 @@ public class GuiShaders extends GuiScreen {
         }
 
         switch (button.id) {
-            case 200:
+            case ID_DONE:
                 if (this.parentScreen == null) {
                     this.mc.currentScreen = null;
                     this.mc.setIngameFocus();
@@ -143,34 +148,30 @@ public class GuiShaders extends GuiScreen {
                 }
                 this.mc.displayGuiScreen(this.parentScreen);
                 break;
-            case 201:
+            case ID_APPLY:
                 applySelectedPack();
                 break;
-            case 202:
+            case ID_REFRESH:
                 refreshShaderList();
                 break;
-            case 203:
+            case ID_OPTIONS:
                 openSelectedPackOptions();
                 break;
-            case 204:
+            case ID_TOGGLE_ENABLED:
                 boolean enabled = !MainMod.getShaderPackManager().areShadersEnabled();
                 MainMod.getShaderPackManager().setShadersEnabled(enabled);
                 updateEnabledButton();
                 break;
-            case 208:
-                if (!dynamicLightsAvailable()) {
-                    notifyUser(dynamicLightsUnavailableReason());
-                    return;
-                }
+            case ID_SETTINGS:
                 this.mc.displayGuiScreen(new GuiDynamicLights(this));
                 break;
-            case 205:
+            case ID_PREVIEW:
                 setPreviewHidden(!previewHidden);
                 break;
-            case 206:
+            case ID_OPEN_FOLDER:
                 openShaderpacksFolder();
                 break;
-            case 207:
+            case ID_CANCEL:
                 this.mc.displayGuiScreen(this.parentScreen);
                 break;
             default:
@@ -199,7 +200,7 @@ public class GuiShaders extends GuiScreen {
 
     private void updatePreviewVisibility() {
         for (GuiButton guiButton : this.buttonList) {
-            guiButton.visible = !previewHidden || guiButton.id == 205;
+            guiButton.visible = !previewHidden || guiButton.id == ID_PREVIEW;
         }
         if (previewButton != null) {
             previewButton.displayString = previewHidden ? "Show GUI" : "Preview";
@@ -228,7 +229,9 @@ public class GuiShaders extends GuiScreen {
         }
 
         MainMod.getShaderPackManager().loadPack(selectedPack);
-        this.mc.renderGlobal.loadRenderers();
+        if (this.mc != null && this.mc.renderGlobal != null) {
+            this.mc.renderGlobal.loadRenderers();
+        }
         if (this.applyButton != null) {
             this.applyButton.enabled = false;
         }
@@ -262,14 +265,14 @@ public class GuiShaders extends GuiScreen {
 
         drawRect(0, 0, this.width, this.height, 0x330B1016);
         drawPanels();
-            this.shaderList.drawScreen(mouseX, mouseY, partialTicks, focusedControl == -1);
+        this.shaderList.drawScreen(mouseX, mouseY, partialTicks, focusedControl == -1);
         drawHeader();
         drawPackDetails();
         drawNotification();
 
         super.drawScreen(mouseX, mouseY, partialTicks);
         drawFocusedButtonOutline();
-        drawDynamicLightsTooltip(mouseX, mouseY);
+        drawEscapeHintTooltip(mouseX, mouseY);
     }
 
     @Override
@@ -278,18 +281,22 @@ public class GuiShaders extends GuiScreen {
             super.mouseClicked(mouseX, mouseY, mouseButton);
             return;
         }
-        if (mouseButton == 1 && isMouseOverButton(dynamicLightsButton, mouseX, mouseY)) {
-            toggleDynamicLights();
-            return;
-        }
         this.shaderList.mouseClicked(mouseX, mouseY, mouseButton);
         super.mouseClicked(mouseX, mouseY, mouseButton);
     }
 
     @Override
     protected void keyTyped(char typedChar, int keyCode) throws IOException {
-        if (previewHidden && keyCode == Keyboard.KEY_ESCAPE) {
-            setPreviewHidden(false);
+        if (keyCode == Keyboard.KEY_ESCAPE) {
+            if (GuiControlHints.isShiftDown()) {
+                this.mc.displayGuiScreen(null);
+                return;
+            }
+            if (previewHidden) {
+                setPreviewHidden(false);
+                return;
+            }
+            this.mc.displayGuiScreen(parentScreen);
             return;
         }
         if (keyCode == Keyboard.KEY_TAB) {
@@ -353,7 +360,7 @@ public class GuiShaders extends GuiScreen {
 
     private void moveFocusHorizontal(int direction) {
         if (previewHidden) {
-            focusedControl = indexOfButton(205);
+            focusedControl = indexOfButton(ID_PREVIEW);
             return;
         }
         List<GuiButton> focusables = focusableButtons();
@@ -372,7 +379,7 @@ public class GuiShaders extends GuiScreen {
 
     private void moveFocusVertical(int direction) {
         if (previewHidden) {
-            focusedControl = indexOfButton(205);
+            focusedControl = indexOfButton(ID_PREVIEW);
             return;
         }
         focusedControl = -1;
@@ -385,7 +392,7 @@ public class GuiShaders extends GuiScreen {
 
     private void ensureFocusedControl() {
         if (previewHidden) {
-            focusedControl = indexOfButton(205);
+            focusedControl = indexOfButton(ID_PREVIEW);
             return;
         }
         if (focusedControl >= this.buttonList.size()
@@ -407,7 +414,7 @@ public class GuiShaders extends GuiScreen {
     }
 
     private boolean isFocusable(GuiButton button) {
-        return button.visible && button.enabled;
+        return GuiControlHints.isFocusable(button);
     }
 
     private int firstButtonIndex(List<GuiButton> buttons) {
@@ -428,14 +435,7 @@ public class GuiShaders extends GuiScreen {
     }
 
     private void drawFocusedButtonOutline() {
-        GuiButton button = focusedButton();
-        if (button == null) {
-            return;
-        }
-        drawRect(button.x - 2, button.y - 2, button.x + button.width + 2, button.y - 1, 0xFFFFD27D);
-        drawRect(button.x - 2, button.y + button.height + 1, button.x + button.width + 2, button.y + button.height + 2, 0xFFFFD27D);
-        drawRect(button.x - 2, button.y - 2, button.x - 1, button.y + button.height + 2, 0xFFFFD27D);
-        drawRect(button.x + button.width + 1, button.y - 2, button.x + button.width + 2, button.y + button.height + 2, 0xFFFFD27D);
+        GuiControlHints.drawFocusedButtonOutline(focusedButton());
     }
 
     private void drawHeader() {
@@ -483,6 +483,9 @@ public class GuiShaders extends GuiScreen {
         this.drawString(this.fontRenderer, "Dynamic lights", x, y + 170, 0x8EA0B5);
         this.drawString(this.fontRenderer, dynamicLightsStatus(), x, y + 182,
                 dynamicLightsEnabled() ? 0xB4F28A : dynamicLightsAvailable() ? 0xFF8A8A : 0xFFD27D);
+        this.drawString(this.fontRenderer, "Portal shaders", x, y + 204, 0x8EA0B5);
+        this.drawString(this.fontRenderer, portalShadersStatus(), x, y + 216,
+                portalShadersEffective() ? 0xB4F28A : portalShadersConfigured() ? 0xFFD27D : 0xFF8A8A);
 
         String status = this.applyButton != null && this.applyButton.enabled ? "Pending pack change" : "No pending pack change";
         this.drawString(this.fontRenderer, status, x, this.height - 56, this.applyButton != null && this.applyButton.enabled ? 0xFFD27D : 0x8EA0B5);
@@ -506,7 +509,7 @@ public class GuiShaders extends GuiScreen {
         this.applyButton.enabled = false;
         this.optionsButton.enabled = canConfigure(shaderList.getSelectedPackName());
         updateEnabledButton();
-        updateDynamicLightsButton();
+        updateSettingsButton();
         updateSelectedProperties();
     }
 
@@ -547,33 +550,15 @@ public class GuiShaders extends GuiScreen {
         toggleEnabledButton.enabled = canConfigure(MainMod.getShaderPackManager().getSelectedPackName());
     }
 
-    private void toggleDynamicLights() {
-        if (MainMod.getDynamicLightConfig() == null) {
-            notifyUser("Dynamic lights config is unavailable");
-            return;
-        }
-        if (!dynamicLightsAvailable()) {
-            notifyUser(dynamicLightsUnavailableReason());
-            updateDynamicLightsButton();
-            return;
-        }
-
-        boolean enabled = !MainMod.getDynamicLightConfig().enabled();
-        MainMod.getDynamicLightConfig().setEnabled(enabled);
-        DynamicLightManager.refreshAfterConfigChange();
-        updateDynamicLightsButton();
-        notifyUser(enabled ? "Shaderless dynamic lights enabled" : "Shaderless dynamic lights disabled");
-    }
-
-    private void updateDynamicLightsButton() {
-        if (dynamicLightsButton != null) {
-            dynamicLightsButton.displayString = dynamicLightsLabel();
-            dynamicLightsButton.enabled = dynamicLightsAvailable();
+    private void updateSettingsButton() {
+        if (settingsButton != null) {
+            settingsButton.displayString = settingsLabel();
+            settingsButton.enabled = true;
         }
     }
 
-    private String dynamicLightsLabel() {
-        return "Dynamic Lights...";
+    private String settingsLabel() {
+        return "Settings...";
     }
 
     private boolean dynamicLightsEnabled() {
@@ -605,22 +590,47 @@ public class GuiShaders extends GuiScreen {
         return reason.isEmpty() ? "Dynamic lights are unavailable" : reason;
     }
 
-    private void drawDynamicLightsTooltip(int mouseX, int mouseY) {
-        if (dynamicLightsButton == null || !dynamicLightsButton.visible || dynamicLightsAvailable()
-                || !isMouseOverButton(dynamicLightsButton, mouseX, mouseY)) {
-            return;
+    private boolean portalShadersConfigured() {
+        return MainMod.getClientSettingsConfig() != null
+                && MainMod.getClientSettingsConfig().portalShadersEnabled();
+    }
+
+    private boolean portalShadersEffective() {
+        return portalShadersConfigured()
+                && BetterPortalsCompat.isInstalled()
+                && BetterPortalsCompat.isSeeThroughPortalsEnabled()
+                && MainMod.getShaderPackManager().areShadersEnabled();
+    }
+
+    private String portalShadersStatus() {
+        if (MainMod.getClientSettingsConfig() == null) {
+            return "Unavailable";
         }
-        drawHoveringText(List.of("AUSM dynamic lights are disabled.", dynamicLightsUnavailableReason()), mouseX, mouseY);
+        if (!portalShadersConfigured()) {
+            return "Off";
+        }
+        if (!BetterPortalsCompat.isInstalled()) {
+            return "On / Better Portals missing";
+        }
+        if (!BetterPortalsCompat.isSeeThroughPortalsEnabled()) {
+            return "On / BP see-through off";
+        }
+        return MainMod.getShaderPackManager().areShadersEnabled() ? "On" : "On / shaders disabled";
     }
 
     private boolean isMouseOver(GuiButton button, int mouseX, int mouseY) {
-        return button != null && button.enabled && isMouseOverButton(button, mouseX, mouseY);
+        return button != null && button.enabled && GuiControlHints.isMouseOverButton(button, mouseX, mouseY);
     }
 
     private boolean isMouseOverButton(GuiButton button, int mouseX, int mouseY) {
-        return button != null && button.visible
-                && mouseX >= button.x && mouseY >= button.y
-                && mouseX < button.x + button.width && mouseY < button.y + button.height;
+        return GuiControlHints.isMouseOverButton(button, mouseX, mouseY);
+    }
+
+    private void drawEscapeHintTooltip(int mouseX, int mouseY) {
+        GuiControlHints.drawEscapeHintLabel(this.fontRenderer, this.width);
+        if (GuiControlHints.isMouseOverEscapeHint(this.fontRenderer, this.width, mouseX, mouseY)) {
+            drawHoveringText(GuiControlHints.escapeTooltip(), mouseX, mouseY);
+        }
     }
 
     private void installDropCallback() {

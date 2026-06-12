@@ -1,9 +1,5 @@
 package com.l.ausm.impl;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import net.minecraft.launchwrapper.Launch;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -55,8 +51,13 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".CodeChickenRenderItemMixin")) {
             return optionalTargetPresent(mixinClassName, "codechicken/lib/render/item/CCRenderItem.class", false);
         }
-        if (mixinClassName.endsWith(".LumenizedRegionRenderCacheBuilderMixin")
-                || mixinClassName.endsWith(".LumenizedBloomTargetMixin")) {
+        if (mixinClassName.endsWith(".BetterPortalsPortalRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/betterportals/client/render/PortalRenderer.class", false);
+        }
+        if (mixinClassName.endsWith(".BetterPortalsClientWorldsManagerMixin")) {
+            return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/view/impl/client/ClientWorldsManagerImpl.class", false);
+        }
+        if (mixinClassName.endsWith(".LumenizedBloomBlockLayerMixin")) {
             return optionalTargetPresent(mixinClassName, "gregtech/client/utils/BloomEffectUtil.class", false);
         }
         if (mixinClassName.contains(".hei.")) {
