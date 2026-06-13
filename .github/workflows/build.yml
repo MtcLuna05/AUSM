@@ -64,41 +64,16 @@ jobs:
     name: Publish latest release
     needs: jar
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && github.actor == 'MtcLuna05'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.actor == 'MtcLuna05')
     permissions:
       contents: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - name: Download built jar
+        uses: actions/download-artifact@v4
         with:
-          distribution: temurin
-          java-version: '25'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Build
-        run: ./gradlew --no-daemon build
-
-      - name: Stage jar
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          mod_id="$(sed -n 's/^mod_id[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
-          jar_path="$(find build/libs -maxdepth 1 -type f -name "${mod_id}-*.jar" ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
-          if [[ -z "${jar_path}" ]]; then
-            jar_path="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
-          fi
-          if [[ -z "${jar_path}" ]]; then
-            echo "No distributable AUSM jar found in build/libs" >&2
-            exit 1
-          fi
-          cp "${jar_path}" "dist/AUSM-latest.jar"
+          name: AUSM-${{ github.sha }}
+          path: dist
 
       - name: Publish latest release jar
         env:
@@ -106,10 +81,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -f dist/AUSM-latest.jar
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
           gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" 2>/dev/null || true
           gh release create latest dist/AUSM-latest.jar \
             --title "AUSM Latest Build" \
-            --notes "Manual latest jar from commit ${GITHUB_SHA}." \
+            --notes "Latest jar from commit ${GITHUB_SHA}." \
             --prerelease \
             --target "${GITHUB_SHA}"
