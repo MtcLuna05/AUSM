@@ -282,12 +282,14 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeLitParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
+            context.prepareVanillaParticleRendering();
             return;
         }
 
-        PipelineContext.getInstance().beginTranslucents();
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.PARTICLES);
+        context.beginTranslucents();
+        context.beginPhase(WorldRenderingPhase.PARTICLES);
     }
 
     @Inject(
@@ -315,11 +317,13 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
+            context.prepareVanillaParticleRendering();
             return;
         }
 
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.PARTICLES_TRANSLUCENT);
+        context.beginPhase(WorldRenderingPhase.PARTICLES_TRANSLUCENT);
     }
 
     @Inject(

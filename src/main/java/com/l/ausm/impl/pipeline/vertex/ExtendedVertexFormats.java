@@ -43,9 +43,7 @@ public class ExtendedVertexFormats {
     
     public static final VertexFormatElement AT_TANGENT = new VertexFormatElement(0, VertexFormatElement.EnumType.BYTE, VertexFormatElement.EnumUsage.PADDING, 4);
 
-    // at_midBlock: 3 byte local midpoint + 1 byte emission slot. The 1.12
-    // backport currently writes zeroes until block-local coordinates are plumbed
-    // through the chunk rebuild path.
+    // at_midBlock: 3 byte local midpoint + 1 byte emission slot.
     public static final VertexFormatElement AT_MID_BLOCK = new VertexFormatElement(0, VertexFormatElement.EnumType.BYTE, VertexFormatElement.EnumUsage.PADDING, 4);
 
     public static void initialize() {

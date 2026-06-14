@@ -67,7 +67,7 @@ public enum WorldRenderingPhase {
     public boolean usesBlockAtlas() {
         return switch (this) {
             case TERRAIN_SOLID, TERRAIN_CUTOUT_MIPPED, TERRAIN_CUTOUT, TERRAIN_TRANSLUCENT, TRIPWIRE,
-                    DESTROY, PARTICLES, BLOCK_ENTITIES, BLOCK_ENTITIES_TRANSLUCENT, ITEM -> true;
+                    DESTROY, PARTICLES, PARTICLES_TRANSLUCENT, BLOCK_ENTITIES, BLOCK_ENTITIES_TRANSLUCENT, ITEM -> true;
             default -> false;
         };
     }

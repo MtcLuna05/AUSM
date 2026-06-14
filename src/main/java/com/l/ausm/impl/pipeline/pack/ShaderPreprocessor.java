@@ -288,6 +288,7 @@ public class ShaderPreprocessor {
                 #define IRIS_FEATURE_CUSTOM_IMAGES
                 #define IRIS_FEATURE_SSBO
                 #define IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE
+                #define IRIS_FEATURE_FADE_VARIABLE
                 """);
 
         switch (ShaderDimensionContext.currentDimensionId()) {

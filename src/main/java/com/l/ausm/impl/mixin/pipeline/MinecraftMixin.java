@@ -86,16 +86,17 @@ public class MinecraftMixin {
             PipelineContext.getInstance().clearScheduledBloomTerrainRefresh();
             return;
         }
-        PipelineContext.getInstance().clearPendingShaderChunkRefreshes();
-        PipelineContext.getInstance().scheduleBloomTerrainRefresh("world load");
+        PipelineContext context = PipelineContext.getInstance();
+        context.clearPendingShaderChunkRefreshes();
+        context.scheduleBloomTerrainRefresh("world load");
         if (MainMod.getShaderPackManager() != null) {
             int dimensionId = ausm$dimensionId(worldClient);
             boolean dimensionSwitch = ausm$isDimensionSwitch(dimensionId);
             if (!dimensionSwitch) {
                 MainMod.getShaderPackManager().preparePipelineForWorldLoad(dimensionId);
-                PipelineContext.getInstance().scheduleWorldLoadLightRecalculation();
+                context.scheduleWorldLoadLightRecalculation();
             } else {
-                PipelineContext.getInstance().clearScheduledWorldLoadLightRecalculation();
+                context.clearScheduledWorldLoadLightRecalculation();
             }
         }
     }

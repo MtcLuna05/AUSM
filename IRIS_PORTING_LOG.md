@@ -894,6 +894,15 @@ Reference source used: local checkout at `/tmp/iris-ausm-ref`.
     overlay. AUSM now redirects only the private `renderShadow` call and leaves
     `renderEntityOnFire` running, matching Iris' separation between shader
     shadows and ordinary entity overlay rendering.
+  - Started the Complementary-specific Iris parity pass against local
+    Complementary Unbound 5.8.1 and Iris' current vanilla transform sources.
+    AUSM now advertises `IRIS_FEATURE_FADE_VARIABLE` and injects Iris'
+    vanilla-path `const float mc_chunkFade = -1.0` for vertex shaders that read
+    it, enabling Complementary's chunk-fade branches without pretending to have
+    Sodium/Distant-Horizons per-chunk fade metadata. The block emission byte
+    reserved in `at_midBlock.w` is now filled from the 1.12 block light value
+    instead of always zero, matching Iris' `BlockState#getLightEmission()`
+    source as closely as 1.12's `IBlockState#getLightValue(...)` permits.
   - Added `ColoredShadowProbe`, a local diagnostic shaderpack for raw shadow
     texture inspection. It renders a basic shadow pass and exposes scene,
     `shadowtex0`, `shadowtex1`, `shadowcolor0.rgb`, and `shadowcolor0.a` views

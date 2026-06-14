@@ -16,6 +16,7 @@ public final class ShaderTransformPipeline {
             new FragmentOutputTransformStage(),
             new LegacySamplerAliasTransformStage(),
             new GbuffersBuiltinTransformStage(),
+            new FadeVariableTransformStage(),
             new EntityAdvancedMaterialFallbackTransformStage(),
             new ComplementaryBlockIpbrTransformStage(),
             new ComplementaryWaterVersionTransformStage(),

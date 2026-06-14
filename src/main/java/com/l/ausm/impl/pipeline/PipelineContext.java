@@ -2401,7 +2401,24 @@ public class PipelineContext {
     }
 
     public int blockRenderEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return 0;
+        if (state == null) {
+            return 0;
+        }
+        try {
+            if (blockAccess != null && pos != null) {
+                return clampLightValue(state.getLightValue(blockAccess, pos));
+            }
+        } catch (RuntimeException ignored) {
+        }
+        try {
+            return clampLightValue(state.getLightValue());
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
+    }
+
+    private static int clampLightValue(int value) {
+        return Math.max(0, Math.min(15, value));
     }
 
     public void recordSyntheticLightCandidate(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -3269,7 +3286,9 @@ public class PipelineContext {
                 || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP
                 || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT
                 || pass == RenderPass.GBUFFERS_WATER
-                || pass == RenderPass.GBUFFERS_DAMAGEDBLOCK;
+                || pass == RenderPass.GBUFFERS_DAMAGEDBLOCK
+                || pass == RenderPass.GBUFFERS_PARTICLES
+                || pass == RenderPass.GBUFFERS_PARTICLES_TRANSLUCENT;
     }
 
     private boolean isMakeUpPack() {
@@ -3724,6 +3743,23 @@ public class PipelineContext {
         GlStateManager.disableLighting();
         GlStateManager.disableColorMaterial();
         GlStateManager.disableBlend();
+    }
+
+    public void prepareVanillaParticleRendering() {
+        if (!shouldBypassWorldPassRendering()) {
+            return;
+        }
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        disablePipelineVertexAttributes();
+        GL11.glColorMask(true, true, true, true);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        GlStateManager.enableTexture2D();
+        bindBlockAtlas();
+        GlStateManager.enableDepth();
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
     }
 
     private static double irisCameraShift(double adjusted, double delta, double absoluteAdjusted) {
@@ -6434,7 +6470,8 @@ public class PipelineContext {
 
     public void renderNativeAusmBloomLayerFromWorldPass(float partialTicks, int pass) {
         if (bloomLayerRenderedThisWorldPass
-                || !AusmBloomLayer.shouldUseNativeHook()) {
+                || !AusmBloomLayer.shouldUseNativeHook()
+                || !isPipelineActive) {
             return;
         }
         if (isRenderingBetterPortalsRenderPass()) {
@@ -7166,6 +7203,9 @@ public class PipelineContext {
         }
 
         refreshVanillaLightmap(mc);
+        if (!isPipelineActive) {
+            return true;
+        }
         BlockPos center = new BlockPos(mc.player);
         int radius = WORLD_LOAD_LIGHT_REFRESH_RADIUS;
         mc.world.markBlockRangeForRenderUpdate(

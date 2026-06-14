@@ -135,7 +135,8 @@ final class ShaderPropertiesPreprocessor {
                 || symbol.equals("IRIS_VERSION")
                 || symbol.equals("IRIS_FEATURE_CUSTOM_IMAGES")
                 || symbol.equals("IRIS_FEATURE_SSBO")
-                || symbol.equals("IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE")) {
+                || symbol.equals("IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE")
+                || symbol.equals("IRIS_FEATURE_FADE_VARIABLE")) {
             return true;
         }
         ShaderOption option = options.get(symbol);
@@ -152,7 +153,8 @@ final class ShaderPropertiesPreprocessor {
         if (symbol.equals("IS_IRIS")
                 || symbol.equals("IRIS_FEATURE_CUSTOM_IMAGES")
                 || symbol.equals("IRIS_FEATURE_SSBO")
-                || symbol.equals("IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE")) {
+                || symbol.equals("IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE")
+                || symbol.equals("IRIS_FEATURE_FADE_VARIABLE")) {
             return 1.0;
         }
 
