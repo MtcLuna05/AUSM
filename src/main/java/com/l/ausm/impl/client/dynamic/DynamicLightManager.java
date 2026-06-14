@@ -152,10 +152,10 @@ public final class DynamicLightManager {
 
         Map<String, DynamicLightSource> next = collectSources(minecraft);
         logSourceChanges(next);
-        rebuildChangedRegions(world, previousSources, next, forceRebuild);
-        previousSources = next;
         activeSources = List.copyOf(next.values());
         active = !activeSources.isEmpty();
+        rebuildChangedRegions(world, previousSources, next, forceRebuild);
+        previousSources = next;
     }
 
     private static boolean shouldRun(Minecraft minecraft) {
@@ -230,13 +230,18 @@ public final class DynamicLightManager {
     }
 
     private static void clear(Minecraft minecraft, boolean forceRebuild) {
+        Map<String, DynamicLightSource> previous = previousSources;
         if (active || !previousSources.isEmpty() || forceRebuild) {
             World world = minecraft != null ? minecraft.world : previousWorld;
-            markSources(world, previousSources);
+            active = false;
+            activeSources = List.of();
+            previousSources = Map.of();
+            markSources(world, previous);
+        } else {
+            active = false;
+            activeSources = List.of();
+            previousSources = Map.of();
         }
-        active = false;
-        activeSources = List.of();
-        previousSources = Map.of();
         if (lastLoggedSourceCount != 0) {
             lastLoggedSourceCount = 0;
             MainMod.LOGGER.info("[DynamicLights] activeSources=0");

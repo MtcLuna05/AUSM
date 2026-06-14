@@ -4,20 +4,20 @@ import com.l.ausm.api.shader.ShaderPackController;
 import com.l.ausm.impl.client.ClientSettingsConfig;
 import com.l.ausm.impl.client.dynamic.DynamicLightConfig;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
+import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.proxy.IProxy;
+import com.l.ausm.impl.util.NoOpLogger;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.SidedProxy;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
-@Mod(modid = Reference.MODID, name = Reference.MOD_NAME, version = Reference.VERSION)
+@Mod(modid = Reference.MODID, name = Reference.MOD_NAME, version = Reference.VERSION, acceptableRemoteVersions = "*")
 public class MainMod {
 
-    public static final Logger LOGGER = LogManager.getLogger(Reference.MOD_NAME);
+    public static final NoOpLogger LOGGER = NoOpLogger.INSTANCE;
 
     @SidedProxy(modId = Reference.MODID, clientSide = "com.l.ausm.impl.proxy.ClientProxy", serverSide = "com.l.ausm.impl.proxy.CommonProxy")
     public static IProxy proxy;
@@ -45,6 +45,8 @@ public class MainMod {
     @Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
         LOGGER.info("Initializing Ausm Pipeline...");
+
+        AusmBloomLayer.initialize();
 
         // Initialize custom vertex formats for the shaders
         ExtendedVertexFormats.initialize();

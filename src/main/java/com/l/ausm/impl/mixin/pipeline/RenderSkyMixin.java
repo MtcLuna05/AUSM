@@ -6,10 +6,14 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
+import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
+import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.RenderGlobal;
+import net.minecraft.client.renderer.Tessellator;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
@@ -27,6 +31,10 @@ public class RenderSkyMixin {
 
     @Inject(method = "renderSky(FI)V", at = @At("HEAD"), cancellable = true)
     private void onRenderSkyHead(float partialTicks, int pass, CallbackInfo ci) {
+        // Some nested/custom sky paths can leave the shared Tessellator open.
+        // Vanilla sky immediately calls BufferBuilder.begin(), which hard-crashes
+        // if the previous buffer was not closed.
+        ausm$forceResetTessellator();
         if (!PipelineContext.getInstance().shouldRenderSkyDisc()) {
             ci.cancel();
             return;
@@ -78,6 +86,54 @@ public class RenderSkyMixin {
     private void onRenderSkyBeforeMoon(float partialTicks, int pass, CallbackInfo ci) {
         PipelineContext.getInstance().endPass();
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.MOON);
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/Tessellator;draw()V",
+                    ordinal = 1
+            )
+    )
+    private void ausm$drawOrSuppressVanillaSun(Tessellator tessellator) {
+        if (PipelineContext.getInstance().shouldSuppressVanillaSunGeometry()) {
+            ausm$forceResetTessellator(tessellator);
+            return;
+        }
+        tessellator.draw();
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/Tessellator;draw()V",
+                    ordinal = 2
+            )
+    )
+    private void ausm$drawOrSuppressVanillaMoon(Tessellator tessellator) {
+        if (PipelineContext.getInstance().shouldSuppressVanillaMoonGeometry()) {
+            ausm$forceResetTessellator(tessellator);
+            return;
+        }
+        tessellator.draw();
+    }
+
+    private static void ausm$forceResetTessellator() {
+        ausm$forceResetTessellator(Tessellator.getInstance());
+    }
+
+    private static void ausm$forceResetTessellator(Tessellator tessellator) {
+        if (tessellator == null) {
+            return;
+        }
+        BufferBuilder buffer = tessellator.getBuffer();
+        if (buffer instanceof IBufferBuilderExtension extension) {
+            extension.ausm$forceResetDrawingState();
+        } else if (buffer != null) {
+            buffer.reset();
+        }
     }
 
     @Inject(

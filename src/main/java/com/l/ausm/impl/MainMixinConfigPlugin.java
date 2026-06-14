@@ -1,8 +1,6 @@
 package com.l.ausm.impl;
 
 import net.minecraft.launchwrapper.Launch;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -11,13 +9,9 @@ import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.JarFile;
 
 public class MainMixinConfigPlugin implements IMixinConfigPlugin {
-    private static final Logger LOGGER = LogManager.getLogger(Reference.MOD_NAME);
-    private static final Set<String> LOGGED_OPTIONAL_MIXINS = ConcurrentHashMap.newKeySet();
-
     @Override
     public void onLoad(String s) {
 
@@ -48,6 +42,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".ProjectRedButtonItemRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "mrtjp/projectred/illumination/ButtonItemRenderer$.class", false);
         }
+        if (mixinClassName.endsWith(".AstralSorcerySkyboxMixin")) {
+            return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/sky/RenderAstralSkybox.class", false);
+        }
         if (mixinClassName.endsWith(".CodeChickenRenderItemMixin")) {
             return optionalTargetPresent(mixinClassName, "codechicken/lib/render/item/CCRenderItem.class", false);
         }
@@ -57,8 +54,35 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".BetterPortalsClientWorldsManagerMixin")) {
             return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/view/impl/client/ClientWorldsManagerImpl.class", false);
         }
-        if (mixinClassName.endsWith(".LumenizedBloomBlockLayerMixin")) {
+        if (mixinClassName.endsWith(".BetterPortalsServerWorldsManagerMixin")) {
+            return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/view/impl/server/ServerWorldsManagerImpl.class", false);
+        }
+        if (mixinClassName.endsWith(".AbyssalCraftPortalLayerMixin")) {
+            return optionalTargetPresent(mixinClassName, "com/shinoow/abyssalcraft/common/blocks/BlockAbyssPortal.class", false);
+        }
+        if (mixinClassName.endsWith(".AbyssalCraftShadowEntityRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "com/shinoow/abyssalcraft/client/render/entity/RenderShadowMonster.class", false);
+        }
+        if (mixinClassName.endsWith(".DimensionalDoorsEntranceRiftRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "org/dimdev/dimdoors/client/TileEntityEntranceRiftRenderer.class", false);
+        }
+        if (mixinClassName.endsWith(".DimensionalDoorsFloatingRiftRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "org/dimdev/dimdoors/client/TileEntityFloatingRiftRenderer.class", false);
+        }
+        if (mixinClassName.endsWith(".GpomBetterPortalsClientWorldCleanupMixin")) {
+            return optionalTargetPresent(mixinClassName, "com/l/gpom/compat/betterportals/BetterPortalsClientWorldCleanup.class", false);
+        }
+        if (mixinClassName.endsWith(".BetweenlandsMessageSyncChunkStorageMixin")) {
+            return optionalTargetPresent(mixinClassName, "thebetweenlands/common/network/clientbound/MessageSyncChunkStorage.class", true);
+        }
+        if (mixinClassName.endsWith(".LumenizedDisableBloomMixin")) {
             return optionalTargetPresent(mixinClassName, "gregtech/client/utils/BloomEffectUtil.class", false);
+        }
+        if (mixinClassName.endsWith(".ScannableScannerRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "li/cil/scannable/client/renderer/ScannerRenderer.class", false);
+        }
+        if (mixinClassName.endsWith(".ScannableOverlayRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "li/cil/scannable/client/renderer/OverlayRenderer.class", false);
         }
         if (mixinClassName.contains(".hei.")) {
             return optionalTargetPresent(mixinClassName, "mezz/jei/JEIInternalPlugin.class", false);
@@ -67,12 +91,7 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
     }
 
     private static boolean optionalTargetPresent(String mixinClassName, String resourcePath, boolean allowJarFallback) {
-        boolean present = classResourcePresent(resourcePath, allowJarFallback);
-        if (LOGGED_OPTIONAL_MIXINS.add(mixinClassName)) {
-            LOGGER.info("[MixinCompat] {} target={} present={} jarFallback={}",
-                    mixinClassName, resourcePath, present, allowJarFallback);
-        }
-        return present;
+        return classResourcePresent(resourcePath, allowJarFallback);
     }
 
     private static boolean classResourcePresent(String resourcePath, boolean allowJarFallback) {

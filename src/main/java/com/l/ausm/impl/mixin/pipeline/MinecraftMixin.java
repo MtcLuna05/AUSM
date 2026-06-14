@@ -48,6 +48,9 @@ public class MinecraftMixin {
     private void ausm$runScheduledWork(CallbackInfo ci) {
         BetterPortalsCompat.tickMainViewSwapRecovery();
         MainMod.getShaderPackManager().runPendingBetterPortalsDimensionCompile();
+        PipelineContext.getInstance().runPendingBetterPortalsPortalBlockRefresh();
+        PipelineContext.getInstance().runPendingShaderChunkRefreshes();
+        PipelineContext.getInstance().runScheduledBloomTerrainRefresh();
         PipelineContext.getInstance().runScheduledWorldLoadLightRecalculation();
     }
 
@@ -78,9 +81,13 @@ public class MinecraftMixin {
     @Inject(method = "loadWorld(Lnet/minecraft/client/multiplayer/WorldClient;Ljava/lang/String;)V", at = @At("RETURN"))
     private void ausm$scheduleLightRefreshAfterWorldLoad(WorldClient worldClient, String loadingMessage, CallbackInfo ci) {
         if (worldClient == null) {
+            PipelineContext.getInstance().clearPendingShaderChunkRefreshes();
             PipelineContext.getInstance().clearScheduledWorldLoadLightRecalculation();
+            PipelineContext.getInstance().clearScheduledBloomTerrainRefresh();
             return;
         }
+        PipelineContext.getInstance().clearPendingShaderChunkRefreshes();
+        PipelineContext.getInstance().scheduleBloomTerrainRefresh("world load");
         if (MainMod.getShaderPackManager() != null) {
             int dimensionId = ausm$dimensionId(worldClient);
             boolean dimensionSwitch = ausm$isDimensionSwitch(dimensionId);

@@ -10,6 +10,8 @@ import com.l.ausm.impl.pipeline.matrix.MatrixState;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.renderer.EntityRenderer;
 import net.minecraft.client.renderer.RenderGlobal;
+import net.minecraft.entity.Entity;
+import net.minecraft.util.BlockRenderLayer;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -51,17 +53,24 @@ public class EntityRendererMixin {
         PipelineContext.getInstance().finishGuiRendering();
     }
 
+    @Inject(
+            method = "updateCameraAndRender(FJ)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/gui/GuiIngame;renderGameOverlay(F)V",
+                    shift = At.Shift.BEFORE
+            ),
+            require = 0
+    )
+    private void onBeforeIngameOverlay(float partialTicks, long nanoTime, CallbackInfo ci) {
+        PipelineContext.getInstance().renderShaderlessBloomBeforeGui();
+    }
+
     @Inject(method = "renderWorldPass", at = @At("HEAD"))
     private void onRenderWorldPassHead(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         MainMod.getShaderPackManager().reloadIfDimensionChanged();
-
-        if (context.shouldBypassWorldPassRendering()) {
-            context.prepareBypassedWorldPassRendering();
-            return;
-        }
-
-        context.beginFrame();
+        context.beginWorldPassRendering(pass, partialTicks);
     }
 
     @Inject(
@@ -426,6 +435,14 @@ public class EntityRendererMixin {
         }
     }
 
+    @Redirect(
+            method = "renderWorldPass",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I")
+    )
+    private int ausm$renderWorldBlockLayer(RenderGlobal renderGlobal, BlockRenderLayer layer, double partialTicks, int pass, Entity viewEntity) {
+        return PipelineContext.getInstance().renderWorldBlockLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
+    }
+
     @Inject(
             method = "renderWorldPass",
             at = @At(
@@ -456,13 +473,16 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterTranslucentTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
+            context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
             return;
         }
 
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().restoreTerrainCulling();
-        PipelineContext.getInstance().restoreWaterRenderState();
+        context.endPass();
+        context.restoreTerrainCulling();
+        context.restoreWaterRenderState();
+        context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
     }
 
     @Inject(
@@ -500,11 +520,6 @@ public class EntityRendererMixin {
 
     @Inject(method = "renderWorldPass", at = @At("RETURN"))
     private void onRenderWorldPassReturn(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
-            PipelineContext.getInstance().finishBypassedWorldPassRendering();
-            return;
-        }
-
-        PipelineContext.getInstance().blitWorldFramebufferToMinecraft();
+        PipelineContext.getInstance().finishWorldPassRendering();
     }
 }

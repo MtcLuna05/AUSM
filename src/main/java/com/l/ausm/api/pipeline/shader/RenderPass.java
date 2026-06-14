@@ -27,8 +27,8 @@ public enum RenderPass {
     GBUFFERS_CLOUDS(ProgramId.CLOUDS, ProgramStage.GBUFFERS, GBUFFERS_TEXTURED),
     GBUFFERS_TERRAIN(ProgramId.TERRAIN, ProgramStage.GBUFFERS, GBUFFERS_TEXTURED_LIT),
     GBUFFERS_TERRAIN_SOLID(ProgramId.TERRAIN_SOLID, ProgramStage.GBUFFERS, GBUFFERS_TERRAIN),
-    GBUFFERS_TERRAIN_CUTOUT_MIP(ProgramId.TERRAIN_CUTOUT, ProgramStage.GBUFFERS, GBUFFERS_TERRAIN),
     GBUFFERS_TERRAIN_CUTOUT(ProgramId.TERRAIN_CUTOUT, ProgramStage.GBUFFERS, GBUFFERS_TERRAIN),
+    GBUFFERS_TERRAIN_CUTOUT_MIP(ProgramId.TERRAIN_CUTOUT_MIPPED, ProgramStage.GBUFFERS, GBUFFERS_TERRAIN_CUTOUT),
     GBUFFERS_DAMAGEDBLOCK(ProgramId.DAMAGED_BLOCK, ProgramStage.GBUFFERS, GBUFFERS_TERRAIN),
     GBUFFERS_BLOCK(ProgramId.BLOCK, ProgramStage.GBUFFERS, GBUFFERS_TERRAIN),
     GBUFFERS_BLOCK_TRANSLUCENT(ProgramId.BLOCK_TRANSLUCENT, ProgramStage.GBUFFERS, GBUFFERS_BLOCK),
@@ -108,6 +108,9 @@ public enum RenderPass {
     public static RenderPass fromProgramId(ProgramId programId) {
         if (programId == ProgramId.TERRAIN_CUTOUT) {
             return GBUFFERS_TERRAIN_CUTOUT;
+        }
+        if (programId == ProgramId.TERRAIN_CUTOUT_MIPPED) {
+            return GBUFFERS_TERRAIN_CUTOUT_MIP;
         }
         return Arrays.stream(values())
                 .filter(pass -> pass.programId == programId)

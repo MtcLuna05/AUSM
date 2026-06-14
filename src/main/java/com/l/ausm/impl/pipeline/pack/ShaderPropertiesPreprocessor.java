@@ -134,6 +134,7 @@ final class ShaderPropertiesPreprocessor {
                 || symbol.equals("IS_IRIS")
                 || symbol.equals("IRIS_VERSION")
                 || symbol.equals("IRIS_FEATURE_CUSTOM_IMAGES")
+                || symbol.equals("IRIS_FEATURE_SSBO")
                 || symbol.equals("IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE")) {
             return true;
         }
@@ -146,10 +147,11 @@ final class ShaderPropertiesPreprocessor {
             return 11202.0;
         }
         if (symbol.equals("IRIS_VERSION")) {
-            return 10800.0;
+            return 10902.0;
         }
         if (symbol.equals("IS_IRIS")
                 || symbol.equals("IRIS_FEATURE_CUSTOM_IMAGES")
+                || symbol.equals("IRIS_FEATURE_SSBO")
                 || symbol.equals("IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE")) {
             return 1.0;
         }

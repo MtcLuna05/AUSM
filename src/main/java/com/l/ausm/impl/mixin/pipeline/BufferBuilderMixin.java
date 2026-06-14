@@ -6,6 +6,7 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
+import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import com.l.ausm.impl.pipeline.vertex.IrisVertexMath;
 import com.l.ausm.impl.pipeline.vertex.SeparateAoColorWriter;
 import com.l.ausm.impl.pipeline.PipelineContext;
@@ -25,7 +26,7 @@ import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 
 @Mixin(BufferBuilder.class)
-public class BufferBuilderMixin {
+public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Shadow
     private ByteBuffer byteBuffer;
@@ -49,6 +50,9 @@ public class BufferBuilderMixin {
     private VertexFormat vertexFormat;
 
     @Shadow
+    private boolean isDrawing;
+
+    @Shadow
     public native int getColorIndex(int vertexIndex);
 
     @Shadow
@@ -56,6 +60,12 @@ public class BufferBuilderMixin {
 
     @Shadow
     private native int getBufferSize();
+
+    @Override
+    public void ausm$forceResetDrawingState() {
+        isDrawing = false;
+        ((BufferBuilder) (Object) this).reset();
+    }
 
     @ModifyVariable(method = "begin", at = @At("HEAD"), argsOnly = true)
     private VertexFormat ausm$usePipelineEntityFormat(VertexFormat original) {

@@ -326,6 +326,7 @@ public class GuiDynamicLights extends GuiScreen {
 
     private boolean portalShadersEffective() {
         return portalShadersConfigured()
+                && BetterPortalsCompat.isNestedShaderPipelineAvailable()
                 && BetterPortalsCompat.isInstalled()
                 && BetterPortalsCompat.isSeeThroughPortalsEnabled()
                 && MainMod.getShaderPackManager().areShadersEnabled();
@@ -343,6 +344,9 @@ public class GuiDynamicLights extends GuiScreen {
         }
         if (!BetterPortalsCompat.isSeeThroughPortalsEnabled()) {
             return "Blocked: Better Portals see-through off";
+        }
+        if (!BetterPortalsCompat.isNestedShaderPipelineAvailable()) {
+            return "Unavailable: nested portal shader path disabled";
         }
         return MainMod.getShaderPackManager().areShadersEnabled()
                 ? "On: portal views use AUSM shaders"

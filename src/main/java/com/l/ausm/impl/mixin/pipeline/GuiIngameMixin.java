@@ -24,6 +24,7 @@ public class GuiIngameMixin {
             return;
         }
 
+        context.renderShaderlessBloomBeforeGui();
         context.beginGuiRendering();
     }
 

@@ -1,10 +1,14 @@
 package com.l.ausm.impl.mixin.pipeline;
 
+import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.network.NetHandlerPlayClient;
+import net.minecraft.network.PacketBuffer;
+import net.minecraft.network.play.server.SPacketChunkData;
 import net.minecraft.network.play.server.SPacketSoundEffect;
 import net.minecraft.network.play.server.SPacketTeams;
+import net.minecraft.world.chunk.BlockStateContainer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -29,5 +33,69 @@ public class NetHandlerPlayClientMixin {
         if (world == null || mc == null || mc.getRenderViewEntity() == null) {
             ci.cancel();
         }
+    }
+
+    @Inject(method = "handleChunkData", at = @At("HEAD"), cancellable = true)
+    private void ausm$dropMalformedChunkData(SPacketChunkData packetIn, CallbackInfo ci) {
+        if (world == null || packetIn == null || !ausm$isChunkDataReadable(packetIn)) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handleChunkData", at = @At("RETURN"))
+    private void ausm$queueShaderChunkRefresh(SPacketChunkData packetIn, CallbackInfo ci) {
+        if (world != null && packetIn != null && packetIn.isFullChunk()) {
+            PipelineContext.getInstance().queueShaderChunkRefresh(world, packetIn.getChunkX(), packetIn.getChunkZ());
+        }
+    }
+
+    private boolean ausm$isChunkDataReadable(SPacketChunkData packetIn) {
+        try {
+            PacketBuffer buffer = packetIn.getReadBuffer();
+            int sections = packetIn.getExtractedSize();
+            boolean hasSkyLight = world.provider != null && world.provider.hasSkyLight();
+
+            if ((sections & ~0xFFFF) != 0) {
+                return false;
+            }
+
+            for (int section = 0; section < 16; section++) {
+                if ((sections & (1 << section)) == 0) {
+                    continue;
+                }
+
+                new BlockStateContainer().read(buffer);
+
+                if (!ausm$skipChunkBytes(buffer, 2048)) {
+                    return false;
+                }
+
+                if (hasSkyLight && !ausm$skipChunkBytes(buffer, 2048)) {
+                    return false;
+                }
+            }
+
+            if (packetIn.isFullChunk()) {
+                int biomePayloadBytes = buffer.readableBytes();
+                if (biomePayloadBytes == 256) {
+                    return ausm$skipChunkBytes(buffer, 256);
+                }
+
+                return biomePayloadBytes > 0 && buffer.readVarIntArray(biomePayloadBytes).length == 256;
+            }
+
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private boolean ausm$skipChunkBytes(PacketBuffer buffer, int byteCount) {
+        if (buffer.readableBytes() < byteCount) {
+            return false;
+        }
+
+        buffer.skipBytes(byteCount);
+        return true;
     }
 }

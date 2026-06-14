@@ -8,5 +8,8 @@ import com.l.ausm.api.pipeline.pack.*;
  * Interface injected into BufferBuilder to avoid illegal mixin casting.
  */
 public interface IBufferBuilderExtension {
-    void ausm$setEntityId(int entityId, int renderType);
+    default void ausm$setEntityId(int entityId, int renderType) {
+    }
+
+    void ausm$forceResetDrawingState();
 }

@@ -17,13 +17,9 @@ public final class BetterPortalsViewEventHandler {
     public static void onForgeEvent(Event event) {
         if (BetterPortalsCompat.handleRenderPassEvent(event)) {
             WorldClient parentWorld = BetterPortalsCompat.consumePendingParentRenderWorld();
-            if (!BetterPortalsCompat.shouldUseAusmPortalShaderHandling()) {
-                return;
+            if (parentWorld != null && parentWorld.provider != null) {
+                MainMod.getShaderPackManager().restoreAfterBetterPortalsNestedRender(parentWorld.provider.getDimension());
             }
-            int parentDimensionId = parentWorld != null && parentWorld.provider != null
-                    ? parentWorld.provider.getDimension()
-                    : Integer.MIN_VALUE;
-            MainMod.getShaderPackManager().restoreAfterBetterPortalsNestedRender(parentDimensionId);
         }
     }
 }

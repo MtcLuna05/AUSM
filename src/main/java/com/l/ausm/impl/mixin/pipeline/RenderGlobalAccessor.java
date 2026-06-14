@@ -44,6 +44,9 @@ public interface RenderGlobalAccessor {
     @Accessor("world")
     WorldClient ausm$world();
 
+    @Accessor("world")
+    void ausm$setWorld(WorldClient world);
+
     @Accessor("chunksToUpdate")
     Set<RenderChunk> ausm$chunksToUpdate();
 }

@@ -3,8 +3,6 @@ package com.l.ausm.impl;
 import net.minecraft.launchwrapper.Launch;
 import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin;
 import org.jetbrains.annotations.Nullable;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import java.io.File;
 import java.io.IOException;
@@ -15,14 +13,22 @@ import java.util.Set;
 import java.util.jar.JarFile;
 
 public class MainLoadingPlugin implements IFMLLoadingPlugin {
-    private static final Logger LOGGER = LogManager.getLogger(Reference.MOD_NAME);
     private static final String[] EARLY_OPTIONAL_COMPAT_TARGETS = {
             "mrtjp/projectred/core/RenderHalo$.class",
             "mrtjp/projectred/illumination/LampRenderer$.class",
             "mrtjp/projectred/illumination/LightFactory$$anon$1.class",
             "mrtjp/projectred/illumination/ButtonItemRenderer$.class",
             "codechicken/lib/render/item/CCRenderItem.class",
-            "gregtech/client/utils/BloomEffectUtil.class"
+            "com/shinoow/abyssalcraft/common/blocks/BlockAbyssPortal.class",
+            "com/shinoow/abyssalcraft/client/render/entity/RenderShadowMonster.class",
+            "com/shinoow/abyssalcraft/client/render/entity/RenderShadowCreature.class",
+            "com/shinoow/abyssalcraft/client/render/entity/RenderShadowBeast.class",
+            "org/dimdev/dimdoors/client/TileEntityEntranceRiftRenderer.class",
+            "org/dimdev/dimdoors/client/TileEntityFloatingRiftRenderer.class",
+            "gregtech/client/utils/BloomEffectUtil.class",
+            "thebetweenlands/common/network/clientbound/MessageSyncChunkStorage.class",
+            "li/cil/scannable/client/renderer/ScannerRenderer.class",
+            "li/cil/scannable/client/renderer/OverlayRenderer.class"
     };
     private static final Set<String> EXPOSED_COMPAT_JARS = new HashSet<>();
 
@@ -30,7 +36,9 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
     public @Nullable String[] getASMTransformerClass() {
         return new String[]{
                 "com.l.ausm.impl.core.ProjectRedScalaModuleTransformer",
-                "com.l.ausm.impl.core.NothiriumBypassTransformer"
+                "com.l.ausm.impl.core.NothiriumBypassTransformer",
+                "com.l.ausm.impl.core.AusmBloomCtmTransformer",
+                "com.l.ausm.impl.core.BetweenlandsMessageSyncChunkStorageTransformer"
         };
     }
 
@@ -56,7 +64,6 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
 
         File modsDirectory = resolveModsDirectory(data);
         if (!modsDirectory.isDirectory()) {
-            LOGGER.warn("[MixinCompat] Could not expose optional compat jars: mods directory not found at {}", modsDirectory);
             return;
         }
 
@@ -79,9 +86,8 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
             try {
                 URL url = file.toURI().toURL();
                 Launch.classLoader.addURL(url);
-                LOGGER.info("[MixinCompat] Added optional compat jar to LaunchClassLoader early: {}", file.getName());
             } catch (Exception exception) {
-                LOGGER.warn("[MixinCompat] Could not add optional compat jar to LaunchClassLoader: {}", file.getName(), exception);
+                // Optional compat exposure is best effort.
             }
         }
     }

@@ -15,10 +15,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.stream.Stream;
 
 public class ShaderPackManager implements ShaderPackController {
@@ -42,6 +44,8 @@ public class ShaderPackManager implements ShaderPackController {
     private boolean pendingPipelineReload = false;
     private int compiledDimensionId = Integer.MIN_VALUE;
     private int pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+    private int pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
+    private final Set<String> betterPortalsPrewarmedCacheKeys = new HashSet<>();
     private String compiledPackName = OFF_PACK_NAME;
 
     public ShaderPackManager(Path minecraftRunDir) {
@@ -82,8 +86,10 @@ public class ShaderPackManager implements ShaderPackController {
             currentPack = NoneShaderPack.INSTANCE;
             currentOptionOverrides = Map.of();
             clearShaderPropertiesCache();
+            betterPortalsPrewarmedCacheKeys.clear();
             compiledDimensionId = Integer.MIN_VALUE;
             pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+            pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
             compiledPackName = OFF_PACK_NAME;
             pendingPipelineReload = false;
             PipelineContext.getInstance().cleanup();
@@ -100,6 +106,7 @@ public class ShaderPackManager implements ShaderPackController {
         selectedPackName = packName;
         currentOptionOverrides = loadOptionOverrides(packName);
         clearShaderPropertiesCacheExcept(packName);
+        betterPortalsPrewarmedCacheKeys.clear();
         PipelineContext.getInstance().clearCompiledPipelineCache();
         pendingPipelineReload = true;
         saveShaderConfig();
@@ -108,6 +115,7 @@ public class ShaderPackManager implements ShaderPackController {
             currentPack = NoneShaderPack.INSTANCE;
             compiledDimensionId = Integer.MIN_VALUE;
             pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+            pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
             compiledPackName = OFF_PACK_NAME;
             PipelineContext.getInstance().cleanup();
             rebuildInactiveVanillaRenderers();
@@ -144,6 +152,8 @@ public class ShaderPackManager implements ShaderPackController {
         pendingPipelineReload = !isOffPack(selectedPackName) && isPackAvailable(selectedPackName);
         compiledDimensionId = Integer.MIN_VALUE;
         pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+        pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
+        betterPortalsPrewarmedCacheKeys.clear();
         compiledPackName = OFF_PACK_NAME;
         PipelineContext.getInstance().setActive(false);
     }
@@ -182,11 +192,13 @@ public class ShaderPackManager implements ShaderPackController {
         this.currentPack = newPack;
         this.currentOptionOverrides = isInternalPack(newPack) ? Map.of() : loadOptionOverrides(newPack.getName());
         clearShaderPropertiesCacheExcept(newPack.getName());
+        betterPortalsPrewarmedCacheKeys.clear();
 
         if (!shadersEnabled && !isInternalPack(newPack)) {
             PipelineContext.getInstance().cleanup();
             this.compiledDimensionId = Integer.MIN_VALUE;
             this.pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+            this.pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
             this.compiledPackName = OFF_PACK_NAME;
             this.pendingPipelineReload = true;
             rebuildInactiveVanillaRenderers();
@@ -269,6 +281,7 @@ public class ShaderPackManager implements ShaderPackController {
 
     public void reloadPack() {
         PipelineContext.getInstance().clearCompiledPipelineCache();
+        betterPortalsPrewarmedCacheKeys.clear();
         if (isOffPack(selectedPackName)) {
             setPack(NoneShaderPack.INSTANCE);
             return;
@@ -289,10 +302,10 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     public void reloadIfDimensionChanged() {
-        boolean nestedBetterPortalsView = BetterPortalsCompat.isRenderingNestedView();
-        if (nestedBetterPortalsView && !BetterPortalsCompat.shouldRenderNestedViewWithShaders()) {
+        if (PipelineContext.getInstance().isRenderingBetterPortalsExternalWorldFrame()) {
             return;
         }
+        boolean nestedBetterPortalsView = BetterPortalsCompat.isRenderingNestedView();
         boolean quietBetterPortalsReload = nestedBetterPortalsView
                 || BetterPortalsCompat.consumeQuietDimensionReloadLogRequest();
         if (!areShadersEnabled() || isOffPack(selectedPackName)) {
@@ -320,10 +333,45 @@ public class ShaderPackManager implements ShaderPackController {
         if (!areShadersEnabled() || isOffPack(selectedPackName) || parentDimensionId == Integer.MIN_VALUE) {
             return;
         }
+        if (isBetterPortalsPipelineBusy()) {
+            pendingBetterPortalsParentRestoreDimensionId = parentDimensionId;
+            MainMod.LOGGER.info("[BetterPortalsPipeline] restore-parent-queued parent={} compiled={} pending={} pack={}",
+                    parentDimensionId,
+                    compiledDimensionId,
+                    pendingBetterPortalsDimensionCompileId,
+                    selectedPackName);
+            return;
+        }
         if (!ensureSelectedPackLoaded()) {
             return;
         }
+        MainMod.LOGGER.info("[BetterPortalsPipeline] restore-parent-dimension parent={} compiled={} pending={} pack={}",
+                parentDimensionId,
+                compiledDimensionId,
+                pendingBetterPortalsDimensionCompileId,
+                selectedPackName);
         switchCompiledPipelineDimension(parentDimensionId, true);
+    }
+
+    public void scheduleBetterPortalsDimensionPrewarm(int dimensionId) {
+        if (dimensionId == Integer.MIN_VALUE
+                || dimensionId == compiledDimensionId
+                || dimensionId == pendingBetterPortalsDimensionCompileId
+                || !areShadersEnabled()
+                || isOffPack(selectedPackName)) {
+            return;
+        }
+        String cacheKey = compiledPipelineCacheKey(selectedPackName, currentOptionOverrides, dimensionId);
+        if (!betterPortalsPrewarmedCacheKeys.add(cacheKey)) {
+            return;
+        }
+
+        pendingBetterPortalsDimensionCompileId = dimensionId;
+        MainMod.LOGGER.info("[BetterPortalsPipeline] queued-dimension-prewarm dimension={} compiled={} pack={} cacheKey={}",
+                dimensionId,
+                compiledDimensionId,
+                selectedPackName,
+                cacheKey);
     }
 
     private void switchCompiledPipelineDimension(int currentDimensionId, boolean quietBetterPortalsReload) {
@@ -335,8 +383,8 @@ public class ShaderPackManager implements ShaderPackController {
         String cacheKey = compiledPipelineCacheKey(currentPack.getName(), currentOptionOverrides, currentDimensionId);
         if (PipelineContext.getInstance().activateCachedCompiledPipeline(cacheKey, currentPack, currentOptionOverrides, properties)) {
             if (quietBetterPortalsReload) {
-                MainMod.LOGGER.debug("Better Portals shader dimension changed from {} to {}; restored cached shaderpack '{}'",
-                        compiledDimensionId, currentDimensionId, selectedPackName);
+                MainMod.LOGGER.info("[BetterPortalsPipeline] dimension-switch-cached from={} to={} pack={} cacheKey={}",
+                        compiledDimensionId, currentDimensionId, selectedPackName, cacheKey);
             } else {
                 MainMod.LOGGER.info("Shader dimension changed from {} to {}; restored cached shaderpack '{}'",
                         compiledDimensionId, currentDimensionId, selectedPackName);
@@ -347,21 +395,36 @@ public class ShaderPackManager implements ShaderPackController {
             return;
         }
 
-        if (quietBetterPortalsReload && BetterPortalsCompat.isRenderingNestedView()) {
+        boolean nestedBetterPortalsView = BetterPortalsCompat.isRenderingNestedView();
+        boolean nestedShaderPipeline = nestedBetterPortalsView && BetterPortalsCompat.shouldRenderNestedViewWithShaders();
+        if (quietBetterPortalsReload && nestedBetterPortalsView && !nestedShaderPipeline) {
             pendingBetterPortalsDimensionCompileId = currentDimensionId;
-            MainMod.LOGGER.debug("Deferred Better Portals shader dimension compile for world {} until the next frame boundary",
-                    currentDimensionId);
+            MainMod.LOGGER.info("[BetterPortalsPipeline] dimension-switch-deferred nestedDimension={} compiled={} pack={} cacheKey={}",
+                    currentDimensionId,
+                    compiledDimensionId,
+                    selectedPackName,
+                    cacheKey);
             return;
         }
 
-        MainMod.LOGGER.info("Shader dimension changed from {} to {}; compiling shaderpack '{}' for this dimension",
-                compiledDimensionId, currentDimensionId, selectedPackName);
+        if (nestedShaderPipeline) {
+            MainMod.LOGGER.info("[BetterPortalsPipeline] dimension-switch-compile-nested from={} to={} pack={} cacheKey={}",
+                    compiledDimensionId,
+                    currentDimensionId,
+                    selectedPackName,
+                    cacheKey);
+        } else {
+            MainMod.LOGGER.info("Shader dimension changed from {} to {}; compiling shaderpack '{}' for this dimension",
+                    compiledDimensionId, currentDimensionId, selectedPackName);
+        }
         initializeCurrentPipeline(properties, true, currentDimensionId);
     }
 
     public void runPendingBetterPortalsDimensionCompile() {
+        runPendingBetterPortalsParentRestore();
+
         int pendingDimensionId = pendingBetterPortalsDimensionCompileId;
-        if (pendingDimensionId == Integer.MIN_VALUE || BetterPortalsCompat.isRenderingNestedView()) {
+        if (pendingDimensionId == Integer.MIN_VALUE || isBetterPortalsPipelineBusy()) {
             return;
         }
         pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
@@ -385,14 +448,55 @@ public class ShaderPackManager implements ShaderPackController {
                 compiledDimensionId = previousDimensionId;
                 compiledPackName = currentPack.getName();
                 pendingPipelineReload = false;
+                MainMod.LOGGER.info("[BetterPortalsPipeline] restored-parent-after-prewarm parent={} pack={} cacheKey={}",
+                        previousDimensionId,
+                        compiledPackName,
+                        previousCacheKey);
             }
         }
+    }
+
+    private void runPendingBetterPortalsParentRestore() {
+        int parentDimensionId = pendingBetterPortalsParentRestoreDimensionId;
+        if (parentDimensionId == Integer.MIN_VALUE || isBetterPortalsPipelineBusy()) {
+            return;
+        }
+        pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
+        if (!areShadersEnabled() || isOffPack(selectedPackName) || parentDimensionId == compiledDimensionId) {
+            return;
+        }
+        if (!ensureSelectedPackLoaded()) {
+            return;
+        }
+
+        MainMod.LOGGER.info("[BetterPortalsPipeline] restore-parent-from-queue parent={} compiled={} pending={} pack={}",
+                parentDimensionId,
+                compiledDimensionId,
+                pendingBetterPortalsDimensionCompileId,
+                selectedPackName);
+        switchCompiledPipelineDimension(parentDimensionId, true);
+    }
+
+    private boolean isBetterPortalsPipelineBusy() {
+        return BetterPortalsCompat.isRenderingNestedView()
+                || PipelineContext.getInstance().isRenderingBetterPortalsExternalWorldFrame();
+    }
+
+    public String describeBetterPortalsPipelineState() {
+        return "selected=" + selectedPackName
+                + ", enabled=" + shadersEnabled
+                + ", current=" + (currentPack != null ? currentPack.getName() : "null")
+                + ", compiled=" + compiledPackName + "@" + compiledDimensionId
+                + ", pendingReload=" + pendingPipelineReload
+                + ", pendingBp=" + pendingBetterPortalsDimensionCompileId
+                + ", pendingParent=" + pendingBetterPortalsParentRestoreDimensionId
+                + ", prewarmed=" + betterPortalsPrewarmedCacheKeys.size();
     }
 
     public void preparePipelineForWorldLoad(int dimensionId) {
         if (isOffPack(selectedPackName)) {
             shadersEnabled = false;
-            pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+            clearBetterPortalsPendingState();
             PipelineContext.getInstance().setActive(false);
             return;
         }
@@ -408,7 +512,7 @@ public class ShaderPackManager implements ShaderPackController {
         shadersEnabled = false;
         pendingPipelineReload = !isOffPack(selectedPackName);
         compiledDimensionId = Integer.MIN_VALUE;
-        pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+        clearBetterPortalsPendingState();
         compiledPackName = OFF_PACK_NAME;
         clearShaderPropertiesCache();
         PipelineContext.getInstance().cleanup();
@@ -442,7 +546,7 @@ public class ShaderPackManager implements ShaderPackController {
         } else {
             PipelineContext.getInstance().cleanup();
             compiledDimensionId = Integer.MIN_VALUE;
-            pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+            clearBetterPortalsPendingState();
             compiledPackName = OFF_PACK_NAME;
             pendingPipelineReload = currentPack != null && !isInternalPack(currentPack);
             rebuildInactiveVanillaRenderers();
@@ -535,6 +639,7 @@ public class ShaderPackManager implements ShaderPackController {
         if (currentPackTarget) {
             currentOptionOverrides = copy;
             PipelineContext.getInstance().clearCompiledPipelineCache();
+            clearBetterPortalsPendingState();
             if (!shadersEnabled) {
                 pendingPipelineReload = true;
                 PipelineContext.getInstance().cleanup();
@@ -569,6 +674,7 @@ public class ShaderPackManager implements ShaderPackController {
             }
             currentOptionOverrides = Map.of();
             PipelineContext.getInstance().clearCompiledPipelineCache();
+            clearBetterPortalsPendingState();
             if (!shadersEnabled) {
                 pendingPipelineReload = true;
                 PipelineContext.getInstance().cleanup();
@@ -607,6 +713,9 @@ public class ShaderPackManager implements ShaderPackController {
             if (pendingBetterPortalsDimensionCompileId == dimensionId) {
                 pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
             }
+            if (pendingBetterPortalsParentRestoreDimensionId == dimensionId) {
+                pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
+            }
             compiledPackName = currentPack.getName();
             pendingPipelineReload = false;
             return true;
@@ -621,7 +730,7 @@ public class ShaderPackManager implements ShaderPackController {
 
     private void markPipelineInactive() {
         compiledDimensionId = Integer.MIN_VALUE;
-        pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+        clearBetterPortalsPendingState();
         compiledPackName = OFF_PACK_NAME;
         pendingPipelineReload = currentPack != null && !isInternalPack(currentPack);
         rebuildInactiveVanillaRenderers();
@@ -658,7 +767,7 @@ public class ShaderPackManager implements ShaderPackController {
         clearShaderPropertiesCacheExcept(newPack.getName());
         pendingPipelineReload = true;
         compiledDimensionId = Integer.MIN_VALUE;
-        pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+        clearBetterPortalsPendingState();
         compiledPackName = OFF_PACK_NAME;
         return true;
     }
@@ -790,9 +899,15 @@ public class ShaderPackManager implements ShaderPackController {
         MainMod.LOGGER.warn(message, packName);
         selectedPackName = OFF_PACK_NAME;
         shadersEnabled = false;
-        pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+        clearBetterPortalsPendingState();
         saveShaderConfig();
         setPack(NoneShaderPack.INSTANCE);
+    }
+
+    private void clearBetterPortalsPendingState() {
+        pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+        pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
+        betterPortalsPrewarmedCacheKeys.clear();
     }
 
     private int getClientDimensionId() {

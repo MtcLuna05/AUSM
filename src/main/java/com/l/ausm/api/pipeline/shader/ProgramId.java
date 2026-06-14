@@ -28,8 +28,8 @@ public enum ProgramId {
     CLOUDS(ProgramGroup.GBUFFERS, "clouds", TEXTURED),
     TERRAIN(ProgramGroup.GBUFFERS, "terrain", TEXTURED_LIT),
     TERRAIN_SOLID(ProgramGroup.GBUFFERS, "terrain_solid", TERRAIN),
-    TERRAIN_CUTOUT_MIPPED(ProgramGroup.GBUFFERS, "terrain_cutout_mip", TERRAIN),
     TERRAIN_CUTOUT(ProgramGroup.GBUFFERS, "terrain_cutout", TERRAIN),
+    TERRAIN_CUTOUT_MIPPED(ProgramGroup.GBUFFERS, "terrain_cutout_mip", TERRAIN_CUTOUT),
     DAMAGED_BLOCK(ProgramGroup.GBUFFERS, "damagedblock", TERRAIN),
     BLOCK(ProgramGroup.GBUFFERS, "block", TERRAIN),
     BLOCK_TRANSLUCENT(ProgramGroup.GBUFFERS, "block_translucent", BLOCK),
@@ -91,8 +91,8 @@ public enum ProgramId {
 
     public static ProgramId fromSourceName(String name) {
         Objects.requireNonNull(name, "name");
-        if ("gbuffers_terrain_cutout_mip".equals(name)) {
-            return TERRAIN_CUTOUT;
+        if ("gbuffers_terrain_cutout_mip".equals(name) || "gbuffers_terrain_cutout_mipped".equals(name)) {
+            return TERRAIN_CUTOUT_MIPPED;
         }
         return Arrays.stream(values())
                 .filter(program -> program.sourceName.equals(name))

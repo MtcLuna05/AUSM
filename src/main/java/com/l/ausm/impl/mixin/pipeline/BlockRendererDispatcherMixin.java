@@ -1,6 +1,7 @@
 package com.l.ausm.impl.mixin.pipeline;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.BlockRendererDispatcher;
@@ -14,8 +15,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(BlockRendererDispatcher.class)
 public class BlockRendererDispatcherMixin {
-    @Inject(method = "renderBlock", at = @At("HEAD"))
+    @Inject(method = "renderBlock", at = @At("HEAD"), cancellable = true)
     private void ausm$beforeRenderBlock(IBlockState state, BlockPos pos, IBlockAccess blockAccess, BufferBuilder bufferBuilder, CallbackInfoReturnable<Boolean> cir) {
+        if (BetterPortalsCompat.shouldSuppressOriginalPortalBlock(state)) {
+            cir.setReturnValue(false);
+            return;
+        }
+
         PipelineContext pipeline = PipelineContext.getInstance();
         int blockEntityId = pipeline.blockEntityId(state);
         int blockEmission = pipeline.blockRenderEmission(state, blockAccess, pos);

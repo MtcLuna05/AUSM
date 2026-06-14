@@ -597,6 +597,7 @@ public class GuiShaders extends GuiScreen {
 
     private boolean portalShadersEffective() {
         return portalShadersConfigured()
+                && BetterPortalsCompat.isNestedShaderPipelineAvailable()
                 && BetterPortalsCompat.isInstalled()
                 && BetterPortalsCompat.isSeeThroughPortalsEnabled()
                 && MainMod.getShaderPackManager().areShadersEnabled();
@@ -614,6 +615,9 @@ public class GuiShaders extends GuiScreen {
         }
         if (!BetterPortalsCompat.isSeeThroughPortalsEnabled()) {
             return "On / BP see-through off";
+        }
+        if (!BetterPortalsCompat.isNestedShaderPipelineAvailable()) {
+            return "On / nested path disabled";
         }
         return MainMod.getShaderPackManager().areShadersEnabled() ? "On" : "On / shaders disabled";
     }

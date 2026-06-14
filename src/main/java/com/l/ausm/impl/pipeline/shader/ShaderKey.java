@@ -29,7 +29,7 @@ public enum ShaderKey {
     CLOUDS(ProgramId.CLOUDS, ShaderAlphaTest.ONE_TENTH_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
     TERRAIN_SOLID(ProgramId.TERRAIN_SOLID, ShaderAlphaTest.ALWAYS, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
     TERRAIN_CUTOUT(ProgramId.TERRAIN_CUTOUT, ShaderAlphaTest.HALF_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
-    TERRAIN_CUTOUT_MIPPED(ProgramId.TERRAIN_CUTOUT, ShaderAlphaTest.HALF_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
+    TERRAIN_CUTOUT_MIPPED(ProgramId.TERRAIN_CUTOUT_MIPPED, ShaderAlphaTest.HALF_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
     TERRAIN_TRANSLUCENT(ProgramId.WATER, ShaderAlphaTest.NON_ZERO_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
     MOVING_BLOCK(ProgramId.BLOCK, ShaderAlphaTest.ONE_TENTH_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
     ENTITIES_ALPHA(ProgramId.ENTITIES, ShaderAlphaTest.VERTEX_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),

@@ -284,8 +284,9 @@ public class ShaderPreprocessor {
                 #define MC_SHADOW_QUALITY 1.0
                 #define MC_HAND_DEPTH 1.0
                 #define IS_IRIS
-                #define IRIS_VERSION 10800
+                #define IRIS_VERSION 10902
                 #define IRIS_FEATURE_CUSTOM_IMAGES
+                #define IRIS_FEATURE_SSBO
                 #define IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE
                 """);
 

@@ -1,26 +1,18 @@
 package com.l.ausm.impl.core;
 
-import com.l.ausm.impl.Reference;
 import net.minecraft.launchwrapper.IClassTransformer;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.Opcodes;
 
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-
 /**
  * ProjectRed's Scala singletons assign generated final fields from trait helpers
  * and constructors. After mixin rewrites, modern JVMs can reject those writes.
  */
 public final class ProjectRedScalaModuleTransformer implements IClassTransformer {
-    private static final Logger LOGGER = LogManager.getLogger(Reference.MOD_NAME);
     private static final String PROJECT_RED_PREFIX = "mrtjp.projectred.";
-    private static final Set<String> LOGGED = ConcurrentHashMap.newKeySet();
 
     @Override
     public byte[] transform(String name, String transformedName, byte[] basicClass) {
@@ -38,13 +30,8 @@ public final class ProjectRedScalaModuleTransformer implements IClassTransformer
             }
 
             String className = transformedName != null ? transformedName : name;
-            if (LOGGED.add(className)) {
-                LOGGER.info("[MixinCompat] Relaxed {} final ProjectRed Scala singleton fields: {}",
-                        visitor.changedFields, className);
-            }
             return writer.toByteArray();
         } catch (Throwable throwable) {
-            LOGGER.warn("[MixinCompat] Could not relax ProjectRed Scala singleton fields for {}", transformedName, throwable);
             return basicClass;
         }
     }

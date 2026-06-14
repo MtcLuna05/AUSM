@@ -19,6 +19,8 @@ public final class ShaderTransformPipeline {
             new EntityAdvancedMaterialFallbackTransformStage(),
             new ComplementaryBlockIpbrTransformStage(),
             new ComplementaryWaterVersionTransformStage(),
+            new ComplementarySkyTexturedCelestialTransformStage(),
+            new ComplementaryNetherExposureTransformStage(),
             new FullscreenBuiltinTransformStage(),
             new CompositeDepthSmoothTransformStage(),
             new MakeUpVolumetricLightTransformStage(),

@@ -3,6 +3,8 @@ package com.l.ausm.impl.pipeline.compat;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.render.TextureBinder;
+import net.minecraft.block.Block;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
@@ -23,6 +25,7 @@ import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Deque;
 
 public final class BetterPortalsCompat {
@@ -58,10 +61,17 @@ public final class BetterPortalsCompat {
     private static WorldClient pendingParentRenderWorld;
     private static boolean portalSurfaceCompositeLogged;
     private static boolean portalRendererStateWarningLogged;
+    private static boolean renderStateDiagnosticWarningLogged;
     private static boolean mainViewSwapRecoveryLogged;
     private static final int CAPTURED_TEXTURE_UNITS = 32;
     private static final int VANILLA_GL_STATE_TEXTURE_UNITS = 8;
     private static final int MAIN_VIEW_SWAP_RECOVERY_FRAMES = 10;
+    private static final int MAX_RENDER_STATE_DIAGNOSTIC_LOGS = 240;
+    private static final int RENDER_STATE_DIAGNOSTIC_FRAMES_AFTER_NESTED = 180;
+    private static final boolean NESTED_SHADER_PIPELINE_ENABLED = false;
+    private static int renderStateDiagnosticLogs;
+    private static int renderStateDiagnosticFramesRemaining;
+    private static boolean nestedShaderPipelineDisabledLogged;
 
     private BetterPortalsCompat() {
     }
@@ -104,6 +114,10 @@ public final class BetterPortalsCompat {
         }
     }
 
+    public static boolean isRenderingRenderPass() {
+        return isInstalled() && renderPassDepth > 0;
+    }
+
     public static boolean isPortalEntity(Entity entity) {
         if (entity == null || !isInstalled()) {
             return false;
@@ -134,18 +148,40 @@ public final class BetterPortalsCompat {
     }
 
     public static boolean shouldRenderNestedViewWithShaders() {
-        // Keep BetterPortals' remote terrain on its shaderless framebuffer path for now.
-        // The AUSM nested shader path still leaks state into the main view on some packs.
-        return false;
+        boolean configured = isInstalled()
+                && isSeeThroughPortalsEnabled()
+                && PipelineContext.getInstance().isActive()
+                && MainMod.getClientSettingsConfig() != null
+                && MainMod.getClientSettingsConfig().portalShadersEnabled();
+        if (!configured) {
+            return false;
+        }
+        if (!NESTED_SHADER_PIPELINE_ENABLED) {
+            if (!nestedShaderPipelineDisabledLogged) {
+                nestedShaderPipelineDisabledLogged = true;
+                MainMod.LOGGER.info("[BetterPortalsCompat] AUSM nested portal shader pipeline is disabled; portal child views will render shaderless.");
+            }
+            return false;
+        }
+        return true;
+    }
+
+    public static boolean isNestedShaderPipelineAvailable() {
+        return NESTED_SHADER_PIPELINE_ENABLED;
     }
 
     public static boolean shouldUseVanillaRenderGlobalForNestedView() {
-        return isInstalled() && isRenderingNestedView() && isSeeThroughPortalsEnabled();
+        return isInstalled()
+                && isSeeThroughPortalsEnabled()
+                && isRenderingNestedView()
+                && !shouldRenderNestedViewWithShaders();
     }
 
     public static boolean shouldUseAusmPortalShaderHandling() {
-        // Disabled until the BetterPortals path can isolate AUSM shadow/final-pass state per portal view.
-        // Keeping this false forces portal views and portal surface handling through BetterPortals' shaderless path.
+        return shouldRenderNestedViewWithShaders();
+    }
+
+    public static boolean shouldUseAusmPortalSurfaceReplacement() {
         return false;
     }
 
@@ -267,11 +303,56 @@ public final class BetterPortalsCompat {
     }
 
     public static float portalOpacity(Object portal) {
-        if (!resolveConfigReflection() || portal == null) {
+        if (portal == null) {
             return 1.0F;
         }
 
-        Object config = portalConfig(portal.getClass().getName());
+        return portalOpacityForClassName(portal.getClass().getName());
+    }
+
+    public static boolean shouldSuppressOriginalPortalBlock(IBlockState state) {
+        if (state == null || !isInstalled() || !isSeeThroughPortalsEnabled()) {
+            return false;
+        }
+        if (!shouldUseAusmPortalSurfaceReplacement()) {
+            return false;
+        }
+
+        Block block = state.getBlock();
+        if (!isBetterPortalsPortalBlock(block)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static boolean isBetterPortalsPortalBlock(Block block) {
+        if (block == null) {
+            return false;
+        }
+        Class<?> type = block.getClass();
+        String name = type.getName();
+        if (name.startsWith("de.johni0702.minecraft.betterportals.")
+                && name.contains("Portal")) {
+            return true;
+        }
+        while (type != null) {
+            for (Class<?> iface : type.getInterfaces()) {
+                if ("de.johni0702.minecraft.betterportals.common.block.PortalBlock".equals(iface.getName())) {
+                    return true;
+                }
+            }
+            type = type.getSuperclass();
+        }
+        return false;
+    }
+
+    private static float portalOpacityForClassName(String portalClassName) {
+        if (!resolveConfigReflection() || portalClassName == null) {
+            return 1.0F;
+        }
+
+        Object config = portalConfig(portalClassName);
         if (config == null) {
             return 1.0F;
         }
@@ -313,8 +394,10 @@ public final class BetterPortalsCompat {
             return;
         }
 
+        logRenderStateDiagnostic("portal-renderer:before-capture");
         try {
             portalRendererStateStack.push(PortalRendererGlState.capture());
+            logRenderStateDiagnostic("portal-renderer:after-capture stack=" + portalRendererStateStack.size());
         } catch (RuntimeException e) {
             if (!portalRendererStateWarningLogged) {
                 portalRendererStateWarningLogged = true;
@@ -333,8 +416,12 @@ public final class BetterPortalsCompat {
             return;
         }
 
+        logRenderStateDiagnostic("portal-renderer:before-restore stack=" + portalRendererStateStack.size());
         try {
             state.restore();
+            logRenderStateDiagnostic("portal-renderer:after-restore stack=" + portalRendererStateStack.size());
+            restoreAfterPortalRender();
+            logRenderStateDiagnostic("portal-renderer:after-normalize stack=" + portalRendererStateStack.size());
         } catch (RuntimeException e) {
             if (!portalRendererStateWarningLogged) {
                 portalRendererStateWarningLogged = true;
@@ -363,16 +450,24 @@ public final class BetterPortalsCompat {
 
         OpenGlHelper.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
         GlStateManager.enableTexture2D();
+        GL11.glEnable(GL11.GL_TEXTURE_2D);
         GlStateManager.enableDepth();
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GlStateManager.enableAlpha();
+        GL11.glEnable(GL11.GL_ALPHA_TEST);
         GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GL11.glAlphaFunc(GL11.GL_GREATER, 0.1F);
         GlStateManager.disableLighting();
+        GL11.glDisable(GL11.GL_LIGHTING);
         GlStateManager.disableColorMaterial();
+        GL11.glDisable(GL11.GL_COLOR_MATERIAL);
         GlStateManager.disableBlend();
+        GL11.glDisable(GL11.GL_BLEND);
         GL11.glColorMask(true, true, true, true);
         GL11.glStencilMask(0xFF);
         GL11.glStencilFunc(GL11.GL_ALWAYS, 0, 0xFF);
@@ -393,13 +488,25 @@ public final class BetterPortalsCompat {
         int dimensionId = renderPassWorldDimension(pass);
         Framebuffer framebuffer = renderPassFramebuffer(pass);
         PortalRendererGlState glState = null;
-        if (nested && shouldProtectBetterPortalsRenderState()) {
+        if (nested) {
+            renderStateDiagnosticFramesRemaining = Math.max(
+                    renderStateDiagnosticFramesRemaining,
+                    RENDER_STATE_DIAGNOSTIC_FRAMES_AFTER_NESTED
+            );
+            if (dimensionId != Integer.MIN_VALUE && MainMod.getShaderPackManager() != null) {
+                MainMod.getShaderPackManager().scheduleBetterPortalsDimensionPrewarm(dimensionId);
+            }
+        }
+        logRenderStateDiagnostic("render-pass-start:before nested=" + nested
+                + " world=" + dimensionId
+                + " fb=" + describeFramebuffer(framebuffer));
+        if (shouldProtectBetterPortalsRenderState()) {
             try {
                 glState = PortalRendererGlState.capture();
             } catch (RuntimeException e) {
                 if (!portalRendererStateWarningLogged) {
                     portalRendererStateWarningLogged = true;
-                    MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to capture Better Portals nested render-pass GL state", e);
+                    MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to capture Better Portals render-pass GL state", e);
                 }
             }
         }
@@ -410,6 +517,9 @@ public final class BetterPortalsCompat {
             nestedRenderPassDepth++;
             logNestedRenderPassState(pass);
         }
+        logRenderStateDiagnostic("render-pass-start:after nested=" + nested
+                + " world=" + dimensionId
+                + " fb=" + describeFramebuffer(framebuffer));
     }
 
     private static boolean handleRenderPassEnd(Event event) {
@@ -417,21 +527,29 @@ public final class BetterPortalsCompat {
         RenderPassState state = renderPassStack.poll();
         boolean nested = state != null ? state.nested() : renderPassParent(pass) != null;
 
-        if (nested && state != null && state.glState() != null) {
+        logRenderStateDiagnostic("render-pass-end:before-restore nested=" + nested
+                + " world=" + (state != null ? state.dimensionId() : renderPassWorldDimension(pass))
+                + " fb=" + describeFramebuffer(state != null ? state.framebuffer() : renderPassFramebuffer(pass)));
+        if (state != null && state.glState() != null) {
             try {
                 state.glState().restore();
+                logRenderStateDiagnostic("render-pass-end:after-gl-restore nested=" + nested);
             } catch (RuntimeException e) {
                 if (!portalRendererStateWarningLogged) {
                     portalRendererStateWarningLogged = true;
-                    MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to restore Better Portals nested render-pass GL state", e);
+                    MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to restore Better Portals render-pass GL state", e);
                 }
             }
         }
 
-        if (nested && nestedRenderPassDepth > 0) {
-            nestedRenderPassDepth--;
-        }
+        boolean nestedRenderStackEmpty = false;
         if (nested) {
+            if (nestedRenderPassDepth > 0) {
+                nestedRenderPassDepth--;
+            }
+            nestedRenderStackEmpty = nestedRenderPassDepth <= 0;
+        }
+        if (nested && nestedRenderStackEmpty) {
             pendingParentRenderWorld = renderPassWorld(renderPassParent(pass));
             quietDimensionReloadRequests = Math.min(quietDimensionReloadRequests + 1, 4);
         }
@@ -440,8 +558,73 @@ public final class BetterPortalsCompat {
         } else {
             nestedRenderPassDepth = 0;
             quietDimensionReloadRequests = 0;
+            nestedRenderStackEmpty = nested;
         }
-        return nested;
+        if (shouldProtectBetterPortalsRenderState()) {
+            restoreAfterPortalRender();
+            logRenderStateDiagnostic("render-pass-end:after-normalize nested=" + nested);
+        }
+        logRenderStateDiagnostic("render-pass-end:after-pop nested=" + nested);
+        return nested && nestedRenderStackEmpty;
+    }
+
+    public static void logRenderStateDiagnostic(String label) {
+        if (!isInstalled()
+                || renderStateDiagnosticLogs >= MAX_RENDER_STATE_DIAGNOSTIC_LOGS
+                || !shouldLogRenderStateDiagnostic(label)) {
+            return;
+        }
+
+        if (renderStateDiagnosticFramesRemaining > 0 && label.startsWith("pipeline:world-pass-begin")) {
+            renderStateDiagnosticFramesRemaining--;
+        }
+        renderStateDiagnosticLogs++;
+        try {
+            PortalRendererGlState glState = PortalRendererGlState.capture();
+            boolean portalShaders = MainMod.getClientSettingsConfig() != null
+                    && MainMod.getClientSettingsConfig().portalShadersEnabled();
+            MainMod.LOGGER.info("[BetterPortalsDiag] {} bpDepth={} nestedDepth={} bpStack={} currentNested={} seeThrough={} portalShadersSetting={} ausmPortalHandling={} pipeline=[{}] gl=[{}]",
+                    label,
+                    renderPassDepth,
+                    nestedRenderPassDepth,
+                    renderPassStack.size(),
+                    isRenderingNestedView(),
+                    isSeeThroughPortalsEnabled(),
+                    portalShaders,
+                    shouldUseAusmPortalShaderHandling(),
+                    PipelineContext.getInstance().describeBetterPortalsDiagnostics(),
+                    glState.summary());
+        } catch (RuntimeException e) {
+            if (!renderStateDiagnosticWarningLogged) {
+                renderStateDiagnosticWarningLogged = true;
+                MainMod.LOGGER.warn("[BetterPortalsDiag] Failed to capture render-state diagnostic", e);
+            }
+        }
+    }
+
+    public static void resetRenderStateDiagnostics() {
+        renderStateDiagnosticLogs = 0;
+        renderStateDiagnosticFramesRemaining = 0;
+        renderStateDiagnosticWarningLogged = false;
+    }
+
+    private static boolean shouldLogRenderStateDiagnostic(String label) {
+        if (label.contains("nested=true")) {
+            return true;
+        }
+        if (label.startsWith("portal-renderer")) {
+            return PipelineContext.getInstance().isActive()
+                    || renderStateDiagnosticFramesRemaining > 0
+                    || renderPassDepth > 0 && nestedRenderPassDepth > 0
+                    || isRenderingNestedView()
+                    || mainViewSwapHandlingDepth > 0
+                    || mainViewSwapRecoveryFrames > 0;
+        }
+        return renderStateDiagnosticFramesRemaining > 0
+                || renderPassDepth > 0 && nestedRenderPassDepth > 0
+                || isRenderingNestedView()
+                || mainViewSwapHandlingDepth > 0
+                || mainViewSwapRecoveryFrames > 0;
     }
 
     private static Object renderPassFromEvent(Event event) {
@@ -582,7 +765,13 @@ public final class BetterPortalsCompat {
 
     private static String portalConfigFieldName(String portalClassName) {
         String name = portalClassName.toLowerCase();
+        if (name.contains("aether")) {
+            return "aetherPortals";
+        }
         if (name.contains("nether")) {
+            return "netherPortals";
+        }
+        if (name.equals("net.minecraft.block.blockportal") || name.endsWith(".blockportal")) {
             return "netherPortals";
         }
         if (name.contains("end")) {
@@ -593,9 +782,6 @@ public final class BetterPortalsCompat {
         }
         if (name.contains("mekanism")) {
             return "mekanismPortals";
-        }
-        if (name.contains("aether")) {
-            return "aetherPortals";
         }
         if (name.contains("abyss") || name.contains("dreadlands") || name.contains("omothol")) {
             return "abyssalcraftPortals";
@@ -608,6 +794,10 @@ public final class BetterPortalsCompat {
 
     private static String describeRenderPassFramebuffer(Object pass) {
         Framebuffer framebuffer = renderPassFramebuffer(pass);
+        return describeFramebuffer(framebuffer);
+    }
+
+    private static String describeFramebuffer(Framebuffer framebuffer) {
         if (framebuffer == null) {
             return "null";
         }
@@ -617,6 +807,10 @@ public final class BetterPortalsCompat {
                 + "x"
                 + framebuffer.framebufferHeight
                 + ")";
+    }
+
+    private static String hex(int value) {
+        return "0x" + Integer.toHexString(value);
     }
 
     private static void setCapability(int capability, boolean enabled) {
@@ -792,6 +986,55 @@ public final class BetterPortalsCompat {
 
         private static PortalRendererGlState capture() {
             return new PortalRendererGlState();
+        }
+
+        private String summary() {
+            return "program=" + program
+                    + " activeTex=" + textureUnitIndex(activeTexture)
+                    + " fbo=" + framebuffer
+                    + " readFb=" + readFramebuffer
+                    + " drawFb=" + drawFramebuffer
+                    + " drawBuf=" + hex(drawBuffer)
+                    + " readBuf=" + hex(readBuffer)
+                    + " viewport=" + Arrays.toString(viewport)
+                    + " scissor=" + Arrays.toString(scissorBox)
+                    + " depth=" + depthTest + "/" + depthMask + "/" + hex(depthFunc)
+                    + " alpha=" + alphaTest + "/" + hex(alphaFunc) + "/" + alphaRef
+                    + " blend=" + blend + "/" + hex(blendSrcRgb) + "," + hex(blendDstRgb) + "," + hex(blendSrcAlpha) + "," + hex(blendDstAlpha)
+                    + " cull=" + cullFace + "/" + hex(cullFaceMode)
+                    + " light=" + lighting
+                    + " colorMat=" + colorMaterial
+                    + " stencil=" + stencilTest + "/" + hex(stencilFunc) + "/" + stencilRef + "/" + hex(stencilValueMask) + "/" + hex(stencilWriteMask)
+                    + " scissorTest=" + scissorTest
+                    + " clip=" + Arrays.toString(clipPlanes)
+                    + " poly=" + polygonOffsetFill + "/" + polygonOffsetFactor + "," + polygonOffsetUnits
+                    + " colorMask=" + Arrays.toString(colorMask)
+                    + " color=" + Arrays.toString(color)
+                    + " matrix=" + hex(matrixMode)
+                    + " shade=" + hex(shadeModel)
+                    + " tex=" + textureSummary();
+        }
+
+        private String textureSummary() {
+            int[] units = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 20, 28, 29, 30, 31};
+            StringBuilder builder = new StringBuilder();
+            for (int unit : units) {
+                if (unit >= texture2dBindings.length) {
+                    continue;
+                }
+                if (builder.length() > 0) {
+                    builder.append(',');
+                }
+                builder.append(unit)
+                        .append('=')
+                        .append(texture2dBindings[unit])
+                        .append(texture2dEnabled[unit] ? 'e' : 'd');
+            }
+            return builder.toString();
+        }
+
+        private static int textureUnitIndex(int textureUnit) {
+            return textureUnit >= GL13.GL_TEXTURE0 ? textureUnit - GL13.GL_TEXTURE0 : textureUnit;
         }
 
         private void restore() {
