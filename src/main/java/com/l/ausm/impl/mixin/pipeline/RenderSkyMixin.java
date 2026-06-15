@@ -51,6 +51,46 @@ public class RenderSkyMixin {
             method = "renderSky(FI)V",
             at = @At(
                     value = "INVOKE",
+                    target = "Lnet/minecraftforge/client/IRenderHandler;render(FLnet/minecraft/client/multiplayer/WorldClient;Lnet/minecraft/client/Minecraft;)V",
+                    shift = At.Shift.BEFORE
+            ),
+            require = 0
+    )
+    private void ausm$beforeCustomSkyRenderer(float partialTicks, int pass, CallbackInfo ci) {
+        PipelineContext.getInstance().endPass();
+        PipelineContext.getInstance().prepareExternalWorldOverlayRender();
+    }
+
+    @Inject(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraftforge/client/IRenderHandler;render(FLnet/minecraft/client/multiplayer/WorldClient;Lnet/minecraft/client/Minecraft;)V",
+                    shift = At.Shift.AFTER
+            ),
+            require = 0
+    )
+    private void ausm$afterCustomSkyRenderer(float partialTicks, int pass, CallbackInfo ci) {
+        PipelineContext.getInstance().finishExternalWorldOverlayRender("custom sky renderer");
+    }
+
+    @Inject(method = "renderSkyEnd()V", at = @At("HEAD"), require = 0)
+    private void ausm$beforeVoidSkybox(CallbackInfo ci) {
+        PipelineContext.getInstance().endPass();
+        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.VOID);
+    }
+
+    @Inject(method = "renderSkyEnd()V", at = @At("RETURN"), require = 0)
+    private void ausm$afterVoidSkybox(CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
+        context.finishExternalWorldOverlayRender("void skybox");
+    }
+
+    @Inject(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
                     target = "Lnet/minecraft/client/renderer/GlStateManager;rotate(FFFF)V",
                     ordinal = 3,
                     shift = At.Shift.AFTER

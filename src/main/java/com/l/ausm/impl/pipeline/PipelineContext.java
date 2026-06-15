@@ -132,6 +132,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -149,6 +150,7 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -190,7 +192,14 @@ public class PipelineContext {
     private static final int WORLD_LOAD_FORCE_LIGHT_RECALC_ATTEMPTS = 12;
     private static final int WORLD_LOAD_FORCE_LIGHT_RECALC_DELAY_FRAMES = 10;
     private static final int WORLD_LOAD_LIGHT_REFRESH_RADIUS = 16;
+    private static final int WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS = 1;
+    private static final int WORLD_LOAD_TERRAIN_REFRESH_INITIAL_DELAY_FRAMES = 2;
+    private static final int WORLD_LOAD_TERRAIN_REFRESH_REPEAT_DELAY_FRAMES = 8;
     private static final int MAX_PENDING_SHADER_CHUNK_REFRESHES = 2048;
+    private static final int MAX_CHUNK_FADE_STATES = 8192;
+    private static final int CHUNK_FADE_STALE_FRAMES = 600;
+    private static final int CHUNK_FADE_WARMUP_FRAMES = 20;
+    private static final float CHUNK_FADE_DURATION_SECONDS = 0.45f;
     private static final int MAX_SHADER_CHUNK_REFRESHES_PER_FRAME = 8;
     private static final int COMPILED_PIPELINE_CACHE_LIMIT = 3;
     private static final int MAX_BETTER_PORTALS_PIPELINE_LOGS = 240;
@@ -198,13 +207,17 @@ public class PipelineContext {
     private static final int MAX_EXTERNAL_OVERLAY_LOGS = 20;
     private static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 80;
     private static final int MAX_TERRAIN_HISTORY_CLEAR_LOGS = 40;
+    private static final String RANDOM_THINGS_LUMINOUS_BLOCK_CLASS = "lumien.randomthings.lib.ILuminousBlock";
+    private static final String BLOCKCRAFTERY_TILE_EDITABLE_BLOCK_CLASS = "epicsquid.blockcraftery.tile.TileEditableBlock";
     private static final float TEMPORAL_HISTORY_CAMERA_DELTA_RESET = 0.85f;
     private static final float TEMPORAL_HISTORY_ACCUMULATED_YAW_RESET = 35.0f;
     private static final float TEMPORAL_HISTORY_ACCUMULATED_PITCH_RESET = 25.0f;
     private static final ShaderBlendMode OIT_COEFFICIENT_BLEND = new ShaderBlendMode(true, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
+    private static final ShaderBlendMode WATER_BLEND_MODE = new ShaderBlendMode(true, GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA);
     private static final float PORTAL_NETHER_FOG_DENSITY = 0.08f;
     private static final float[] PORTAL_NETHER_FOG_COLOR = {0.20f, 0.03f, 0.03f};
     private static final float NETHER_SHADER_FOG_COLOR_SCALE = 0.25f;
+    private static final float SHADER_OVERWORLD_FOG_START_RATIO = 0.85f;
     private static int maxDrawBuffers = -1;
     private static boolean celeritasShadowCameraWarningLogged;
 
@@ -247,7 +260,17 @@ public class PipelineContext {
     private final Set<ShaderChunkRefresh> pendingShaderChunkRefreshes = new LinkedHashSet<>();
     private int pendingWorldLoadLightRecalculationAttempts = 0;
     private int pendingWorldLoadLightRecalculationDelay = 0;
+    private int pendingWorldTerrainRefreshAttempts = 0;
+    private int pendingWorldTerrainRefreshDelay = 0;
+    private int pendingWorldTerrainRefreshDimension = Integer.MIN_VALUE;
+    private boolean pendingWorldTerrainRendererReset = false;
     private String activeCompiledPipelineCacheKey;
+    private boolean randomThingsLuminousBlockResolved;
+    private Class<?> randomThingsLuminousBlockClass;
+    private Method randomThingsShouldGlowMethod;
+    private boolean blockcrafteryTileResolved;
+    private Class<?> blockcrafteryTileClass;
+    private Field blockcrafteryTileStateField;
 
     private final Deque<PassScope> passStack = new ArrayDeque<>();
     private final Deque<Boolean> worldPassBypassStack = new ArrayDeque<>();
@@ -257,6 +280,7 @@ public class PipelineContext {
     private WorldRenderingPhase activePhase = WorldRenderingPhase.NONE;
     private WorldRenderingPhase overridePhase = null;
     private volatile boolean isPipelineActive = false;
+    private boolean shaderlessWorldPassActive = false;
     private String activePackName = "(internal)";
     private float centerDepth = 1.0f;
     private float centerDepthSmooth = 1.0f;
@@ -266,6 +290,8 @@ public class PipelineContext {
     private final FloatBuffer fogColorBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
     private int currentEntityId = 0;
     private float[] currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
+    private final float[] currentAstralConstellationColor = new float[]{1.0f, 1.0f, 1.0f};
+    private final float[] currentAstralTierColor = new float[]{1.0f, 1.0f, 1.0f};
     private float currentAlphaTestReference = 0.1f;
     private float shadowMapDistance = 128.0f;
     private float shadowDistanceRenderMul = -1.0f;
@@ -288,6 +314,9 @@ public class PipelineContext {
     private final long pipelineStartNanos = System.nanoTime();
     private long lastPipelineFrameNanos = pipelineStartNanos;
     private float currentFrameTime = 0.016f;
+    private float currentChunkFade = 1.0f;
+    private long chunkFadeWarmupUntilFrame = 0L;
+    private final Map<ChunkFadeKey, ChunkFadeState> chunkFadeStates = new LinkedHashMap<>();
     private float frameTimeCounter = 0.0f;
     private float frameTimeSmooth = 0.016f;
     private boolean frameTimeSmoothInitialized = false;
@@ -354,6 +383,7 @@ public class PipelineContext {
     private int betterPortalsPipelineLogs = 0;
     private int shaderlessBloomHookLogs = 0;
     private int externalOverlayLogs = 0;
+    private long nothiriumPipelineTranslucentFrame = Long.MIN_VALUE;
     private boolean shaderlessBloomRenderedThisWorldPass = false;
     private final IntBuffer viewportBuffer = org.lwjgl.BufferUtils.createIntBuffer(16);
 
@@ -461,7 +491,7 @@ public class PipelineContext {
         uniformRegistry.registerInt("isRightHanded", () -> mc.gameSettings.mainHand == EnumHandSide.RIGHT ? 1 : 0);
         uniformRegistry.registerInt("firstPersonCamera", () -> mc.gameSettings.thirdPersonView == 0 ? 1 : 0);
         uniformRegistry.registerFloat("near", () -> 0.05f);
-        uniformRegistry.registerFloat("far", () -> (float) Math.max(16, mc.gameSettings.renderDistanceChunks * 16));
+        uniformRegistry.registerFloat("far", () -> shaderFarPlaneDistance(mc));
         uniformRegistry.registerFloat("fogStart", () -> effectiveFogStart(mc));
         uniformRegistry.registerFloat("fogEnd", () -> effectiveFogEnd(mc));
         uniformRegistry.registerFloat("fogDensity", () -> effectiveFogDensity(mc));
@@ -510,6 +540,9 @@ public class PipelineContext {
         uniformRegistry.registerInt("isSpectator", () -> mc.player != null && mc.player.isSpectator() ? 1 : 0);
         uniformRegistry.registerInt("seaLevel", () -> renderWorld(mc) != null ? renderWorld(mc).getSeaLevel() : 63);
         uniformRegistry.registerInt("renderStage", () -> getPhase().ordinal());
+        uniformRegistry.registerFloat("mc_chunkFade", () -> currentChunkFade);
+        uniformRegistry.registerVec3("ausmAstralConstellationColor", () -> currentAstralConstellationColor.clone());
+        uniformRegistry.registerVec3("ausmAstralTierColor", () -> currentAstralTierColor.clone());
         uniformRegistry.registerFloat("dayMoment", () -> dayMoment(mc));
         uniformRegistry.registerFloat("timeAngle", () -> dayMoment(mc));
         uniformRegistry.registerFloat("timeBrightness", () -> Math.max((float) Math.sin(dayMoment(mc) * Math.PI * 2.0), 0.0f));
@@ -823,17 +856,25 @@ public class PipelineContext {
     }
 
     private float effectiveFogStart(Minecraft mc) {
-        if (!shouldUseNestedPortalFogFallback(mc)) {
-            return GL11.glGetFloat(GL11.GL_FOG_START);
+        if (shouldUseNestedPortalFogFallback(mc)) {
+            return isNetherRenderWorld(mc) ? 0.0f : portalFogFar(mc) * 0.75f;
         }
-        return isNetherRenderWorld(mc) ? 0.0f : portalFogFar(mc) * 0.75f;
+        if (isNetherRenderWorld(mc)) {
+            return GL11.glIsEnabled(GL11.GL_FOG) ? GL11.glGetFloat(GL11.GL_FOG_START) : 0.0f;
+        }
+        return shaderFarPlaneDistance(mc) * SHADER_OVERWORLD_FOG_START_RATIO;
     }
 
     private float effectiveFogEnd(Minecraft mc) {
-        if (!shouldUseNestedPortalFogFallback(mc)) {
-            return GL11.glGetFloat(GL11.GL_FOG_END);
+        if (shouldUseNestedPortalFogFallback(mc)) {
+            return portalFogFar(mc);
         }
-        return portalFogFar(mc);
+        if (isNetherRenderWorld(mc)) {
+            return GL11.glIsEnabled(GL11.GL_FOG)
+                    ? Math.max(GL11.glGetFloat(GL11.GL_FOG_END), shaderRenderDistance(mc))
+                    : shaderRenderDistance(mc);
+        }
+        return shaderFarPlaneDistance(mc);
     }
 
     private float effectiveFogDensity(Minecraft mc) {
@@ -920,7 +961,15 @@ public class PipelineContext {
     }
 
     private float portalFogFar(Minecraft mc) {
-        return (float) Math.max(16, mc != null ? mc.gameSettings.renderDistanceChunks * 16 : 16);
+        return shaderFarPlaneDistance(mc);
+    }
+
+    private static float shaderFarPlaneDistance(Minecraft mc) {
+        return shaderRenderDistance(mc) * 2.0f;
+    }
+
+    private static float shaderRenderDistance(Minecraft mc) {
+        return Math.max(16.0f, mc != null ? mc.gameSettings.renderDistanceChunks * 16.0f : 16.0f);
     }
 
     private static int currentGlFogMode() {
@@ -1160,7 +1209,7 @@ public class PipelineContext {
         if (world == null || pos == null) {
             return 0;
         }
-        return blockEntityId(world.getBlockState(pos));
+        return blockEntityId(world.getBlockState(pos), world, pos);
     }
 
     private static float[] currentSelectedBlockPos(Minecraft mc) {
@@ -1537,6 +1586,7 @@ public class PipelineContext {
             setupComputePending = hasSetupPrograms();
 
             isPipelineActive = pingPongManager.isInitialized();
+            resetChunkFadeState(true);
             activeCompiledPipelineCacheKey = cacheKey;
             long loadedProgramCount = programs.values().stream().filter(PipelineProgram::hasOwnProgram).count();
             long loadedArrayProgramCount = fullscreenArrayPrograms.values().stream()
@@ -1604,6 +1654,7 @@ public class PipelineContext {
             setupComputePending = hasSetupPrograms();
             resetTransientWorldRenderState();
             isPipelineActive = true;
+            resetChunkFadeState(true);
             MainMod.LOGGER.debug("[Pipeline] Activated cached compiled shader programs: {}", cacheKey);
             return true;
         } catch (RuntimeException e) {
@@ -1692,12 +1743,14 @@ public class PipelineContext {
         overridePhase = null;
         passStack.clear();
         worldPassBypassStack.clear();
+        shaderlessWorldPassActive = false;
         worldFrameActive = false;
         deferredPassesRenderedThisFrame = false;
         preTranslucentDepthCopiedThisFrame = false;
         preHandDepthCopiedThisFrame = false;
         renderingShadowMap = false;
         renderingDeferredIngameHud = false;
+        nothiriumPipelineTranslucentFrame = Long.MIN_VALUE;
     }
 
     private void initializeBlankShadowFramebuffer(ShaderPack pack, ShaderProperties properties) {
@@ -2391,18 +2444,57 @@ public class PipelineContext {
     }
 
     public int blockEntityId(IBlockState state) {
+        return blockEntityId(state, null, null);
+    }
+
+    public int blockEntityId(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
         if (state == null) {
             return 0;
         }
-        if (shaderProperties.blockIds().isEmpty()) {
-            return 0;
+
+        IBlockState pipelineState = actualLightState(state, blockAccess, pos);
+        ShaderBlockIdMap.BlockIdRules blockIds = shaderProperties.blockIds();
+        if (!blockIds.isEmpty()) {
+            int id = blockIds.idFor(pipelineState);
+            if (id != 0) {
+                return id;
+            }
         }
-        return shaderProperties.blockIds().idFor(state);
+
+        if (isComplementaryStylePack() && pipelineState.getMaterial() == Material.WATER) {
+            return 32000;
+        }
+        return 0;
+    }
+
+    public int blockMetadata(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        return blockMetadata(actualLightState(state, blockAccess, pos));
     }
 
     public int blockRenderEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
         if (state == null) {
             return 0;
+        }
+        int emission = blockRenderEmissionForState(state, blockAccess, pos);
+        IBlockState pipelineState = actualLightState(state, blockAccess, pos);
+        if (pipelineState != state) {
+            emission = Math.max(emission, blockRenderEmissionForState(pipelineState, blockAccess, pos));
+        }
+        return emission;
+    }
+
+    public boolean shouldUseCrystalOnlyEmission(IBlockState state) {
+        return isAstralCrystalCluster(state);
+    }
+
+    private int blockRenderEmissionForState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        int luminousEmission = randomThingsLuminousEmission(state);
+        if (luminousEmission > 0) {
+            return luminousEmission;
+        }
+        int astralEmission = astralCrystalEmission(state);
+        if (astralEmission > 0) {
+            return astralEmission;
         }
         try {
             if (blockAccess != null && pos != null) {
@@ -2415,6 +2507,174 @@ public class PipelineContext {
         } catch (RuntimeException ignored) {
             return 0;
         }
+    }
+
+    private static int blockMetadata(IBlockState state) {
+        if (state == null || state.getBlock() == null) {
+            return 0;
+        }
+        try {
+            return state.getBlock().getMetaFromState(state);
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
+    }
+
+    private int randomThingsLuminousEmission(IBlockState state) {
+        if (state == null) {
+            return 0;
+        }
+
+        Block block = state.getBlock();
+        if (!isRandomThingsLuminousBlock(state)) {
+            return 0;
+        }
+
+        Class<?> luminousBlockClass = randomThingsLuminousBlockClass();
+        if (block == null || luminousBlockClass == null || !luminousBlockClass.isInstance(block)) {
+            return 0;
+        }
+
+        Method shouldGlow = randomThingsShouldGlowMethod;
+        if (shouldGlow == null) {
+            return 0;
+        }
+
+        int metadata = 0;
+        try {
+            metadata = block.getMetaFromState(state);
+        } catch (RuntimeException | LinkageError ignored) {
+        }
+
+        try {
+            Object result = shouldGlow.invoke(block, state, metadata);
+            return Boolean.TRUE.equals(result) ? 15 : 0;
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            return 0;
+        }
+    }
+
+    private Class<?> randomThingsLuminousBlockClass() {
+        if (!randomThingsLuminousBlockResolved) {
+            randomThingsLuminousBlockResolved = true;
+            try {
+                randomThingsLuminousBlockClass = Class.forName(RANDOM_THINGS_LUMINOUS_BLOCK_CLASS, false, PipelineContext.class.getClassLoader());
+                randomThingsShouldGlowMethod = randomThingsLuminousBlockClass.getMethod("shouldGlow", IBlockState.class, int.class);
+                randomThingsShouldGlowMethod.setAccessible(true);
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+                randomThingsLuminousBlockClass = null;
+                randomThingsShouldGlowMethod = null;
+            }
+        }
+        return randomThingsLuminousBlockClass;
+    }
+
+    private static boolean isRandomThingsLuminousBlock(IBlockState state) {
+        ResourceLocation name = registryName(state);
+        return name != null
+                && "randomthings".equals(name.getNamespace())
+                && containsIgnoreCase(name.getPath(), "luminous");
+    }
+
+    private static int astralCrystalEmission(IBlockState state) {
+        if (!isAstralCrystalCluster(state)) {
+            return 0;
+        }
+        ResourceLocation name = registryName(state);
+        String path = name.getPath();
+        if ("blockcelestialcrystals".equalsIgnoreCase(path)) {
+            int stage = parseIntProperty(state, "stage", 2);
+            return clampLightValue(6 + Math.max(0, Math.min(4, stage)));
+        }
+        if ("blockgemcrystals".equalsIgnoreCase(path)) {
+            String stage = propertyValue(state, "stage");
+            if ("stage_2_day".equalsIgnoreCase(stage)
+                    || "stage_2_night".equalsIgnoreCase(stage)
+                    || "stage_2_sky".equalsIgnoreCase(stage)) {
+                return 10;
+            }
+            if ("stage_1".equalsIgnoreCase(stage)) {
+                return 8;
+            }
+            return 6;
+        }
+        return 0;
+    }
+
+    private static boolean isAstralCrystalCluster(IBlockState state) {
+        ResourceLocation name = registryName(state);
+        if (name == null || !"astralsorcery".equals(name.getNamespace())) {
+            return false;
+        }
+        String path = name.getPath();
+        return "blockcelestialcrystals".equalsIgnoreCase(path)
+                || "blockgemcrystals".equalsIgnoreCase(path);
+    }
+
+    private static int astralCrystalMaterialId(IBlockState state) {
+        ResourceLocation name = registryName(state);
+        if (name == null || !"astralsorcery".equals(name.getNamespace())) {
+            return 0;
+        }
+
+        String path = name.getPath();
+        if ("blockcelestialcrystals".equalsIgnoreCase(path)) {
+            return 10914; // cool light blue
+        }
+        if ("blockgemcrystals".equalsIgnoreCase(path)) {
+            String stage = propertyValue(state, "stage");
+            if ("stage_2_day".equalsIgnoreCase(stage)) {
+                return 10904; // warm orange
+            }
+            if ("stage_2_night".equalsIgnoreCase(stage)) {
+                return 10916; // blue
+            }
+            return 10912; // cyan/sky
+        }
+        return 0;
+    }
+
+    private static int astralCrystalVoxelId(IBlockState state) {
+        return localActVoxelId(astralCrystalMaterialId(state));
+    }
+
+    private static int parseIntProperty(IBlockState state, String propertyName, int fallback) {
+        String value = propertyValue(state, propertyName);
+        if (value == null) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static String propertyValue(IBlockState state, String propertyName) {
+        if (state == null || propertyName == null) {
+            return null;
+        }
+        for (Map.Entry<net.minecraft.block.properties.IProperty<?>, Comparable<?>> entry : state.getProperties().entrySet()) {
+            net.minecraft.block.properties.IProperty property = entry.getKey();
+            if (property != null && property.getName().equals(propertyName)) {
+                return property.getName(entry.getValue());
+            }
+        }
+        return null;
+    }
+
+    private static boolean containsIgnoreCase(String value, String needle) {
+        if (value == null || needle == null) {
+            return false;
+        }
+        int max = value.length() - needle.length();
+        for (int i = 0; i <= max; i++) {
+            if (value.regionMatches(true, i, needle, 0, needle.length())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int clampLightValue(int value) {
@@ -2531,8 +2791,13 @@ public class PipelineContext {
         try {
             emission = actualState.getLightValue(blockAccess, pos);
         } catch (RuntimeException ignored) {
-            return new SyntheticLightInfo(state, actualState, shaderBlockId, voxelId, 0, "light_value_error");
+            emission = Math.max(randomThingsLuminousEmission(actualState), astralCrystalEmission(actualState));
+            if (emission <= 0) {
+                return new SyntheticLightInfo(state, actualState, shaderBlockId, voxelId, 0, "light_value_error");
+            }
         }
+        emission = Math.max(emission, randomThingsLuminousEmission(actualState));
+        emission = Math.max(emission, astralCrystalEmission(actualState));
         if (voxelId <= 0) {
             return new SyntheticLightInfo(state, actualState, shaderBlockId, 0, emission, "no_colored_voxel_mapping");
         }
@@ -2732,7 +2997,10 @@ public class PipelineContext {
             return "seared_furnace_controller".equals(path);
         }
         if ("randomthings".equals(namespace)) {
-            return path.contains("luminous") || path.contains("runic");
+            return containsIgnoreCase(path, "luminous") || containsIgnoreCase(path, "runic");
+        }
+        if ("astralsorcery".equals(namespace)) {
+            return "blockcelestialcrystals".equalsIgnoreCase(path) || "blockgemcrystals".equalsIgnoreCase(path);
         }
         return false;
     }
@@ -2767,15 +3035,75 @@ public class PipelineContext {
         return builder.append(']').toString();
     }
 
-    private static IBlockState actualLightState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+    private IBlockState actualLightState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
         if (state == null || blockAccess == null || pos == null) {
             return state;
         }
+        IBlockState decoratedState = blockcrafteryDecoratedState(state, blockAccess, pos);
+        IBlockState renderState = decoratedState != null ? decoratedState : state;
         try {
-            return state.getActualState(blockAccess, pos);
+            return renderState.getActualState(blockAccess, pos);
         } catch (RuntimeException ignored) {
-            return state;
+            return renderState;
         }
+    }
+
+    private IBlockState blockcrafteryDecoratedState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (!isBlockcrafteryEditableBlock(state) || blockAccess == null || pos == null) {
+            return null;
+        }
+
+        Class<?> tileClass = blockcrafteryTileClass();
+        Field stateField = blockcrafteryTileStateField;
+        if (tileClass == null || stateField == null) {
+            return null;
+        }
+
+        TileEntity tile;
+        try {
+            tile = blockAccess.getTileEntity(pos);
+        } catch (RuntimeException | LinkageError ignored) {
+            return null;
+        }
+
+        if (tile == null || !tileClass.isInstance(tile)) {
+            return null;
+        }
+
+        try {
+            Object value = stateField.get(tile);
+            if (!(value instanceof IBlockState decoratedState)
+                    || decoratedState.getBlock() == null
+                    || decoratedState.getBlock() == Blocks.AIR
+                    || isBlockcrafteryEditableBlock(decoratedState)) {
+                return null;
+            }
+            return decoratedState;
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            return null;
+        }
+    }
+
+    private Class<?> blockcrafteryTileClass() {
+        if (!blockcrafteryTileResolved) {
+            blockcrafteryTileResolved = true;
+            try {
+                blockcrafteryTileClass = Class.forName(BLOCKCRAFTERY_TILE_EDITABLE_BLOCK_CLASS, false, PipelineContext.class.getClassLoader());
+                blockcrafteryTileStateField = blockcrafteryTileClass.getField("state");
+                blockcrafteryTileStateField.setAccessible(true);
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+                blockcrafteryTileClass = null;
+                blockcrafteryTileStateField = null;
+            }
+        }
+        return blockcrafteryTileClass;
+    }
+
+    private static boolean isBlockcrafteryEditableBlock(IBlockState state) {
+        ResourceLocation name = registryName(state);
+        return name != null
+                && "blockcraftery".equals(name.getNamespace())
+                && name.getPath().startsWith("editable_");
     }
 
     public boolean shouldSeparateBlockAo(IBlockState state) {
@@ -2784,7 +3112,9 @@ public class PipelineContext {
         }
 
         Block block = state.getBlock();
-        return block != null && block.getRenderLayer() != BlockRenderLayer.TRANSLUCENT;
+        return block != null
+                && block.getRenderLayer() == BlockRenderLayer.SOLID
+                && !isRandomThingsLuminousBlock(state);
     }
 
     public boolean shouldSeparateAo() {
@@ -2832,6 +3162,10 @@ public class PipelineContext {
     }
 
     private boolean shouldSuppressComplementaryVanillaCelestialGeometry() {
+        return isComplementaryStylePack();
+    }
+
+    private boolean isComplementaryStylePack() {
         String packName = activePackName == null ? "" : activePackName.toLowerCase(java.util.Locale.ROOT);
         return packName.contains("complementary") || packName.contains("complimentary");
     }
@@ -2903,6 +3237,10 @@ public class PipelineContext {
                 || activePass == RenderPass.GBUFFERS_ENTITIES_TRANSLUCENT;
     }
 
+    public boolean shouldUsePipelineBlockFormat() {
+        return isPipelineActive;
+    }
+
     public boolean isShadowPassActive() {
         return isPipelineActive && (renderingShadowMap || activePass != null && activePass.stage() == ProgramStage.SHADOW);
     }
@@ -2933,6 +3271,7 @@ public class PipelineContext {
         double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
         double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
         double cameraZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        nothiriumShadowRenderer.drainUploads();
         return nothiriumShadowRenderer.renderVisibleLayer(
                 layer,
                 cameraX,
@@ -2941,6 +3280,60 @@ public class PipelineContext {
                 nothiriumFallbackBlockEntityId(layer),
                 nothiriumFallbackRenderType(layer)
         );
+    }
+
+    public boolean renderNothiriumRendererPass(Object chunkRenderPass) {
+        boolean translucentPass = isNothiriumTranslucentPass(chunkRenderPass);
+        if (shouldCancelDuplicateNothiriumTranslucentPass(translucentPass)) {
+            return true;
+        }
+        if (!isPipelineActive
+                || !worldFrameActive
+                || renderingShadowMap
+                || activePass != RenderPass.GBUFFERS_WATER
+                || getPhase() != WorldRenderingPhase.TERRAIN_TRANSLUCENT
+                || renderingGuiScreen()
+                || !translucentPass) {
+            return false;
+        }
+
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null) {
+            return false;
+        }
+
+        Entity viewEntity = mc.getRenderViewEntity();
+        if (viewEntity == null) {
+            return false;
+        }
+
+        int count = renderNothiriumTerrainLayer(
+                BlockRenderLayer.TRANSLUCENT,
+                mc.getRenderPartialTicks(),
+                viewEntity
+        );
+        if (count < 0) {
+            return false;
+        }
+
+        markNothiriumPipelineTranslucentBridge(BlockRenderLayer.TRANSLUCENT);
+        recordTerrainLayerCount(BlockRenderLayer.TRANSLUCENT, count);
+        return true;
+    }
+
+    private boolean shouldCancelDuplicateNothiriumTranslucentPass(boolean translucentPass) {
+        return translucentPass
+                && isPipelineActive
+                && worldFrameActive
+                && !renderingShadowMap
+                && !renderingGuiScreen()
+                && activePass == null
+                && getPhase() == WorldRenderingPhase.NONE
+                && nothiriumPipelineTranslucentFrame == pipelineFrameId;
+    }
+
+    private static boolean isNothiriumTranslucentPass(Object chunkRenderPass) {
+        return chunkRenderPass instanceof Enum<?> pass && "TRANSLUCENT".equals(pass.name());
     }
 
     private int nothiriumFallbackBlockEntityId(BlockRenderLayer layer) {
@@ -3135,6 +3528,130 @@ public class PipelineContext {
         uniformRegistry.upload(program, "entityColor");
     }
 
+    public void applyChunkFade(RenderChunk renderChunk, BlockRenderLayer layer) {
+        if (renderChunk == null || !shouldUploadChunkFade(layer)) {
+            return;
+        }
+
+        BlockPos position = renderChunk.getPosition();
+        if (position == null) {
+            resetChunkFadeUniform();
+            return;
+        }
+
+        int dimensionId = safeDimensionId(renderChunk.getWorld());
+        if (dimensionId == Integer.MIN_VALUE) {
+            dimensionId = safeDimensionId(renderWorld(Minecraft.getMinecraft()));
+        }
+        applyChunkFade(dimensionId, position.getX(), position.getY(), position.getZ());
+    }
+
+    public void applyChunkFade(int blockX, int blockY, int blockZ) {
+        Minecraft mc = Minecraft.getMinecraft();
+        World world = renderWorld(mc);
+        applyChunkFade(safeDimensionId(world), blockX, blockY, blockZ);
+    }
+
+    private void applyChunkFade(int dimensionId, int blockX, int blockY, int blockZ) {
+        if (!shouldUploadChunkFade(null)) {
+            return;
+        }
+
+        currentChunkFade = chunkFadeValue(dimensionId, blockX, blockY, blockZ);
+        uploadChunkFadeUniform();
+    }
+
+    public void resetChunkFadeUniform() {
+        if (currentChunkFade == 1.0f) {
+            return;
+        }
+        currentChunkFade = 1.0f;
+        uploadChunkFadeUniform();
+    }
+
+    private boolean shouldUploadChunkFade(BlockRenderLayer layer) {
+        if (!isPipelineActive || activePass == null || activePass.stage() != ProgramStage.GBUFFERS || renderingShadowMap) {
+            return false;
+        }
+        if (layer != null && layer != BlockRenderLayer.SOLID
+                && layer != BlockRenderLayer.CUTOUT
+                && layer != BlockRenderLayer.CUTOUT_MIPPED
+                && layer != BlockRenderLayer.TRANSLUCENT) {
+            return false;
+        }
+        return isChunkFadePass(activePass);
+    }
+
+    private static boolean isChunkFadePass(RenderPass pass) {
+        return pass == RenderPass.GBUFFERS_TERRAIN
+                || pass == RenderPass.GBUFFERS_TERRAIN_SOLID
+                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT
+                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP
+                || pass == RenderPass.GBUFFERS_DAMAGEDBLOCK
+                || pass == RenderPass.GBUFFERS_BLOCK
+                || pass == RenderPass.GBUFFERS_BLOCK_TRANSLUCENT
+                || pass == RenderPass.GBUFFERS_WATER;
+    }
+
+    private float chunkFadeValue(int dimensionId, int blockX, int blockY, int blockZ) {
+        if (dimensionId == Integer.MIN_VALUE) {
+            return 1.0f;
+        }
+
+        ChunkFadeKey key = new ChunkFadeKey(
+                dimensionId,
+                Math.floorDiv(blockX, 16),
+                Math.floorDiv(blockY, 16),
+                Math.floorDiv(blockZ, 16)
+        );
+        ChunkFadeState state = chunkFadeStates.get(key);
+        if (state == null) {
+            float initial = pipelineFrameId <= chunkFadeWarmupUntilFrame ? 1.0f : 0.0f;
+            state = new ChunkFadeState(initial, pipelineFrameId);
+            chunkFadeStates.put(key, state);
+            pruneChunkFadeStates();
+            return state.value;
+        }
+
+        if (state.lastFrameSeen != pipelineFrameId) {
+            state.value = clamp01(state.value + currentFrameTime / CHUNK_FADE_DURATION_SECONDS);
+            state.lastFrameSeen = pipelineFrameId;
+        }
+        return state.value;
+    }
+
+    private void uploadChunkFadeUniform() {
+        ShaderProgram program = activeProgram();
+        if (program != null) {
+            uniformRegistry.upload(program, "mc_chunkFade");
+        }
+    }
+
+    private void resetChunkFadeState(boolean warmExistingChunks) {
+        chunkFadeStates.clear();
+        currentChunkFade = 1.0f;
+        chunkFadeWarmupUntilFrame = warmExistingChunks ? pipelineFrameId + CHUNK_FADE_WARMUP_FRAMES : pipelineFrameId;
+    }
+
+    private void pruneChunkFadeStates() {
+        if (chunkFadeStates.size() <= MAX_CHUNK_FADE_STATES) {
+            return;
+        }
+
+        long staleBefore = pipelineFrameId - CHUNK_FADE_STALE_FRAMES;
+        Iterator<Map.Entry<ChunkFadeKey, ChunkFadeState>> iterator = chunkFadeStates.entrySet().iterator();
+        while (iterator.hasNext() && chunkFadeStates.size() > MAX_CHUNK_FADE_STATES) {
+            if (iterator.next().getValue().lastFrameSeen < staleBefore) {
+                iterator.remove();
+            }
+        }
+        iterator = chunkFadeStates.entrySet().iterator();
+        while (iterator.hasNext() && chunkFadeStates.size() > MAX_CHUNK_FADE_STATES) {
+            iterator.next();
+            iterator.remove();
+        }
+    }
+
     public void beginPass(RenderPass pass) {
         beginPass(pass, WorldRenderingPhase.NONE);
     }
@@ -3160,6 +3677,54 @@ public class PipelineContext {
         if (pass != null) {
             beginPass(pass, phase);
         }
+    }
+
+    public void beginAstralConstellationPhase(Object constellation, WorldRenderingPhase phase) {
+        setAstralConstellationColors(constellation);
+        beginPhase(phase);
+    }
+
+    public void endAstralConstellationPhase() {
+        endPass();
+        resetAstralConstellationColors();
+    }
+
+    private void setAstralConstellationColors(Object constellation) {
+        java.awt.Color tierColor = astralColor(constellation, "getTierRenderColor", java.awt.Color.WHITE);
+        java.awt.Color constellationColor = astralColor(constellation, "getConstellationColor", tierColor);
+        setColor(currentAstralConstellationColor, constellationColor);
+        setColor(currentAstralTierColor, tierColor);
+    }
+
+    private void resetAstralConstellationColors() {
+        setColor(currentAstralConstellationColor, null);
+        setColor(currentAstralTierColor, null);
+    }
+
+    private static java.awt.Color astralColor(Object constellation, String methodName, java.awt.Color fallback) {
+        if (constellation != null) {
+            try {
+                Method method = constellation.getClass().getMethod(methodName);
+                Object result = method.invoke(constellation);
+                if (result instanceof java.awt.Color color) {
+                    return color;
+                }
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+            }
+        }
+        return fallback;
+    }
+
+    private static void setColor(float[] target, java.awt.Color color) {
+        if (color == null) {
+            target[0] = 1.0f;
+            target[1] = 1.0f;
+            target[2] = 1.0f;
+            return;
+        }
+        target[0] = color.getRed() / 255.0f;
+        target[1] = color.getGreen() / 255.0f;
+        target[2] = color.getBlue() / 255.0f;
     }
 
     public boolean beginItemRenderPhase() {
@@ -3216,6 +3781,7 @@ public class PipelineContext {
         List<Attachment> drawBuffers = effectiveDrawBuffersForCurrentPhase(pipelineProgram);
         applyBlendMode(pass, drawBuffers);
         applyOitDepthState(pass);
+        applyGbufferDepthState(pass);
         applyHandRenderState(pass);
         configureGbufferDrawBuffers(pipelineProgram, drawBuffers);
         if (pipelineProgram.stage() == ProgramStage.GBUFFERS) {
@@ -3358,16 +3924,21 @@ public class PipelineContext {
 
         PipelineProgram pipelineProgram = programs.get(pass);
         ShaderBlendMode blendMode = pipelineProgram == null ? null : pipelineProgram.directives().blendModeOverride();
+        Map<Attachment, ShaderBlendMode> attachmentModes = attachmentBlendModesFor(pass);
+        if (pass == RenderPass.GBUFFERS_WATER) {
+            applyWaterBlendMode(drawBuffers, blendMode == null ? WATER_BLEND_MODE : blendMode, attachmentModes);
+            return;
+        }
         if (blendMode == null) {
             blendMode = defaultBlendMode(pass);
         }
-        Map<Attachment, ShaderBlendMode> attachmentModes = attachmentBlendModesFor(pass);
         if (blendMode == null && attachmentModes.isEmpty()) {
             return;
         }
 
         if (blendMode != null && !blendMode.enabled()) {
             GlStateManager.disableBlend();
+            resetIndexedBlendState();
             return;
         }
 
@@ -3393,7 +3964,44 @@ public class PipelineContext {
         }
     }
 
+    private void applyWaterBlendMode(List<Attachment> drawBuffers, ShaderBlendMode blendMode, Map<Attachment, ShaderBlendMode> attachmentModes) {
+        if (!blendMode.enabled()) {
+            GlStateManager.disableBlend();
+            resetIndexedBlendState();
+            return;
+        }
+
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(
+                blendMode.srcRgb(),
+                blendMode.dstRgb(),
+                blendMode.srcAlpha(),
+                blendMode.dstAlpha()
+        );
+        resetIndexedBlendState();
+
+        for (int drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); drawBufferIndex++) {
+            Attachment attachment = drawBuffers.get(drawBufferIndex);
+            ShaderBlendMode attachmentMode = attachmentModes.get(attachment);
+            if (attachmentMode != null) {
+                applyIndexedBlendMode(drawBufferIndex, attachmentMode);
+            } else if (defaultWaterBlendTarget(attachment)) {
+                applyIndexedBlendMode(drawBufferIndex, blendMode);
+            }
+        }
+    }
+
+    private static boolean defaultWaterBlendTarget(Attachment attachment) {
+        return attachment == Attachment.COLOR || attachment == Attachment.COMPOSITE;
+    }
+
     private static ShaderBlendMode defaultBlendMode(RenderPass pass) {
+        if (pass == RenderPass.GBUFFERS_TERRAIN
+                || pass == RenderPass.GBUFFERS_TERRAIN_SOLID
+                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP
+                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT) {
+            return ShaderBlendMode.OFF;
+        }
         if (pass == RenderPass.SHADOW
                 || pass == RenderPass.SHADOW_SOLID
                 || pass == RenderPass.SHADOW_CUTOUT
@@ -3453,6 +4061,23 @@ public class PipelineContext {
         GlStateManager.enableDepth();
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GlStateManager.depthMask(false);
+    }
+
+    private void applyGbufferDepthState(RenderPass pass) {
+        if (!isOpaqueTerrainPass(pass) && pass != RenderPass.GBUFFERS_WATER) {
+            return;
+        }
+        GlStateManager.enableDepth();
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GlStateManager.depthMask(true);
+        GL11.glColorMask(true, true, true, true);
+    }
+
+    private static boolean isOpaqueTerrainPass(RenderPass pass) {
+        return pass == RenderPass.GBUFFERS_TERRAIN
+                || pass == RenderPass.GBUFFERS_TERRAIN_SOLID
+                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP
+                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT;
     }
 
     private boolean isOitGbufferPass(RenderPass pass) {
@@ -3635,6 +4260,11 @@ public class PipelineContext {
             return;
         }
 
+        if (!isPipelineActive) {
+            beginShaderlessWorldPassRendering();
+            return;
+        }
+
         beginFrame();
     }
 
@@ -3649,8 +4279,24 @@ public class PipelineContext {
             return;
         }
 
+        if (!isPipelineActive) {
+            finishShaderlessWorldPassRendering();
+            return;
+        }
+
         renderNativeBloomLayerIfNeeded();
         blitWorldFramebufferToMinecraft();
+    }
+
+    private void beginShaderlessWorldPassRendering() {
+        prepareInactiveVanillaFrame();
+        shaderlessWorldPassActive = true;
+        restoreVanillaWorldPassState(true, true);
+    }
+
+    private void finishShaderlessWorldPassRendering() {
+        restoreVanillaWorldPassState(false, true);
+        shaderlessWorldPassActive = false;
     }
 
     private void updateCameraPosition(Minecraft mc) {
@@ -3746,7 +4392,7 @@ public class PipelineContext {
     }
 
     public void prepareVanillaParticleRendering() {
-        if (!shouldBypassWorldPassRendering()) {
+        if (isPipelineActive && !shouldBypassWorldPassRendering()) {
             return;
         }
         OpenGlHelper.glUseProgram(0);
@@ -4073,6 +4719,7 @@ public class PipelineContext {
             return;
         }
 
+        BetterPortalsCompat.clearMainViewSwapTransientState();
         BetterPortalsCompat.beginMainViewSwapHandling();
         try {
             resetPipelineState(mc.getFramebuffer());
@@ -4092,6 +4739,28 @@ public class PipelineContext {
         } finally {
             BetterPortalsCompat.endMainViewSwapHandling();
         }
+    }
+
+    public void handleWorldDimensionSwitch(int previousDimensionId, int dimensionId) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.world == null) {
+            return;
+        }
+
+        BetterPortalsCompat.clearMainViewSwapTransientState();
+        resetPipelineState(mc.getFramebuffer());
+        currentWorldPass = 0;
+        currentWorldPartialTicks = 0.0F;
+        clearPendingShaderChunkRefreshes();
+        if (mc.renderGlobal instanceof RenderGlobalAccessor accessor) {
+            clearRenderGlobalChunkUpdates(accessor);
+        }
+
+        scheduleWorldTerrainRefresh();
+        scheduleBloomTerrainRefresh("dimension switch");
+        scheduleWorldLoadLightRecalculation();
+        BetterPortalsCompat.startMainViewSwapRecovery(mc.world);
+        vanillaRecoveryFrames = Math.max(vanillaRecoveryFrames, 6);
     }
 
     public void queueBetterPortalsPortalBlockChanged(World world, BlockPos pos, IBlockState oldState, IBlockState newState) {
@@ -4749,6 +5418,10 @@ public class PipelineContext {
                 && stateName(state).contains("active=true")) {
             return 71;
         }
+        int astralVoxel = astralCrystalVoxelId(state);
+        if (astralVoxel > 0) {
+            return astralVoxel;
+        }
         return 0;
     }
 
@@ -5291,9 +5964,113 @@ public class PipelineContext {
             return 0;
         }
 
-        int count = renderGlobal.renderBlockLayer(layer, partialTicks, pass, viewEntity);
-        recordTerrainLayerCount(layer, count);
-        return count;
+        boolean prepareVanillaState = shouldPrepareShaderlessBlockLayerState();
+        if (prepareVanillaState) {
+            prepareShaderlessBlockLayerState(layer);
+        }
+
+        try {
+            int nothiriumCount = renderNothiriumTerrainLayer(layer, (float) partialTicks, viewEntity);
+            if (nothiriumCount >= 0) {
+                markNothiriumPipelineTranslucentBridge(layer);
+                recordTerrainLayerCount(layer, nothiriumCount);
+                return nothiriumCount;
+            }
+
+            boolean forceVanillaFallback = isPipelineActive && !NothiriumBypass.shouldBypass();
+            if (forceVanillaFallback) {
+                NothiriumBypass.pushForcedBypass();
+            }
+            int count;
+            try {
+                count = renderGlobal.renderBlockLayer(layer, partialTicks, pass, viewEntity);
+            } finally {
+                if (forceVanillaFallback) {
+                    NothiriumBypass.popForcedBypass();
+                }
+            }
+            recordTerrainLayerCount(layer, count);
+            return count;
+        } finally {
+            if (prepareVanillaState) {
+                finishShaderlessBlockLayerState(layer);
+            }
+        }
+    }
+
+    private void markNothiriumPipelineTranslucentBridge(BlockRenderLayer layer) {
+        if (layer != BlockRenderLayer.TRANSLUCENT
+                || !isPipelineActive
+                || !worldFrameActive
+                || renderingShadowMap
+                || activePass != RenderPass.GBUFFERS_WATER
+                || getPhase() != WorldRenderingPhase.TERRAIN_TRANSLUCENT) {
+            return;
+        }
+
+        nothiriumPipelineTranslucentFrame = pipelineFrameId;
+    }
+
+    private boolean shouldPrepareShaderlessBlockLayerState() {
+        return !isPipelineActive || shouldBypassWorldPassRendering();
+    }
+
+    private void prepareShaderlessBlockLayerState(BlockRenderLayer layer) {
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        resetIndexedBlendState();
+        disablePipelineVertexAttributes();
+        unbindShaderStorageBuffers();
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(0.0F, 0.0F);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GlStateManager.colorMask(true, true, true, true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        GlStateManager.disableLighting();
+        GlStateManager.disableColorMaterial();
+        GlStateManager.enableTexture2D();
+        bindBlockAtlas();
+        GlStateManager.enableDepth();
+
+        if (layer == BlockRenderLayer.TRANSLUCENT) {
+            GlStateManager.enableAlpha();
+            GlStateManager.alphaFunc(GL11.GL_GREATER, 0.003921569F);
+            GlStateManager.enableBlend();
+            GlStateManager.tryBlendFuncSeparate(
+                    GL11.GL_SRC_ALPHA,
+                    GL11.GL_ONE_MINUS_SRC_ALPHA,
+                    GL11.GL_ONE,
+                    GL11.GL_ZERO
+            );
+            GlStateManager.depthMask(false);
+            return;
+        }
+
+        GlStateManager.depthMask(true);
+        GlStateManager.disableBlend();
+        if (layer == BlockRenderLayer.SOLID) {
+            GlStateManager.disableAlpha();
+        } else {
+            GlStateManager.enableAlpha();
+            GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        }
+    }
+
+    private void finishShaderlessBlockLayerState(BlockRenderLayer layer) {
+        GlStateManager.colorMask(true, true, true, true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        GlStateManager.enableTexture2D();
+        GlStateManager.enableDepth();
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        if (layer == BlockRenderLayer.TRANSLUCENT) {
+            GlStateManager.depthMask(true);
+            GlStateManager.disableBlend();
+            GlStateManager.enableAlpha();
+            GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        }
     }
 
     private void recordTerrainLayerCount(BlockRenderLayer layer, int count) {
@@ -5931,6 +6708,8 @@ public class PipelineContext {
         centerDepth = 1.0f;
         centerDepthSmooth = 1.0f;
         pipelineFrameId = 0L;
+        nothiriumPipelineTranslucentFrame = Long.MIN_VALUE;
+        resetChunkFadeState(false);
         frameTimeCounter = 0.0f;
         currentFrameTime = 0.016f;
         frameTimeSmooth = 0.016f;
@@ -5968,6 +6747,7 @@ public class PipelineContext {
         wetnessSmoothInitialized = false;
         passStack.clear();
         worldPassBypassStack.clear();
+        shaderlessWorldPassActive = false;
         shaderlessBloomRenderedThisWorldPass = false;
         vanillaRecoveryFrames = Math.max(vanillaRecoveryFrames, 6);
     }
@@ -6006,6 +6786,7 @@ public class PipelineContext {
 
     public String describeBetterPortalsDiagnostics() {
         return "active=" + isPipelineActive
+                + " shaderlessWorldPass=" + shaderlessWorldPassActive
                 + " worldFrame=" + worldFrameActive
                 + " frame=" + pipelineFrameId
                 + " activePass=" + activePass
@@ -6023,8 +6804,7 @@ public class PipelineContext {
     }
 
     private boolean computeShouldBypassWorldPassRendering() {
-        return !isPipelineActive
-                || (isRenderingBetterPortalsNestedView() && !shouldRenderBetterPortalsNestedViewWithShaders());
+        return isRenderingBetterPortalsNestedView() && !shouldRenderBetterPortalsNestedViewWithShaders();
     }
 
     private boolean shouldLeaveBetterPortalsRenderPassUntouched() {
@@ -6421,6 +7201,7 @@ public class PipelineContext {
         BetterPortalsCompat.logRenderStateDiagnostic("pipeline:bypass-finish-before");
         restoreVanillaWorldPassState(false, true);
         popVanillaTerrainRendererState();
+        shaderlessWorldPassActive = false;
         restoreActiveWorldPassAfterExternalShader();
         BetterPortalsCompat.logRenderStateDiagnostic("pipeline:bypass-finish-after");
     }
@@ -6491,6 +7272,9 @@ public class PipelineContext {
 
     public int renderAusmBloomLayer(RenderGlobal renderGlobal, double partialTicks, int pass, Entity entity) {
         if (renderingGuiScreen() || renderingShadowMap) {
+            return 0;
+        }
+        if (!AusmBloomLayer.shouldUseNativeHook()) {
             return 0;
         }
         if (isRenderingBetterPortalsRenderPass()) {
@@ -6630,6 +7414,12 @@ public class PipelineContext {
                 + " nativeBloom=" + AusmBloomLayer.shouldUseNativeHook()
                 + " renderPass=" + isRenderingBetterPortalsRenderPass());
         renderNativeBloomLayerIfNeeded();
+        if (!bloomLayerRenderedThisWorldPass && !AusmBloomLayer.shouldUseNativeHook()) {
+            bloomRenderer.renderShaderlessEmissiveTerrainBloom(
+                    mc.getFramebuffer(),
+                    () -> renderShaderlessNothiriumEmissiveTerrain(mc.getRenderPartialTicks(), mc.getRenderViewEntity())
+            );
+        }
         renderPostWorldBloom(mc.getFramebuffer(), false);
         shaderlessBloomRenderedThisWorldPass = true;
         OpenGlHelper.glUseProgram(0);
@@ -6637,7 +7427,32 @@ public class PipelineContext {
         GlStateManager.bindTexture(0);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
         GlStateManager.enableTexture2D();
-        GL11.glColorMask(true, true, true, true);
+        GlStateManager.colorMask(true, true, true, true);
+    }
+
+    private int renderShaderlessNothiriumEmissiveTerrain(float partialTicks, Entity viewEntity) {
+        if (isPipelineActive
+                || viewEntity == null
+                || !NothiriumShadowRenderer.isAvailable()
+                || NothiriumBypass.shouldBypass()) {
+            return 0;
+        }
+
+        double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
+        double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
+        double cameraZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        nothiriumShadowRenderer.drainUploads();
+
+        int rendered = 0;
+        rendered += positiveCount(nothiriumShadowRenderer.renderVisibleLayer(BlockRenderLayer.SOLID, cameraX, cameraY, cameraZ, 0, (short) 0));
+        rendered += positiveCount(nothiriumShadowRenderer.renderVisibleLayer(BlockRenderLayer.CUTOUT_MIPPED, cameraX, cameraY, cameraZ, 0, (short) 0));
+        rendered += positiveCount(nothiriumShadowRenderer.renderVisibleLayer(BlockRenderLayer.CUTOUT, cameraX, cameraY, cameraZ, 0, (short) 0));
+        rendered += positiveCount(nothiriumShadowRenderer.renderVisibleLayer(BlockRenderLayer.TRANSLUCENT, cameraX, cameraY, cameraZ, 0, (short) 0));
+        return rendered;
+    }
+
+    private static int positiveCount(int count) {
+        return Math.max(0, count);
     }
 
     private void logShaderlessBloomHook(String detail) {
@@ -6678,7 +7493,6 @@ public class PipelineContext {
         }
         OpenGlHelper.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
-        GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GlStateManager.bindTexture(0);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
         GlStateManager.enableTexture2D();
@@ -6694,20 +7508,74 @@ public class PipelineContext {
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        GL11.glColorMask(true, true, true, true);
+        GlStateManager.colorMask(true, true, true, true);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
     }
 
     public void finishExternalOverlayRender(String source) {
+        restoreGuiSafeRenderState(source);
+    }
+
+    public void finishExternalWorldOverlayRender(String source) {
+        restoreWorldSafeRenderState(source);
+    }
+
+    private void restoreGuiSafeRenderState(String source) {
         OpenGlHelper.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
-        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        disablePipelineVertexAttributes();
+        unbindShaderStorageBuffers();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(0.0F, 0.0F);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
         GlStateManager.bindTexture(0);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        GlStateManager.colorMask(true, true, true, true);
         GlStateManager.enableTexture2D();
         GlStateManager.enableAlpha();
-        GlStateManager.enableBlend();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GlStateManager.enableDepth();
         GlStateManager.depthMask(true);
-        GL11.glColorMask(true, true, true, true);
+        GlStateManager.disableLighting();
+        GlStateManager.disableColorMaterial();
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(
+                GL11.GL_SRC_ALPHA,
+                GL11.GL_ONE_MINUS_SRC_ALPHA,
+                GL11.GL_ONE,
+                GL11.GL_ZERO
+        );
+    }
+
+    private void restoreWorldSafeRenderState(String source) {
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        resetIndexedBlendState();
+        disablePipelineVertexAttributes();
+        unbindShaderStorageBuffers();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(0.0F, 0.0F);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GlStateManager.bindTexture(0);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        GlStateManager.colorMask(true, true, true, true);
+        GlStateManager.enableTexture2D();
+        bindBlockAtlas();
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GlStateManager.enableDepth();
+        GlStateManager.depthMask(true);
+        GlStateManager.enableCull();
+        GlStateManager.disableLighting();
+        GlStateManager.disableColorMaterial();
+        GlStateManager.disableBlend();
     }
 
     public void restoreActiveWorldPassAfterExternalShader() {
@@ -6724,8 +7592,10 @@ public class PipelineContext {
         TextureBinder.restoreDefaultTextureUnit();
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        GL11.glColorMask(true, true, true, true);
+        GlStateManager.colorMask(true, true, true, true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         GlStateManager.enableDepth();
         GlStateManager.enableAlpha();
         GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
@@ -6745,7 +7615,7 @@ public class PipelineContext {
                     GlStateManager.bindTexture(0);
                     GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
                     GlStateManager.enableTexture2D();
-                    GL11.glColorMask(true, true, true, true);
+                    GlStateManager.colorMask(true, true, true, true);
                 }
             }
             return;
@@ -6769,7 +7639,7 @@ public class PipelineContext {
         GlStateManager.bindTexture(0);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
         GlStateManager.enableTexture2D();
-        GL11.glColorMask(true, true, true, true);
+        GlStateManager.colorMask(true, true, true, true);
     }
 
     public void prepareGuiRendering() {
@@ -6806,6 +7676,7 @@ public class PipelineContext {
         }
         if (guiRenderDepth == 0) {
             renderingGui = false;
+            restoreGuiSafeRenderState("gui-finish");
         }
     }
 
@@ -6834,7 +7705,7 @@ public class PipelineContext {
         TextureBinder.restoreDefaultTextureUnit();
         GlStateManager.bindTexture(0);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GL11.glColorMask(true, true, true, true);
+        GlStateManager.colorMask(true, true, true, true);
         GlStateManager.enableDepth();
         GL11.glDepthMask(true);
         GlStateManager.enableTexture2D();
@@ -6998,6 +7869,7 @@ public class PipelineContext {
         if (isPipelineActive) {
             ensureVanillaTerrainRenderer();
         }
+        NothiriumBypass.markAllChanged();
         mc.renderGlobal.loadRenderers();
     }
 
@@ -7053,6 +7925,30 @@ public class PipelineContext {
     public void clearScheduledWorldLoadLightRecalculation() {
         pendingWorldLoadLightRecalculationAttempts = 0;
         pendingWorldLoadLightRecalculationDelay = 0;
+    }
+
+    public void scheduleWorldTerrainRefresh() {
+        Minecraft mc = Minecraft.getMinecraft();
+        int dimension = mc != null && mc.world != null ? safeDimensionId(mc.world) : Integer.MIN_VALUE;
+        resetChunkFadeState(true);
+        if (pendingWorldTerrainRefreshAttempts > 0 && pendingWorldTerrainRefreshDimension == dimension) {
+            pendingWorldTerrainRefreshAttempts = Math.max(pendingWorldTerrainRefreshAttempts, WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS);
+            pendingWorldTerrainRefreshDelay = Math.min(pendingWorldTerrainRefreshDelay, WORLD_LOAD_TERRAIN_REFRESH_INITIAL_DELAY_FRAMES);
+            pendingWorldTerrainRendererReset = true;
+            return;
+        }
+        pendingWorldTerrainRefreshAttempts = WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS;
+        pendingWorldTerrainRefreshDelay = WORLD_LOAD_TERRAIN_REFRESH_INITIAL_DELAY_FRAMES;
+        pendingWorldTerrainRefreshDimension = dimension;
+        pendingWorldTerrainRendererReset = true;
+    }
+
+    public void clearScheduledWorldTerrainRefresh() {
+        pendingWorldTerrainRefreshAttempts = 0;
+        pendingWorldTerrainRefreshDelay = 0;
+        pendingWorldTerrainRefreshDimension = Integer.MIN_VALUE;
+        pendingWorldTerrainRendererReset = false;
+        resetChunkFadeState(true);
     }
 
     public void queueShaderChunkRefresh(WorldClient world, int chunkX, int chunkZ) {
@@ -7113,6 +8009,9 @@ public class PipelineContext {
         int minX = refresh.chunkX << 4;
         int minZ = refresh.chunkZ << 4;
         refresh.world.markBlockRangeForRenderUpdate(minX, 0, minZ, minX + 15, 255, minZ + 15);
+        if (!NothiriumBypass.shouldBypass()) {
+            nothiriumShadowRenderer.refreshChunkColumn(refresh.chunkX, refresh.chunkZ);
+        }
     }
 
     public void scheduleBloomTerrainRefresh(String reason) {
@@ -7167,6 +8066,26 @@ public class PipelineContext {
         }
     }
 
+    public void runScheduledWorldTerrainRefresh() {
+        if (pendingWorldTerrainRefreshAttempts <= 0) {
+            return;
+        }
+        if (pendingWorldTerrainRefreshDelay > 0) {
+            pendingWorldTerrainRefreshDelay--;
+            return;
+        }
+
+        if (refreshWorldTerrainState()) {
+            pendingWorldTerrainRefreshAttempts--;
+        }
+
+        if (pendingWorldTerrainRefreshAttempts <= 0) {
+            clearScheduledWorldTerrainRefresh();
+        } else {
+            pendingWorldTerrainRefreshDelay = WORLD_LOAD_TERRAIN_REFRESH_REPEAT_DELAY_FRAMES;
+        }
+    }
+
     private boolean refreshBloomTerrainState(String reason) {
         Minecraft mc = Minecraft.getMinecraft();
         if (mc == null || mc.world == null || mc.player == null) {
@@ -7193,6 +8112,40 @@ public class PipelineContext {
                 radius,
                 nothiriumDirty,
                 pendingBloomTerrainRefreshAttempts);
+        return true;
+    }
+
+    private boolean refreshWorldTerrainState() {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.world == null || mc.player == null) {
+            return false;
+        }
+
+        int dimension = safeDimensionId(mc.world);
+        if (pendingWorldTerrainRefreshDimension != Integer.MIN_VALUE
+                && pendingWorldTerrainRefreshDimension != dimension) {
+            clearScheduledWorldTerrainRefresh();
+            return false;
+        }
+
+        if (pendingWorldTerrainRendererReset) {
+            deleteCachedVanillaTerrainRenderer(mc.world);
+            pendingWorldTerrainRendererReset = false;
+        }
+
+        ensureVanillaTerrainRenderer(mc.world, true);
+        BlockPos center = new BlockPos(mc.player);
+        int radius = Math.max(32, Math.min(128, mc.gameSettings.renderDistanceChunks * 16));
+        mc.world.markBlockRangeForRenderUpdate(
+                center.getX() - radius,
+                0,
+                center.getZ() - radius,
+                center.getX() + radius,
+                255,
+                center.getZ() + radius
+        );
+        NothiriumBypass.markAllChanged();
+        vanillaRecoveryFrames = Math.max(vanillaRecoveryFrames, 4);
         return true;
     }
 
@@ -7304,12 +8257,14 @@ public class PipelineContext {
         activePhase = WorldRenderingPhase.NONE;
         overridePhase = null;
         worldFrameActive = false;
+        shaderlessWorldPassActive = false;
         deferredPassesRenderedThisFrame = false;
         preTranslucentDepthCopiedThisFrame = false;
         preHandDepthCopiedThisFrame = false;
         renderingShadowMap = false;
         renderingDeferredIngameHud = false;
         renderingGui = false;
+        nothiriumPipelineTranslucentFrame = Long.MIN_VALUE;
         guiRenderDepth = 0;
         bloomLayerRenderedThisWorldPass = false;
         pendingDeferredNativeBloom = false;
@@ -7459,7 +8414,7 @@ public class PipelineContext {
     }
 
     private void refreshVanillaLightmap(Minecraft mc) {
-        if (mc == null || mc.world == null || mc.entityRenderer == null) {
+        if (mc == null || mc.world == null || mc.player == null || mc.entityRenderer == null) {
             return;
         }
         EntityRendererAccessor accessor = (EntityRendererAccessor) mc.entityRenderer;
@@ -7749,6 +8704,19 @@ public class PipelineContext {
             result = 31 * result + chunkX;
             result = 31 * result + chunkZ;
             return result;
+        }
+    }
+
+    private record ChunkFadeKey(int dimensionId, int chunkX, int chunkY, int chunkZ) {
+    }
+
+    private static final class ChunkFadeState {
+        private float value;
+        private long lastFrameSeen;
+
+        private ChunkFadeState(float value, long lastFrameSeen) {
+            this.value = value;
+            this.lastFrameSeen = lastFrameSeen;
         }
     }
 

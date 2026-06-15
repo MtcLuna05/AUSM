@@ -2,6 +2,7 @@ package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.BlockRenderLayer;
@@ -21,13 +22,20 @@ public class LumenizedDisableBloomMixin {
         PipelineContext context = PipelineContext.getInstance();
         if (!logged) {
             logged = true;
-            MainMod.LOGGER.info("[AUSMBloom] Disabled original Lumenized bloom renderer; AUSM owns BLOOM rendering.");
+            MainMod.LOGGER.info("[AUSMBloom] Replacing original Lumenized bloom pass while preserving wrapped terrain layers.");
         }
-        cir.setReturnValue(context.renderAusmBloomLayer(
+        int bloomRendered = context.renderAusmBloomLayer(
                 renderGlobal,
                 partialTicks,
                 pass,
                 entity
-        ));
+        );
+
+        if (renderGlobal == null || layer == null || AusmBloomLayer.isBloomLayer(layer)) {
+            cir.setReturnValue(bloomRendered);
+            return;
+        }
+
+        cir.setReturnValue(renderGlobal.renderBlockLayer(layer, partialTicks, pass, entity));
     }
 }

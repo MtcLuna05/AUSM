@@ -1,10 +1,12 @@
 package com.l.ausm.impl.pipeline.compat;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.util.BlockRenderLayer;
+import net.minecraftforge.fml.common.Loader;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
@@ -13,6 +15,7 @@ import org.lwjgl.opengl.GLContext;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -28,6 +31,7 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class NothiriumShadowRenderer {
 
+    private static final String NOTHIRIUM_MOD_ID = "nothirium";
     private static final int VANILLA_BLOCK_STRIDE = 28;
     private static final int POSITION_OFFSET = 0;
     private static final int COLOR_OFFSET = 12;
@@ -35,7 +39,11 @@ public final class NothiriumShadowRenderer {
     private static final int LIGHT_COORD_OFFSET = 24;
     private static final int MAX_SHADOW_COMPILES_PER_FRAME = 8;
     private static final int MAX_PENDING_SHADOW_COMPILES = 64;
-    private static final Reflection REFLECTION = Reflection.load();
+    private static final int MAX_CHUNK_REFRESH_COMPILES = 16;
+    private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 16;
+    private static final long REFLECTION_RETRY_DELAY_MS = 1000L;
+    private static Reflection reflection;
+    private static long nextReflectionAttemptMillis;
 
     private boolean disabled;
     private boolean warned;
@@ -47,13 +55,15 @@ public final class NothiriumShadowRenderer {
     private int providerZeroAuditAttempts;
     private int uploadAuditAttempts;
     private int compileAuditAttempts;
+    private int chunkRefreshAuditAttempts;
+    private int visibleTranslucentAuditAttempts;
 
     public static boolean isAvailable() {
-        return REFLECTION != null;
+        return reflection() != null;
     }
 
     public void drainUploads() {
-        Reflection reflection = REFLECTION;
+        Reflection reflection = reflection();
         if (disabled || reflection == null) {
             return;
         }
@@ -74,13 +84,89 @@ public final class NothiriumShadowRenderer {
         }
     }
 
+    public boolean refreshChunkColumn(int chunkX, int chunkZ) {
+        Reflection reflection = reflection();
+        if (disabled || reflection == null) {
+            return false;
+        }
+
+        try {
+            Object provider = reflection.getProvider.invoke(null);
+            if (provider == null) {
+                return false;
+            }
+
+            Object chunksObject = reflection.providerChunks.get(provider);
+            if (!(chunksObject instanceof Object[] chunks) || chunks.length == 0) {
+                return false;
+            }
+
+            Object renderer = reflection.getRenderer.invoke(null);
+            Object dispatcher = reflection.getTaskDispatcher.invoke(null);
+            ChunkRefreshStats stats = new ChunkRefreshStats(chunkX, chunkZ);
+            for (Object chunk : chunks) {
+                stats.total++;
+                if (chunk == null) {
+                    stats.nullChunks++;
+                    continue;
+                }
+
+                int sectionX = ((Integer) reflection.getX.invoke(chunk)) >> 4;
+                int sectionZ = ((Integer) reflection.getZ.invoke(chunk)) >> 4;
+                if (sectionX != chunkX || sectionZ != chunkZ) {
+                    continue;
+                }
+
+                stats.matched++;
+                if (reflection.isChunkDirty(chunk)) {
+                    stats.alreadyDirty++;
+                }
+                if (futureIsRunning(reflection.lastCompileTaskResult(chunk))) {
+                    stats.running++;
+                }
+
+                reflection.releaseBuffers.invoke(chunk);
+                stats.released++;
+                reflection.markDirty.invoke(chunk);
+                stats.marked++;
+
+                if (renderer == null || dispatcher == null) {
+                    stats.noDispatcher++;
+                    continue;
+                }
+                if (!Boolean.TRUE.equals(reflection.canCompile(chunk))) {
+                    stats.cannotCompile++;
+                    continue;
+                }
+                stats.canCompile++;
+                if (stats.scheduled >= MAX_CHUNK_REFRESH_COMPILES) {
+                    stats.deferred++;
+                    continue;
+                }
+
+                reflection.compileAsync.invoke(chunk, renderer, dispatcher);
+                stats.scheduled++;
+            }
+
+            if (stats.scheduled > 0 && dispatcher != null) {
+                reflection.dispatcherUpdate.invoke(dispatcher);
+            }
+            auditChunkRefresh(stats);
+            return stats.matched > 0;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            disabled = true;
+            warnOnce(e);
+            return false;
+        }
+    }
+
     public int renderLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ, double maxDistance) {
         return renderLayer(layer, cameraX, cameraY, cameraZ, maxDistance, false, true, false);
     }
 
     public int renderVisibleLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
                                   int fallbackBlockEntityId, short fallbackRenderType) {
-        Reflection reflection = REFLECTION;
+        Reflection reflection = reflection();
         if (disabled || reflection == null) {
             return -1;
         }
@@ -106,8 +192,16 @@ public final class NothiriumShadowRenderer {
                 return -1;
             }
 
+            boolean requirePipelineStride = layer != BlockRenderLayer.TRANSLUCENT;
             DrawStats stats = drawChunks(reflection, pass, chunks, cameraX, cameraY, cameraZ, -1.0D, false,
-                    fallbackBlockEntityId, fallbackRenderType);
+                    fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
+            if (stats.unsupportedStride > 0) {
+                refreshUnsupportedPipelineChunks(reflection, stats.unsupportedPipelineChunks);
+            }
+            auditVisibleTranslucentLayer(layer, stats, fallbackBlockEntityId, fallbackRenderType);
+            if (stats.drawn == 0 && stats.unsupportedStride > 0) {
+                return -1;
+            }
             return stats.drawn;
         } catch (ReflectiveOperationException | RuntimeException e) {
             disabled = true;
@@ -118,7 +212,7 @@ public final class NothiriumShadowRenderer {
 
     private int renderLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ, double maxDistance,
                             boolean scheduleCompiles, boolean audit, boolean visibleOnly) {
-        Reflection reflection = REFLECTION;
+        Reflection reflection = reflection();
         if (disabled || reflection == null) {
             return 0;
         }
@@ -140,7 +234,7 @@ public final class NothiriumShadowRenderer {
                         boolean collectState = audit && layer == BlockRenderLayer.SOLID
                                 && (!providerSuccessAuditLogged || providerZeroAuditAttempts < 8);
                         DrawStats stats = drawChunks(reflection, pass, Arrays.asList(chunks), cameraX, cameraY, cameraZ,
-                                maxDistance, collectState, 0, (short) 0);
+                                maxDistance, collectState, 0, (short) 0, false);
                         if (audit) {
                             auditDrawStats("provider", layer, stats);
                         }
@@ -176,7 +270,7 @@ public final class NothiriumShadowRenderer {
             }
 
             DrawStats stats = drawChunks(reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, false,
-                    0, (short) 0);
+                    0, (short) 0, false);
             if (audit) {
                 auditDrawStats("fallback", layer, stats);
             }
@@ -257,7 +351,7 @@ public final class NothiriumShadowRenderer {
 
     private DrawStats drawChunks(Reflection reflection, Object pass, Iterable<?> chunks,
                                  double cameraX, double cameraY, double cameraZ, double maxDistance, boolean collectState,
-                                 int fallbackBlockEntityId, short fallbackRenderType)
+                                 int fallbackBlockEntityId, short fallbackRenderType, boolean requirePipelineStride)
             throws ReflectiveOperationException {
         DrawStats stats = new DrawStats();
         int previousVbo = -1;
@@ -327,6 +421,14 @@ public final class NothiriumShadowRenderer {
                     stats.badStride++;
                     continue;
                 }
+                boolean pipelineStride = isPipelineBlockStride(stride);
+                if (!pipelineStride) {
+                    stats.unsupportedStride++;
+                    stats.captureUnsupportedPipelineChunk(chunk);
+                    if (requirePipelineStride) {
+                        continue;
+                    }
+                }
 
                 if (vbo != previousVbo || stride != previousStride) {
                     GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
@@ -345,6 +447,7 @@ public final class NothiriumShadowRenderer {
 
                 GL11.glPushMatrix();
                 try {
+                    PipelineContext.getInstance().applyChunkFade(chunkX, chunkY, chunkZ);
                     GL11.glTranslated(chunkX - cameraX, chunkY - cameraY, chunkZ - cameraZ);
                     GL11.glDrawArrays(GL11.GL_QUADS, first, count);
                 } finally {
@@ -362,9 +465,44 @@ public final class NothiriumShadowRenderer {
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
+            PipelineContext.getInstance().resetChunkFadeUniform();
         }
 
         return stats;
+    }
+
+    private void refreshUnsupportedPipelineChunks(Reflection reflection, List<Object> chunks)
+            throws ReflectiveOperationException {
+        if (chunks.isEmpty()) {
+            return;
+        }
+
+        Object renderer = reflection.getRenderer.invoke(null);
+        Object dispatcher = reflection.getTaskDispatcher.invoke(null);
+        if (renderer == null || dispatcher == null) {
+            return;
+        }
+
+        int scheduled = 0;
+        for (Object chunk : chunks) {
+            if (chunk == null || scheduled >= MAX_CHUNK_REFRESH_COMPILES) {
+                continue;
+            }
+            if (futureIsRunning(reflection.lastCompileTaskResult(chunk))) {
+                continue;
+            }
+
+            reflection.releaseBuffers.invoke(chunk);
+            reflection.markDirty.invoke(chunk);
+            if (Boolean.TRUE.equals(reflection.canCompile(chunk))) {
+                reflection.compileAsync.invoke(chunk, renderer, dispatcher);
+                scheduled++;
+            }
+        }
+
+        if (scheduled > 0) {
+            reflection.dispatcherUpdate.invoke(dispatcher);
+        }
     }
 
     private static int vertexStride(int size, int count) {
@@ -405,6 +543,7 @@ public final class NothiriumShadowRenderer {
             setupPipelineAttributes(stride);
         } else {
             GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
+            GL11.glNormal3f(0.0F, 1.0F, 0.0F);
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
@@ -421,8 +560,15 @@ public final class NothiriumShadowRenderer {
     }
 
     private static boolean isPipelineBlockStride(int stride) {
+        ensurePipelineBlockFormat();
         return ExtendedVertexFormats.PIPELINE_BLOCK != null
                 && stride == ExtendedVertexFormats.PIPELINE_BLOCK.getSize();
+    }
+
+    private static void ensurePipelineBlockFormat() {
+        if (ExtendedVertexFormats.PIPELINE_BLOCK == null) {
+            ExtendedVertexFormats.initialize();
+        }
     }
 
     private static void setupPipelineAttributes(int stride) {
@@ -470,6 +616,33 @@ public final class NothiriumShadowRenderer {
         );
     }
 
+    private void auditVisibleTranslucentLayer(BlockRenderLayer layer, DrawStats stats,
+                                             int fallbackBlockEntityId, short fallbackRenderType) {
+        if (layer != BlockRenderLayer.TRANSLUCENT || visibleTranslucentAuditAttempts >= 8) {
+            return;
+        }
+
+        visibleTranslucentAuditAttempts++;
+        MainMod.LOGGER.info(
+                "[NothiriumWaterAudit] attempt={} total={} null={} part={} valid={} count={} vbo={} badStride={} unsupportedStride={} rangeSkip={} drawn={} fallbackBlock={} fallbackRenderType={} firstChunk={} firstPart={}",
+                visibleTranslucentAuditAttempts,
+                stats.total,
+                stats.nullChunks,
+                stats.partPresent,
+                stats.validPart,
+                stats.positiveCount,
+                stats.positiveVbo,
+                stats.badStride,
+                stats.unsupportedStride,
+                stats.invalidRange,
+                stats.drawn,
+                fallbackBlockEntityId,
+                fallbackRenderType,
+                stats.firstChunk,
+                stats.firstPart
+        );
+    }
+
     private static void resetClientArrayState() {
         GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
         GL11.glDisableClientState(GL11.GL_COLOR_ARRAY);
@@ -508,6 +681,34 @@ public final class NothiriumShadowRenderer {
                 stats.running,
                 stats.scheduled,
                 stats.firstChunk
+        );
+    }
+
+    private void auditChunkRefresh(ChunkRefreshStats stats) {
+        if (stats.matched <= 0) {
+            return;
+        }
+        if (chunkRefreshAuditAttempts >= MAX_CHUNK_REFRESH_AUDIT_LOGS) {
+            return;
+        }
+        chunkRefreshAuditAttempts++;
+        MainMod.LOGGER.debug(
+                "[NothiriumShadowBridge] refreshedChunkColumn attempt={} chunk={},{} total={} null={} matched={} alreadyDirty={} running={} released={} marked={} canCompile={} cannotCompile={} noDispatcher={} scheduled={} deferred={}",
+                chunkRefreshAuditAttempts,
+                stats.chunkX,
+                stats.chunkZ,
+                stats.total,
+                stats.nullChunks,
+                stats.matched,
+                stats.alreadyDirty,
+                stats.running,
+                stats.released,
+                stats.marked,
+                stats.canCompile,
+                stats.cannotCompile,
+                stats.noDispatcher,
+                stats.scheduled,
+                stats.deferred
         );
     }
 
@@ -591,7 +792,7 @@ public final class NothiriumShadowRenderer {
         }
         emptyAuditLogged = true;
 
-        Reflection reflection = REFLECTION;
+        Reflection reflection = reflection();
         int renderedChunks = -1;
         int renderedSections = -1;
         int totalRenderedSections = -1;
@@ -616,6 +817,26 @@ public final class NothiriumShadowRenderer {
         );
     }
 
+    private static Reflection reflection() {
+        Reflection existing = reflection;
+        if (existing != null) {
+            return existing;
+        }
+        if (!Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
+            return null;
+        }
+        long now = System.currentTimeMillis();
+        if (now < nextReflectionAttemptMillis) {
+            return null;
+        }
+        nextReflectionAttemptMillis = now + REFLECTION_RETRY_DELAY_MS;
+        Reflection loaded = Reflection.load();
+        if (loaded != null) {
+            reflection = loaded;
+        }
+        return loaded;
+    }
+
     private static final class CompileStats {
         private int total;
         private int nullChunks;
@@ -636,6 +857,28 @@ public final class NothiriumShadowRenderer {
         }
     }
 
+    private static final class ChunkRefreshStats {
+        private final int chunkX;
+        private final int chunkZ;
+        private int total;
+        private int nullChunks;
+        private int matched;
+        private int alreadyDirty;
+        private int running;
+        private int released;
+        private int marked;
+        private int canCompile;
+        private int cannotCompile;
+        private int noDispatcher;
+        private int scheduled;
+        private int deferred;
+
+        private ChunkRefreshStats(int chunkX, int chunkZ) {
+            this.chunkX = chunkX;
+            this.chunkZ = chunkZ;
+        }
+    }
+
     private static final class DrawStats {
         private int total;
         private int nullChunks;
@@ -650,6 +893,7 @@ public final class NothiriumShadowRenderer {
         private int badVbo;
         private int positiveVbo;
         private int badStride;
+        private int unsupportedStride;
         private int invalidRange;
         private int drawn;
         private String firstChunk = "n/a";
@@ -672,6 +916,7 @@ public final class NothiriumShadowRenderer {
         private int maxRecorded = -1;
         private int maxEnqueued = -1;
         private int nonemptyMaskChunks;
+        private final List<Object> unsupportedPipelineChunks = new ArrayList<>();
 
         private void captureFirstChunk(int x, int y, int z) {
             if (firstChunk.equals("n/a")) {
@@ -688,6 +933,12 @@ public final class NothiriumShadowRenderer {
                         + " size=" + size
                         + " stride=" + stride
                         + " vboSize=" + vboSize;
+            }
+        }
+
+        private void captureUnsupportedPipelineChunk(Object chunk) {
+            if (unsupportedPipelineChunks.size() < MAX_CHUNK_REFRESH_COMPILES) {
+                unsupportedPipelineChunks.add(chunk);
             }
         }
 
@@ -808,6 +1059,8 @@ public final class NothiriumShadowRenderer {
         private final Method isValid;
         private final Method isDirty;
         private final Method isEmpty;
+        private final Method markDirty;
+        private final Method releaseBuffers;
         private final Method canCompile;
         private final Method compileAsync;
         private final Method getX;
@@ -829,10 +1082,11 @@ public final class NothiriumShadowRenderer {
         private Reflection(Method getRenderer, Method getProvider, Method getTaskDispatcher, Method dispatcherUpdate,
                            Method enumMapGet, Method renderedChunks, Method renderedSections,
                            Method renderedSectionsAll, Method getVboPart, Method getVbo, Method getFirst,
-                           Method getCount, Method getOffset, Method getSize, Method isValid, Method isDirty, Method isEmpty,
-                           Method canCompile, Method compileAsync, Method getX, Method getY, Method getZ, Field chunks,
-                           Field providerChunks, Field dispatcherQueue, Field lastCompileTask, Field lastCompileTaskResult,
-                           Field lastTimeRecorded, Field lastTimeEnqueued, Field nonemptyVboParts,
+                           Method getCount, Method getOffset, Method getSize, Method isValid, Method isDirty,
+                           Method isEmpty, Method markDirty, Method releaseBuffers, Method canCompile,
+                           Method compileAsync, Method getX, Method getY, Method getZ, Field chunks,
+                           Field providerChunks, Field dispatcherQueue, Field lastCompileTask,
+                           Field lastCompileTaskResult, Field lastTimeRecorded, Field lastTimeEnqueued, Field nonemptyVboParts,
                            Object solid, Object cutout, Object cutoutMipped, Object translucent) {
             this.getRenderer = getRenderer;
             this.getProvider = getProvider;
@@ -851,6 +1105,8 @@ public final class NothiriumShadowRenderer {
             this.isValid = isValid;
             this.isDirty = isDirty;
             this.isEmpty = isEmpty;
+            this.markDirty = markDirty;
+            this.releaseBuffers = releaseBuffers;
             this.canCompile = canCompile;
             this.compileAsync = compileAsync;
             this.getX = getX;
@@ -900,6 +1156,8 @@ public final class NothiriumShadowRenderer {
                 Method isValid = vboPartClass.getMethod("isValid");
                 Method isDirty = abstractChunkClass.getMethod("isDirty");
                 Method isEmpty = renderChunkClass.getMethod("isEmpty");
+                Method markDirty = abstractChunkClass.getMethod("markDirty");
+                Method releaseBuffers = abstractChunkClass.getMethod("releaseBuffers");
                 Method canCompile = abstractChunkClass.getDeclaredMethod("canCompile");
                 canCompile.setAccessible(true);
                 Method compileAsync = abstractChunkClass.getMethod("compileAsync", chunkRendererClass, dispatcherClass);
@@ -944,6 +1202,8 @@ public final class NothiriumShadowRenderer {
                         isValid,
                         isDirty,
                         isEmpty,
+                        markDirty,
+                        releaseBuffers,
                         canCompile,
                         compileAsync,
                         getX,

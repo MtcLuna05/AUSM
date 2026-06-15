@@ -8,8 +8,11 @@ import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.pipeline.vertex.IPipelineRenderChunk;
+import net.minecraft.client.renderer.BufferBuilder;
+import net.minecraft.client.renderer.chunk.CompiledChunk;
 import net.minecraft.client.renderer.chunk.RenderChunk;
 import net.minecraft.client.renderer.vertex.VertexFormat;
+import net.minecraft.util.BlockRenderLayer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -19,6 +22,8 @@ import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import net.minecraft.world.World;
 
+import java.util.Arrays;
+
 @Mixin(RenderChunk.class)
 public class RenderChunkMixin implements IPipelineRenderChunk {
     @Shadow
@@ -26,6 +31,12 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
 
     @Unique
     private boolean ausm$pipelineVertexFormat;
+
+    @Unique
+    private boolean ausm$pendingPipelineVertexFormat;
+
+    @Unique
+    private final boolean[] ausm$pipelineVertexFormatByLayer = new boolean[BlockRenderLayer.values().length];
 
     @Unique
     private static boolean ausm$loggedNullWorldRepair;
@@ -54,8 +65,11 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
             index = 0
     )
     private VertexFormat ausm$usePipelineVertexBufferFormat(VertexFormat original) {
-        boolean pipelineFormat = PipelineContext.getInstance().isActive();
+        boolean pipelineFormat = PipelineContext.getInstance().shouldUsePipelineBlockFormat()
+                && ExtendedVertexFormats.PIPELINE_BLOCK != null;
         ausm$pipelineVertexFormat = pipelineFormat;
+        ausm$pendingPipelineVertexFormat = pipelineFormat;
+        Arrays.fill(ausm$pipelineVertexFormatByLayer, pipelineFormat);
         return pipelineFormat ? ExtendedVertexFormats.PIPELINE_BLOCK : original;
     }
 
@@ -65,14 +79,40 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
             index = 1
     )
     private VertexFormat ausm$usePipelineBlockFormat(VertexFormat original) {
-        boolean pipelineFormat = PipelineContext.getInstance().isActive();
+        boolean pipelineFormat = PipelineContext.getInstance().shouldUsePipelineBlockFormat()
+                && ExtendedVertexFormats.PIPELINE_BLOCK != null;
         ausm$pipelineVertexFormat = pipelineFormat;
+        ausm$pendingPipelineVertexFormat = pipelineFormat;
         return pipelineFormat ? ExtendedVertexFormats.PIPELINE_BLOCK : original;
+    }
+
+    @Inject(method = "postRenderBlocks", at = @At("HEAD"))
+    private void ausm$recordLayerVertexFormat(BlockRenderLayer layer, float x, float y, float z,
+                                              BufferBuilder bufferBuilder, CompiledChunk compiledChunk, CallbackInfo ci) {
+        int index = ausm$layerIndex(layer);
+        if (index >= 0) {
+            ausm$pipelineVertexFormatByLayer[index] = ausm$pendingPipelineVertexFormat;
+        }
+    }
+
+    @Override
+    public boolean ausm$usesPipelineVertexFormat(BlockRenderLayer layer) {
+        int index = ausm$layerIndex(layer);
+        return index >= 0 ? ausm$pipelineVertexFormatByLayer[index] : ausm$pipelineVertexFormat;
     }
 
     @Override
     public boolean ausm$usesPipelineVertexFormat() {
         return ausm$pipelineVertexFormat;
+    }
+
+    @Unique
+    private int ausm$layerIndex(BlockRenderLayer layer) {
+        if (layer == null) {
+            return -1;
+        }
+        int ordinal = layer.ordinal();
+        return ordinal >= 0 && ordinal < ausm$pipelineVertexFormatByLayer.length ? ordinal : -1;
     }
 
     @Unique

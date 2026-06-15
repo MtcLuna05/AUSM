@@ -129,7 +129,6 @@ public class ShaderCompiler {
                 MainMod.LOGGER.error("[ShaderCompiler] File was empty or null: {}", resourcePath);
                 return -1;
             }
-
             int shaderId = OpenGlHelper.glCreateShader(shaderType);
             
             GL20.glShaderSource(shaderId, source);

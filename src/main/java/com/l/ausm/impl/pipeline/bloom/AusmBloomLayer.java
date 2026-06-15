@@ -9,6 +9,8 @@ import net.minecraftforge.fml.common.Loader;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class AusmBloomLayer {
     private static final String LUMENIZED_MOD_ID = "lumenized";
@@ -32,11 +34,13 @@ public final class AusmBloomLayer {
     private static boolean loggedLumenizedInitFailure;
     private static boolean loggedNothiriumPatchFailure;
     private static boolean loggedCtmPatchFailure;
+    private static boolean loggedNativeLayerDisabledForNothirium;
 
     private AusmBloomLayer() {
     }
 
     public static void initialize() {
+        sanitizeNothiriumLayerArrays();
         layer();
     }
 
@@ -45,30 +49,11 @@ public final class AusmBloomLayer {
             return bloomLayer;
         }
 
+        standaloneCreateAttempted = true;
         bloomLayer = existingLayer();
-        if (bloomLayer == null && Loader.isModLoaded(LUMENIZED_MOD_ID)) {
-            initializeLumenizedBloomLayer();
-            bloomLayer = existingLayer();
-            if (bloomLayer == null) {
-                return null;
-            }
-        }
-
-        if (bloomLayer == null) {
-            standaloneCreateAttempted = true;
-            try {
-                bloomLayer = EnumHelper.addEnum(BlockRenderLayer.class, "BLOOM", new Class<?>[]{String.class}, "Bloom");
-                MainMod.LOGGER.info("[AUSMBloom] Created standalone BlockRenderLayer.BLOOM for CTM/Lumenized-style resources.");
-            } catch (RuntimeException | LinkageError error) {
-                if (!loggedCreateFailure) {
-                    loggedCreateFailure = true;
-                    MainMod.LOGGER.warn("[AUSMBloom] Failed to create standalone BLOOM render layer", error);
-                }
-            }
-        }
 
         if (bloomLayer != null) {
-            patchNothiriumBloomLayer();
+            sanitizeNothiriumLayerArrays();
             patchCtmBloomLayer();
             if (!loggedAvailable) {
                 loggedAvailable = true;
@@ -85,16 +70,28 @@ public final class AusmBloomLayer {
         return layer() != null;
     }
 
+    public static boolean isBloomLayer(BlockRenderLayer layer) {
+        return layer != null && "BLOOM".equals(layer.name());
+    }
+
     public static boolean shouldUseNativeHook() {
+        if (Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
+            sanitizeNothiriumLayerArrays();
+            if (!loggedNativeLayerDisabledForNothirium) {
+                loggedNativeLayerDisabledForNothirium = true;
+                MainMod.LOGGER.info("[AUSMBloom] Disabled native BLOOM chunk layer while Nothirium is installed; using framebuffer fallback.");
+            }
+            return false;
+        }
         return isAvailable();
     }
 
     public static void ensureRegionBuffer(BufferBuilder[] worldRenderers) {
-        BlockRenderLayer layer = layer();
-        if (layer == null || worldRenderers == null) {
+        if (!shouldUseNativeHook() || worldRenderers == null) {
             return;
         }
 
+        BlockRenderLayer layer = bloomLayer;
         int ordinal = layer.ordinal();
         if (ordinal < 0 || ordinal >= worldRenderers.length) {
             if (!loggedBufferOutOfRange) {
@@ -132,27 +129,71 @@ public final class AusmBloomLayer {
         }
     }
 
-    private static void patchNothiriumBloomLayer() {
-        if (nothiriumLayerPatched || bloomLayer == null || !Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
+    private static void sanitizeNothiriumLayerArrays() {
+        if (nothiriumLayerPatched || !Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
             return;
         }
 
         try {
-            Class<?> chunkRenderPassClass = Class.forName(NOTHIRIUM_CHUNK_RENDER_PASS, false, AusmBloomLayer.class.getClassLoader());
-            ensureEnumConstant(chunkRenderPassClass, "BLOOM");
-            writeStaticField(chunkRenderPassClass, "ALL", invokeValues(chunkRenderPassClass));
-
             Class<?> blockRenderLayerUtilClass = Class.forName(NOTHIRIUM_BLOCK_RENDER_LAYER_UTIL, true, AusmBloomLayer.class.getClassLoader());
-            writeStaticField(blockRenderLayerUtilClass, "ALL", BlockRenderLayer.values());
+            writeStaticField(blockRenderLayerUtilClass, "ALL", nonBloomBlockRenderLayers());
+            Class<?> chunkRenderPassClass = Class.forName(NOTHIRIUM_CHUNK_RENDER_PASS, true, AusmBloomLayer.class.getClassLoader());
+            writeStaticField(chunkRenderPassClass, "ALL", nonBloomEnumArray(chunkRenderPassClass));
 
             nothiriumLayerPatched = true;
-            MainMod.LOGGER.info("[AUSMBloom] Patched Nothirium BLOOM render pass/layer arrays.");
+            MainMod.LOGGER.info("[AUSMBloom] Sanitized Nothirium layer/pass snapshots to vanilla terrain layers.");
         } catch (Throwable error) {
             if (!loggedNothiriumPatchFailure) {
                 loggedNothiriumPatchFailure = true;
-                MainMod.LOGGER.warn("[AUSMBloom] Failed to patch Nothirium BLOOM render layer support", error);
+                MainMod.LOGGER.warn("[AUSMBloom] Failed to sanitize Nothirium terrain layer support", error);
             }
         }
+    }
+
+    private static BlockRenderLayer[] nonBloomBlockRenderLayers() {
+        List<BlockRenderLayer> layers = new ArrayList<>();
+        for (BlockRenderLayer layer : BlockRenderLayer.values()) {
+            if (layer != null && !"BLOOM".equals(layer.name())) {
+                layers.add(layer);
+            }
+        }
+        return layers.toArray(new BlockRenderLayer[0]);
+    }
+
+    private static Object nonBloomEnumArray(Class<?> enumClass) {
+        try {
+            Field all = enumClass.getDeclaredField("ALL");
+            all.setAccessible(true);
+            Object values = all.get(null);
+            if (values != null && values.getClass().isArray()) {
+                return nonBloomEnumArray(values);
+            }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+        }
+        return nonBloomEnumArray(invokeValues(enumClass));
+    }
+
+    private static Object nonBloomEnumArray(Object values) {
+        if (values == null || !values.getClass().isArray()) {
+            return values;
+        }
+
+        Class<?> componentType = values.getClass().getComponentType();
+        List<Enum<?>> entries = new ArrayList<>();
+        int length = Array.getLength(values);
+        for (int i = 0; i < length; i++) {
+            Object value = Array.get(values, i);
+            if (value instanceof Enum<?> enumValue && !"BLOOM".equals(enumValue.name())) {
+                entries.add(enumValue);
+            }
+        }
+        entries.sort((left, right) -> Integer.compare(left.ordinal(), right.ordinal()));
+
+        Object filtered = Array.newInstance(componentType, entries.size());
+        for (int i = 0; i < entries.size(); i++) {
+            Array.set(filtered, i, entries.get(i));
+        }
+        return filtered;
     }
 
     private static void patchCtmBloomLayer() {

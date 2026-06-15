@@ -25,10 +25,31 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         if (mixinClassName.endsWith(".NothiriumRenderChunkTaskCompileMixin")) {
-            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskCompile.class", false);
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskCompile.class", true);
+        }
+        if (mixinClassName.endsWith(".NothiriumRenderChunkTaskSortTranslucentMixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskSortTranslucent.class", true);
+        }
+        if (mixinClassName.endsWith(".NothiriumChunkRendererDynamicVboMixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/ChunkRendererDynamicVbo.class", true);
+        }
+        if (mixinClassName.endsWith(".NothiriumChunkRendererGL15Mixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/ChunkRendererGL15.class", true);
+        }
+        if (mixinClassName.endsWith(".NothiriumChunkRendererGL20Mixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/ChunkRendererGL20.class", true);
+        }
+        if (mixinClassName.endsWith(".NothiriumChunkRendererGL42Mixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/ChunkRendererGL42.class", true);
+        }
+        if (mixinClassName.endsWith(".NothiriumChunkRendererGL43Mixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/ChunkRendererGL43.class", true);
+        }
+        if (mixinClassName.endsWith(".NothiriumMinecraftChunkRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/MinecraftChunkRenderer.class", true);
         }
         if (mixinClassName.endsWith(".NothiriumSectionRenderCacheDynamicLightMixin")) {
-            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/SectionRenderCache.class", false);
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/SectionRenderCache.class", true);
         }
         if (mixinClassName.endsWith(".ProjectRedRenderHaloMixin")) {
             return optionalTargetPresent(mixinClassName, "mrtjp/projectred/core/RenderHalo$.class", false);
@@ -44,6 +65,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         }
         if (mixinClassName.endsWith(".AstralSorcerySkyboxMixin")) {
             return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/sky/RenderAstralSkybox.class", false);
+        }
+        if (mixinClassName.endsWith(".AstralSorceryConstellationRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/util/RenderConstellation.class", false);
         }
         if (mixinClassName.endsWith(".CodeChickenRenderItemMixin")) {
             return optionalTargetPresent(mixinClassName, "codechicken/lib/render/item/CCRenderItem.class", false);

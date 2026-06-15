@@ -271,6 +271,21 @@ public final class BetterPortalsCompat {
         return isInstalled() && mainViewSwapHandlingDepth > 0;
     }
 
+    public static void clearMainViewSwapTransientState() {
+        if (!isInstalled()) {
+            return;
+        }
+
+        renderPassStack.clear();
+        portalRendererStateStack.clear();
+        renderPassDepth = 0;
+        nestedRenderPassDepth = 0;
+        quietDimensionReloadRequests = 0;
+        pendingParentRenderWorld = null;
+        lastLoggedNestedRenderState = null;
+        mainViewSwapHandlingDepth = 0;
+    }
+
     public static void tickMainViewSwapRecovery() {
         if (mainViewSwapRecoveryFrames > 0) {
             mainViewSwapRecoveryFrames--;
@@ -493,7 +508,9 @@ public final class BetterPortalsCompat {
                     renderStateDiagnosticFramesRemaining,
                     RENDER_STATE_DIAGNOSTIC_FRAMES_AFTER_NESTED
             );
-            if (dimensionId != Integer.MIN_VALUE && MainMod.getShaderPackManager() != null) {
+            if (dimensionId != Integer.MIN_VALUE
+                    && shouldRenderNestedViewWithShaders()
+                    && MainMod.getShaderPackManager() != null) {
                 MainMod.getShaderPackManager().scheduleBetterPortalsDimensionPrewarm(dimensionId);
             }
         }

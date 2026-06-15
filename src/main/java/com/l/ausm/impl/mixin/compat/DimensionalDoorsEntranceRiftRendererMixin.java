@@ -21,7 +21,7 @@ public class DimensionalDoorsEntranceRiftRendererMixin {
                                                  float partialTicks, int destroyStage, float alpha,
                                                  CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        context.finishExternalOverlayRender("Dimensional Doors entrance rift");
+        context.finishExternalWorldOverlayRender("Dimensional Doors entrance rift");
         context.restoreActiveWorldPassAfterExternalShader();
     }
 }

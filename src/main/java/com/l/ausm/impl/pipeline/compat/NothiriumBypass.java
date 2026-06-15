@@ -83,7 +83,7 @@ public final class NothiriumBypass {
         if (!PipelineContext.getInstance().isActive()) {
             return false;
         }
-        return true;
+        return !NothiriumShadowRenderer.isAvailable();
     }
 
     private static boolean hasVanillaViewFrustum() {

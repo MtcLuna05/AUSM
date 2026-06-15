@@ -288,6 +288,9 @@ public class ShaderPackManager implements ShaderPackController {
         }
 
         boolean wasEnabled = shadersEnabled;
+        closeCurrentPack();
+        currentPack = null;
+        clearShaderPropertiesCache();
         if (!ensureSelectedPackLoaded()) {
             return;
         }
@@ -330,7 +333,10 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     public void restoreAfterBetterPortalsNestedRender(int parentDimensionId) {
-        if (!areShadersEnabled() || isOffPack(selectedPackName) || parentDimensionId == Integer.MIN_VALUE) {
+        if (!BetterPortalsCompat.isNestedShaderPipelineAvailable()
+                || !areShadersEnabled()
+                || isOffPack(selectedPackName)
+                || parentDimensionId == Integer.MIN_VALUE) {
             return;
         }
         if (isBetterPortalsPipelineBusy()) {
@@ -354,7 +360,8 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     public void scheduleBetterPortalsDimensionPrewarm(int dimensionId) {
-        if (dimensionId == Integer.MIN_VALUE
+        if (!BetterPortalsCompat.isNestedShaderPipelineAvailable()
+                || dimensionId == Integer.MIN_VALUE
                 || dimensionId == compiledDimensionId
                 || dimensionId == pendingBetterPortalsDimensionCompileId
                 || !areShadersEnabled()
@@ -421,6 +428,11 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     public void runPendingBetterPortalsDimensionCompile() {
+        if (!BetterPortalsCompat.isNestedShaderPipelineAvailable()) {
+            pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
+            pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
+            return;
+        }
         runPendingBetterPortalsParentRestore();
 
         int pendingDimensionId = pendingBetterPortalsDimensionCompileId;
@@ -530,6 +542,11 @@ public class ShaderPackManager implements ShaderPackController {
         }
         saveShaderConfig();
         if (shadersEnabled && (pendingPipelineReload || currentPack == null || !selectedPackName.equals(currentPack.getName()))) {
+            if (pendingPipelineReload && currentPack != null && selectedPackName.equals(currentPack.getName()) && !isInternalPack(currentPack)) {
+                closeCurrentPack();
+                currentPack = null;
+                clearShaderPropertiesCache();
+            }
             if (!ensureSelectedPackLoaded()) {
                 return;
             }
@@ -718,6 +735,9 @@ public class ShaderPackManager implements ShaderPackController {
             }
             compiledPackName = currentPack.getName();
             pendingPipelineReload = false;
+            if (activate) {
+                context.scheduleWorldTerrainRefresh();
+            }
             return true;
         } catch (RuntimeException e) {
             String packName = currentPack == null ? "<none>" : currentPack.getName();

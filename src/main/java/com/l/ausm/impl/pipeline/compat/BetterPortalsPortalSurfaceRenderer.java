@@ -294,7 +294,8 @@ public final class BetterPortalsPortalSurfaceRenderer {
 
         private final int program;
         private final int activeTexture;
-        private final int texture;
+        private final int texture0;
+        private final int activeTextureBinding;
         private final boolean depthTest;
         private final boolean depthMask;
         private final int depthFunc;
@@ -315,7 +316,10 @@ public final class BetterPortalsPortalSurfaceRenderer {
         private SurfaceRenderState() {
             program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
             activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
-            texture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            texture0 = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            GL13.glActiveTexture(activeTexture);
+            activeTextureBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
             depthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
             depthMask = glBoolean(GL11.GL_DEPTH_WRITEMASK);
             depthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
@@ -336,20 +340,48 @@ public final class BetterPortalsPortalSurfaceRenderer {
 
         private void restore() {
             OpenGlHelper.glUseProgram(program);
-            GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
-            GL13.glActiveTexture(activeTexture);
-            setCapability(GL11.GL_DEPTH_TEST, depthTest);
-            GL11.glDepthMask(depthMask);
-            GL11.glDepthFunc(depthFunc);
-            setCapability(GL11.GL_ALPHA_TEST, alphaTest);
-            GL11.glAlphaFunc(alphaFunc, alphaRef);
-            setCapability(GL11.GL_BLEND, blend);
+            GlStateManager.setActiveTexture(GL13.GL_TEXTURE0);
+            GlStateManager.bindTexture(texture0);
+            GlStateManager.setActiveTexture(activeTexture);
+            GlStateManager.bindTexture(activeTextureBinding);
+            setManagedCapability(GL11.GL_DEPTH_TEST, depthTest);
+            GlStateManager.depthMask(depthMask);
+            GlStateManager.depthFunc(depthFunc);
+            setManagedCapability(GL11.GL_ALPHA_TEST, alphaTest);
+            GlStateManager.alphaFunc(alphaFunc, alphaRef);
+            setManagedCapability(GL11.GL_BLEND, blend);
             GlStateManager.tryBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
             setCapability(GL11.GL_POLYGON_OFFSET_FILL, polygonOffsetFill);
             GL11.glPolygonOffset(polygonOffsetFactor, polygonOffsetUnits);
-            GL11.glColorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
-            GL11.glColor4f(color[0], color[1], color[2], color[3]);
+            GlStateManager.colorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+            GlStateManager.color(color[0], color[1], color[2], color[3]);
+        }
+
+        private static void setManagedCapability(int capability, boolean enabled) {
+            switch (capability) {
+                case GL11.GL_DEPTH_TEST -> {
+                    if (enabled) {
+                        GlStateManager.enableDepth();
+                    } else {
+                        GlStateManager.disableDepth();
+                    }
+                }
+                case GL11.GL_ALPHA_TEST -> {
+                    if (enabled) {
+                        GlStateManager.enableAlpha();
+                    } else {
+                        GlStateManager.disableAlpha();
+                    }
+                }
+                case GL11.GL_BLEND -> {
+                    if (enabled) {
+                        GlStateManager.enableBlend();
+                    } else {
+                        GlStateManager.disableBlend();
+                    }
+                }
+                default -> setCapability(capability, enabled);
+            }
         }
 
         private static void setCapability(int capability, boolean enabled) {

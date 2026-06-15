@@ -288,6 +288,9 @@ public class EntityRendererMixin {
             return;
         }
 
+        if (!context.isActive()) {
+            context.prepareVanillaParticleRendering();
+        }
         context.beginTranslucents();
         context.beginPhase(WorldRenderingPhase.PARTICLES);
     }
@@ -323,6 +326,9 @@ public class EntityRendererMixin {
             return;
         }
 
+        if (!context.isActive()) {
+            context.prepareVanillaParticleRendering();
+        }
         context.beginPhase(WorldRenderingPhase.PARTICLES_TRANSLUCENT);
     }
 

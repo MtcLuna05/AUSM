@@ -67,6 +67,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         ((BufferBuilder) (Object) this).reset();
     }
 
+    @Override
+    public boolean ausm$isDrawing() {
+        return isDrawing;
+    }
+
     @ModifyVariable(method = "begin", at = @At("HEAD"), argsOnly = true)
     private VertexFormat ausm$usePipelineEntityFormat(VertexFormat original) {
         if (original == DefaultVertexFormats.ITEM && PipelineContext.getInstance().shouldUsePipelineEntityFormat()) {
@@ -81,11 +86,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return;
         }
 
-        ByteBuffer source = sourceBuffer.duplicate();
+        ByteBuffer source = sourceBuffer.slice();
         source.order(byteBuffer.order());
         int sourceBytes = source.remaining();
         int targetStride = vertexFormat.getSize();
-        int sourceStride = ausm$pipelineBlockBulkStride(sourceBytes, targetStride);
+        int sourceStride = ausm$pipelineBlockBulkStride(source, sourceBytes, targetStride);
         if (sourceStride < 0) {
             return;
         }
@@ -99,6 +104,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             for (int sourceInt = 0; sourceInt < sourceStride / Integer.BYTES; sourceInt++) {
                 expandedData[target + sourceInt] = source.getInt();
             }
+            ausm$applyEmissiveLightmap(expandedData, target);
             expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity();
             expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh();
             expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
@@ -137,7 +143,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
 
         int targetStride = vertexFormat.getIntegerSize();
-        int sourceStride = ausm$pipelineBlockVertexStride(vertexData.length, targetStride);
+        int sourceStride = ausm$pipelineBlockVertexStride(vertexData, targetStride);
         if (sourceStride < 0) {
             return;
         }
@@ -149,6 +155,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             int source = vertex * sourceStride;
             int target = vertex * targetStride;
             System.arraycopy(vertexData, source, expandedData, target, Math.min(sourceStride, targetStride));
+            ausm$applyEmissiveLightmap(expandedData, target);
             expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity();
             expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh();
             expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
@@ -171,22 +178,33 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         ci.cancel();
     }
 
-    private static int ausm$pipelineBlockVertexStride(int sourceInts, int targetStride) {
+    private static int ausm$pipelineBlockVertexStride(int[] vertexData, int targetStride) {
+        int sourceInts = vertexData != null ? vertexData.length : 0;
         if (sourceInts <= 0) {
             return -1;
         }
 
         // BakedQuad is four vertices. A vanilla 1.12 quad is 28 ints, which is
         // also divisible by the 14-int pipeline stride, so classify by quad
-        // vertex count before using divisibility.
-        if (sourceInts % 4 == 0) {
+        // vertex count before using divisibility. Some Forge/model pipelines
+        // include a normal slot and produce 8-int vertices.
+        if (sourceInts % 4 == 0 && sourceInts <= 4 * targetStride) {
             int quadStride = sourceInts / 4;
-            if (quadStride == 7 || quadStride == 14 || quadStride == targetStride) {
+            if (quadStride == 7 || quadStride == 8 || quadStride == 14 || quadStride == targetStride) {
                 return quadStride;
             }
         }
+        if (sourceInts % 7 == 0 && ausm$looksLikeVanillaIntStride(vertexData, 7)) {
+            return 7;
+        }
+        if (sourceInts % 8 == 0 && ausm$looksLikeVanillaIntStride(vertexData, 8)) {
+            return 8;
+        }
         if (sourceInts % 7 == 0 && sourceInts % targetStride != 0) {
             return 7;
+        }
+        if (sourceInts % 8 == 0 && sourceInts % targetStride != 0) {
+            return 8;
         }
         if (sourceInts % 14 == 0) {
             return 14;
@@ -194,11 +212,21 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         return sourceInts % targetStride == 0 ? targetStride : -1;
     }
 
-    private static int ausm$pipelineBlockBulkStride(int sourceBytes, int targetStride) {
+    private static int ausm$pipelineBlockBulkStride(ByteBuffer source, int sourceBytes, int targetStride) {
         int vanillaStride = 7 * Integer.BYTES;
+        int forgeNormalStride = 8 * Integer.BYTES;
         int optifineStride = 14 * Integer.BYTES;
         if (sourceBytes == 4 * vanillaStride) {
             return vanillaStride;
+        }
+        if (sourceBytes == 4 * forgeNormalStride) {
+            return forgeNormalStride;
+        }
+        if (sourceBytes % vanillaStride == 0 && ausm$looksLikeVanillaByteStride(source, sourceBytes, vanillaStride)) {
+            return vanillaStride;
+        }
+        if (sourceBytes % forgeNormalStride == 0 && ausm$looksLikeVanillaByteStride(source, sourceBytes, forgeNormalStride)) {
+            return forgeNormalStride;
         }
         if (sourceBytes % optifineStride == 0) {
             return optifineStride;
@@ -206,7 +234,95 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         if (sourceBytes % vanillaStride == 0) {
             return vanillaStride;
         }
+        if (sourceBytes % forgeNormalStride == 0 && sourceBytes % targetStride != 0) {
+            return forgeNormalStride;
+        }
         return sourceBytes % targetStride == 0 ? targetStride : -1;
+    }
+
+    private static boolean ausm$looksLikeVanillaIntStride(int[] data, int strideInts) {
+        if (data == null || data.length < strideInts * 2 || data.length % strideInts != 0) {
+            return false;
+        }
+        int vertices = Math.min(data.length / strideInts, 8);
+        for (int vertex = 0; vertex < vertices; vertex++) {
+            if (!ausm$looksLikeVanillaVertex(data, vertex * strideInts, strideInts)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean ausm$looksLikeVanillaByteStride(ByteBuffer data, int sourceBytes, int strideBytes) {
+        if (data == null || sourceBytes < strideBytes * 2 || sourceBytes % strideBytes != 0) {
+            return false;
+        }
+        int vertices = Math.min(sourceBytes / strideBytes, 8);
+        for (int vertex = 0; vertex < vertices; vertex++) {
+            if (!ausm$looksLikeVanillaVertex(data, vertex * strideBytes, strideBytes / Integer.BYTES)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean ausm$looksLikeVanillaVertex(int[] data, int base, int strideInts) {
+        if (base < 0 || base + 6 >= data.length || strideInts < 7) {
+            return false;
+        }
+        return ausm$looksLikePosition(data[base], data[base + 1], data[base + 2])
+                && ausm$looksLikeColor(data[base + 3])
+                && ausm$looksLikeUv(data[base + 4], data[base + 5]);
+    }
+
+    private static boolean ausm$looksLikeVanillaVertex(ByteBuffer data, int base, int strideInts) {
+        if (base < 0 || base + 7 * Integer.BYTES > data.limit() || strideInts < 7) {
+            return false;
+        }
+        return ausm$looksLikePosition(data.getInt(base), data.getInt(base + 4), data.getInt(base + 8))
+                && ausm$looksLikeColor(data.getInt(base + 12))
+                && ausm$looksLikeUv(data.getInt(base + 16), data.getInt(base + 20));
+    }
+
+    private static boolean ausm$looksLikePosition(int xBits, int yBits, int zBits) {
+        float x = Float.intBitsToFloat(xBits);
+        float y = Float.intBitsToFloat(yBits);
+        float z = Float.intBitsToFloat(zBits);
+        return Float.isFinite(x) && Float.isFinite(y) && Float.isFinite(z)
+                && Math.abs(x) < 4096.0f
+                && Math.abs(y) < 4096.0f
+                && Math.abs(z) < 4096.0f;
+    }
+
+    private static boolean ausm$looksLikeUv(int uBits, int vBits) {
+        float u = Float.intBitsToFloat(uBits);
+        float v = Float.intBitsToFloat(vBits);
+        return Float.isFinite(u) && Float.isFinite(v)
+                && Math.abs(u) < 64.0f
+                && Math.abs(v) < 64.0f;
+    }
+
+    private static boolean ausm$looksLikeColor(int color) {
+        return ((color >>> 24) & 0xFF) > 0;
+    }
+
+    @Inject(method = "endVertex", at = @At("HEAD"))
+    private void ausm$applyEmissiveLightmap(CallbackInfo ci) {
+        int blockEmission = BlockRenderContext.vanillaLightmapEmission();
+        if (blockEmission <= 0 || vertexFormat == null || !vertexFormat.hasUvOffset(1)) {
+            return;
+        }
+
+        int offset = vertexCount * vertexFormat.getSize() + vertexFormat.getUvOffsetById(1);
+        if (offset < 0 || offset + 4 > byteBuffer.capacity()) {
+            return;
+        }
+
+        int packed = byteBuffer.getShort(offset) & 0xFFFF;
+        packed |= (byteBuffer.getShort(offset + 2) & 0xFFFF) << 16;
+        packed = ausm$emissiveLightmap(packed, blockEmission);
+        byteBuffer.putShort(offset, (short) (packed & 0xFFFF));
+        byteBuffer.putShort(offset + 2, (short) ((packed >>> 16) & 0xFFFF));
     }
 
     @Inject(method = "endVertex", at = @At("HEAD"))
@@ -268,6 +384,28 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                 && !((drawMode == GL11.GL_QUADS && vertexCount % 4 == 0)
                 || (drawMode == GL11.GL_TRIANGLES && vertexCount % 3 == 0))) {
             ausm$resetPipelineVertexCursor();
+        }
+    }
+
+    @Inject(method = "putPosition", at = @At("RETURN"))
+    private void ausm$refreshMidBlockAfterRawQuadTranslation(double x, double y, double z, CallbackInfo ci) {
+        if (!ExtendedVertexFormats.isPipelineBlock(vertexFormat) || vertexCount < 4) {
+            return;
+        }
+
+        int stride = vertexFormat.getSize();
+        int base = (vertexCount - 4) * stride;
+        if (base < 0 || base + 3 * stride + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET + 4 > byteBuffer.capacity()) {
+            return;
+        }
+
+        for (int vertex = 0; vertex < 4; vertex++) {
+            int vertexBase = base + vertex * stride;
+            byteBuffer.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET, BlockRenderContext.midBlock(
+                    byteBuffer.getFloat(vertexBase),
+                    byteBuffer.getFloat(vertexBase + 4),
+                    byteBuffer.getFloat(vertexBase + 8)
+            ));
         }
     }
 
@@ -401,6 +539,21 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     private static int packedEntityHigh() {
         return BlockRenderContext.metadata() & 0xFFFF;
+    }
+
+    private static void ausm$applyEmissiveLightmap(int[] vertexData, int vertexBase) {
+        int blockEmission = BlockRenderContext.vanillaLightmapEmission();
+        if (blockEmission <= 0 || vertexData == null || vertexBase < 0 || vertexBase + 6 >= vertexData.length) {
+            return;
+        }
+        vertexData[vertexBase + 6] = ausm$emissiveLightmap(vertexData[vertexBase + 6], blockEmission);
+    }
+
+    private static int ausm$emissiveLightmap(int packedLightmap, int blockEmission) {
+        int emissiveLevel = 240;
+        int block = Math.max(packedLightmap & 0xFFFF, emissiveLevel);
+        int sky = Math.max((packedLightmap >>> 16) & 0xFFFF, emissiveLevel);
+        return (sky << 16) | block;
     }
 
     private void ausm$writeDerivedEntityAttributesForPolygon(int firstVertex, int vertexAmount) {

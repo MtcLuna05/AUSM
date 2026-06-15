@@ -4,17 +4,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Backports Iris' vanilla-path fade variable transform.
- *
- * <p>Modern Iris exposes {@code mc_chunkFade} to shaderpacks that opt into
- * {@code IRIS_FEATURE_FADE_VARIABLE}. Without Sodium-style chunk draw metadata,
- * Iris' vanilla transformer provides a constant sentinel instead of per-chunk
- * fade values. AUSM follows that vanilla path for 1.12 chunk rendering.</p>
+ * Declares Iris' per-chunk fade variable for vertex shaders.
  */
 public final class FadeVariableTransformStage implements ShaderTransformStage {
     private static final Pattern VERSION_OR_EXTENSION = Pattern.compile("(?m)^(\\s*(?:#version\\b.*|#extension\\b.*)\\R)");
     private static final Pattern MC_CHUNK_FADE_DECLARATION = Pattern.compile(
-            "(?m)^\\s*(?:const\\s+)?(?:uniform\\s+|attribute\\s+|varying\\s+|in\\s+|out\\s+)?float\\s+mc_chunkFade\\b"
+            "(?m)^\\s*(?:uniform\\s+|attribute\\s+|varying\\s+|in\\s+|out\\s+)?float\\s+mc_chunkFade\\b"
     );
 
     @Override
@@ -25,7 +20,7 @@ public final class FadeVariableTransformStage implements ShaderTransformStage {
             return source;
         }
 
-        return injectAfterVersion(source, "const float mc_chunkFade = -1.0;\n");
+        return injectAfterVersion(source, "uniform float mc_chunkFade;\n");
     }
 
     private static String injectAfterVersion(String source, String declaration) {

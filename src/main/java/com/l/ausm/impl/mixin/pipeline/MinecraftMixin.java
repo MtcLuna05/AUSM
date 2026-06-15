@@ -51,6 +51,7 @@ public class MinecraftMixin {
         PipelineContext.getInstance().runPendingBetterPortalsPortalBlockRefresh();
         PipelineContext.getInstance().runPendingShaderChunkRefreshes();
         PipelineContext.getInstance().runScheduledBloomTerrainRefresh();
+        PipelineContext.getInstance().runScheduledWorldTerrainRefresh();
         PipelineContext.getInstance().runScheduledWorldLoadLightRecalculation();
     }
 
@@ -84,19 +85,21 @@ public class MinecraftMixin {
             PipelineContext.getInstance().clearPendingShaderChunkRefreshes();
             PipelineContext.getInstance().clearScheduledWorldLoadLightRecalculation();
             PipelineContext.getInstance().clearScheduledBloomTerrainRefresh();
+            PipelineContext.getInstance().clearScheduledWorldTerrainRefresh();
             return;
         }
         PipelineContext context = PipelineContext.getInstance();
         context.clearPendingShaderChunkRefreshes();
+        context.scheduleWorldTerrainRefresh();
         context.scheduleBloomTerrainRefresh("world load");
         if (MainMod.getShaderPackManager() != null) {
             int dimensionId = ausm$dimensionId(worldClient);
             boolean dimensionSwitch = ausm$isDimensionSwitch(dimensionId);
-            if (!dimensionSwitch) {
+            if (dimensionSwitch) {
+                context.handleWorldDimensionSwitch(ausm$previousWorldDimensionId, dimensionId);
+            } else {
                 MainMod.getShaderPackManager().preparePipelineForWorldLoad(dimensionId);
                 context.scheduleWorldLoadLightRecalculation();
-            } else {
-                context.clearScheduledWorldLoadLightRecalculation();
             }
         }
     }

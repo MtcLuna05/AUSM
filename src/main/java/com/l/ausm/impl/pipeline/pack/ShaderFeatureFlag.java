@@ -20,7 +20,7 @@ enum ShaderFeatureFlag {
     BLOCK_EMISSION_ATTRIBUTE(true, false, "block emission is available in at_midBlock.w"),
     CAN_DISABLE_WEATHER(true, false, "weather render toggles are implemented"),
     SSBO(true, true, "OpenGL 4.3 or ARB_shader_storage_buffer_object is required"),
-    FADE_VARIABLE(true, false, "Iris vanilla chunk fade variable is exposed as mc_chunkFade"),
+    FADE_VARIABLE(true, false, "per-chunk fade variable is uploaded before terrain chunk draws"),
     TEXTURE_FILTERING(false, false, "Iris texture filtering directives are not implemented"),
     UNKNOWN(false, false, "unknown Iris feature flag");
 

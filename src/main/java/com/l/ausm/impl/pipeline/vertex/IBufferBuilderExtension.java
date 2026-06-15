@@ -12,4 +12,8 @@ public interface IBufferBuilderExtension {
     }
 
     void ausm$forceResetDrawingState();
+
+    default boolean ausm$isDrawing() {
+        return false;
+    }
 }

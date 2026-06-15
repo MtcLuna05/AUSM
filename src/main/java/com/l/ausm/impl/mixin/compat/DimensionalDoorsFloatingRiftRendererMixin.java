@@ -21,7 +21,7 @@ public class DimensionalDoorsFloatingRiftRendererMixin {
                                                  float partialTicks, int destroyStage, float alpha,
                                                  CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        context.finishExternalOverlayRender("Dimensional Doors floating rift");
+        context.finishExternalWorldOverlayRender("Dimensional Doors floating rift");
         context.restoreActiveWorldPassAfterExternalShader();
     }
 }

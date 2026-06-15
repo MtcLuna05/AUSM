@@ -13,6 +13,8 @@ public final class BlockRenderContext {
     private static final ThreadLocal<Integer> CURRENT_LOCAL_Y = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_LOCAL_Z = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_EMISSION = ThreadLocal.withInitial(() -> 0);
+    private static final ThreadLocal<Boolean> CURRENT_CRYSTAL_ONLY_EMISSION = ThreadLocal.withInitial(() -> false);
+    private static final ThreadLocal<Integer> CURRENT_QUAD_EMISSION_OVERRIDE = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> SEPARATE_AO_ELIGIBLE = ThreadLocal.withInitial(() -> false);
     private static final ThreadLocal<float[]> CURRENT_QUAD_AO = new ThreadLocal<>();
 
@@ -54,7 +56,33 @@ public final class BlockRenderContext {
     }
 
     public static int blockEmission() {
-        return CURRENT_BLOCK_EMISSION.get();
+        Integer override = CURRENT_QUAD_EMISSION_OVERRIDE.get();
+        return override != null ? Math.max(0, Math.min(15, override)) : CURRENT_BLOCK_EMISSION.get();
+    }
+
+    public static int vanillaLightmapEmission() {
+        return CURRENT_CRYSTAL_ONLY_EMISSION.get() ? 0 : blockEmission();
+    }
+
+    public static void setCrystalOnlyEmission(boolean crystalOnlyEmission) {
+        CURRENT_CRYSTAL_ONLY_EMISSION.set(crystalOnlyEmission);
+        CURRENT_QUAD_EMISSION_OVERRIDE.remove();
+    }
+
+    public static void setQuadSprite(String spriteName) {
+        if (!CURRENT_CRYSTAL_ONLY_EMISSION.get()) {
+            CURRENT_QUAD_EMISSION_OVERRIDE.remove();
+            return;
+        }
+        if (isAstralCrystalSprite(spriteName)) {
+            CURRENT_QUAD_EMISSION_OVERRIDE.remove();
+        } else {
+            CURRENT_QUAD_EMISSION_OVERRIDE.set(0);
+        }
+    }
+
+    public static void clearQuadEmissionOverride() {
+        CURRENT_QUAD_EMISSION_OVERRIDE.remove();
     }
 
     public static int midBlock(float x, float y, float z) {
@@ -69,7 +97,16 @@ public final class BlockRenderContext {
         return ((int) (x * 64.0f) & 0xFF)
                 | (((int) (y * 64.0f) & 0xFF) << 8)
                 | (((int) (z * 64.0f) & 0xFF) << 16)
-                | ((CURRENT_BLOCK_EMISSION.get() & 0xFF) << 24);
+                | ((blockEmission() & 0xFF) << 24);
+    }
+
+    private static boolean isAstralCrystalSprite(String spriteName) {
+        if (spriteName == null) {
+            return false;
+        }
+        String normalized = spriteName.toLowerCase(java.util.Locale.ROOT);
+        return normalized.contains("astralsorcery:blocks/crystal/")
+                && !normalized.contains("rock");
     }
 
     public static void setSeparateAoEligible(boolean separateAoEligible) {
@@ -108,6 +145,8 @@ public final class BlockRenderContext {
         CURRENT_LOCAL_Y.remove();
         CURRENT_LOCAL_Z.remove();
         CURRENT_BLOCK_EMISSION.remove();
+        CURRENT_CRYSTAL_ONLY_EMISSION.remove();
+        CURRENT_QUAD_EMISSION_OVERRIDE.remove();
         SEPARATE_AO_ELIGIBLE.remove();
         CURRENT_QUAD_AO.remove();
     }

@@ -28,12 +28,13 @@ import java.nio.IntBuffer;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntSupplier;
 
 public final class AusmBloomRenderer {
     private static final int HALF_RESOLUTION_DIVISOR = 2;
-    private static final float BLOOM_STRENGTH = 0.85F;
-    private static final float FRAMEBUFFER_BLOOM_STRENGTH = 0.80F;
-    private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.92F;
+    private static final float BLOOM_STRENGTH = 1.45F;
+    private static final float FRAMEBUFFER_BLOOM_STRENGTH = 1.05F;
+    private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
     private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = true;
     private static final int BLOOM_RENDER_LOG_LIMIT = 120;
     private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 20;
@@ -51,8 +52,10 @@ public final class AusmBloomRenderer {
     private int thresholdProgram = -1;
     private int blurProgram = -1;
     private int compositeProgram = -1;
+    private int emissiveExtractProgram = -1;
     private boolean layerBloomPending;
     private boolean loggedLayerRenderer;
+    private boolean loggedShaderlessEmissiveRenderer;
     private boolean loggedProgramFailure;
     private int bloomCompositeLogs;
     private int framebufferBloomLogs;
@@ -139,6 +142,48 @@ public final class AusmBloomRenderer {
         layerBloomPending = false;
     }
 
+    public boolean renderShaderlessEmissiveTerrainBloom(Framebuffer target, IntSupplier geometryRenderer) {
+        if (target == null
+                || geometryRenderer == null
+                || target.framebufferTexture <= 0
+                || PipelineContext.getInstance().isActive()) {
+            return false;
+        }
+        if (!ensureTargets(target.framebufferWidth, target.framebufferHeight)) {
+            return false;
+        }
+
+        int program = emissiveExtractProgram();
+        if (program == -1) {
+            return false;
+        }
+
+        int rendered = 0;
+        RenderState state = captureState();
+        try {
+            clearLayerTarget();
+            copyDepth(null, target);
+            bindLayerTargetForGeometry();
+            prepareShaderlessEmissiveGeometryState(program);
+            rendered = geometryRenderer.getAsInt();
+        } finally {
+            OpenGlHelper.glUseProgram(0);
+            state.restore();
+        }
+
+        if (rendered <= 0) {
+            layerBloomPending = false;
+            return false;
+        }
+
+        layerBloomPending = true;
+        if (!loggedShaderlessEmissiveRenderer) {
+            loggedShaderlessEmissiveRenderer = true;
+            MainMod.LOGGER.info("[AUSMBloom] Rendering shaderless emissive terrain bloom with AUSM vertex emission metadata.");
+        }
+        return true;
+    }
+
     public void clearPendingLayerBloom() {
         layerBloomPending = false;
     }
@@ -165,10 +210,12 @@ public final class AusmBloomRenderer {
         deleteProgram(thresholdProgram);
         deleteProgram(blurProgram);
         deleteProgram(compositeProgram);
+        deleteProgram(emissiveExtractProgram);
         copyProgram = -1;
         thresholdProgram = -1;
         blurProgram = -1;
         compositeProgram = -1;
+        emissiveExtractProgram = -1;
     }
 
     private boolean compositePendingLayerBloom(Framebuffer target) {
@@ -326,10 +373,7 @@ public final class AusmBloomRenderer {
 
     private int renderBloomGeometry(RenderGlobal renderGlobal, BlockRenderLayer bloomLayer,
                                     double partialTicks, int pass, Entity entity) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.getTextureManager() != null) {
-            mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
-        }
+        bindBlockAtlasOnDefaultTextureUnit();
 
         OpenGlHelper.glUseProgram(0);
         GlStateManager.enableTexture2D();
@@ -498,12 +542,28 @@ public final class AusmBloomRenderer {
         return compositeProgram;
     }
 
+    private int emissiveExtractProgram() {
+        if (emissiveExtractProgram == -1) {
+            emissiveExtractProgram = createProgram(
+                    "shaderless-emissive-extract",
+                    EMISSIVE_EXTRACT_VERTEX_SHADER,
+                    EMISSIVE_EXTRACT_FRAGMENT_SHADER,
+                    true
+            );
+        }
+        return emissiveExtractProgram;
+    }
+
     private int createProgram(String name, String fragmentSource) {
+        return createProgram(name, VERTEX_SHADER, fragmentSource, false);
+    }
+
+    private int createProgram(String name, String vertexSource, String fragmentSource, boolean bindPipelineAttributes) {
         if (!OpenGlHelper.shadersSupported) {
             return -1;
         }
 
-        int vertex = compileShader(name + ":vertex", GL20.GL_VERTEX_SHADER, VERTEX_SHADER);
+        int vertex = compileShader(name + ":vertex", GL20.GL_VERTEX_SHADER, vertexSource);
         int fragment = compileShader(name + ":fragment", GL20.GL_FRAGMENT_SHADER, fragmentSource);
         if (vertex == -1 || fragment == -1) {
             deleteShader(vertex);
@@ -514,6 +574,13 @@ public final class AusmBloomRenderer {
         int program = GL20.glCreateProgram();
         GL20.glAttachShader(program, vertex);
         GL20.glAttachShader(program, fragment);
+        if (bindPipelineAttributes) {
+            GL20.glBindAttribLocation(
+                    program,
+                    com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE,
+                    "at_midBlock"
+            );
+        }
         GL20.glLinkProgram(program);
         GL20.glDeleteShader(vertex);
         GL20.glDeleteShader(fragment);
@@ -546,6 +613,40 @@ public final class AusmBloomRenderer {
         int location = GL20.glGetUniformLocation(program, name);
         if (location != -1) {
             GL20.glUniform1i(location, unit);
+        }
+    }
+
+    private static void bindSamplerUniform(int program, String name, int unit) {
+        int location = GL20.glGetUniformLocation(program, name);
+        if (location != -1) {
+            GL20.glUniform1i(location, unit);
+        }
+    }
+
+    private static void prepareShaderlessEmissiveGeometryState(int program) {
+        bindBlockAtlasOnDefaultTextureUnit();
+
+        OpenGlHelper.glUseProgram(program);
+        bindSamplerUniform(program, "terrain", 0);
+        GlStateManager.enableTexture2D();
+        GlStateManager.enableDepth();
+        GlStateManager.depthMask(false);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.003921569F);
+        GlStateManager.disableCull();
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
+        GlStateManager.colorMask(true, true, true, true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    private static void bindBlockAtlasOnDefaultTextureUnit() {
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc != null && mc.getTextureManager() != null) {
+            mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
         }
     }
 
@@ -801,6 +902,40 @@ public final class AusmBloomRenderer {
             void main() {
                 gl_Position = ftransform();
                 textureCoords = gl_MultiTexCoord0.st;
+            }
+            """;
+
+    private static final String EMISSIVE_EXTRACT_VERTEX_SHADER = """
+            #version 120
+            attribute vec4 at_midBlock;
+            varying vec2 textureCoords;
+            varying vec4 vertexColor;
+            varying float vertexEmission;
+            void main() {
+                gl_Position = ftransform();
+                textureCoords = gl_MultiTexCoord0.st;
+                vertexColor = gl_Color;
+                vertexEmission = clamp(at_midBlock.w / 15.0, 0.0, 1.0);
+            }
+            """;
+
+    private static final String EMISSIVE_EXTRACT_FRAGMENT_SHADER = """
+            #version 120
+            uniform sampler2D terrain;
+            varying vec2 textureCoords;
+            varying vec4 vertexColor;
+            varying float vertexEmission;
+            void main() {
+                if (vertexEmission <= 0.0) {
+                    discard;
+                }
+                vec4 albedo = texture2D(terrain, textureCoords) * vertexColor;
+                if (albedo.a <= 0.003921569) {
+                    discard;
+                }
+                float emissionMask = smoothstep(0.02, 0.35, vertexEmission);
+                vec3 bloom = albedo.rgb * (1.25 + vertexEmission * 5.25) * emissionMask;
+                gl_FragColor = vec4(bloom, albedo.a * emissionMask);
             }
             """;
 

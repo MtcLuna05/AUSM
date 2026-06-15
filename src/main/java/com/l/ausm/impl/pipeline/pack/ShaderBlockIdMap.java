@@ -61,6 +61,25 @@ public final class ShaderBlockIdMap {
             new ColorAlias("yellow", 10906)
     };
 
+    private static final ColorAlias[] RANDOM_THINGS_LUMINOUS_COLORS = {
+            new ColorAlias("white", 12003),
+            new ColorAlias("gray", 12003),
+            new ColorAlias("silver", 12003),
+            new ColorAlias("black", 12003),
+            new ColorAlias("orange", 12071),
+            new ColorAlias("brown", 12071),
+            new ColorAlias("magenta", 12079),
+            new ColorAlias("light_blue", 12076),
+            new ColorAlias("yellow", 12072),
+            new ColorAlias("lime", 12073),
+            new ColorAlias("pink", 12080),
+            new ColorAlias("cyan", 12075),
+            new ColorAlias("purple", 12078),
+            new ColorAlias("blue", 12077),
+            new ColorAlias("green", 12074),
+            new ColorAlias("red", 12070)
+    };
+
     private ShaderBlockIdMap() {
     }
 
@@ -141,12 +160,32 @@ public final class ShaderBlockIdMap {
             addLitStateAlias(stateRules, "bewitchment", color.name() + "_candle", color.materialId());
         }
 
+        for (ColorAlias color : RANDOM_THINGS_LUMINOUS_COLORS) {
+            addStateAlias(stateRules, "randomthings", "luminousblock", "color", color.name(), color.materialId());
+            addStateAlias(stateRules, "randomthings", "translucentluminousblock", "color", color.name(), color.materialId());
+            addStateAlias(stateRules, "randomthings", "luminousstainedbrick", "color", color.name(), color.materialId());
+        }
+
+        addAstralCrystalCompatibility(stateRules);
+
         // Seared furnace controllers emit colored light through AUSM's CPU voxel injection.
         // Do not alias the rendered block ID here, or shader packs treat the whole texture as emissive.
     }
 
+    private static void addAstralCrystalCompatibility(List<StateRule> stateRules) {
+        for (int stage = 0; stage <= 4; stage++) {
+            addStateAlias(stateRules, "astralsorcery", "blockcelestialcrystals", "stage", Integer.toString(stage), 10914);
+        }
+
+        addStateAlias(stateRules, "astralsorcery", "blockgemcrystals", "stage", "stage_0", 10912);
+        addStateAlias(stateRules, "astralsorcery", "blockgemcrystals", "stage", "stage_1", 10912);
+        addStateAlias(stateRules, "astralsorcery", "blockgemcrystals", "stage", "stage_2_sky", 10912);
+        addStateAlias(stateRules, "astralsorcery", "blockgemcrystals", "stage", "stage_2_day", 10904);
+        addStateAlias(stateRules, "astralsorcery", "blockgemcrystals", "stage", "stage_2_night", 10916);
+    }
+
     private static void addBlockAlias(Map<Block, Integer> blockIds, String namespace, String path, int id) {
-        Block block = Block.REGISTRY.getObject(new ResourceLocation(namespace, path));
+        Block block = findBlock(namespace, path);
         if (block != null) {
             blockIds.putIfAbsent(block, id);
         }
@@ -157,10 +196,24 @@ public final class ShaderBlockIdMap {
     }
 
     private static void addStateAlias(List<StateRule> stateRules, String namespace, String path, String propertyName, String propertyValue, int id) {
-        Block block = Block.REGISTRY.getObject(new ResourceLocation(namespace, path));
+        Block block = findBlock(namespace, path);
         if (block != null) {
             stateRules.add(new StateRule(block, propertyName, propertyValue, id));
         }
+    }
+
+    private static Block findBlock(String namespace, String path) {
+        Block block = Block.REGISTRY.getObject(new ResourceLocation(namespace, path));
+        if (block != null) {
+            return block;
+        }
+
+        for (ResourceLocation key : Block.REGISTRY.getKeys()) {
+            if (namespace.equalsIgnoreCase(key.getNamespace()) && path.equalsIgnoreCase(key.getPath())) {
+                return Block.REGISTRY.getObject(key);
+            }
+        }
+        return null;
     }
 
     private static void addLegacyDyeColorRules(Map<Block, Integer> blockIds, List<StateRule> stateRules, String blockName, int baseId) {
