@@ -66,12 +66,14 @@ public final class BetterPortalsCompat {
     private static final int CAPTURED_TEXTURE_UNITS = 32;
     private static final int VANILLA_GL_STATE_TEXTURE_UNITS = 8;
     private static final int MAIN_VIEW_SWAP_RECOVERY_FRAMES = 10;
-    private static final int MAX_RENDER_STATE_DIAGNOSTIC_LOGS = 240;
+    private static final int MAX_RENDER_STATE_DIAGNOSTIC_LOGS = 0;
+    private static final int MAX_TRANSITION_DIAGNOSTIC_LOGS = 0;
     private static final int RENDER_STATE_DIAGNOSTIC_FRAMES_AFTER_NESTED = 180;
     private static final boolean NESTED_SHADER_PIPELINE_ENABLED = false;
     private static int renderStateDiagnosticLogs;
     private static int renderStateDiagnosticFramesRemaining;
     private static boolean nestedShaderPipelineDisabledLogged;
+    private static int transitionDiagnosticLogs;
 
     private BetterPortalsCompat() {
     }
@@ -242,6 +244,16 @@ public final class BetterPortalsCompat {
         return current != null ? renderPassWorld(current) : null;
     }
 
+    public static Framebuffer currentRenderPassFramebuffer() {
+        RenderPassState state = renderPassStack.peek();
+        if (state != null) {
+            return state.framebuffer();
+        }
+
+        Object current = currentViewPlan();
+        return current != null ? renderPassFramebuffer(current) : null;
+    }
+
     public static void startMainViewSwapRecovery(WorldClient world) {
         if (!isInstalled()) {
             return;
@@ -286,6 +298,16 @@ public final class BetterPortalsCompat {
         mainViewSwapHandlingDepth = 0;
     }
 
+    public static void cancelMainViewSwapRecovery() {
+        if (!isInstalled()) {
+            return;
+        }
+
+        mainViewSwapRecoveryFrames = 0;
+        mainViewSwapRecoveryDimensionId = Integer.MIN_VALUE;
+        mainViewSwapRecoveryLogged = false;
+    }
+
     public static void tickMainViewSwapRecovery() {
         if (mainViewSwapRecoveryFrames > 0) {
             mainViewSwapRecoveryFrames--;
@@ -302,6 +324,43 @@ public final class BetterPortalsCompat {
 
     public static int mainViewSwapRecoveryDimensionId() {
         return isMainViewSwapRecoveryActive() ? mainViewSwapRecoveryDimensionId : Integer.MIN_VALUE;
+    }
+
+    public static String describeTransitionState() {
+        if (!isInstalled()) {
+            return "installed=false";
+        }
+
+        Object current = currentViewPlan();
+        Object main = mainViewPlan();
+        return "passDepth=" + renderPassDepth
+                + " nestedDepth=" + nestedRenderPassDepth
+                + " stack=" + renderPassStack.size()
+                + " rendererStack=" + portalRendererStateStack.size()
+                + " handlingDepth=" + mainViewSwapHandlingDepth
+                + " recoveryFrames=" + mainViewSwapRecoveryFrames
+                + " recoveryDim=" + mainViewSwapRecoveryDimensionId
+                + " quietReloads=" + quietDimensionReloadRequests
+                + " pendingParent=" + dimensionId(pendingParentRenderWorld)
+                + " current=" + describeViewPlan(current)
+                + " main=" + describeViewPlan(main)
+                + " currentIsMain=" + (current != null && current == main)
+                + " currentNested=" + isRenderingNestedView()
+                + " renderPass=" + isRenderingRenderPass()
+                + " seeThrough=" + isSeeThroughPortalsEnabled();
+    }
+
+    public static void logTransitionDiagnostic(String stage, Object viewPlan) {
+        if (!isInstalled() || transitionDiagnosticLogs >= MAX_TRANSITION_DIAGNOSTIC_LOGS) {
+            return;
+        }
+        transitionDiagnosticLogs++;
+        MainMod.LOGGER.info("[BetterPortalsTransition] call={} stage={} view={} state={} caller={}",
+                transitionDiagnosticLogs,
+                stage,
+                describeViewPlan(viewPlan),
+                describeTransitionState(),
+                externalCaller());
     }
 
     public static void logMainViewSwapRecoveryIfNeeded(WorldClient world) {
@@ -341,7 +400,7 @@ public final class BetterPortalsCompat {
         return true;
     }
 
-    private static boolean isBetterPortalsPortalBlock(Block block) {
+    public static boolean isBetterPortalsPortalBlock(Block block) {
         if (block == null) {
             return false;
         }
@@ -498,6 +557,7 @@ public final class BetterPortalsCompat {
 
     private static void handleRenderPassStart(Event event) {
         Object pass = renderPassFromEvent(event);
+        logTransitionDiagnostic("render-pass-start:before", pass);
         boolean nested = renderPassParent(pass) != null;
         WorldClient world = renderPassWorld(pass);
         int dimensionId = renderPassWorldDimension(pass);
@@ -534,6 +594,7 @@ public final class BetterPortalsCompat {
             nestedRenderPassDepth++;
             logNestedRenderPassState(pass);
         }
+        logTransitionDiagnostic("render-pass-start:after", pass);
         logRenderStateDiagnostic("render-pass-start:after nested=" + nested
                 + " world=" + dimensionId
                 + " fb=" + describeFramebuffer(framebuffer));
@@ -541,6 +602,7 @@ public final class BetterPortalsCompat {
 
     private static boolean handleRenderPassEnd(Event event) {
         Object pass = renderPassFromEvent(event);
+        logTransitionDiagnostic("render-pass-end:before", pass);
         RenderPassState state = renderPassStack.poll();
         boolean nested = state != null ? state.nested() : renderPassParent(pass) != null;
 
@@ -581,6 +643,7 @@ public final class BetterPortalsCompat {
             restoreAfterPortalRender();
             logRenderStateDiagnostic("render-pass-end:after-normalize nested=" + nested);
         }
+        logTransitionDiagnostic("render-pass-end:after", pass);
         logRenderStateDiagnostic("render-pass-end:after-pop nested=" + nested);
         return nested && nestedRenderStackEmpty;
     }
@@ -623,6 +686,7 @@ public final class BetterPortalsCompat {
         renderStateDiagnosticLogs = 0;
         renderStateDiagnosticFramesRemaining = 0;
         renderStateDiagnosticWarningLogged = false;
+        transitionDiagnosticLogs = 0;
     }
 
     private static boolean shouldLogRenderStateDiagnostic(String label) {
@@ -678,6 +742,44 @@ public final class BetterPortalsCompat {
             logViewPlanReflectionFailure(e);
             return null;
         }
+    }
+
+    private static Object mainViewPlan() {
+        if (!isInstalled() || !resolveViewPlanReflection()) {
+            return null;
+        }
+
+        try {
+            return mainViewPlanField.get(null);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            logViewPlanReflectionFailure(e);
+            return null;
+        }
+    }
+
+    private static String describeViewPlan(Object pass) {
+        if (pass == null) {
+            return "null";
+        }
+
+        return pass.getClass().getName()
+                + "@"
+                + Integer.toHexString(System.identityHashCode(pass))
+                + "{world="
+                + describeRenderPassWorld(pass)
+                + ", fb="
+                + describeRenderPassFramebuffer(pass)
+                + ", parent="
+                + describeParent(pass)
+                + "}";
+    }
+
+    private static String describeParent(Object pass) {
+        Object parent = renderPassParent(pass);
+        if (parent == null) {
+            return "null";
+        }
+        return parent.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(parent));
     }
 
     private static boolean isNestedViewPlan(Object pass) {
@@ -824,6 +926,22 @@ public final class BetterPortalsCompat {
                 + "x"
                 + framebuffer.framebufferHeight
                 + ")";
+    }
+
+    private static int dimensionId(WorldClient world) {
+        return world != null && world.provider != null ? world.provider.getDimension() : Integer.MIN_VALUE;
+    }
+
+    private static String externalCaller() {
+        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+        for (StackTraceElement frame : stack) {
+            String className = frame.getClassName();
+            if (className.equals(Thread.class.getName()) || className.equals(BetterPortalsCompat.class.getName())) {
+                continue;
+            }
+            return className + "#" + frame.getMethodName() + ":" + frame.getLineNumber();
+        }
+        return "unknown";
     }
 
     private static String hex(int value) {

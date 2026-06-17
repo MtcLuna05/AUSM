@@ -29,6 +29,16 @@ public class RenderSkyMixin {
         PipelineContext.getInstance().ensureRenderGlobalViewFrustum((RenderGlobal) (Object) this);
     }
 
+    @Inject(method = "loadRenderers", at = @At("HEAD"))
+    private void ausm$logLoadRenderers(CallbackInfo ci) {
+        PipelineContext.getInstance().handleRenderGlobalLoadRenderers((RenderGlobal) (Object) this);
+    }
+
+    @Inject(method = "loadRenderers", at = @At("RETURN"))
+    private void ausm$afterLoadRenderers(CallbackInfo ci) {
+        PipelineContext.getInstance().handleRenderGlobalLoadRenderersComplete((RenderGlobal) (Object) this);
+    }
+
     @Inject(method = "renderSky(FI)V", at = @At("HEAD"), cancellable = true)
     private void onRenderSkyHead(float partialTicks, int pass, CallbackInfo ci) {
         // Some nested/custom sky paths can leave the shared Tessellator open.
@@ -58,7 +68,7 @@ public class RenderSkyMixin {
     )
     private void ausm$beforeCustomSkyRenderer(float partialTicks, int pass, CallbackInfo ci) {
         PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().prepareExternalWorldOverlayRender();
+        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.CUSTOM_SKY);
     }
 
     @Inject(
@@ -71,7 +81,7 @@ public class RenderSkyMixin {
             require = 0
     )
     private void ausm$afterCustomSkyRenderer(float partialTicks, int pass, CallbackInfo ci) {
-        PipelineContext.getInstance().finishExternalWorldOverlayRender("custom sky renderer");
+        PipelineContext.getInstance().endPass();
     }
 
     @Inject(method = "renderSkyEnd()V", at = @At("HEAD"), require = 0)

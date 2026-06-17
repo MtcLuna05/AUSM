@@ -26,7 +26,17 @@ public final class ProjectRedHaloRenderer {
             GL13.GL_TEXTURE2
     };
 
-    private static HaloState state;
+    private static final int[] savedTexture2D = new int[HALO_TEXTURE_UNITS.length];
+    private static final boolean[] savedTexture2DEnabled = new boolean[HALO_TEXTURE_UNITS.length];
+    private static int savedProgram;
+    private static int savedActiveTexture;
+    private static boolean savedBlend;
+    private static boolean savedLighting;
+    private static boolean savedCull;
+    private static boolean savedDepthMask;
+    private static int savedBlendSrc;
+    private static int savedBlendDst;
+    private static double activeScale = 1.0D;
     private static int stateDepth;
     private static int solidItemLogCount;
     private static int skippedItemLogCount;
@@ -50,26 +60,25 @@ public final class ProjectRedHaloRenderer {
             return;
         }
 
-        HaloState saved = new HaloState();
-        saved.scale = scale;
-        saved.program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
-        saved.activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
-        saved.blend = GL11.glIsEnabled(GL11.GL_BLEND);
-        saved.lighting = GL11.glIsEnabled(GL11.GL_LIGHTING);
-        saved.cull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
-        saved.depthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
-        saved.blendSrc = GL11.glGetInteger(GL11.GL_BLEND_SRC);
-        saved.blendDst = GL11.glGetInteger(GL11.GL_BLEND_DST);
+        activeScale = scale;
+        savedProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        savedActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        savedBlend = GL11.glIsEnabled(GL11.GL_BLEND);
+        savedLighting = GL11.glIsEnabled(GL11.GL_LIGHTING);
+        savedCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+        savedDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+        savedBlendSrc = GL11.glGetInteger(GL11.GL_BLEND_SRC);
+        savedBlendDst = GL11.glGetInteger(GL11.GL_BLEND_DST);
 
         OpenGlHelper.glUseProgram(0);
         for (int i = 0; i < HALO_TEXTURE_UNITS.length; i++) {
             GL13.glActiveTexture(HALO_TEXTURE_UNITS[i]);
-            saved.texture2D[i] = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-            saved.texture2DEnabled[i] = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
+            savedTexture2D[i] = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            savedTexture2DEnabled[i] = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
             GL11.glDisable(GL11.GL_TEXTURE_2D);
         }
-        GL13.glActiveTexture(saved.activeTexture);
+        GL13.glActiveTexture(savedActiveTexture);
 
         GlStateManager.enableBlend();
         GlStateManager.blendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE);
@@ -77,7 +86,6 @@ public final class ProjectRedHaloRenderer {
         GlStateManager.disableLighting();
         GlStateManager.disableCull();
         GlStateManager.depthMask(false);
-        state = saved;
     }
 
     public static void renderImmediateHalo(Object cuboid, int color, Object transformation) {
@@ -302,25 +310,19 @@ public final class ProjectRedHaloRenderer {
             return;
         }
 
-        HaloState saved = state;
-        state = null;
-        if (saved == null) {
-            return;
-        }
-
-        GlStateManager.depthMask(saved.depthMask);
-        if (saved.cull) {
+        GlStateManager.depthMask(savedDepthMask);
+        if (savedCull) {
             GlStateManager.enableCull();
         } else {
             GlStateManager.disableCull();
         }
-        if (saved.lighting) {
+        if (savedLighting) {
             GlStateManager.enableLighting();
         } else {
             GlStateManager.disableLighting();
         }
-        GlStateManager.blendFunc(saved.blendSrc, saved.blendDst);
-        if (saved.blend) {
+        GlStateManager.blendFunc(savedBlendSrc, savedBlendDst);
+        if (savedBlend) {
             GlStateManager.enableBlend();
         } else {
             GlStateManager.disableBlend();
@@ -328,15 +330,16 @@ public final class ProjectRedHaloRenderer {
 
         for (int i = 0; i < HALO_TEXTURE_UNITS.length; i++) {
             GL13.glActiveTexture(HALO_TEXTURE_UNITS[i]);
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, saved.texture2D[i]);
-            if (saved.texture2DEnabled[i]) {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, savedTexture2D[i]);
+            if (savedTexture2DEnabled[i]) {
                 GL11.glEnable(GL11.GL_TEXTURE_2D);
             } else {
                 GL11.glDisable(GL11.GL_TEXTURE_2D);
             }
         }
-        GL13.glActiveTexture(saved.activeTexture);
-        OpenGlHelper.glUseProgram(saved.program);
+        GL13.glActiveTexture(savedActiveTexture);
+        OpenGlHelper.glUseProgram(savedProgram);
+        activeScale = 1.0D;
     }
 
     private static int enumColourRgba(int color) {
@@ -438,7 +441,7 @@ public final class ProjectRedHaloRenderer {
     }
 
     private static double activeHaloScale() {
-        return state != null ? state.scale : 1.0D;
+        return stateDepth > 0 ? activeScale : 1.0D;
     }
 
     private static double scaleAround(double center, double value, double scale) {
@@ -486,17 +489,4 @@ public final class ProjectRedHaloRenderer {
         throw new NoSuchFieldException(name);
     }
 
-    private static final class HaloState {
-        private final int[] texture2D = new int[HALO_TEXTURE_UNITS.length];
-        private final boolean[] texture2DEnabled = new boolean[HALO_TEXTURE_UNITS.length];
-        private int program;
-        private int activeTexture;
-        private boolean blend;
-        private boolean lighting;
-        private boolean cull;
-        private boolean depthMask;
-        private int blendSrc;
-        private int blendDst;
-        private double scale = 1.0D;
-    }
 }

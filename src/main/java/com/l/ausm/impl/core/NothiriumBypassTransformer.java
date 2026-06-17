@@ -59,7 +59,7 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         for (MethodNode method : classNode.methods) {
             String signature = method.name + method.desc;
             if (MARK_BLOCKS_FOR_UPDATE.equals(signature)) {
-                insertBypassGuard(method, "shouldBypassBlockUpdates");
+                insertBlockUpdateBypassGuard(method);
                 changed = true;
             } else if (VOID_HANDLERS.contains(signature)) {
                 insertBypassGuard(method, "shouldBypass");
@@ -84,6 +84,26 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
                 BYPASS_OWNER,
                 bypassMethodName,
                 "()Z",
+                false
+        ));
+        guard.add(new JumpInsnNode(Opcodes.IFEQ, continueLabel));
+        guard.add(new InsnNode(Opcodes.RETURN));
+        guard.add(continueLabel);
+        guard.add(new FrameNode(Opcodes.F_SAME, 0, null, 0, null));
+        method.instructions.insert(guard);
+    }
+
+    private static void insertBlockUpdateBypassGuard(MethodNode method) {
+        LabelNode continueLabel = new LabelNode();
+        InsnList guard = new InsnList();
+        for (int local = 1; local <= 6; local++) {
+            guard.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ILOAD, local));
+        }
+        guard.add(new MethodInsnNode(
+                Opcodes.INVOKESTATIC,
+                BYPASS_OWNER,
+                "shouldBypassBlockUpdates",
+                "(IIIIII)Z",
                 false
         ));
         guard.add(new JumpInsnNode(Opcodes.IFEQ, continueLabel));

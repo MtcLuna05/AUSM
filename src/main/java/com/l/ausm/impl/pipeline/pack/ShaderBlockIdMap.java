@@ -61,25 +61,6 @@ public final class ShaderBlockIdMap {
             new ColorAlias("yellow", 10906)
     };
 
-    private static final ColorAlias[] RANDOM_THINGS_LUMINOUS_COLORS = {
-            new ColorAlias("white", 12003),
-            new ColorAlias("gray", 12003),
-            new ColorAlias("silver", 12003),
-            new ColorAlias("black", 12003),
-            new ColorAlias("orange", 12071),
-            new ColorAlias("brown", 12071),
-            new ColorAlias("magenta", 12079),
-            new ColorAlias("light_blue", 12076),
-            new ColorAlias("yellow", 12072),
-            new ColorAlias("lime", 12073),
-            new ColorAlias("pink", 12080),
-            new ColorAlias("cyan", 12075),
-            new ColorAlias("purple", 12078),
-            new ColorAlias("blue", 12077),
-            new ColorAlias("green", 12074),
-            new ColorAlias("red", 12070)
-    };
-
     private ShaderBlockIdMap() {
     }
 
@@ -158,12 +139,6 @@ public final class ShaderBlockIdMap {
 
         for (ColorAlias color : MINECRAFT_DYE_COLORS) {
             addLitStateAlias(stateRules, "bewitchment", color.name() + "_candle", color.materialId());
-        }
-
-        for (ColorAlias color : RANDOM_THINGS_LUMINOUS_COLORS) {
-            addStateAlias(stateRules, "randomthings", "luminousblock", "color", color.name(), color.materialId());
-            addStateAlias(stateRules, "randomthings", "translucentluminousblock", "color", color.name(), color.materialId());
-            addStateAlias(stateRules, "randomthings", "luminousstainedbrick", "color", color.name(), color.materialId());
         }
 
         addAstralCrystalCompatibility(stateRules);

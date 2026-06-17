@@ -3,7 +3,6 @@ package com.l.ausm.impl.mixin.compat;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import net.minecraft.block.Block;
-import net.minecraft.block.BlockPortal;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.util.math.BlockPos;
@@ -13,8 +12,6 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-
-import java.util.Locale;
 
 @Mixin(World.class)
 public class BetterPortalsPortalBlockChangeMixin {
@@ -54,10 +51,12 @@ public class BetterPortalsPortalBlockChangeMixin {
     private void ausm$refreshPortalTerrainAfterSetBlock(BlockPos pos, IBlockState newState, int flags,
                                                         CallbackInfoReturnable<Boolean> cir) {
         try {
+            boolean oldPortal = ausm$isPortalState(ausm$previousPortalState);
+            boolean newPortal = ausm$isPortalState(newState);
             if (!cir.getReturnValueZ()
                     || ausm$previousPortalPos == null
                     || !ausm$previousPortalPos.equals(pos)
-                    || (!ausm$isPortalState(ausm$previousPortalState) && !ausm$isPortalState(newState))) {
+                    || oldPortal == newPortal) {
                 return;
             }
 
@@ -83,11 +82,6 @@ public class BetterPortalsPortalBlockChangeMixin {
         }
 
         Block block = state.getBlock();
-        if (block instanceof BlockPortal) {
-            return true;
-        }
-
-        String className = block.getClass().getName().toLowerCase(Locale.ROOT);
-        return className.contains("portal");
+        return BetterPortalsCompat.isBetterPortalsPortalBlock(block);
     }
 }

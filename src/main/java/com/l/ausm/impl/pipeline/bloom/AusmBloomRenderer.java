@@ -32,12 +32,13 @@ import java.util.function.IntSupplier;
 
 public final class AusmBloomRenderer {
     private static final int HALF_RESOLUTION_DIVISOR = 2;
-    private static final float BLOOM_STRENGTH = 1.45F;
+    private static final float BLOOM_STRENGTH = 2.25F;
+    private static final float BLOOM_DIRECT_DEBUG_STRENGTH = 0.35F;
     private static final float FRAMEBUFFER_BLOOM_STRENGTH = 1.05F;
     private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
     private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = true;
-    private static final int BLOOM_RENDER_LOG_LIMIT = 120;
-    private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 20;
+    private static final int BLOOM_RENDER_LOG_LIMIT = 40;
+    private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 0;
 
     private final AusmBloomResourceIndex resourceIndex = new AusmBloomResourceIndex();
     private final IntBuffer viewportBuffer = BufferUtils.createIntBuffer(16);
@@ -229,6 +230,7 @@ public final class AusmBloomRenderer {
         try {
             if (runBlurChain(bloomLayerTarget.framebufferTexture)) {
                 compositeBlurredBloom(target, BLOOM_STRENGTH);
+                compositeTexture(target, bloomLayerTarget.framebufferTexture, BLOOM_DIRECT_DEBUG_STRENGTH);
                 composited = true;
                 if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
                     bloomCompositeLogs++;
@@ -348,6 +350,10 @@ public final class AusmBloomRenderer {
     }
 
     private void compositeBlurredBloom(Framebuffer target, float strength) {
+        compositeTexture(target, bloomDownsampleTarget.framebufferTexture, strength);
+    }
+
+    private void compositeTexture(Framebuffer target, int texture, float strength) {
         if (target == null || compositeProgram() == -1) {
             return;
         }
@@ -360,13 +366,15 @@ public final class AusmBloomRenderer {
         GlStateManager.disableDepth();
         GlStateManager.depthMask(false);
         GlStateManager.disableAlpha();
+        GlStateManager.enableTexture2D();
+        GL11.glEnable(GL11.GL_TEXTURE_2D);
         GlStateManager.enableBlend();
         GlStateManager.tryBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
         GlStateManager.colorMask(true, true, true, true);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
 
         OpenGlHelper.glUseProgram(compositeProgram);
-        bindTextureUniform(compositeProgram, "bloom", bloomDownsampleTarget.framebufferTexture, 0);
+        bindTextureUniform(compositeProgram, "bloom", texture, 0);
         setUniform1f(compositeProgram, "strength", strength);
         drawFullscreenQuad();
     }
@@ -915,7 +923,9 @@ public final class AusmBloomRenderer {
                 gl_Position = ftransform();
                 textureCoords = gl_MultiTexCoord0.st;
                 vertexColor = gl_Color;
-                vertexEmission = clamp(at_midBlock.w / 15.0, 0.0, 1.0);
+                float metadataEmission = clamp(at_midBlock.w / 15.0, 0.0, 1.0);
+                float lightmapEmission = smoothstep(220.0, 240.0, min(gl_MultiTexCoord1.s, gl_MultiTexCoord1.t));
+                vertexEmission = max(metadataEmission, lightmapEmission);
             }
             """;
 

@@ -3,6 +3,7 @@ package com.l.ausm.impl.mixin.compat;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsPortalSurfaceRenderer;
+import com.l.ausm.impl.MainMod;
 import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.util.math.Vec3d;
 import org.spongepowered.asm.mixin.Mixin;
@@ -13,11 +14,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(targets = "de.johni0702.minecraft.betterportals.client.render.PortalRenderer", remap = false)
 public abstract class BetterPortalsPortalRendererMixin {
+    private static boolean ausm$portalSurfaceRendererUnavailableLogged;
 
     @Inject(method = "renderPortal", at = @At("HEAD"), cancellable = true, remap = false)
     private void ausm$renderPortalSurface(@Coerce Object portal, Vec3d pos, Framebuffer framebuffer, @Coerce Object renderPass, CallbackInfo ci) {
-        if (BetterPortalsPortalSurfaceRenderer.renderPortalSurface(this, portal, pos, framebuffer, renderPass)) {
-            ci.cancel();
+        try {
+            if (BetterPortalsPortalSurfaceRenderer.renderPortalSurface(this, portal, pos, framebuffer, renderPass)) {
+                ci.cancel();
+            }
+        } catch (LinkageError | RuntimeException error) {
+            if (!ausm$portalSurfaceRendererUnavailableLogged) {
+                ausm$portalSurfaceRendererUnavailableLogged = true;
+                MainMod.LOGGER.warn("[BetterPortalsCompat] AUSM portal surface replacement failed to load; falling back to Better Portals surface renderer", error);
+            }
         }
     }
 

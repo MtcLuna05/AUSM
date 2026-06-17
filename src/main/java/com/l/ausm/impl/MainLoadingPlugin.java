@@ -28,7 +28,11 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
             "gregtech/client/utils/BloomEffectUtil.class",
             "thebetweenlands/common/network/clientbound/MessageSyncChunkStorage.class",
             "li/cil/scannable/client/renderer/ScannerRenderer.class",
-            "li/cil/scannable/client/renderer/OverlayRenderer.class"
+            "li/cil/scannable/client/renderer/OverlayRenderer.class",
+            "epicsquid/blockcraftery/model/BakedModelEditable.class",
+            "com/elytradev/architecture/client/render/CustomBlockDispatcher.class",
+            "com/elytradev/architecture/client/render/target/RenderTargetWorld.class",
+            "com/elytradev/architecture/client/render/RenderingManager.class"
     };
     private static final Set<String> EXPOSED_COMPAT_JARS = new HashSet<>();
 

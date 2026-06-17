@@ -69,6 +69,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".AstralSorceryConstellationRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/util/RenderConstellation.class", false);
         }
+        if (mixinClassName.endsWith(".AstralSorceryEffectHandlerMixin")) {
+            return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/effect/EffectHandler.class", false);
+        }
         if (mixinClassName.endsWith(".CodeChickenRenderItemMixin")) {
             return optionalTargetPresent(mixinClassName, "codechicken/lib/render/item/CCRenderItem.class", false);
         }
@@ -108,6 +111,21 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".ScannableOverlayRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "li/cil/scannable/client/renderer/OverlayRenderer.class", false);
         }
+        if (mixinClassName.endsWith(".BlockcrafteryBakedModelEditableMixin")) {
+            return optionalTargetPresent(mixinClassName, "epicsquid/blockcraftery/model/BakedModelEditable.class", false);
+        }
+        if (mixinClassName.endsWith(".RandomThingsLuminousBlockMixin")) {
+            return optionalTargetPresent(mixinClassName, "lumien/randomthings/block/BlockBlockLuminousBase.class", true);
+        }
+        if (mixinClassName.endsWith(".ArchitectureCraftRenderTargetWorldMixin")) {
+            return optionalTargetPresent(mixinClassName, "com/elytradev/architecture/client/render/target/RenderTargetWorld.class", true);
+        }
+        if (mixinClassName.endsWith(".ArchitectureCraftCustomBlockDispatcherMixin")) {
+            return optionalTargetPresent(mixinClassName, "com/elytradev/architecture/client/render/CustomBlockDispatcher.class", true);
+        }
+        if (mixinClassName.endsWith(".ArchitectureCraftRenderingManagerMixin")) {
+            return optionalTargetPresent(mixinClassName, "com/elytradev/architecture/client/render/RenderingManager.class", true);
+        }
         if (mixinClassName.contains(".hei.")) {
             return optionalTargetPresent(mixinClassName, "mezz/jei/JEIInternalPlugin.class", false);
         }
@@ -115,27 +133,52 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
     }
 
     private static boolean optionalTargetPresent(String mixinClassName, String resourcePath, boolean allowJarFallback) {
-        return classResourcePresent(resourcePath, allowJarFallback);
+        String source = classResourceSource(resourcePath, allowJarFallback);
+        boolean present = source != null;
+        if (shouldLogOptionalTargetProbe(mixinClassName)) {
+            MainMod.LOGGER.info("[AUSMMixinProbe] mixin={} target={} present={} source={} allowJarFallback={} userDir={}",
+                    mixinClassName,
+                    resourcePath,
+                    present,
+                    source,
+                    allowJarFallback,
+                    System.getProperty("user.dir", "."));
+        }
+        return present;
     }
 
     private static boolean classResourcePresent(String resourcePath, boolean allowJarFallback) {
+        return classResourceSource(resourcePath, allowJarFallback) != null;
+    }
+
+    private static String classResourceSource(String resourcePath, boolean allowJarFallback) {
         if (resourcePath == null || resourcePath.isEmpty()) {
-            return false;
+            return null;
         }
 
         if (resourcePresent(MainMixinConfigPlugin.class.getClassLoader(), resourcePath)) {
-            return true;
+            return "plugin-classloader";
         }
         if (resourcePresent(Thread.currentThread().getContextClassLoader(), resourcePath)) {
-            return true;
+            return "context-classloader";
         }
         if (resourcePresent(Launch.classLoader, resourcePath)) {
-            return true;
+            return "launch-classloader";
         }
         if (ClassLoader.getSystemResource(resourcePath) != null) {
-            return true;
+            return "system-classloader";
         }
-        return allowJarFallback && resourcePresentInModsDirectory(resourcePath);
+        if (!allowJarFallback) {
+            return null;
+        }
+        File jar = resourceJarInModsDirectory(resourcePath);
+        return jar != null ? "mods-jar:" + jar.getName() : null;
+    }
+
+    private static boolean shouldLogOptionalTargetProbe(String mixinClassName) {
+        return mixinClassName != null
+                && (mixinClassName.contains("ArchitectureCraft")
+                || mixinClassName.contains("Blockcraftery"));
     }
 
     private static boolean resourcePresent(ClassLoader loader, String resourcePath) {
@@ -147,9 +190,13 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
     }
 
     private static boolean resourcePresentInModsDirectory(String resourcePath) {
+        return resourceJarInModsDirectory(resourcePath) != null;
+    }
+
+    private static File resourceJarInModsDirectory(String resourcePath) {
         File modsDirectory = new File(System.getProperty("user.dir", "."), "mods");
         if (!modsDirectory.isDirectory()) {
-            return false;
+            return null;
         }
 
         File[] files = modsDirectory.listFiles((dir, name) -> {
@@ -157,19 +204,19 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
             return lower.endsWith(".jar") || lower.endsWith(".zip");
         });
         if (files == null) {
-            return false;
+            return null;
         }
 
         for (File file : files) {
             try (JarFile jar = new JarFile(file)) {
                 if (jar.getEntry(resourcePath) != null) {
-                    return true;
+                    return file;
                 }
             } catch (IOException | RuntimeException ignored) {
                 // Broken jars should not make optional compat mixins fatal.
             }
         }
-        return false;
+        return null;
     }
 
     @Override

@@ -13,10 +13,17 @@ public final class BlockRenderContext {
     private static final ThreadLocal<Integer> CURRENT_LOCAL_Y = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_LOCAL_Z = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_EMISSION = ThreadLocal.withInitial(() -> 0);
+    private static final ThreadLocal<Integer> CURRENT_BLOCK_ALPHA = ThreadLocal.withInitial(() -> -1);
     private static final ThreadLocal<Boolean> CURRENT_CRYSTAL_ONLY_EMISSION = ThreadLocal.withInitial(() -> false);
     private static final ThreadLocal<Integer> CURRENT_QUAD_EMISSION_OVERRIDE = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> SEPARATE_AO_ELIGIBLE = ThreadLocal.withInitial(() -> false);
     private static final ThreadLocal<float[]> CURRENT_QUAD_AO = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> BLOOM_MASK_FALLBACK = ThreadLocal.withInitial(() -> false);
+    private static final ThreadLocal<float[]> BLOOM_MASK_UV = ThreadLocal.withInitial(() -> new float[] {0.5f, 0.5f});
+    private static final ThreadLocal<Integer> BLOOM_MASK_COLOR = ThreadLocal.withInitial(() -> -1);
+    private static final ThreadLocal<String> CURRENT_DEBUG_KIND = ThreadLocal.withInitial(() -> "unknown");
+    private static final ThreadLocal<String> CURRENT_DEBUG_STATE = ThreadLocal.withInitial(() -> "unknown");
+    private static final ThreadLocal<String> CURRENT_DEBUG_EFFECTIVE_STATE = ThreadLocal.withInitial(() -> "unknown");
 
     private BlockRenderContext() {
     }
@@ -51,6 +58,18 @@ public final class BlockRenderContext {
         CURRENT_LOCAL_Z.set(z & 15);
     }
 
+    public static int localX() {
+        return CURRENT_LOCAL_X.get();
+    }
+
+    public static int localY() {
+        return CURRENT_LOCAL_Y.get();
+    }
+
+    public static int localZ() {
+        return CURRENT_LOCAL_Z.get();
+    }
+
     public static void setBlockEmission(int blockEmission) {
         CURRENT_BLOCK_EMISSION.set(Math.max(0, Math.min(15, blockEmission)));
     }
@@ -58,6 +77,14 @@ public final class BlockRenderContext {
     public static int blockEmission() {
         Integer override = CURRENT_QUAD_EMISSION_OVERRIDE.get();
         return override != null ? Math.max(0, Math.min(15, override)) : CURRENT_BLOCK_EMISSION.get();
+    }
+
+    public static void setBlockAlpha(int alpha) {
+        CURRENT_BLOCK_ALPHA.set(alpha >= 0 ? Math.max(0, Math.min(255, alpha)) : -1);
+    }
+
+    public static int blockAlpha() {
+        return CURRENT_BLOCK_ALPHA.get();
     }
 
     public static int vanillaLightmapEmission() {
@@ -137,6 +164,52 @@ public final class BlockRenderContext {
         CURRENT_QUAD_AO.remove();
     }
 
+    public static void setBloomMaskFallback(boolean enabled, float u, float v, int color) {
+        BLOOM_MASK_FALLBACK.set(enabled);
+        BLOOM_MASK_UV.set(new float[] {u, v});
+        BLOOM_MASK_COLOR.set(color);
+    }
+
+    public static boolean bloomMaskFallback() {
+        return BLOOM_MASK_FALLBACK.get();
+    }
+
+    public static float bloomMaskU() {
+        return BLOOM_MASK_UV.get()[0];
+    }
+
+    public static float bloomMaskV() {
+        return BLOOM_MASK_UV.get()[1];
+    }
+
+    public static int bloomMaskColor() {
+        return BLOOM_MASK_COLOR.get();
+    }
+
+    public static void clearBloomMaskFallback() {
+        BLOOM_MASK_FALLBACK.remove();
+        BLOOM_MASK_UV.remove();
+        BLOOM_MASK_COLOR.remove();
+    }
+
+    public static void setDebugBlock(String kind, String state, String effectiveState) {
+        CURRENT_DEBUG_KIND.set(kind != null ? kind : "unknown");
+        CURRENT_DEBUG_STATE.set(state != null ? state : "unknown");
+        CURRENT_DEBUG_EFFECTIVE_STATE.set(effectiveState != null ? effectiveState : "unknown");
+    }
+
+    public static String debugKind() {
+        return CURRENT_DEBUG_KIND.get();
+    }
+
+    public static String debugState() {
+        return CURRENT_DEBUG_STATE.get();
+    }
+
+    public static String debugEffectiveState() {
+        return CURRENT_DEBUG_EFFECTIVE_STATE.get();
+    }
+
     public static void clear() {
         CURRENT_BLOCK_ENTITY_ID.remove();
         CURRENT_RENDER_TYPE.remove();
@@ -145,9 +218,16 @@ public final class BlockRenderContext {
         CURRENT_LOCAL_Y.remove();
         CURRENT_LOCAL_Z.remove();
         CURRENT_BLOCK_EMISSION.remove();
+        CURRENT_BLOCK_ALPHA.remove();
         CURRENT_CRYSTAL_ONLY_EMISSION.remove();
         CURRENT_QUAD_EMISSION_OVERRIDE.remove();
         SEPARATE_AO_ELIGIBLE.remove();
         CURRENT_QUAD_AO.remove();
+        BLOOM_MASK_FALLBACK.remove();
+        BLOOM_MASK_UV.remove();
+        BLOOM_MASK_COLOR.remove();
+        CURRENT_DEBUG_KIND.remove();
+        CURRENT_DEBUG_STATE.remove();
+        CURRENT_DEBUG_EFFECTIVE_STATE.remove();
     }
 }

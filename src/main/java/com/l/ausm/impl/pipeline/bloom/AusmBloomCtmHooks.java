@@ -68,8 +68,7 @@ public final class AusmBloomCtmHooks {
         if (model == null
                 || layer == null
                 || bloomLayer == null
-                || mergingBloomQuads.get() != null
-                || (!PipelineContext.getInstance().isActive() && layer != bloomLayer)) {
+                || mergingBloomQuads.get() != null) {
             return original;
         }
 
@@ -86,6 +85,10 @@ public final class AusmBloomCtmHooks {
         }
 
         try {
+            if (!shouldMergeBloomIntoLayer(original, state, layer)) {
+                return original;
+            }
+
             List<BakedQuad> bloomQuads = getBloomLayerQuads(model, state, side, rand, layer);
             if (bloomQuads == null || bloomQuads.isEmpty()) {
                 return original;
@@ -96,12 +99,28 @@ public final class AusmBloomCtmHooks {
             merged.addAll(bloomQuads);
             if (!loggedMergedQuads) {
                 loggedMergedQuads = true;
-                MainMod.LOGGER.info("[AUSMBloom] Merged CTM BLOOM quads into shadered layer {} for emissive visibility.", layer);
+                MainMod.LOGGER.info("[AUSMBloom] Merged CTM BLOOM quads into base layer {} for emissive visibility.", layer);
             }
             return merged;
         } catch (RuntimeException | LinkageError error) {
             logFailure(error);
             return original;
+        }
+    }
+
+    private static boolean shouldMergeBloomIntoLayer(List<BakedQuad> original, IBlockState state, BlockRenderLayer layer) {
+        if (PipelineContext.getInstance().isActive() || original == null || !original.isEmpty()) {
+            return true;
+        }
+        if (state == null || state.getBlock() == null) {
+            return false;
+        }
+
+        try {
+            BlockRenderLayer naturalLayer = state.getBlock().getRenderLayer();
+            return naturalLayer == layer;
+        } catch (RuntimeException | LinkageError ignored) {
+            return false;
         }
     }
 

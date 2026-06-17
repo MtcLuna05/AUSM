@@ -24,6 +24,21 @@ public class LumenizedDisableBloomMixin {
             logged = true;
             MainMod.LOGGER.info("[AUSMBloom] Replacing original Lumenized bloom pass while preserving wrapped terrain layers.");
         }
+
+        if (!AusmBloomLayer.shouldUseNativeHook()) {
+            if (renderGlobal == null || layer == null) {
+                cir.setReturnValue(0);
+                return;
+            }
+            if (AusmBloomLayer.isBloomLayer(layer)) {
+                int rendered = context.renderShaderlessVisibleBloomLayerFromWorldPass((float) partialTicks, pass);
+                cir.setReturnValue(rendered);
+                return;
+            }
+            cir.setReturnValue(context.renderWorldBlockLayer(renderGlobal, layer, partialTicks, pass, entity));
+            return;
+        }
+
         int bloomRendered = context.renderAusmBloomLayer(
                 renderGlobal,
                 partialTicks,
@@ -36,6 +51,6 @@ public class LumenizedDisableBloomMixin {
             return;
         }
 
-        cir.setReturnValue(renderGlobal.renderBlockLayer(layer, partialTicks, pass, entity));
+        cir.setReturnValue(context.renderWorldBlockLayer(renderGlobal, layer, partialTicks, pass, entity));
     }
 }

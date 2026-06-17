@@ -83,6 +83,7 @@ public class MinecraftMixin {
     private void ausm$scheduleLightRefreshAfterWorldLoad(WorldClient worldClient, String loadingMessage, CallbackInfo ci) {
         if (worldClient == null) {
             PipelineContext.getInstance().clearPendingShaderChunkRefreshes();
+            PipelineContext.getInstance().clearPendingClientChunkRenderRefreshes();
             PipelineContext.getInstance().clearScheduledWorldLoadLightRecalculation();
             PipelineContext.getInstance().clearScheduledBloomTerrainRefresh();
             PipelineContext.getInstance().clearScheduledWorldTerrainRefresh();
@@ -90,17 +91,22 @@ public class MinecraftMixin {
         }
         PipelineContext context = PipelineContext.getInstance();
         context.clearPendingShaderChunkRefreshes();
-        context.scheduleWorldTerrainRefresh();
-        context.scheduleBloomTerrainRefresh("world load");
-        if (MainMod.getShaderPackManager() != null) {
-            int dimensionId = ausm$dimensionId(worldClient);
-            boolean dimensionSwitch = ausm$isDimensionSwitch(dimensionId);
-            if (dimensionSwitch) {
-                context.handleWorldDimensionSwitch(ausm$previousWorldDimensionId, dimensionId);
-            } else {
-                MainMod.getShaderPackManager().preparePipelineForWorldLoad(dimensionId);
-                context.scheduleWorldLoadLightRecalculation();
-            }
+        context.clearPendingClientChunkRenderRefreshes();
+        if (MainMod.getShaderPackManager() == null) {
+            context.scheduleWorldTerrainRefresh();
+            context.scheduleBloomTerrainRefresh("world load");
+            return;
+        }
+
+        int dimensionId = ausm$dimensionId(worldClient);
+        boolean dimensionSwitch = ausm$isDimensionSwitch(dimensionId);
+        if (dimensionSwitch) {
+            context.handleWorldDimensionSwitch(ausm$previousWorldDimensionId, dimensionId);
+        } else {
+            context.scheduleWorldTerrainRefresh();
+            context.scheduleBloomTerrainRefresh("world load");
+            MainMod.getShaderPackManager().preparePipelineForWorldLoad(dimensionId);
+            context.scheduleWorldLoadLightRecalculation();
         }
     }
 

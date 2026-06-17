@@ -33,9 +33,9 @@ public class ShaderPackManager implements ShaderPackController {
     private final Path shaderConfigFile;
     private ShaderPack currentPack = NoneShaderPack.INSTANCE;
     private Map<String, String> currentOptionOverrides = Map.of();
-    private final Map<ShaderPropertiesCacheKey, ShaderProperties> shaderPropertiesCache = new LinkedHashMap<>() {
+    private final Map<String, ShaderProperties> shaderPropertiesCache = new LinkedHashMap<>() {
         @Override
-        protected boolean removeEldestEntry(Map.Entry<ShaderPropertiesCacheKey, ShaderProperties> eldest) {
+        protected boolean removeEldestEntry(Map.Entry<String, ShaderProperties> eldest) {
             return size() > SHADER_PROPERTIES_CACHE_LIMIT;
         }
     };
@@ -399,6 +399,9 @@ public class ShaderPackManager implements ShaderPackController {
             compiledDimensionId = currentDimensionId;
             compiledPackName = currentPack.getName();
             pendingPipelineReload = false;
+            if (!quietBetterPortalsReload && currentDimensionId == getClientDimensionId()) {
+                PipelineContext.getInstance().scheduleWorldTerrainRefresh();
+            }
             return;
         }
 
@@ -424,7 +427,7 @@ public class ShaderPackManager implements ShaderPackController {
             MainMod.LOGGER.info("Shader dimension changed from {} to {}; compiling shaderpack '{}' for this dimension",
                     compiledDimensionId, currentDimensionId, selectedPackName);
         }
-        initializeCurrentPipeline(properties, true, currentDimensionId);
+        initializeCurrentPipeline(properties, true, currentDimensionId, false);
     }
 
     public void runPendingBetterPortalsDimensionCompile() {
@@ -593,7 +596,7 @@ public class ShaderPackManager implements ShaderPackController {
 
         Map<String, String> safeOverrides = overrides == null || overrides.isEmpty() ? Map.of() : Map.copyOf(overrides);
         int safeDimensionId = dimensionId == Integer.MIN_VALUE ? ShaderDimensionContext.currentDimensionId() : dimensionId;
-        ShaderPropertiesCacheKey cacheKey = new ShaderPropertiesCacheKey(packName, safeOverrides, safeDimensionId);
+        String cacheKey = shaderPropertiesCacheKey(packName, safeOverrides, safeDimensionId);
         ShaderProperties cached = shaderPropertiesCache.get(cacheKey);
         if (cached != null) {
             return cached;
@@ -704,10 +707,14 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     private boolean initializeCurrentPipeline(ShaderProperties properties, boolean activate) {
-        return initializeCurrentPipeline(properties, activate, getEffectiveRenderDimensionId());
+        return initializeCurrentPipeline(properties, activate, getEffectiveRenderDimensionId(), true);
     }
 
     private boolean initializeCurrentPipeline(ShaderProperties properties, boolean activate, int dimensionId) {
+        return initializeCurrentPipeline(properties, activate, dimensionId, true);
+    }
+
+    private boolean initializeCurrentPipeline(ShaderProperties properties, boolean activate, int dimensionId, boolean fullTerrainRefresh) {
         try {
             PipelineContext context = PipelineContext.getInstance();
             String cacheKey = activate
@@ -736,7 +743,11 @@ public class ShaderPackManager implements ShaderPackController {
             compiledPackName = currentPack.getName();
             pendingPipelineReload = false;
             if (activate) {
-                context.scheduleWorldTerrainRefresh();
+                if (fullTerrainRefresh && dimensionId == getClientDimensionId()) {
+                    context.scheduleFullWorldTerrainRefresh();
+                } else {
+                    context.scheduleWorldTerrainRefresh();
+                }
             }
             return true;
         } catch (RuntimeException e) {
@@ -856,7 +867,7 @@ public class ShaderPackManager implements ShaderPackController {
             clearShaderPropertiesCache();
             return;
         }
-        shaderPropertiesCache.keySet().removeIf(key -> !packName.equals(key.packName()));
+        shaderPropertiesCache.keySet().removeIf(key -> !isShaderPropertiesCacheKeyForPack(key, packName));
     }
 
     private void saveShaderConfig() {
@@ -954,6 +965,22 @@ public class ShaderPackManager implements ShaderPackController {
         return pack == null || INTERNAL_PACK_NAME.equals(pack.getName());
     }
 
-    private record ShaderPropertiesCacheKey(String packName, Map<String, String> overrides, int dimensionId) {
+    private static String shaderPropertiesCacheKey(String packName, Map<String, String> overrides, int dimensionId) {
+        String safePackName = packName != null ? packName : "";
+        StringBuilder builder = new StringBuilder(safePackName.length() + 32);
+        builder.append(safePackName).append('\0').append(dimensionId);
+        if (overrides != null && !overrides.isEmpty()) {
+            new java.util.TreeMap<>(overrides).forEach((key, value) ->
+                    builder.append('\0')
+                            .append(key != null ? key : "")
+                            .append('=')
+                            .append(value != null ? value : ""));
+        }
+        return builder.toString();
+    }
+
+    private static boolean isShaderPropertiesCacheKeyForPack(String cacheKey, String packName) {
+        String safePackName = packName != null ? packName : "";
+        return cacheKey != null && cacheKey.startsWith(safePackName + '\0');
     }
 }

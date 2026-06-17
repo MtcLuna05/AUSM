@@ -1,5 +1,6 @@
 package com.l.ausm.impl.mixin.pipeline;
 
+import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiScreen;
@@ -41,8 +42,16 @@ public class GuiScreenMixin {
                 || this.mc.world == null) {
             return false;
         }
+        if (ausm$shouldUseVanillaWorldBackground()) {
+            return false;
+        }
 
+        PipelineContext.getInstance().prepareGuiFramebuffer();
         Gui.drawRect(0, 0, this.width, this.height, WORLD_GUI_BACKGROUND);
         return true;
+    }
+
+    private boolean ausm$shouldUseVanillaWorldBackground() {
+        return "tinker_io.gui.GuiSmartOutput".equals(getClass().getName());
     }
 }

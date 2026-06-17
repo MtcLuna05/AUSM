@@ -3,11 +3,15 @@ package com.l.ausm.impl.pipeline.compat;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
+import net.minecraft.client.renderer.texture.TextureMap;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraftforge.fml.common.Loader;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
@@ -41,6 +45,7 @@ public final class NothiriumShadowRenderer {
     private static final int MAX_PENDING_SHADOW_COMPILES = 64;
     private static final int MAX_CHUNK_REFRESH_COMPILES = 16;
     private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 16;
+    private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 80;
     private static final long REFLECTION_RETRY_DELAY_MS = 1000L;
     private static Reflection reflection;
     private static long nextReflectionAttemptMillis;
@@ -57,6 +62,7 @@ public final class NothiriumShadowRenderer {
     private int compileAuditAttempts;
     private int chunkRefreshAuditAttempts;
     private int visibleTranslucentAuditAttempts;
+    private static int visibleTranslucentStateLogs;
 
     public static boolean isAvailable() {
         return reflection() != null;
@@ -193,12 +199,12 @@ public final class NothiriumShadowRenderer {
             }
 
             boolean requirePipelineStride = layer != BlockRenderLayer.TRANSLUCENT;
-            DrawStats stats = drawChunks(reflection, pass, chunks, cameraX, cameraY, cameraZ, -1.0D, false,
+            DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, -1.0D, false,
                     fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
             if (stats.unsupportedStride > 0) {
                 refreshUnsupportedPipelineChunks(reflection, stats.unsupportedPipelineChunks);
             }
-            auditVisibleTranslucentLayer(layer, stats, fallbackBlockEntityId, fallbackRenderType);
+            auditVisibleTranslucentLayer(layer, stats, fallbackBlockEntityId, fallbackRenderType, "after-draw");
             if (stats.drawn == 0 && stats.unsupportedStride > 0) {
                 return -1;
             }
@@ -233,7 +239,7 @@ public final class NothiriumShadowRenderer {
                         }
                         boolean collectState = audit && layer == BlockRenderLayer.SOLID
                                 && (!providerSuccessAuditLogged || providerZeroAuditAttempts < 8);
-                        DrawStats stats = drawChunks(reflection, pass, Arrays.asList(chunks), cameraX, cameraY, cameraZ,
+                        DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, Arrays.asList(chunks), cameraX, cameraY, cameraZ,
                                 maxDistance, collectState, 0, (short) 0, false);
                         if (audit) {
                             auditDrawStats("provider", layer, stats);
@@ -269,7 +275,7 @@ public final class NothiriumShadowRenderer {
                 return 0;
             }
 
-            DrawStats stats = drawChunks(reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, false,
+            DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, false,
                     0, (short) 0, false);
             if (audit) {
                 auditDrawStats("fallback", layer, stats);
@@ -347,6 +353,21 @@ public final class NothiriumShadowRenderer {
 
     private static boolean futureIsRunning(Object futureObject) {
         return futureObject instanceof CompletableFuture<?> future && !future.isDone();
+    }
+
+    private DrawStats drawChunksWithLayerState(BlockRenderLayer layer, Reflection reflection, Object pass, Iterable<?> chunks,
+                                               double cameraX, double cameraY, double cameraZ, double maxDistance, boolean collectState,
+                                               int fallbackBlockEntityId, short fallbackRenderType, boolean requirePipelineStride)
+            throws ReflectiveOperationException {
+        LayerGlState layerState = LayerGlState.prepare(layer);
+        try {
+            return drawChunks(reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, collectState,
+                    fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
+        } finally {
+            if (layerState != null) {
+                layerState.restore();
+            }
+        }
     }
 
     private DrawStats drawChunks(Reflection reflection, Object pass, Iterable<?> chunks,
@@ -617,15 +638,16 @@ public final class NothiriumShadowRenderer {
     }
 
     private void auditVisibleTranslucentLayer(BlockRenderLayer layer, DrawStats stats,
-                                             int fallbackBlockEntityId, short fallbackRenderType) {
-        if (layer != BlockRenderLayer.TRANSLUCENT || visibleTranslucentAuditAttempts >= 8) {
+                                             int fallbackBlockEntityId, short fallbackRenderType, String stage) {
+        if (layer != BlockRenderLayer.TRANSLUCENT || visibleTranslucentAuditAttempts >= MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS) {
             return;
         }
 
         visibleTranslucentAuditAttempts++;
         MainMod.LOGGER.info(
-                "[NothiriumWaterAudit] attempt={} total={} null={} part={} valid={} count={} vbo={} badStride={} unsupportedStride={} rangeSkip={} drawn={} fallbackBlock={} fallbackRenderType={} firstChunk={} firstPart={}",
+                "[AUSMTranslucentDiag] source=nothirium-visible call={} stage={} total={} null={} part={} valid={} count={} vbo={} badStride={} unsupportedStride={} rangeSkip={} drawn={} fallbackBlock={} fallbackRenderType={} firstChunk={} firstPart={} gl={}",
                 visibleTranslucentAuditAttempts,
+                stage,
                 stats.total,
                 stats.nullChunks,
                 stats.partPresent,
@@ -639,7 +661,8 @@ public final class NothiriumShadowRenderer {
                 fallbackBlockEntityId,
                 fallbackRenderType,
                 stats.firstChunk,
-                stats.firstPart
+                stats.firstPart,
+                glStateSummary()
         );
     }
 
@@ -657,6 +680,147 @@ public final class NothiriumShadowRenderer {
         if (index >= 0 && index < GL11.glGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS)) {
             GL20.glVertexAttrib4f(index, x, y, z, w);
         }
+    }
+
+    private static final class LayerGlState {
+        private final boolean texture2D;
+        private final boolean depthTest;
+        private final boolean alphaTest;
+        private final boolean blend;
+        private final boolean depthMask;
+        private final int depthFunc;
+        private final int alphaFunc;
+        private final float alphaRef;
+        private final int blendSrcRgb;
+        private final int blendDstRgb;
+        private final int blendSrcAlpha;
+        private final int blendDstAlpha;
+
+        private LayerGlState() {
+            this.texture2D = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
+            this.depthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
+            this.alphaTest = GL11.glIsEnabled(GL11.GL_ALPHA_TEST);
+            this.blend = GL11.glIsEnabled(GL11.GL_BLEND);
+            this.depthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+            this.depthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
+            this.alphaFunc = GL11.glGetInteger(GL11.GL_ALPHA_TEST_FUNC);
+            this.alphaRef = GL11.glGetFloat(GL11.GL_ALPHA_TEST_REF);
+            this.blendSrcRgb = GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB);
+            this.blendDstRgb = GL11.glGetInteger(GL14.GL_BLEND_DST_RGB);
+            this.blendSrcAlpha = GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA);
+            this.blendDstAlpha = GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA);
+        }
+
+        private static LayerGlState prepare(BlockRenderLayer layer) {
+            if (layer != BlockRenderLayer.TRANSLUCENT) {
+                return null;
+            }
+
+            LayerGlState previous = new LayerGlState();
+            Minecraft mc = Minecraft.getMinecraft();
+            if (mc != null && mc.entityRenderer != null) {
+                mc.entityRenderer.enableLightmap();
+            }
+            OpenGlHelper.setActiveTexture(OpenGlHelper.defaultTexUnit);
+            GlStateManager.enableTexture2D();
+            if (mc != null && mc.getTextureManager() != null) {
+                mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+            }
+            OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+            GlStateManager.enableDepth();
+            GL11.glDepthFunc(GL11.GL_LEQUAL);
+            GlStateManager.enableAlpha();
+            GlStateManager.alphaFunc(GL11.GL_GREATER, 0.003921569F);
+            GlStateManager.enableBlend();
+            GlStateManager.tryBlendFuncSeparate(
+                    GL11.GL_SRC_ALPHA,
+                    GL11.GL_ONE_MINUS_SRC_ALPHA,
+                    GL11.GL_ONE,
+                    GL11.GL_ZERO
+            );
+            GlStateManager.depthMask(false);
+            GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+            forceTranslucentFixedFunctionState();
+            logVisibleTranslucentState("prepare");
+            return previous;
+        }
+
+        private void restore() {
+            if (texture2D) {
+                GlStateManager.enableTexture2D();
+            } else {
+                GlStateManager.disableTexture2D();
+            }
+            if (depthTest) {
+                GlStateManager.enableDepth();
+            } else {
+                GlStateManager.disableDepth();
+            }
+            GL11.glDepthFunc(depthFunc);
+            if (alphaTest) {
+                GlStateManager.enableAlpha();
+            } else {
+                GlStateManager.disableAlpha();
+            }
+            GlStateManager.alphaFunc(alphaFunc, alphaRef);
+            if (blend) {
+                GlStateManager.enableBlend();
+            } else {
+                GlStateManager.disableBlend();
+            }
+            GlStateManager.tryBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
+            GlStateManager.depthMask(depthMask);
+            GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        }
+    }
+
+    private static void forceTranslucentFixedFunctionState() {
+        GL13.glActiveTexture(OpenGlHelper.defaultTexUnit);
+        GL11.glEnable(GL11.GL_TEXTURE_2D);
+        GL13.glClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glEnable(GL11.GL_ALPHA_TEST);
+        GL11.glAlphaFunc(GL11.GL_GREATER, 0.003921569F);
+        GL11.glEnable(GL11.GL_BLEND);
+        GL14.glBlendFuncSeparate(
+                GL11.GL_SRC_ALPHA,
+                GL11.GL_ONE_MINUS_SRC_ALPHA,
+                GL11.GL_ONE,
+                GL11.GL_ZERO
+        );
+        GL11.glDepthMask(false);
+    }
+
+    private static void logVisibleTranslucentState(String stage) {
+        if (visibleTranslucentStateLogs >= MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS) {
+            return;
+        }
+        visibleTranslucentStateLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMTranslucentDiag] source=nothirium-state call={} stage={} gl={}",
+                visibleTranslucentStateLogs,
+                stage,
+                glStateSummary()
+        );
+    }
+
+    private static String glStateSummary() {
+        return "program=" + GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
+                + ",activeTex=" + GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE)
+                + ",clientTex=" + GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE)
+                + ",tex=" + GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D)
+                + ",blend=" + GL11.glIsEnabled(GL11.GL_BLEND)
+                + ",blendFunc=" + GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB)
+                + "/" + GL11.glGetInteger(GL14.GL_BLEND_DST_RGB)
+                + "/" + GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA)
+                + "/" + GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA)
+                + ",alpha=" + GL11.glIsEnabled(GL11.GL_ALPHA_TEST)
+                + ",alphaFunc=" + GL11.glGetInteger(GL11.GL_ALPHA_TEST_FUNC)
+                + ",alphaRef=" + GL11.glGetFloat(GL11.GL_ALPHA_TEST_REF)
+                + ",depth=" + GL11.glIsEnabled(GL11.GL_DEPTH_TEST)
+                + ",depthMask=" + GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
+                + ",depthFunc=" + GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
     }
 
     private void auditCompileStats(CompileStats stats) {

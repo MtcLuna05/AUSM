@@ -29,6 +29,11 @@ public class EntityRendererMixin {
     protected void renderRainSnow(float partialTicks) {
     }
 
+    @Inject(method = "updateCameraAndRender(FJ)V", at = @At("HEAD"))
+    private void onUpdateCameraAndRenderHead(float partialTicks, long nanoTime, CallbackInfo ci) {
+        PipelineContext.getInstance().beginClientRenderFrame(nanoTime);
+    }
+
     @Inject(
             method = "updateCameraAndRender(FJ)V",
             at = @At(
@@ -100,13 +105,15 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeSetupTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.updateShaderlessVanillaViewFrustumForCamera();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        PipelineContext.getInstance().ensureVanillaTerrainRenderer();
-        if (PipelineContext.getInstance().shouldRenderShadowMapBeforeTerrainSetup()) {
-            PipelineContext.getInstance().renderShadowMap(partialTicks);
+        context.ensureVanillaTerrainRenderer();
+        if (context.shouldRenderShadowMapBeforeTerrainSetup()) {
+            context.renderShadowMap(partialTicks);
         }
     }
 
@@ -485,6 +492,7 @@ public class EntityRendererMixin {
     private void onRenderWorldPassAfterTranslucentTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldBypassWorldPassRendering()) {
+            context.renderShaderlessVisibleBloomLayerFromWorldPass(partialTicks, pass);
             context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
             return;
         }
@@ -493,6 +501,7 @@ public class EntityRendererMixin {
         context.restoreTerrainCulling();
         context.restoreWaterRenderState();
         context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
+        context.renderShaderlessVisibleBloomLayerFromWorldPass(partialTicks, pass);
     }
 
     @Inject(

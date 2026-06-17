@@ -90,9 +90,11 @@ public class KeybindManager {
 
         while (forceLightRecalculation.isPressed()) {
             MainMod.LOGGER.info("Forcing nearby light recalculation...");
-            PipelineContext.LightRecalculationResult result = PipelineContext.getInstance().forceLightRecalculation();
-            if (result.ran()) {
-                sendActionBar("Forced light recalculation: " + result.blockChecks() + " light checks, " + result.chunks() + " chunks");
+            int[] result = PipelineContext.getInstance().forceLightRecalculation();
+            int chunks = result.length > 1 ? result[1] : 0;
+            int blockChecks = result.length > 2 ? result[2] : 0;
+            if (chunks > 0 || blockChecks > 0) {
+                sendActionBar("Forced light recalculation: " + blockChecks + " light checks, " + chunks + " chunks");
             } else {
                 sendActionBar("No loaded world light data to recalculate");
             }
