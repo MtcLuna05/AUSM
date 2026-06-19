@@ -40,6 +40,7 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
     public @Nullable String[] getASMTransformerClass() {
         return new String[]{
                 "com.l.ausm.impl.core.ProjectRedScalaModuleTransformer",
+                "com.l.ausm.impl.core.InfinityLibBakedModelTransformer",
                 "com.l.ausm.impl.core.NothiriumBypassTransformer",
                 "com.l.ausm.impl.core.AusmBloomCtmTransformer",
                 "com.l.ausm.impl.core.BetweenlandsMessageSyncChunkStorageTransformer"

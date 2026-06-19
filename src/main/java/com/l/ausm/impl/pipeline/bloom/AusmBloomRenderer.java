@@ -33,11 +33,11 @@ import java.util.function.IntSupplier;
 public final class AusmBloomRenderer {
     private static final int HALF_RESOLUTION_DIVISOR = 2;
     private static final float BLOOM_STRENGTH = 2.25F;
-    private static final float BLOOM_DIRECT_DEBUG_STRENGTH = 0.35F;
+    private static final float BLOOM_DIRECT_DEBUG_STRENGTH = 0.0F;
     private static final float FRAMEBUFFER_BLOOM_STRENGTH = 1.05F;
     private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
     private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = true;
-    private static final int BLOOM_RENDER_LOG_LIMIT = 40;
+    private static final int BLOOM_RENDER_LOG_LIMIT = 0;
     private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 0;
 
     private final AusmBloomResourceIndex resourceIndex = new AusmBloomResourceIndex();
@@ -230,7 +230,9 @@ public final class AusmBloomRenderer {
         try {
             if (runBlurChain(bloomLayerTarget.framebufferTexture)) {
                 compositeBlurredBloom(target, BLOOM_STRENGTH);
-                compositeTexture(target, bloomLayerTarget.framebufferTexture, BLOOM_DIRECT_DEBUG_STRENGTH);
+                if (BLOOM_DIRECT_DEBUG_STRENGTH > 0.0F) {
+                    compositeTexture(target, bloomLayerTarget.framebufferTexture, BLOOM_DIRECT_DEBUG_STRENGTH);
+                }
                 composited = true;
                 if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
                     bloomCompositeLogs++;

@@ -24,9 +24,9 @@ public final class NothiriumBypass {
     private static int rendererSetupLogs;
     private static int rendererSetupFailureLogs;
     private static long lastIsolatedMainSetupNanos;
-    private static final int BLOCK_UPDATE_LOG_LIMIT = 160;
-    private static final int RENDERER_RECOVERY_LOG_LIMIT = 20;
-    private static final int RENDERER_SETUP_LOG_LIMIT = 20;
+    private static final int BLOCK_UPDATE_LOG_LIMIT = 0;
+    private static final int RENDERER_RECOVERY_LOG_LIMIT = 0;
+    private static final int RENDERER_SETUP_LOG_LIMIT = 0;
     private static final long ISOLATED_MAIN_SETUP_INTERVAL_NANOS = 15_000_000L;
 
     private NothiriumBypass() {

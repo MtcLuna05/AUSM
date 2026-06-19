@@ -4,12 +4,15 @@ import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
+import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.renderer.entity.Render;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityList;
+import net.minecraft.util.ResourceLocation;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -17,6 +20,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(RenderManager.class)
 public class RenderManagerMixin {
+    private static final int AUSM_MAX_BETWEENLANDS_RENDER_LOGS = 160;
+    private static int ausm$betweenlandsRenderLogCount;
 
     @Inject(
             method = "renderEntity",
@@ -30,6 +35,11 @@ public class RenderManagerMixin {
                 return;
             }
             context.setCurrentEntity(entity);
+            boolean betweenlandsVanillaProgram = context.shouldRenderEntityWithVanillaProgram(entity);
+            if (betweenlandsVanillaProgram) {
+                context.prepareExternalWorldOverlayRender();
+            }
+            ausm$logBetweenlandsRender("renderEntity", context, entity, betweenlandsVanillaProgram);
         }
     }
 
@@ -43,7 +53,7 @@ public class RenderManagerMixin {
             return;
         }
         boolean portalEntity = BetterPortalsCompat.isPortalEntity(entity);
-        if (portalEntity) {
+        if (portalEntity || context.shouldRenderEntityWithVanillaProgram(entity)) {
             context.restoreActiveWorldPassAfterExternalShader();
         }
         context.clearCurrentEntity();
@@ -64,6 +74,10 @@ public class RenderManagerMixin {
         }
         context.setCurrentEntity(entity);
         context.beginPhase(WorldRenderingPhase.ENTITIES_TRANSLUCENT);
+        if (context.shouldRenderEntityWithVanillaProgram(entity)) {
+            context.prepareExternalWorldOverlayRender();
+        }
+        ausm$logBetweenlandsRender("renderMultipass", context, entity, context.shouldRenderEntityWithVanillaProgram(entity));
     }
 
     @Inject(
@@ -81,7 +95,30 @@ public class RenderManagerMixin {
             context.clearCurrentEntity();
             return;
         }
+        if (context.shouldRenderEntityWithVanillaProgram(entity)) {
+            context.restoreActiveWorldPassAfterExternalShader();
+        }
         context.endPass();
         context.clearCurrentEntity();
+    }
+
+    private static void ausm$logBetweenlandsRender(String stage, PipelineContext context, Entity entity, boolean vanillaProgram) {
+        ResourceLocation key = entity != null ? EntityList.getKey(entity) : null;
+        if (key == null || !"thebetweenlands".equals(key.getNamespace()) || ausm$betweenlandsRenderLogCount++ >= AUSM_MAX_BETWEENLANDS_RENDER_LOGS) {
+            return;
+        }
+        MainMod.LOGGER.info(
+                "[AUSMBetweenlandsEntity] render-manager stage={} phase={} active={} bypass={} vanillaProgram={} entity={} class={} pos={},{},{}",
+                stage,
+                context.getPhase(),
+                context.isActive(),
+                context.shouldBypassWorldPassRendering(),
+                vanillaProgram,
+                key,
+                entity.getClass().getName(),
+                Math.round(entity.posX * 10.0D) / 10.0D,
+                Math.round(entity.posY * 10.0D) / 10.0D,
+                Math.round(entity.posZ * 10.0D) / 10.0D
+        );
     }
 }

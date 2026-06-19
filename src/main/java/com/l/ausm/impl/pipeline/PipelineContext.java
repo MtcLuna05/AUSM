@@ -184,7 +184,9 @@ public class PipelineContext {
     private static final int MAX_SYNTHETIC_LIGHT_CANDIDATES = 2048;
     private static final int MAX_SYNTHETIC_LIGHT_RANGE_REFRESH_VOLUME = 4096;
     private static final int MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME = 128;
-    private static final int MAX_COLORED_LIGHT_AUDIT_LOGS = 512;
+    private static final int MAX_CPU_LIGHT_TILE_ENTITY_SCANS_PER_FRAME = 512;
+    private static final int CPU_LIGHT_TILE_ENTITY_SNAPSHOT_INTERVAL_FRAMES = 20;
+    private static final int MAX_COLORED_LIGHT_AUDIT_LOGS = 0;
     private static final int BIOME_NETHER_WASTES_ID = 100_000;
     private static final int BIOME_CRIMSON_FOREST_ID = 100_001;
     private static final int BIOME_WARPED_FOREST_ID = 100_002;
@@ -212,22 +214,22 @@ public class PipelineContext {
     private static final int MAX_SHADER_CHUNK_REFRESHES_PER_FRAME = 8;
     private static final int COMPILED_PIPELINE_CACHE_LIMIT = 3;
     private static final int MAX_BETTER_PORTALS_PIPELINE_LOGS = 0;
-    private static final int MAX_SHADERLESS_BLOOM_HOOK_LOGS = 240;
-    private static final int MAX_VISIBLE_BLOOM_DIAG_LOGS = 240;
-    private static final int MAX_WORLD_LAYER_DIAG_LOGS = 160;
-    private static final int MAX_EXTERNAL_OVERLAY_LOGS = 20;
-    private static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 80;
-    private static final int MAX_TERRAIN_HISTORY_CLEAR_LOGS = 40;
+    private static final int MAX_SHADERLESS_BLOOM_HOOK_LOGS = 0;
+    private static final int MAX_VISIBLE_BLOOM_DIAG_LOGS = 0;
+    private static final int MAX_WORLD_LAYER_DIAG_LOGS = 0;
+    private static final int MAX_EXTERNAL_OVERLAY_LOGS = 0;
+    private static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 8;
+    private static final int MAX_TERRAIN_HISTORY_CLEAR_LOGS = 8;
     private static final int MAX_RENDER_GLOBAL_LOAD_RENDERER_LOGS = 0;
     private static final int MAX_TERRAIN_DIAGNOSTIC_LOGS = 0;
-    private static final int MAX_STEADY_VANILLA_TERRAIN_DIAGNOSTIC_LOGS = 24;
+    private static final int MAX_STEADY_VANILLA_TERRAIN_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_CAMERA_FRUSTUM_SYNC_LOGS = 0;
     private static final int MAX_CLIENT_CHUNK_RENDER_REFRESH_LOGS = 0;
-    private static final int MAX_DECORATED_LIGHT_AUDIT_LOGS = 240;
-    private static final int MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS = 700;
-    private static final int MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS = 700;
-    private static final int MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS = 1200;
-    private static final int MAX_CURRENT_PROBLEM_PROBE_LOGS = 1200;
+    private static final int MAX_DECORATED_LIGHT_AUDIT_LOGS = 0;
+    private static final int MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS = 0;
+    private static final int MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS = 0;
+    private static final int MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS = 0;
+    private static final int MAX_CURRENT_PROBLEM_PROBE_LOGS = 0;
     private static final boolean ENABLE_CHUNK_FADE = false;
     private static final long WORLD_TERRAIN_TRANSITION_DEBOUNCE_MS = 750L;
     private static final long BETTER_PORTALS_PORTAL_BLOCK_REFRESH_DEBOUNCE_MS = 1000L;
@@ -329,6 +331,7 @@ public class PipelineContext {
     private final FloatBuffer centerDepthTextureBuffer = org.lwjgl.BufferUtils.createFloatBuffer(1);
     private final FloatBuffer fogColorBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
     private int currentEntityId = 0;
+    private ResourceLocation currentEntityKey = null;
     private float[] currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
     private final float[] currentAstralConstellationColor = new float[]{1.0f, 1.0f, 1.0f};
     private final float[] currentAstralTierColor = new float[]{1.0f, 1.0f, 1.0f};
@@ -351,6 +354,10 @@ public class PipelineContext {
     private int shadowFrameCount = 1_000_000;
     private long lastShadowFrameId = -1L;
     private long pipelineFrameId = 0L;
+    private World cpuLightTileEntitySnapshotWorld = null;
+    private long cpuLightTileEntitySnapshotFrame = Long.MIN_VALUE;
+    private List<TileEntity> cpuLightTileEntitySnapshot = java.util.Collections.emptyList();
+    private int cpuLightTileEntityScanCursor = 0;
     private final long pipelineStartNanos = System.nanoTime();
     private long lastPipelineFrameNanos = pipelineStartNanos;
     private float currentFrameTime = 0.016f;
@@ -4008,6 +4015,9 @@ public class PipelineContext {
         if (!isPipelineActive || !worldFrameActive || activePass == null || renderingGuiScreen()) {
             return false;
         }
+        if (isBetweenlandsEntity(currentEntityKey) || currentEntityKey == null && isBetweenlandsRenderStack()) {
+            return false;
+        }
         if (activePass.stage() == ProgramStage.SHADOW) {
             return true;
         }
@@ -4192,6 +4202,32 @@ public class PipelineContext {
         return currentEntityId;
     }
 
+    public boolean shouldRenderEntityWithVanillaProgram(Entity entity) {
+        if (!isPipelineActive || !worldFrameActive || activePass == null || renderingShadowMap || renderingGuiScreen()) {
+            return false;
+        }
+        if (activePass.stage() != ProgramStage.GBUFFERS) {
+            return false;
+        }
+        return isBetweenlandsEntity(EntityList.getKey(entity));
+    }
+
+    private static boolean isBetweenlandsEntity(ResourceLocation entityKey) {
+        return entityKey != null && "thebetweenlands".equals(entityKey.getNamespace());
+    }
+
+    private static boolean isBetweenlandsRenderStack() {
+        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+        for (StackTraceElement element : stack) {
+            String className = element.getClassName();
+            if (className.startsWith("thebetweenlands.client.render.entity.")
+                    || className.startsWith("thebetweenlands.client.render.model.entity.")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private int heldItemId(ItemStack stack) {
         return shaderProperties.itemIds().idFor(stack);
     }
@@ -4242,12 +4278,14 @@ public class PipelineContext {
     }
 
     public void setCurrentEntity(Entity entity) {
+        currentEntityKey = entity != null ? EntityList.getKey(entity) : null;
         currentEntityId = entityId(entity);
         currentEntityColor = entityColor(entity);
         uploadEntityUniforms();
     }
 
     public void clearCurrentEntity() {
+        currentEntityKey = null;
         currentEntityId = 0;
         currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
         uploadEntityUniforms();
@@ -4667,9 +4705,7 @@ public class PipelineContext {
                 || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP
                 || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT
                 || pass == RenderPass.GBUFFERS_WATER
-                || pass == RenderPass.GBUFFERS_DAMAGEDBLOCK
-                || pass == RenderPass.GBUFFERS_PARTICLES
-                || pass == RenderPass.GBUFFERS_PARTICLES_TRANSLUCENT;
+                || pass == RenderPass.GBUFFERS_DAMAGEDBLOCK;
     }
 
     private boolean isMakeUpPack() {
@@ -6869,10 +6905,20 @@ public class PipelineContext {
         int[] projectRedVoxelIds = new int[8];
         Set<Long> writtenVoxels = new HashSet<>();
 
-        for (TileEntity tileEntity : world.loadedTileEntityList) {
+        List<TileEntity> loadedTileEntities = cpuLightTileEntitySnapshot(world);
+        int tileEntityCount = loadedTileEntities.size();
+        int scanCount = Math.min(tileEntityCount, MAX_CPU_LIGHT_TILE_ENTITY_SCANS_PER_FRAME);
+        for (int scan = 0; scan < scanCount; scan++) {
             if (injected >= MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME) {
                 break;
             }
+            if (tileEntityCount <= 0) {
+                break;
+            }
+            if (cpuLightTileEntityScanCursor >= tileEntityCount) {
+                cpuLightTileEntityScanCursor = 0;
+            }
+            TileEntity tileEntity = loadedTileEntities.get(cpuLightTileEntityScanCursor++);
             if (tileEntity == null || tileEntity.isInvalid()) {
                 continue;
             }
@@ -6927,6 +6973,32 @@ public class PipelineContext {
         if (injected > 0 && GLContext.getCapabilities().OpenGL42) {
             GL42.glMemoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
         }
+    }
+
+    private List<TileEntity> cpuLightTileEntitySnapshot(World world) {
+        if (world == null) {
+            cpuLightTileEntitySnapshotWorld = null;
+            cpuLightTileEntitySnapshot = java.util.Collections.emptyList();
+            cpuLightTileEntitySnapshotFrame = Long.MIN_VALUE;
+            cpuLightTileEntityScanCursor = 0;
+            return cpuLightTileEntitySnapshot;
+        }
+
+        boolean worldChanged = cpuLightTileEntitySnapshotWorld != world;
+        boolean refresh = worldChanged
+                || cpuLightTileEntitySnapshotFrame == Long.MIN_VALUE
+                || pipelineFrameId - cpuLightTileEntitySnapshotFrame >= CPU_LIGHT_TILE_ENTITY_SNAPSHOT_INTERVAL_FRAMES;
+        if (refresh) {
+            cpuLightTileEntitySnapshotWorld = world;
+            cpuLightTileEntitySnapshotFrame = pipelineFrameId;
+            cpuLightTileEntitySnapshot = new ArrayList<>(world.loadedTileEntityList);
+            if (worldChanged || cpuLightTileEntitySnapshot.isEmpty()) {
+                cpuLightTileEntityScanCursor = 0;
+            } else {
+                cpuLightTileEntityScanCursor = Math.floorMod(cpuLightTileEntityScanCursor, cpuLightTileEntitySnapshot.size());
+            }
+        }
+        return cpuLightTileEntitySnapshot;
     }
 
     private int injectRecordedSyntheticLightVoxels(World world, int[] dimensions, int cameraFloorX, int cameraFloorY, int cameraFloorZ,
@@ -8467,6 +8539,7 @@ public class PipelineContext {
         overridePhase = null;
         worldFrameActive = false;
         currentEntityId = 0;
+        currentEntityKey = null;
         currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
         currentAlphaTestReference = 0.1f;
         centerDepthHalfLife = 1.0f;
@@ -10517,6 +10590,7 @@ public class PipelineContext {
         worldPassBypassStack.clear();
         untouchedBetterPortalsVanillaRendererStack.clear();
         currentEntityId = 0;
+        currentEntityKey = null;
         currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
         restoreTerrainCulling();
         OpenGlHelper.glUseProgram(0);

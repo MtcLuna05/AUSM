@@ -51,6 +51,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".NothiriumSectionRenderCacheDynamicLightMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/SectionRenderCache.class", true);
         }
+        if (mixinClassName.endsWith(".RenderLibBetweenlandsEntityRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/renderlib/renderer/entity/EntityRenderer.class", true);
+        }
         if (mixinClassName.endsWith(".ProjectRedRenderHaloMixin")) {
             return optionalTargetPresent(mixinClassName, "mrtjp/projectred/core/RenderHalo$.class", false);
         }

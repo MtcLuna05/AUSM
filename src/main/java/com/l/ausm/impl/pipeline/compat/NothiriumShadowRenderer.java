@@ -44,8 +44,8 @@ public final class NothiriumShadowRenderer {
     private static final int MAX_SHADOW_COMPILES_PER_FRAME = 8;
     private static final int MAX_PENDING_SHADOW_COMPILES = 64;
     private static final int MAX_CHUNK_REFRESH_COMPILES = 16;
-    private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 16;
-    private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 80;
+    private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 0;
+    private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 0;
     private static final long REFLECTION_RETRY_DELAY_MS = 1000L;
     private static Reflection reflection;
     private static long nextReflectionAttemptMillis;

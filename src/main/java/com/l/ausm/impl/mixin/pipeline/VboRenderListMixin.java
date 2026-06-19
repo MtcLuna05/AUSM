@@ -30,7 +30,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(VboRenderList.class)
 public class VboRenderListMixin {
     @Unique
-    private static final int AUSM_TRANSLUCENT_VBO_LOG_LIMIT = 60;
+    private static final int AUSM_TRANSLUCENT_VBO_LOG_LIMIT = 0;
 
     @Unique
     private static int ausm$translucentVboLogs;

@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Mixin(targets = "com.elytradev.architecture.client.render.RenderingManager", remap = false)
 public abstract class ArchitectureCraftRenderingManagerMixin {
     @Unique
-    private static final int AUSM_ARCHITECTURE_MANAGER_LOG_LIMIT = 700;
+    private static final int AUSM_ARCHITECTURE_MANAGER_LOG_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_ARCHITECTURE_MANAGER_LOGS = new AtomicInteger();

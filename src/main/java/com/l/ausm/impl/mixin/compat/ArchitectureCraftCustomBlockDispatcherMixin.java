@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Mixin(targets = "com.elytradev.architecture.client.render.CustomBlockDispatcher", remap = false)
 public abstract class ArchitectureCraftCustomBlockDispatcherMixin {
     @Unique
-    private static final int AUSM_ARCHITECTURE_DISPATCHER_LOG_LIMIT = 700;
+    private static final int AUSM_ARCHITECTURE_DISPATCHER_LOG_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_ARCHITECTURE_DISPATCHER_LOGS = new AtomicInteger();

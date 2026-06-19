@@ -40,10 +40,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Mixin(targets = "meldexun.nothirium.mc.renderer.chunk.RenderChunkTaskCompile", remap = false)
 public class NothiriumRenderChunkTaskCompileMixin {
     @Unique
-    private static final int AUSM_FIRE_FALLBACK_LOG_LIMIT = 160;
+    private static final int AUSM_FIRE_FALLBACK_LOG_LIMIT = 0;
 
     @Unique
-    private static final int AUSM_FIRE_COMPILE_LOG_LIMIT = 120;
+    private static final int AUSM_FIRE_COMPILE_LOG_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_FIRE_FALLBACK_LOGS = new AtomicInteger();
@@ -52,7 +52,7 @@ public class NothiriumRenderChunkTaskCompileMixin {
     private static final AtomicInteger AUSM_FIRE_COMPILE_LOGS = new AtomicInteger();
 
     @Unique
-    private static final int AUSM_EMISSIVE_FALLBACK_LOG_LIMIT = 700;
+    private static final int AUSM_EMISSIVE_FALLBACK_LOG_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_EMISSIVE_FALLBACK_LOGS = new AtomicInteger();

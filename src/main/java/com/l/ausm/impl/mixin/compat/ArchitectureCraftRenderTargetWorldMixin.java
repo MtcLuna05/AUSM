@@ -21,7 +21,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(targets = "com.elytradev.architecture.client.render.target.RenderTargetWorld", remap = false)
 public abstract class ArchitectureCraftRenderTargetWorldMixin {
-    private static final int AUSM_ARCHITECTURE_TARGET_LOG_LIMIT = 700;
+    private static final int AUSM_ARCHITECTURE_TARGET_LOG_LIMIT = 0;
     private static int ausm$architectureTargetLogs;
 
     @Shadow(remap = false)

@@ -5,9 +5,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class BlockRendererDispatcherHooks {
-    public static final int RENDER_PROBE_LOG_LIMIT = 800;
-    public static final int EMISSIVE_DISPATCHER_FALLBACK_LOG_LIMIT = 600;
-    public static final int EMISSIVE_DISPATCHER_FALLBACK_SKIP_LOG_LIMIT = 600;
+    public static final int RENDER_PROBE_LOG_LIMIT = 0;
+    public static final int EMISSIVE_DISPATCHER_FALLBACK_LOG_LIMIT = 0;
+    public static final int EMISSIVE_DISPATCHER_FALLBACK_SKIP_LOG_LIMIT = 0;
     public static final ThreadLocal<Integer> PROBE_START_VERTEX = new ThreadLocal<>();
     public static final ThreadLocal<Integer> FRAMED_DIAGNOSTIC_START_VERTEX = new ThreadLocal<>();
     public static final ThreadLocal<Boolean> BLOOM_FALLBACK_RENDER = new ThreadLocal<>();
