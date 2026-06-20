@@ -69,6 +69,7 @@
     "pipeline.BlockStateContainerStateImplementationMixin",
     "pipeline.BlockRendererDispatcherMixin",
     "pipeline.BufferBuilderMixin",
+    "pipeline.CustomMainMenuGuiCustomMixin",
     "pipeline.RenderChunkMixin",
     "pipeline.VertexBufferConsumerMixin",
     "pipeline.VboRenderListMixin",

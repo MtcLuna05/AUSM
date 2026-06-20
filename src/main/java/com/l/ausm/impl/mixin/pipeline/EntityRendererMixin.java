@@ -8,10 +8,14 @@ import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.matrix.MatrixState;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.EntityRenderer;
+import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.BlockRenderLayer;
+import org.lwjgl.opengl.GL11;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -31,6 +35,7 @@ public class EntityRendererMixin {
 
     @Inject(method = "updateCameraAndRender(FJ)V", at = @At("HEAD"))
     private void onUpdateCameraAndRenderHead(float partialTicks, long nanoTime, CallbackInfo ci) {
+        ausm$prepareNoWorldCustomMainMenu();
         PipelineContext.getInstance().beginClientRenderFrame(nanoTime);
     }
 
@@ -43,6 +48,10 @@ public class EntityRendererMixin {
             )
     )
     private void onBeforeGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
+        boolean vanillaNoWorldGui = ausm$shouldUseVanillaNoWorldGui();
+        if (vanillaNoWorldGui) {
+            return;
+        }
         PipelineContext.getInstance().beginGuiRendering();
     }
 
@@ -55,7 +64,48 @@ public class EntityRendererMixin {
             )
     )
     private void onAfterGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
+        boolean vanillaNoWorldGui = ausm$shouldUseVanillaNoWorldGui();
+        if (vanillaNoWorldGui) {
+            return;
+        }
         PipelineContext.getInstance().finishGuiRendering();
+    }
+
+    private boolean ausm$shouldUseVanillaNoWorldGui() {
+        Minecraft minecraft = Minecraft.getMinecraft();
+        return minecraft == null || minecraft.world == null;
+    }
+
+    private void ausm$prepareNoWorldCustomMainMenu() {
+        Minecraft minecraft = Minecraft.getMinecraft();
+        if (minecraft == null || minecraft.world != null || !ausm$isCustomMainMenu(minecraft)) {
+            return;
+        }
+
+        if (minecraft.getFramebuffer() != null) {
+            minecraft.getFramebuffer().bindFramebuffer(false);
+            GlStateManager.viewport(0, 0, minecraft.displayWidth, minecraft.displayHeight);
+        }
+        OpenGlHelper.glUseProgram(0);
+        GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
+        GlStateManager.bindTexture(0);
+        GlStateManager.enableTexture2D();
+        GlStateManager.enableAlpha();
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(
+                GL11.GL_SRC_ALPHA,
+                GL11.GL_ONE_MINUS_SRC_ALPHA,
+                GL11.GL_ONE,
+                GL11.GL_ZERO
+        );
+        GlStateManager.colorMask(true, true, true, true);
+        GlStateManager.depthMask(true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    private boolean ausm$isCustomMainMenu(Minecraft minecraft) {
+        return minecraft.currentScreen != null
+                && "lumien.custommainmenu.gui.GuiCustom".equals(minecraft.currentScreen.getClass().getName());
     }
 
     @Inject(

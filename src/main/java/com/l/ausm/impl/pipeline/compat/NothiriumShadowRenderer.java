@@ -46,6 +46,7 @@ public final class NothiriumShadowRenderer {
     private static final int MAX_CHUNK_REFRESH_COMPILES = 16;
     private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 0;
     private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 0;
+    private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 24;
     private static final long REFLECTION_RETRY_DELAY_MS = 1000L;
     private static Reflection reflection;
     private static long nextReflectionAttemptMillis;
@@ -62,6 +63,7 @@ public final class NothiriumShadowRenderer {
     private int compileAuditAttempts;
     private int chunkRefreshAuditAttempts;
     private int visibleTranslucentAuditAttempts;
+    private int visibleTerrainFailureAttempts;
     private static int visibleTranslucentStateLogs;
 
     public static boolean isAvailable() {
@@ -205,7 +207,8 @@ public final class NothiriumShadowRenderer {
                 refreshUnsupportedPipelineChunks(reflection, stats.unsupportedPipelineChunks);
             }
             auditVisibleTranslucentLayer(layer, stats, fallbackBlockEntityId, fallbackRenderType, "after-draw");
-            if (stats.drawn == 0 && stats.unsupportedStride > 0) {
+            if (shouldFallBackFromVisibleBridge(stats)) {
+                auditVisibleTerrainFailure(layer, stats, fallbackBlockEntityId, fallbackRenderType);
                 return -1;
             }
             return stats.drawn;
@@ -634,6 +637,56 @@ public final class NothiriumShadowRenderer {
                 false,
                 stride,
                 (long) ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET
+        );
+    }
+
+    private static boolean shouldFallBackFromVisibleBridge(DrawStats stats) {
+        if (stats.drawn > 0) {
+            return false;
+        }
+
+        // An empty Nothirium visibility list can be transient, but treating it
+        // as a successful layer render makes shader terrain disappear. Let the
+        // existing forced-vanilla path render the layer instead.
+        return stats.total == 0
+                || stats.partPresent > 0
+                || stats.validPart > 0
+                || stats.positiveCount > 0
+                || stats.positiveVbo > 0
+                || stats.badStride > 0
+                || stats.unsupportedStride > 0
+                || stats.invalidRange > 0;
+    }
+
+    private void auditVisibleTerrainFailure(BlockRenderLayer layer, DrawStats stats,
+                                            int fallbackBlockEntityId, short fallbackRenderType) {
+        if (visibleTerrainFailureAttempts >= MAX_VISIBLE_TERRAIN_FAILURE_LOGS) {
+            return;
+        }
+
+        visibleTerrainFailureAttempts++;
+        MainMod.LOGGER.warn(
+                "[AUSMNothiriumTerrainFallback] call={} layer={} total={} null={} within={} distCull={} missingPart={} part={} valid={} count={} vbo={} badStride={} unsupportedStride={} rangeSkip={} drawn={} fallbackBlock={} fallbackRenderType={} firstChunk={} firstPart={} gl={}",
+                visibleTerrainFailureAttempts,
+                layer,
+                stats.total,
+                stats.nullChunks,
+                stats.withinDistance,
+                stats.distanceCulled,
+                stats.missingPart,
+                stats.partPresent,
+                stats.validPart,
+                stats.positiveCount,
+                stats.positiveVbo,
+                stats.badStride,
+                stats.unsupportedStride,
+                stats.invalidRange,
+                stats.drawn,
+                fallbackBlockEntityId,
+                fallbackRenderType,
+                stats.firstChunk,
+                stats.firstPart,
+                glStateSummary()
         );
     }
 

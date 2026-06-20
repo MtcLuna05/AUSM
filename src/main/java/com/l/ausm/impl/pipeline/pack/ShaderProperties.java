@@ -270,8 +270,8 @@ public record ShaderProperties(
         );
         ShaderRenderSettings renderSettings = ShaderRenderSettings.parse(properties);
         CustomUniformSet customUniforms = parseCustomUniforms(properties);
-        List<ShaderImageDirective> images = parseImages(properties);
-        Map<Integer, ShaderStorageBufferDirective> storageBuffers = parseStorageBuffers(properties);
+        List<ShaderImageDirective> images = parseImages(properties, options);
+        Map<Integer, ShaderStorageBufferDirective> storageBuffers = parseStorageBuffers(properties, options);
         ShaderFeatureSet features = ShaderFeatureSet.parse(properties);
         int noiseTextureResolution = parsePositiveInt(properties.getProperty("noiseTextureResolution"), 256);
         ShaderPackDirectives packDirectives = new ShaderPackDirectives(
@@ -719,7 +719,7 @@ public record ShaderProperties(
         return CustomUniformSet.parse(Map.copyOf(expressions));
     }
 
-    private static List<ShaderImageDirective> parseImages(Properties properties) {
+    private static List<ShaderImageDirective> parseImages(Properties properties, ShaderOptions options) {
         List<ShaderImageDirective> images = new ArrayList<>();
         for (String key : properties.stringPropertyNames()) {
             if (!key.startsWith("image.")) {
@@ -759,8 +759,8 @@ public record ShaderProperties(
                             0,
                             0,
                             0,
-                            Float.parseFloat(parts[6]),
-                            Float.parseFloat(parts[7])
+                            parseDirectiveFloat(parts[6], options),
+                            parseDirectiveFloat(parts[7], options)
                     );
                 } else {
                     ShaderImageTarget target = switch (parts.length) {
@@ -782,9 +782,9 @@ public record ShaderProperties(
                             parts[3],
                             clear,
                             false,
-                            Integer.parseInt(parts[6]),
-                            parts.length > 7 ? Integer.parseInt(parts[7]) : 0,
-                            parts.length > 8 ? Integer.parseInt(parts[8]) : 0,
+                            parseDirectiveInt(parts[6], options),
+                            parts.length > 7 ? parseDirectiveInt(parts[7], options) : 0,
+                            parts.length > 8 ? parseDirectiveInt(parts[8], options) : 0,
                             0.0f,
                             0.0f
                     );
@@ -797,7 +797,7 @@ public record ShaderProperties(
         return List.copyOf(images);
     }
 
-    private static Map<Integer, ShaderStorageBufferDirective> parseStorageBuffers(Properties properties) {
+    private static Map<Integer, ShaderStorageBufferDirective> parseStorageBuffers(Properties properties, ShaderOptions options) {
         Map<Integer, ShaderStorageBufferDirective> buffers = new java.util.TreeMap<>();
         for (String key : properties.stringPropertyNames()) {
             if (!key.startsWith("bufferObject.")) {
@@ -812,7 +812,7 @@ public record ShaderProperties(
 
             try {
                 int index = Integer.parseInt(rawIndex);
-                long size = Long.parseLong(parts[0]);
+                long size = parseDirectiveLong(parts[0], options);
                 if (index > 12) {
                     MainMod.LOGGER.warn("[ShaderProperties] Ignoring SSBO index above Iris reserved limit: {}", key);
                     continue;
@@ -836,8 +836,8 @@ public record ShaderProperties(
                             index,
                             size,
                             Boolean.parseBoolean(parts[1]),
-                            Float.parseFloat(parts[2]),
-                            Float.parseFloat(parts[3]),
+                            parseDirectiveFloat(parts[2], options),
+                            parseDirectiveFloat(parts[3], options),
                             null
                     );
                 }
@@ -1394,6 +1394,55 @@ public record ShaderProperties(
             return parsed > 0 ? parsed : fallback;
         } catch (NumberFormatException ignored) {
             return fallback;
+        }
+    }
+
+    private static int parseDirectiveInt(String token, ShaderOptions options) {
+        double value = parseDirectiveDouble(token, options);
+        if (!Double.isFinite(value)) {
+            throw new NumberFormatException(token);
+        }
+        int rounded = (int) Math.round(value);
+        if (Math.abs(value - rounded) > 0.0001d) {
+            throw new NumberFormatException(token);
+        }
+        return rounded;
+    }
+
+    private static long parseDirectiveLong(String token, ShaderOptions options) {
+        double value = parseDirectiveDouble(token, options);
+        if (!Double.isFinite(value)) {
+            throw new NumberFormatException(token);
+        }
+        long rounded = Math.round(value);
+        if (Math.abs(value - rounded) > 0.0001d) {
+            throw new NumberFormatException(token);
+        }
+        return rounded;
+    }
+
+    private static float parseDirectiveFloat(String token, ShaderOptions options) {
+        double value = parseDirectiveDouble(token, options);
+        if (!Double.isFinite(value)) {
+            throw new NumberFormatException(token);
+        }
+        return (float) value;
+    }
+
+    private static double parseDirectiveDouble(String token, ShaderOptions options) {
+        if (token == null || token.isBlank()) {
+            throw new NumberFormatException(String.valueOf(token));
+        }
+
+        String trimmed = token.trim();
+        try {
+            return Double.parseDouble(trimmed);
+        } catch (NumberFormatException ignored) {
+            ShaderOption option = options.get(trimmed);
+            if (option == null || option.value() == null || option.value().isBlank()) {
+                throw new NumberFormatException(trimmed);
+            }
+            return Double.parseDouble(option.value().trim());
         }
     }
 

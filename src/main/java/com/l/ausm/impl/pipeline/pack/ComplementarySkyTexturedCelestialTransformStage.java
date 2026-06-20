@@ -25,6 +25,9 @@ public final class ComplementarySkyTexturedCelestialTransformStage implements Sh
                 || !source.contains("renderStage == MC_RENDER_STAGE_MOON")) {
             return source;
         }
+        if (source.contains("AUSM_SIMPLE_VOID_WORLD")) {
+            return source;
+        }
 
         Matcher matcher = CELESTIAL_STYLE_GUARD.matcher(source);
         if (!matcher.find()) {

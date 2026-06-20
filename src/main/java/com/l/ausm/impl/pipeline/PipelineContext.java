@@ -3958,7 +3958,11 @@ public class PipelineContext {
     }
 
     private boolean shouldSuppressComplementaryVanillaCelestialGeometry() {
-        return isComplementaryStylePack();
+        // Complementary style 1 intentionally uses vanilla sun/moon quads as
+        // inputs to gbuffers_skytextured. Suppressing them here removes the
+        // shaderpack's own celestial rendering path; procedural styles already
+        // discard these quads in the shader.
+        return false;
     }
 
     private boolean isComplementaryStylePack() {
@@ -4635,6 +4639,7 @@ public class PipelineContext {
         applyBlendMode(pass, drawBuffers);
         applyOitDepthState(pass);
         applyGbufferDepthState(pass);
+        applySkyDepthState(pass);
         applyHandRenderState(pass);
         configureGbufferDrawBuffers(pipelineProgram, drawBuffers);
         if (pipelineProgram.stage() == ProgramStage.GBUFFERS) {
@@ -4924,6 +4929,16 @@ public class PipelineContext {
         GlStateManager.enableDepth();
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GlStateManager.depthMask(true);
+        GL11.glColorMask(true, true, true, true);
+    }
+
+    private void applySkyDepthState(RenderPass pass) {
+        if (pass != RenderPass.GBUFFERS_SKYBASIC && pass != RenderPass.GBUFFERS_SKYTEXTURED) {
+            return;
+        }
+        GlStateManager.disableDepth();
+        GlStateManager.depthMask(false);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glColorMask(true, true, true, true);
     }
 
@@ -9781,6 +9796,8 @@ public class PipelineContext {
         Minecraft mc = Minecraft.getMinecraft();
         return isPipelineActive
                 && mc != null
+                && mc.world != null
+                && mc.currentScreen == null
                 && mc.gameSettings != null
                 && externalWorldFramebufferTarget == null
                 && !isRenderingBetterPortalsNestedView()

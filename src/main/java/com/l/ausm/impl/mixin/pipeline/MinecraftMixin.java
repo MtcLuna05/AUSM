@@ -41,6 +41,10 @@ public class MinecraftMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/shader/Framebuffer;framebufferRender(II)V")
     )
     private void ausm$beforeFramebufferPresentation(CallbackInfo ci) {
+        Minecraft mc = (Minecraft) (Object) this;
+        if (mc.world == null) {
+            return;
+        }
         PipelineContext.getInstance().prepareFramebufferPresentation();
     }
 
@@ -63,6 +67,9 @@ public class MinecraftMixin {
     private void ausm$afterFramebufferPresentation(CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         Minecraft mc = (Minecraft) (Object) this;
+        if (mc.world == null) {
+            return;
+        }
         if (context.shouldDirectPresentFramebuffer()) {
             context.presentFramebufferDirectly(mc.getFramebuffer(), mc.displayWidth, mc.displayHeight);
             if (mc.currentScreen == null) {
