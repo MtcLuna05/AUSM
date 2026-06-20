@@ -40,6 +40,7 @@
     "compat.NothiriumRenderChunkTaskCompileMixin",
     "compat.NothiriumRenderChunkTaskSortTranslucentMixin",
     "compat.RenderLibBetweenlandsEntityRendererMixin",
+    "compat.ThaumcraftFixClientEventHandlerMixin",
     "gui.GuiVideoSettingsMixin",
     "pipeline.EntityRendererAccessor",
     "pipeline.EntityRendererMixin",

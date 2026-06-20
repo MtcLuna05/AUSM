@@ -54,6 +54,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".RenderLibBetweenlandsEntityRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/renderlib/renderer/entity/EntityRenderer.class", true);
         }
+        if (mixinClassName.endsWith(".ThaumcraftFixClientEventHandlerMixin")) {
+            return optionalTargetPresent(mixinClassName, "thecodex6824/thaumcraftfix/client/ClientEventHandler.class", false);
+        }
         if (mixinClassName.endsWith(".ProjectRedRenderHaloMixin")) {
             return optionalTargetPresent(mixinClassName, "mrtjp/projectred/core/RenderHalo$.class", false);
         }

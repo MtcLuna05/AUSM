@@ -50,6 +50,7 @@ public class MinecraftMixin {
         MainMod.getShaderPackManager().runPendingBetterPortalsDimensionCompile();
         PipelineContext.getInstance().runPendingBetterPortalsPortalBlockRefresh();
         PipelineContext.getInstance().runPendingShaderChunkRefreshes();
+        PipelineContext.getInstance().runPendingClientChunkRenderRefreshes();
         PipelineContext.getInstance().runScheduledBloomTerrainRefresh();
         PipelineContext.getInstance().runScheduledWorldTerrainRefresh();
         PipelineContext.getInstance().runScheduledWorldLoadLightRecalculation();

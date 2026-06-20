@@ -223,7 +223,7 @@ public class PipelineContext {
     private static final int MAX_RENDER_GLOBAL_LOAD_RENDERER_LOGS = 0;
     private static final int MAX_TERRAIN_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_STEADY_VANILLA_TERRAIN_DIAGNOSTIC_LOGS = 0;
-    private static final int MAX_CAMERA_FRUSTUM_SYNC_LOGS = 0;
+    private static final int MAX_CAMERA_FRUSTUM_SYNC_LOGS = 24;
     private static final int MAX_CLIENT_CHUNK_RENDER_REFRESH_LOGS = 0;
     private static final int MAX_DECORATED_LIGHT_AUDIT_LOGS = 0;
     private static final int MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS = 0;
@@ -5664,7 +5664,6 @@ public class PipelineContext {
         return BetterPortalsCompat.isInstalled()
                 && !isPipelineActive
                 && NothiriumBypass.shouldBypass()
-                && !BetterPortalsCompat.isRenderingNestedView()
                 && !BetterPortalsCompat.isMainViewSwapRecoveryActive();
     }
 
@@ -5727,12 +5726,12 @@ public class PipelineContext {
         BetterPortalsCompat.clearMainViewSwapTransientState();
         BetterPortalsCompat.beginMainViewSwapHandling();
         try {
-            refreshBetterPortalsMainViewTerrain(mc);
-            if (terrainTransition) {
-                BetterPortalsCompat.startMainViewSwapRecovery(mc.world);
-                BetterPortalsCompat.logMainViewSwapRecoveryIfNeeded(mc.world);
-                ensureVanillaTerrainRenderer(mc.world, false);
-            }
+            refreshBetterPortalsMainViewTerrain(mc, "bp-main-view-swap");
+            BetterPortalsCompat.startMainViewSwapRecovery(mc.world);
+            BetterPortalsCompat.logMainViewSwapRecoveryIfNeeded(mc.world);
+            scheduleDimensionSwitchTerrainRefresh();
+            scheduleBloomTerrainRefresh("better portals main view swap");
+            scheduleWorldLoadLightRecalculation();
         } finally {
             BetterPortalsCompat.endMainViewSwapHandling();
         }
@@ -5776,15 +5775,14 @@ public class PipelineContext {
         resetPipelineState(mc.getFramebuffer());
         currentWorldPass = 0;
         currentWorldPartialTicks = 0.0F;
-        if (mc.renderGlobal instanceof RenderGlobalAccessor accessor) {
-            clearRenderGlobalChunkUpdates(accessor);
-        }
 
         boolean betterPortalsRecovery = BetterPortalsCompat.isMainViewSwapRecoveryActive();
         if (betterPortalsRecovery) {
-            refreshBetterPortalsMainViewTerrain(mc);
+            refreshBetterPortalsMainViewTerrain(mc, "dimension-switch");
         } else {
             BetterPortalsCompat.startMainViewSwapRecovery(mc.world);
+            rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "dimension-switch");
+            resetCameraFrustumSyncState();
         }
         scheduleDimensionSwitchTerrainRefresh();
         scheduleBloomTerrainRefresh("dimension switch");
@@ -6137,13 +6135,14 @@ public class PipelineContext {
 
     private boolean shouldUseStableMainWorldRenderDistance(World world) {
         Minecraft mc = Minecraft.getMinecraft();
+        WorldClient renderPassWorld = BetterPortalsCompat.currentRenderPassWorld();
         return BetterPortalsCompat.isInstalled()
                 && !isPipelineActive
                 && BetterPortalsCompat.isRenderingRenderPass()
-                && !BetterPortalsCompat.isRenderingNestedView()
                 && !BetterPortalsCompat.isMainViewSwapRecoveryActive()
                 && mc != null
                 && mc.world != null
+                && renderPassWorld == mc.world
                 && world == mc.world;
     }
 
@@ -6674,7 +6673,7 @@ public class PipelineContext {
         }
     }
 
-    private void refreshBetterPortalsMainViewTerrain(Minecraft mc) {
+    private void refreshBetterPortalsMainViewTerrain(Minecraft mc, String reason) {
         if (mc == null || mc.world == null || mc.renderGlobal == null) {
             return;
         }
@@ -6686,7 +6685,8 @@ public class PipelineContext {
         try {
             logTerrainDiagnostic("bp-refresh-main-view:start", mc.world, "");
             boolean worldChanged = syncRenderGlobalWorld(mc.renderGlobal, mc.world);
-            adoptCurrentRenderGlobalViewFrustum(mc.world);
+            rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, reason);
+            resetCameraFrustumSyncState();
             logTerrainDiagnostic("bp-refresh-main-view:end", mc.world, "worldChanged=" + worldChanged);
         } catch (RuntimeException e) {
             MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to refresh terrain after main view swap", e);
@@ -8887,11 +8887,10 @@ public class PipelineContext {
             MainMod.LOGGER.debug("[BetterPortalsCompat] Skipped chunk updates for mismatched render-pass world: renderGlobal={} pass={}",
                     safeDimensionId(accessor.ausm$world()),
                     safeDimensionId(renderPassWorld));
-            clearRenderGlobalChunkUpdates(accessor);
             return false;
         }
 
-        return filterBetterPortalsChunkUpdates(accessor, renderPassWorld);
+        return hasOnlyValidBetterPortalsChunkUpdates(accessor, renderPassWorld);
     }
 
     public boolean handleBetterPortalsChunkUpdateFailure(RenderGlobal renderGlobal, NullPointerException exception) {
@@ -8950,19 +8949,19 @@ public class PipelineContext {
         return false;
     }
 
-    private boolean filterBetterPortalsChunkUpdates(RenderGlobalAccessor accessor, World allowedWorld) {
+    private boolean hasOnlyValidBetterPortalsChunkUpdates(RenderGlobalAccessor accessor, World allowedWorld) {
         Set<RenderChunk> chunksToUpdate = accessor.ausm$chunksToUpdate();
         if (chunksToUpdate == null || chunksToUpdate.isEmpty()) {
             return false;
         }
 
-        int before = chunksToUpdate.size();
-        chunksToUpdate.removeIf(chunk -> !isValidBetterPortalsChunkUpdate(chunk, allowedWorld));
-        int removed = before - chunksToUpdate.size();
-        if (removed > 0) {
-            MainMod.LOGGER.debug("[BetterPortalsCompat] Removed {} stale chunk update(s) from Better Portals render pass", removed);
+        for (RenderChunk chunk : chunksToUpdate) {
+            if (!isValidBetterPortalsChunkUpdate(chunk, allowedWorld)) {
+                MainMod.LOGGER.debug("[BetterPortalsCompat] Deferred nested chunk updates because the queue contains work for another world");
+                return false;
+            }
         }
-        return !chunksToUpdate.isEmpty();
+        return true;
     }
 
     private boolean isValidBetterPortalsChunkUpdate(RenderChunk chunk, World allowedWorld) {
