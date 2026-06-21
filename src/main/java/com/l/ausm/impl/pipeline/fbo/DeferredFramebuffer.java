@@ -30,7 +30,9 @@ public class DeferredFramebuffer {
     private static final int COLOR_ATTACHMENT_SLOTS = 8;
     private static final int READ_TEXTURE_INDEX = 0;
     private static final int WRITE_TEXTURE_INDEX = 1;
+    private static final int MAX_FRAMEBUFFER_STATUS_LOGS = 16;
     private static int maxDrawBufferSlots = -1;
+    private static int framebufferStatusLogs;
 
     private int fboId = -1;
     private int fullscreenFboId = -1;
@@ -56,6 +58,7 @@ public class DeferredFramebuffer {
     private final FloatBuffer depthReadBuffer = org.lwjgl.BufferUtils.createFloatBuffer(1);
     private final FloatBuffer colorReadBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
     private final FloatBuffer clearColorBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
+    private boolean usable = true;
 
     public DeferredFramebuffer(int width, int height) {
         this(width, height, ShaderRenderTargetSettings.empty());
@@ -78,6 +81,7 @@ public class DeferredFramebuffer {
     private void createFBO() {
         if (!OpenGlHelper.isFramebufferEnabled()) {
             MainMod.LOGGER.warn("Framebuffers not supported! Pipeline will fail.");
+            usable = false;
             return;
         }
 
@@ -205,6 +209,7 @@ public class DeferredFramebuffer {
         } else {
             GL11.glReadBuffer(GL11.GL_NONE);
         }
+        checkStatus("bindPipelineFramebuffer:" + framebufferId + ", depth=" + withDepth + ", read=" + readTextures + ", targets=" + java.util.Arrays.toString(drawTargets));
     }
 
     public void attachDepthTexture() {
@@ -229,6 +234,10 @@ public class DeferredFramebuffer {
 
     public int getFramebufferId() {
         return fboId;
+    }
+
+    public boolean isUsable() {
+        return fboId > -1 && usable;
     }
 
     public int getWidth() {
@@ -648,9 +657,39 @@ public class DeferredFramebuffer {
     }
 
     private void checkStatus() {
+        checkStatus("unspecified");
+    }
+
+    private void checkStatus(String stage) {
         int status = OpenGlHelper.glCheckFramebufferStatus(OpenGlHelper.GL_FRAMEBUFFER);
         if (status != OpenGlHelper.GL_FRAMEBUFFER_COMPLETE) {
-            MainMod.LOGGER.error("DeferredFramebuffer is not complete! Status: {}", status);
+            usable = false;
+            if (framebufferStatusLogs < MAX_FRAMEBUFFER_STATUS_LOGS) {
+                framebufferStatusLogs++;
+                MainMod.LOGGER.error(
+                        "[AUSMFramebuffer] DeferredFramebuffer is not complete stage={} status={} readFbo={} drawFbo={} fbo={} fullscreenFbo={} size={}x{} maxDrawBuffers={} maxColorAttachments={} formats={} scales={}",
+                        stage,
+                        status,
+                        GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
+                        GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+                        fboId,
+                        fullscreenFboId,
+                        width,
+                        height,
+                        safeGetInteger(GL20.GL_MAX_DRAW_BUFFERS),
+                        safeGetInteger(GL30.GL_MAX_COLOR_ATTACHMENTS),
+                        formats,
+                        textureScales
+                );
+            }
+        }
+    }
+
+    private static int safeGetInteger(int parameter) {
+        try {
+            return GL11.glGetInteger(parameter);
+        } catch (RuntimeException | LinkageError ignored) {
+            return -1;
         }
     }
 

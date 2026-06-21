@@ -230,6 +230,9 @@ public class PipelineContext {
     private static final int MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_CURRENT_PROBLEM_PROBE_LOGS = 0;
+    private static final int MAX_HARDWARE_CAPABILITY_LOGS = 4;
+    private static final int MAX_HARDWARE_TERRAIN_FALLBACK_LOGS = 12;
+    private static final int HARDWARE_TERRAIN_FALLBACK_ZERO_FRAMES = 5;
     private static final boolean ENABLE_CHUNK_FADE = false;
     private static final long WORLD_TERRAIN_TRANSITION_DEBOUNCE_MS = 750L;
     private static final long BETTER_PORTALS_PORTAL_BLOCK_REFRESH_DEBOUNCE_MS = 1000L;
@@ -391,6 +394,11 @@ public class PipelineContext {
     private long terrainLayerCountFrame = Long.MIN_VALUE;
     private int terrainOpaqueLayerCount = 0;
     private int terrainOpaqueDrawCount = 0;
+    private int hardwareCapabilityLogs = 0;
+    private int hardwareTerrainFallbackLogs = 0;
+    private int zeroOpaqueTerrainFrames = 0;
+    private boolean hardwareSafeVanillaTerrain = false;
+    private String hardwareSafeVanillaTerrainReason = "";
     private boolean deferredPassesRenderedThisFrame = false;
     private boolean preTranslucentDepthCopiedThisFrame = false;
     private boolean preHandDepthCopiedThisFrame = false;
@@ -1532,8 +1540,10 @@ public class PipelineContext {
         }
         shaderProperties = emptyShaderProperties();
         activePackName = pack.getName();
+        resetHardwareCompatibilityState();
 
         MainMod.LOGGER.info("[Pipeline] Initializing with pack: {}", pack.getName());
+        logHardwareCapabilities("initialize:" + pack.getName(), preloadedProperties != null ? preloadedProperties.packDirectives() : null);
 
         if (pack.getName().equals("(internal)")) { // NoneShaderPack
             MainMod.LOGGER.info("[Pipeline] Internal None pack selected. Pipeline is inactive.");
@@ -1547,6 +1557,7 @@ public class PipelineContext {
             Minecraft mc = Minecraft.getMinecraft();
             ShaderLoadingScreen.step("Loading shader properties");
             ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
+            logHardwareCapabilities("properties:" + pack.getName(), properties.packDirectives());
             ShaderCompileNotifications.beginReload();
             ShaderLoadingScreen.step("Scanning shader programs");
             programSet = usingCachedPrograms ? cachedPrograms.programSet : ShaderProgramSet.load(pack, properties);
@@ -2498,7 +2509,7 @@ public class PipelineContext {
 
     private void logRequestedFeaturesAndCapabilities() {
         if (!packDirectives.features().required().isEmpty() || !packDirectives.features().optional().isEmpty()) {
-            MainMod.LOGGER.debug(
+            MainMod.LOGGER.info(
                     "[Pipeline] Pack feature flags: required={} optional={}",
                     packDirectives.features().required(),
                     packDirectives.features().optional()
@@ -2512,16 +2523,16 @@ public class PipelineContext {
                 || capabilities.customUniforms()
                 || capabilities.customTextures()
                 || capabilities.extraProgramArrayEntries()) {
-            MainMod.LOGGER.debug("[Pipeline] Pack capabilities: {}", capabilities);
+            MainMod.LOGGER.info("[Pipeline] Pack capabilities: {}", capabilities);
         }
         if (shaderImages.active()) {
-            MainMod.LOGGER.debug("[Pipeline] Loaded {} Iris custom image directives", shaderImages.count());
+            MainMod.LOGGER.info("[Pipeline] Loaded {} Iris custom image directives", shaderImages.count());
         }
         if (shaderStorageBuffers.active()) {
-            MainMod.LOGGER.debug("[Pipeline] Loaded {} Iris SSBO directives", shaderStorageBuffers.count());
+            MainMod.LOGGER.info("[Pipeline] Loaded {} Iris SSBO directives", shaderStorageBuffers.count());
         }
         if (packDirectives.textureDirectives().rawTextureCount() > 0) {
-            MainMod.LOGGER.debug(
+            MainMod.LOGGER.info(
                     "[Pipeline] Loaded {} Iris raw custom texture directives",
                     packDirectives.textureDirectives().rawTextureCount()
             );
@@ -2531,6 +2542,93 @@ public class PipelineContext {
         }
         if (capabilities.storageBuffers() && !packDirectives.features().requires("ssbo") && !packDirectives.features().optional("ssbo")) {
             MainMod.LOGGER.warn("[Pipeline] Pack declares SSBO directives without iris.features ssbo");
+        }
+    }
+
+    private void resetHardwareCompatibilityState() {
+        zeroOpaqueTerrainFrames = 0;
+        hardwareSafeVanillaTerrain = false;
+        hardwareSafeVanillaTerrainReason = "";
+    }
+
+    private void logHardwareCapabilities(String stage, ShaderPackDirectives directives) {
+        if (hardwareCapabilityLogs >= MAX_HARDWARE_CAPABILITY_LOGS) {
+            return;
+        }
+        hardwareCapabilityLogs++;
+
+        org.lwjgl.opengl.ContextCapabilities caps = GLContext.getCapabilities();
+        int maxVertexAttribs = safeGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS);
+        int maxDrawBuffers = caps.OpenGL20 ? safeGetInteger(GL20.GL_MAX_DRAW_BUFFERS) : 1;
+        int maxColorAttachments = caps.OpenGL30 ? safeGetInteger(GL30.GL_MAX_COLOR_ATTACHMENTS) : 1;
+        int maxTextureUnits = caps.OpenGL20 ? safeGetInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) : safeGetInteger(GL13.GL_MAX_TEXTURE_UNITS);
+        int maxImageUnits = caps.OpenGL42 ? safeGetInteger(GL42.GL_MAX_IMAGE_UNITS) : 0;
+        int maxSsboBindings = caps.OpenGL43 ? safeGetInteger(GL43.GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS) : 0;
+        ShaderPipelineCapabilities requested = directives != null ? directives.capabilities() : null;
+        boolean requestedCompute = requested != null && requested.compute();
+        boolean requestedImages = requested != null && requested.images();
+        boolean requestedSsbo = requested != null && requested.storageBuffers();
+
+        MainMod.LOGGER.info(
+                "[AUSMHardware] stage={} vendor='{}' renderer='{}' version='{}' gl20={} gl30={} gl40={} gl42={} gl43={} arbCompute={} arbImages={} arbSsbo={} arbDrawBuffersBlend={} fboEnabled={} maxAttribs={} maxDrawBuffers={} maxColorAttachments={} maxTextureUnits={} maxImageUnits={} maxSsboBindings={} requiredAttribs={} requestedCompute={} requestedImages={} requestedSsbo={}",
+                stage,
+                safeGetString(GL11.GL_VENDOR),
+                safeGetString(GL11.GL_RENDERER),
+                safeGetString(GL11.GL_VERSION),
+                caps.OpenGL20,
+                caps.OpenGL30,
+                caps.OpenGL40,
+                caps.OpenGL42,
+                caps.OpenGL43,
+                caps.GL_ARB_compute_shader,
+                caps.GL_ARB_shader_image_load_store,
+                caps.GL_ARB_shader_storage_buffer_object,
+                caps.GL_ARB_draw_buffers_blend,
+                OpenGlHelper.isFramebufferEnabled(),
+                maxVertexAttribs,
+                maxDrawBuffers,
+                maxColorAttachments,
+                maxTextureUnits,
+                maxImageUnits,
+                maxSsboBindings,
+                ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE + 1,
+                requestedCompute,
+                requestedImages,
+                requestedSsbo
+        );
+
+        if (maxVertexAttribs <= ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE) {
+            MainMod.LOGGER.warn(
+                    "[AUSMHardware] GPU exposes only {} vertex attribs; pipeline terrain metadata needs attribute index {}. Nothirium shader terrain will be bypassed if terrain fails.",
+                    maxVertexAttribs,
+                    ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE
+            );
+        }
+        if (requestedCompute && !caps.OpenGL43 && !caps.GL_ARB_compute_shader) {
+            MainMod.LOGGER.warn("[AUSMHardware] Shaderpack requests compute programs, but OpenGL 4.3 is unavailable.");
+        }
+        if (requestedImages && !caps.OpenGL42 && !caps.GL_ARB_shader_image_load_store) {
+            MainMod.LOGGER.warn("[AUSMHardware] Shaderpack requests custom image load/store, but OpenGL 4.2 is unavailable.");
+        }
+        if (requestedSsbo && !caps.OpenGL43 && !caps.GL_ARB_shader_storage_buffer_object) {
+            MainMod.LOGGER.warn("[AUSMHardware] Shaderpack requests SSBOs, but OpenGL 4.3 is unavailable.");
+        }
+    }
+
+    private static int safeGetInteger(int parameter) {
+        try {
+            return GL11.glGetInteger(parameter);
+        } catch (RuntimeException | LinkageError ignored) {
+            return -1;
+        }
+    }
+
+    private static String safeGetString(int parameter) {
+        try {
+            String value = GL11.glGetString(parameter);
+            return value != null ? value : "unknown";
+        } catch (RuntimeException | LinkageError ignored) {
+            return "unavailable";
         }
     }
 
@@ -4041,7 +4139,7 @@ public class PipelineContext {
     }
 
     public boolean shouldUsePipelineBlockFormat() {
-        return isPipelineActive || shouldUseShaderlessBloomVertexMetadata();
+        return isPipelineActive && !hardwareSafeVanillaTerrain || shouldUseShaderlessBloomVertexMetadata();
     }
 
     private boolean shouldUseShaderlessBloomVertexMetadata() {
@@ -4060,6 +4158,9 @@ public class PipelineContext {
 
     public int renderNothiriumTerrainLayer(BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
         if (!isPipelineActive || !worldFrameActive || renderingShadowMap || activePass == null || viewEntity == null) {
+            return -1;
+        }
+        if (hardwareSafeVanillaTerrain) {
             return -1;
         }
         if (NothiriumBypass.shouldBypass()) {
@@ -7945,13 +8046,91 @@ public class PipelineContext {
                 || layer == BlockRenderLayer.CUTOUT) {
             terrainOpaqueLayerCount++;
             terrainOpaqueDrawCount += Math.max(0, count);
+            if (count > 0) {
+                zeroOpaqueTerrainFrames = 0;
+            }
         }
 
         if (layer == BlockRenderLayer.CUTOUT
                 && terrainOpaqueLayerCount >= 3
                 && terrainOpaqueDrawCount == 0) {
             requestPersistentHistoryClear("zero-opaque-terrain");
+            if (hasLoadedTerrainNearPlayer()) {
+                zeroOpaqueTerrainFrames++;
+                logHardwareTerrainFallback(
+                        "zero-opaque-frame",
+                        "frames=" + zeroOpaqueTerrainFrames
+                                + ", activePass=" + activePass
+                                + ", phase=" + getPhase()
+                                + ", bypass=" + NothiriumBypass.shouldBypass()
+                );
+                if (zeroOpaqueTerrainFrames >= HARDWARE_TERRAIN_FALLBACK_ZERO_FRAMES) {
+                    activateHardwareSafeVanillaTerrain("zero opaque shader terrain for " + zeroOpaqueTerrainFrames + " consecutive frames");
+                }
+            } else {
+                logHardwareTerrainFallback("zero-opaque-no-loaded-terrain", "world=" + describeWorld(Minecraft.getMinecraft() != null ? Minecraft.getMinecraft().world : null));
+            }
         }
+    }
+
+    private boolean hasLoadedTerrainNearPlayer() {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.world == null || mc.player == null) {
+            return false;
+        }
+
+        int playerChunkX = ((int) Math.floor(mc.player.posX)) >> 4;
+        int playerChunkZ = ((int) Math.floor(mc.player.posZ)) >> 4;
+        if (mc.world.getChunkProvider() instanceof ChunkProviderClient provider) {
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    Chunk chunk = provider.getLoadedChunk(playerChunkX + dx, playerChunkZ + dz);
+                    if (chunk != null && !chunk.isEmpty()) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        return mc.world.isBlockLoaded(new BlockPos(mc.player));
+    }
+
+    private void activateHardwareSafeVanillaTerrain(String reason) {
+        if (hardwareSafeVanillaTerrain) {
+            return;
+        }
+        hardwareSafeVanillaTerrain = true;
+        hardwareSafeVanillaTerrainReason = reason;
+        logHardwareTerrainFallback(
+                "activate",
+                reason + ", maxAttribs=" + safeGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS)
+                        + ", renderer='" + safeGetString(GL11.GL_RENDERER) + "'"
+        );
+        boolean formatChanged = updateNothiriumPipelineBlockFormatMode();
+        ensureVanillaTerrainRenderer();
+        if (formatChanged) {
+            NothiriumBypass.markAllChanged();
+        }
+    }
+
+    private void logHardwareTerrainFallback(String stage, String detail) {
+        if (hardwareTerrainFallbackLogs >= MAX_HARDWARE_TERRAIN_FALLBACK_LOGS) {
+            return;
+        }
+        hardwareTerrainFallbackLogs++;
+        MainMod.LOGGER.warn(
+                "[AUSMHardwareTerrainFallback] call={} stage={} active={} safeVanilla={} reason='{}' detail={} frame={} worldFrame={} world={} gl={}",
+                hardwareTerrainFallbackLogs,
+                stage,
+                isPipelineActive,
+                hardwareSafeVanillaTerrain,
+                hardwareSafeVanillaTerrainReason,
+                detail,
+                pipelineFrameId,
+                worldFrameActive,
+                describeWorld(Minecraft.getMinecraft() != null ? Minecraft.getMinecraft().world : null),
+                glStateSummary()
+        );
     }
 
     public int getCenterDepthSmoothTexture() {
@@ -9033,6 +9212,13 @@ public class PipelineContext {
 
     private int safeDimensionId(World world) {
         return world != null && world.provider != null ? world.provider.getDimension() : Integer.MIN_VALUE;
+    }
+
+    private String describeWorld(World world) {
+        if (world == null) {
+            return "null";
+        }
+        return "dim=" + safeDimensionId(world) + ", id=" + System.identityHashCode(world);
     }
 
     public void prepareBypassedWorldPassRendering() {

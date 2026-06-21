@@ -41,7 +41,7 @@ public class PingPongManager {
     }
 
     public boolean isInitialized() {
-        return framebuffer != null;
+        return framebuffer != null && framebuffer.isUsable();
     }
 
     public void snapshotReadBufferDepth(int index) {
