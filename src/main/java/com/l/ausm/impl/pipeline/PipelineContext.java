@@ -224,7 +224,7 @@ public class PipelineContext {
     private static final int MAX_TERRAIN_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_STEADY_VANILLA_TERRAIN_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_CAMERA_FRUSTUM_SYNC_LOGS = 24;
-    private static final int MAX_CLIENT_CHUNK_RENDER_REFRESH_LOGS = 0;
+    private static final int MAX_CLIENT_CHUNK_RENDER_REFRESH_LOGS = 32;
     private static final int MAX_DECORATED_LIGHT_AUDIT_LOGS = 0;
     private static final int MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS = 0;
@@ -5779,8 +5779,7 @@ public class PipelineContext {
     private boolean shouldSyncShaderlessVanillaViewFrustumForCamera() {
         return BetterPortalsCompat.isInstalled()
                 && !isPipelineActive
-                && NothiriumBypass.shouldBypass()
-                && !BetterPortalsCompat.isMainViewSwapRecoveryActive();
+                && NothiriumBypass.shouldBypass();
     }
 
     private void logCameraFrustumSyncIfChanged(World world, ViewFrustum viewFrustum, Entity viewEntity,
@@ -10361,6 +10360,7 @@ public class PipelineContext {
                 return;
             }
             if (refresh.world != mc.world) {
+                deferBetterPortalsClientChunkRenderRefreshIfNeeded(mc, refresh);
                 continue;
             }
 
@@ -10389,6 +10389,38 @@ public class PipelineContext {
             }
         }
         return null;
+    }
+
+    private void deferBetterPortalsClientChunkRenderRefreshIfNeeded(Minecraft mc, ClientChunkRenderRefresh refresh) {
+        if (refresh == null
+                || refresh.world == null
+                || mc == null
+                || mc.world == null
+                || !BetterPortalsCompat.isInstalled()
+                || !shouldRetainBetterPortalsClientChunkRefresh(mc, refresh)) {
+            return;
+        }
+
+        refresh.attemptsRemaining--;
+        if (refresh.attemptsRemaining <= 0) {
+            logClientChunkRenderRefreshMismatch(refresh, mc.world, false);
+            return;
+        }
+
+        refresh.delayFrames = CLIENT_CHUNK_RENDER_REFRESH_REPEAT_DELAY_FRAMES;
+        synchronized (pendingClientChunkRenderRefreshes) {
+            pendingClientChunkRenderRefreshes.add(refresh);
+        }
+        logClientChunkRenderRefreshMismatch(refresh, mc.world, true);
+    }
+
+    private boolean shouldRetainBetterPortalsClientChunkRefresh(Minecraft mc, ClientChunkRenderRefresh refresh) {
+        int refreshDimension = safeDimensionId(refresh.world);
+        int currentDimension = safeDimensionId(mc.world);
+        return refreshDimension != currentDimension
+                || BetterPortalsCompat.isMainViewSwapRecoveryActive()
+                || BetterPortalsCompat.isRenderingRenderPass()
+                || BetterPortalsCompat.isRenderingNestedView();
     }
 
     private void refreshClientChunkRender(Minecraft mc, ClientChunkRenderRefresh refresh) {
@@ -10476,6 +10508,27 @@ public class PipelineContext {
                 refresh.chunkZ,
                 loaded,
                 scheduledChunks,
+                refresh.attemptsRemaining,
+                isPipelineActive,
+                NothiriumBypass.shouldBypass(),
+                BetterPortalsCompat.describeTransitionState()
+        );
+    }
+
+    private void logClientChunkRenderRefreshMismatch(ClientChunkRenderRefresh refresh, World currentWorld, boolean retained) {
+        if (clientChunkRenderRefreshLogs >= MAX_CLIENT_CHUNK_RENDER_REFRESH_LOGS) {
+            return;
+        }
+        clientChunkRenderRefreshLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMClientChunkRefresh] call={} reason={} stage=world-mismatch refreshWorld={} currentWorld={} chunk={},{} retained={} attemptsLeft={} active={} bypass={} bp={}",
+                clientChunkRenderRefreshLogs,
+                refresh.reason,
+                safeDimensionId(refresh.world),
+                safeDimensionId(currentWorld),
+                refresh.chunkX,
+                refresh.chunkZ,
+                retained,
                 refresh.attemptsRemaining,
                 isPipelineActive,
                 NothiriumBypass.shouldBypass(),

@@ -70,7 +70,9 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
                 }
             }
             if ("createQuads".equals(method.name) && CREATE_QUADS_DESC.equals(method.desc)) {
-                method.instructions.insert(cropStateRendererMismatchGuard());
+                int quadsLocal = method.maxLocals;
+                method.maxLocals = Math.max(method.maxLocals, quadsLocal + 1);
+                method.instructions.insert(cropStateRendererMismatchGuard(quadsLocal));
                 changed = true;
             }
         }
@@ -78,19 +80,20 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
         return changed ? writeClass(reader, classNode) : basicClass;
     }
 
-    private static InsnList cropStateRendererMismatchGuard() {
+    private static InsnList cropStateRendererMismatchGuard(int quadsLocal) {
         LabelNode continueOriginal = new LabelNode();
         InsnList code = new InsnList();
 
         code.add(new VarInsnNode(Opcodes.ALOAD, 1));
         code.add(new JumpInsnNode(Opcodes.IFNULL, continueOriginal));
-        code.add(new VarInsnNode(Opcodes.ALOAD, 1));
-        code.add(new MethodInsnNode(Opcodes.INVOKEINTERFACE, "net/minecraft/block/state/IBlockState",
-                "func_177230_c", "()Lnet/minecraft/block/Block;", true));
         code.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        code.add(new FieldInsnNode(Opcodes.GETFIELD, BAKED_MODEL_INTERNAL, "block",
-                "Lcom/infinityraider/infinitylib/block/BlockBase;"));
-        code.add(new JumpInsnNode(Opcodes.IF_ACMPEQ, continueOriginal));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 1));
+        code.add(new MethodInsnNode(Opcodes.INVOKESTATIC,
+                "com/l/ausm/impl/core/InfinityLibBakedModelTransformer",
+                "rendererBlockMismatch",
+                "(Ljava/lang/Object;Lnet/minecraft/block/state/IBlockState;)Z",
+                false));
+        code.add(new JumpInsnNode(Opcodes.IFEQ, continueOriginal));
         code.add(new VarInsnNode(Opcodes.ALOAD, 1));
         code.add(new MethodInsnNode(Opcodes.INVOKESTATIC,
                 "com/l/ausm/impl/core/InfinityLibBakedModelTransformer",
@@ -111,6 +114,12 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
                 "renderAgricraftCropQuads",
                 "(Lnet/minecraft/client/renderer/vertex/VertexFormat;Ljava/util/function/Function;Lnet/minecraft/block/state/IBlockState;Lnet/minecraft/util/EnumFacing;)Lcom/google/common/collect/ImmutableList;",
                 false));
+        code.add(new VarInsnNode(Opcodes.ASTORE, quadsLocal));
+        code.add(new VarInsnNode(Opcodes.ALOAD, quadsLocal));
+        code.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "com/google/common/collect/ImmutableList",
+                "isEmpty", "()Z", false));
+        code.add(new JumpInsnNode(Opcodes.IFNE, continueOriginal));
+        code.add(new VarInsnNode(Opcodes.ALOAD, quadsLocal));
         code.add(new InsnNode(Opcodes.ARETURN));
         code.add(continueOriginal);
         return code;
@@ -298,21 +307,75 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
     }
 
     public static boolean isAgricraftCropState(IBlockState state) {
-        if (state == null || state.getBlock() == null || state.getBlock().getRegistryName() == null) {
+        Object block = blockFromState(state);
+        if (block == null) {
             return false;
         }
-        return "agricraft:crop".equals(state.getBlock().getRegistryName().toString());
+        try {
+            Method getRegistryName = block.getClass().getMethod("getRegistryName");
+            Object name = getRegistryName.invoke(block);
+            return name != null && "agricraft:crop".equals(name.toString());
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            return false;
+        }
+    }
+
+    public static boolean rendererBlockMismatch(Object model, IBlockState state) {
+        Object stateBlock = blockFromState(state);
+        Object modelBlock = blockFromModel(model);
+        return stateBlock != null && modelBlock != null && stateBlock != modelBlock;
+    }
+
+    private static Object blockFromState(IBlockState state) {
+        if (state == null) {
+            return null;
+        }
+        Object block = invokeNoArg(state, "getBlock");
+        return block != null ? block : invokeNoArg(state, "func_177230_c");
+    }
+
+    private static Object blockFromModel(Object model) {
+        if (model == null) {
+            return null;
+        }
+        for (Class<?> type = model.getClass(); type != null; type = type.getSuperclass()) {
+            try {
+                java.lang.reflect.Field field = type.getDeclaredField("block");
+                field.setAccessible(true);
+                return field.get(model);
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // Try the next superclass.
+            }
+        }
+        return null;
+    }
+
+    private static Object invokeNoArg(Object target, String methodName) {
+        if (target == null || methodName == null) {
+            return null;
+        }
+        for (Class<?> type = target.getClass(); type != null; type = type.getSuperclass()) {
+            try {
+                Method method = type.getMethod(methodName);
+                method.setAccessible(true);
+                return method.invoke(target);
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // Try the next method spelling or superclass.
+            }
+        }
+        return null;
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     public static ImmutableList renderAgricraftCropQuads(VertexFormat format, Function textureFunction,
                                                          IBlockState state, EnumFacing side) {
-        if (format == null || textureFunction == null || state == null || state.getBlock() == null) {
+        Object block = blockFromState(state);
+        if (format == null || textureFunction == null || block == null) {
             return ImmutableList.of();
         }
         try {
             Class<?> cropBlockClass = Class.forName("com.infinityraider.agricraft.blocks.BlockCrop");
-            if (!cropBlockClass.isInstance(state.getBlock())) {
+            if (!cropBlockClass.isInstance(block)) {
                 return ImmutableList.of();
             }
 
@@ -324,11 +387,11 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
 
             Class<?> rendererClass = Class.forName("com.infinityraider.agricraft.renderers.blocks.RenderCrop");
             Constructor<?> constructor = rendererClass.getConstructor(cropBlockClass);
-            Object renderer = constructor.newInstance(state.getBlock());
+            Object renderer = constructor.newInstance(block);
             Class<?> itessellatorClass = Class.forName("com.infinityraider.infinitylib.render.tessellation.ITessellator");
             Method render = rendererClass.getMethod("renderWorldBlockStatic", itessellatorClass, IBlockState.class,
                     cropBlockClass, EnumFacing.class);
-            render.invoke(renderer, tessellator, state, state.getBlock(), side);
+            render.invoke(renderer, tessellator, state, block, side);
 
             ImmutableList quads = (ImmutableList) tessellatorClass.getMethod("getQuads").invoke(tessellator);
             tessellatorClass.getMethod("draw").invoke(tessellator);
