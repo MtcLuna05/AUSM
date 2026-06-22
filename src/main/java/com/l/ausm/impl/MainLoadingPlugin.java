@@ -44,7 +44,8 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
                 "com.l.ausm.impl.core.InfinityLibBakedModelTransformer",
                 "com.l.ausm.impl.core.NothiriumBypassTransformer",
                 "com.l.ausm.impl.core.AusmBloomCtmTransformer",
-                "com.l.ausm.impl.core.BetweenlandsMessageSyncChunkStorageTransformer"
+                "com.l.ausm.impl.core.BetweenlandsMessageSyncChunkStorageTransformer",
+                "com.l.ausm.impl.core.ClientPacketNullPlayerTransformer"
         };
     }
 

@@ -9,6 +9,7 @@ import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.matrix.MatrixState;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiIngame;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.EntityRenderer;
 import net.minecraft.client.renderer.OpenGlHelper;
@@ -37,6 +38,22 @@ public class EntityRendererMixin {
     private void onUpdateCameraAndRenderHead(float partialTicks, long nanoTime, CallbackInfo ci) {
         ausm$prepareNoWorldCustomMainMenu();
         PipelineContext.getInstance().beginClientRenderFrame(nanoTime);
+    }
+
+    @Redirect(
+            method = "updateCameraAndRender(FJ)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/gui/GuiIngame;renderGameOverlay(F)V"
+            )
+    )
+    private void ausm$renderGameOverlayIfPlayerReady(GuiIngame guiIngame, float partialTicks) {
+        Minecraft minecraft = Minecraft.getMinecraft();
+        if (minecraft == null || minecraft.player == null) {
+            return;
+        }
+
+        guiIngame.renderGameOverlay(partialTicks);
     }
 
     @Inject(
@@ -108,21 +125,14 @@ public class EntityRendererMixin {
                 && "lumien.custommainmenu.gui.GuiCustom".equals(minecraft.currentScreen.getClass().getName());
     }
 
-    @Inject(
-            method = "updateCameraAndRender(FJ)V",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/gui/GuiIngame;renderGameOverlay(F)V",
-                    shift = At.Shift.BEFORE
-            ),
-            require = 0
-    )
-    private void onBeforeIngameOverlay(float partialTicks, long nanoTime, CallbackInfo ci) {
-        PipelineContext.getInstance().renderShaderlessBloomBeforeGui();
-    }
-
-    @Inject(method = "renderWorldPass", at = @At("HEAD"))
+    @Inject(method = "renderWorldPass", at = @At("HEAD"), cancellable = true)
     private void onRenderWorldPassHead(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        Minecraft minecraft = Minecraft.getMinecraft();
+        if (minecraft == null || minecraft.world == null || minecraft.getRenderViewEntity() == null) {
+            ci.cancel();
+            return;
+        }
+
         PipelineContext context = PipelineContext.getInstance();
         MainMod.getShaderPackManager().reloadIfDimensionChanged();
         context.beginWorldPassRendering(pass, partialTicks);
@@ -156,6 +166,7 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassBeforeSetupTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.runPendingClientChunkRenderRefreshesForCurrentRenderPass();
         context.updateShaderlessVanillaViewFrustumForCamera();
         if (context.shouldBypassWorldPassRendering()) {
             return;

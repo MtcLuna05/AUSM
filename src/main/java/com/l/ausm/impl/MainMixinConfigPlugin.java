@@ -90,6 +90,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".BetterPortalsClientWorldsManagerMixin")) {
             return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/view/impl/client/ClientWorldsManagerImpl.class", false);
         }
+        if (mixinClassName.endsWith(".BetterPortalsCreateWorldHandlerMixin")) {
+            return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/view/impl/net/CreateWorld$Handler.class", true);
+        }
         if (mixinClassName.endsWith(".BetterPortalsServerWorldsManagerMixin")) {
             return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/view/impl/server/ServerWorldsManagerImpl.class", false);
         }
@@ -98,6 +101,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         }
         if (mixinClassName.endsWith(".AbyssalCraftShadowEntityRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "com/shinoow/abyssalcraft/client/render/entity/RenderShadowMonster.class", false);
+        }
+        if (mixinClassName.endsWith(".AbyssalCraftNecroDataCapMessageMixin")) {
+            return optionalTargetPresent(mixinClassName, "com/shinoow/abyssalcraft/common/network/client/NecroDataCapMessage.class", true);
         }
         if (mixinClassName.endsWith(".DimensionalDoorsEntranceRiftRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "org/dimdev/dimdoors/client/TileEntityEntranceRiftRenderer.class", false);
@@ -125,6 +131,12 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         }
         if (mixinClassName.endsWith(".RandomThingsLuminousBlockMixin")) {
             return optionalTargetPresent(mixinClassName, "lumien/randomthings/block/BlockBlockLuminousBase.class", true);
+        }
+        if (mixinClassName.endsWith(".ReachFixUtilMixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/reachfix/util/ReachFixUtil.class", true);
+        }
+        if (mixinClassName.endsWith(".BewitchmentSyncExtendedPlayerHandlerMixin")) {
+            return optionalTargetPresent(mixinClassName, "com/bewitchment/api/message/SyncExtendedPlayer$Handler.class", true);
         }
         if (mixinClassName.endsWith(".ArchitectureCraftRenderTargetWorldMixin")) {
             return optionalTargetPresent(mixinClassName, "com/elytradev/architecture/client/render/target/RenderTargetWorld.class", true);

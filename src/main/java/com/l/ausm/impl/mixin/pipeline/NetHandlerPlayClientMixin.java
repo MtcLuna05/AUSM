@@ -6,8 +6,16 @@ import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.network.NetHandlerPlayClient;
 import net.minecraft.network.PacketBuffer;
 import net.minecraft.network.play.server.SPacketChunkData;
+import net.minecraft.network.play.server.SPacketCustomPayload;
+import net.minecraft.network.play.server.SPacketEffect;
+import net.minecraft.network.play.server.SPacketHeldItemChange;
+import net.minecraft.network.play.server.SPacketPlayerAbilities;
+import net.minecraft.network.play.server.SPacketPlayerPosLook;
+import net.minecraft.network.play.server.SPacketSetExperience;
+import net.minecraft.network.play.server.SPacketSetSlot;
 import net.minecraft.network.play.server.SPacketSoundEffect;
 import net.minecraft.network.play.server.SPacketTeams;
+import net.minecraft.network.play.server.SPacketUpdateHealth;
 import net.minecraft.world.chunk.BlockStateContainer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -35,6 +43,70 @@ public class NetHandlerPlayClientMixin {
         }
     }
 
+    @Inject(method = "handleHeldItemChange", at = @At("HEAD"), cancellable = true)
+    private void ausm$ignoreHeldItemChangeWithoutPlayer(SPacketHeldItemChange packetIn, CallbackInfo ci) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (world == null || mc == null || mc.player == null) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handleSetSlot", at = @At("HEAD"), cancellable = true)
+    private void ausm$ignoreSetSlotWithoutPlayer(SPacketSetSlot packetIn, CallbackInfo ci) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (world == null || mc == null || mc.player == null) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handlePlayerAbilities", at = @At("HEAD"), cancellable = true)
+    private void ausm$ignorePlayerAbilitiesWithoutPlayer(SPacketPlayerAbilities packetIn, CallbackInfo ci) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (world == null || mc == null || mc.player == null) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handlePlayerPosLook", at = @At("HEAD"), cancellable = true)
+    private void ausm$ignorePlayerPosLookWithoutPlayer(SPacketPlayerPosLook packetIn, CallbackInfo ci) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (world == null || mc == null || mc.player == null) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handleSetExperience", at = @At("HEAD"), cancellable = true)
+    private void ausm$ignoreSetExperienceWithoutPlayer(SPacketSetExperience packetIn, CallbackInfo ci) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (world == null || mc == null || mc.player == null) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handleUpdateHealth", at = @At("HEAD"), cancellable = true)
+    private void ausm$ignoreUpdateHealthWithoutPlayer(SPacketUpdateHealth packetIn, CallbackInfo ci) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (world == null || mc == null || mc.player == null) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handleEffect", at = @At("HEAD"), cancellable = true)
+    private void ausm$ignoreEffectWithoutRenderViewEntity(SPacketEffect packetIn, CallbackInfo ci) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (world == null || mc == null || mc.getRenderViewEntity() == null) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handleCustomPayload", at = @At("HEAD"), cancellable = true)
+    private void ausm$ignoreCustomPayloadWithoutPlayer(SPacketCustomPayload packetIn, CallbackInfo ci) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (world == null || mc == null || mc.player == null) {
+            ci.cancel();
+        }
+    }
+
     @Inject(method = "handleChunkData", at = @At("HEAD"), cancellable = true)
     private void ausm$dropMalformedChunkData(SPacketChunkData packetIn, CallbackInfo ci) {
         if (world == null || packetIn == null || !ausm$isChunkDataReadable(packetIn)) {
@@ -46,6 +118,12 @@ public class NetHandlerPlayClientMixin {
     private void ausm$queueShaderChunkRefresh(SPacketChunkData packetIn, CallbackInfo ci) {
         if (world != null && packetIn != null && packetIn.isFullChunk()) {
             PipelineContext.getInstance().queueShaderChunkRefresh(world, packetIn.getChunkX(), packetIn.getChunkZ());
+            PipelineContext.getInstance().queueClientChunkRenderRefresh(
+                    world,
+                    packetIn.getChunkX(),
+                    packetIn.getChunkZ(),
+                    "chunk-data"
+            );
         }
     }
 

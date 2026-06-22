@@ -31,12 +31,13 @@ import java.util.Map;
 import java.util.function.IntSupplier;
 
 public final class AusmBloomRenderer {
-    private static final int HALF_RESOLUTION_DIVISOR = 2;
+    private static final int HALF_RESOLUTION_DIVISOR = 4;
+    private static final int BLUR_ITERATIONS = 1;
     private static final float BLOOM_STRENGTH = 2.25F;
     private static final float BLOOM_DIRECT_DEBUG_STRENGTH = 0.0F;
     private static final float FRAMEBUFFER_BLOOM_STRENGTH = 1.05F;
     private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
-    private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = true;
+    private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = false;
     private static final int BLOOM_RENDER_LOG_LIMIT = 0;
     private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 0;
 
@@ -88,29 +89,30 @@ public final class AusmBloomRenderer {
             copyDepth(pipelineDepthSource, minecraftDepthSource);
             bindLayerTargetForGeometry();
             rendered = renderBloomGeometry(renderGlobal, bloomLayer, partialTicks, pass, entity);
+            if (rendered > 0) {
+                layerBloomPending = true;
+                if (bloomRenderLogs < BLOOM_RENDER_LOG_LIMIT) {
+                    bloomRenderLogs++;
+                    MainMod.LOGGER.info("[AUSMBloom] BLOOM layer rendered count={} pass={} deferredComposite={} size={}x{}",
+                            rendered,
+                            pass,
+                            deferComposite,
+                            width,
+                            height);
+                }
+                if (!loggedLayerRenderer) {
+                    loggedLayerRenderer = true;
+                    MainMod.LOGGER.info("[AUSMBloom] Rendering CTM/Lumenized BLOOM layer with AUSM-owned framebuffer size={}x{}", width, height);
+                }
+                if (!deferComposite && minecraftDepthSource != null) {
+                    compositePendingLayerBloom(minecraftDepthSource, false);
+                }
+            }
         } finally {
             state.restore();
         }
 
-        if (rendered > 0) {
-            layerBloomPending = true;
-            if (bloomRenderLogs < BLOOM_RENDER_LOG_LIMIT) {
-                bloomRenderLogs++;
-                MainMod.LOGGER.info("[AUSMBloom] BLOOM layer rendered count={} pass={} deferredComposite={} size={}x{}",
-                        rendered,
-                        pass,
-                        deferComposite,
-                        width,
-                        height);
-            }
-            if (!loggedLayerRenderer) {
-                loggedLayerRenderer = true;
-                MainMod.LOGGER.info("[AUSMBloom] Rendering CTM/Lumenized BLOOM layer with AUSM-owned framebuffer size={}x{}", width, height);
-            }
-            if (!deferComposite && minecraftDepthSource != null) {
-                compositePendingLayerBloom(minecraftDepthSource);
-            }
-        } else if (resourceIndex.hasBloomResources() && zeroBloomRenderLogs < BLOOM_ZERO_RENDER_LOG_LIMIT) {
+        if (rendered <= 0 && resourceIndex.hasBloomResources() && zeroBloomRenderLogs < BLOOM_ZERO_RENDER_LOG_LIMIT) {
             zeroBloomRenderLogs++;
             MainMod.LOGGER.info("[AUSMBloom] BLOOM layer produced no geometry pass={} deferredComposite={} size={}x{}",
                     pass,
@@ -130,7 +132,7 @@ public final class AusmBloomRenderer {
         resourceIndex.scanOnce();
         boolean compositedLayerBloom = false;
         if (layerBloomPending) {
-            compositedLayerBloom = compositePendingLayerBloom(target);
+            compositedLayerBloom = compositePendingLayerBloom(target, true);
         }
 
         if (!compositedLayerBloom
@@ -219,14 +221,14 @@ public final class AusmBloomRenderer {
         emissiveExtractProgram = -1;
     }
 
-    private boolean compositePendingLayerBloom(Framebuffer target) {
+    private boolean compositePendingLayerBloom(Framebuffer target, boolean captureState) {
         if (!layerBloomPending || bloomLayerTarget == null || target == null) {
             layerBloomPending = false;
             return false;
         }
 
         boolean composited = false;
-        RenderState state = captureState();
+        RenderState state = captureState ? captureState() : null;
         try {
             if (runBlurChain(bloomLayerTarget.framebufferTexture)) {
                 compositeBlurredBloom(target, BLOOM_STRENGTH);
@@ -253,7 +255,9 @@ public final class AusmBloomRenderer {
             }
         } finally {
             layerBloomPending = false;
-            state.restore();
+            if (state != null) {
+                state.restore();
+            }
         }
         return composited;
     }
@@ -305,7 +309,7 @@ public final class AusmBloomRenderer {
         bindTextureUniform(copyProgram, "source", sourceTexture, 0);
         drawFullscreenQuad();
 
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < BLUR_ITERATIONS; i++) {
             bindHalfTarget(bloomBlurTarget);
             OpenGlHelper.glUseProgram(blurProgram);
             bindTextureUniform(blurProgram, "source", bloomDownsampleTarget.framebufferTexture, 0);
@@ -335,7 +339,7 @@ public final class AusmBloomRenderer {
         setUniform1f(thresholdProgram, "threshold", FRAMEBUFFER_BLOOM_THRESHOLD);
         drawFullscreenQuad();
 
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < BLUR_ITERATIONS; i++) {
             bindHalfTarget(bloomBlurTarget);
             OpenGlHelper.glUseProgram(blurProgram);
             bindTextureUniform(blurProgram, "source", bloomDownsampleTarget.framebufferTexture, 0);
@@ -360,6 +364,7 @@ public final class AusmBloomRenderer {
             return;
         }
 
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
         target.bindFramebuffer(false);
         GL11.glDrawBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
         GL11.glReadBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
@@ -416,6 +421,7 @@ public final class AusmBloomRenderer {
     }
 
     private void clearLayerTarget() {
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
         bloomLayerTarget.bindFramebuffer(false);
         GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
@@ -458,6 +464,7 @@ public final class AusmBloomRenderer {
     }
 
     private void bindLayerTargetForGeometry() {
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
         bloomLayerTarget.bindFramebuffer(false);
         GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
@@ -465,6 +472,7 @@ public final class AusmBloomRenderer {
     }
 
     private void bindHalfTarget(Framebuffer framebuffer) {
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
         framebuffer.bindFramebuffer(false);
         GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
@@ -645,8 +653,7 @@ public final class AusmBloomRenderer {
         GlStateManager.enableAlpha();
         GlStateManager.alphaFunc(GL11.GL_GREATER, 0.003921569F);
         GlStateManager.disableCull();
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
+        GlStateManager.disableBlend();
         GlStateManager.colorMask(true, true, true, true);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
     }
@@ -740,6 +747,7 @@ public final class AusmBloomRenderer {
         private final int drawFramebuffer;
         private final int activeTexture;
         private final int texture;
+        private final int texture0;
         private final int program;
         private final boolean blend;
         private final boolean depthTest;
@@ -755,12 +763,20 @@ public final class AusmBloomRenderer {
         private final int viewportY;
         private final int viewportWidth;
         private final int viewportHeight;
+        private final boolean scissorTest;
+        private final int scissorX;
+        private final int scissorY;
+        private final int scissorWidth;
+        private final int scissorHeight;
 
         private RenderState() {
             readFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
             drawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
             activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
             texture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            texture0 = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            GL13.glActiveTexture(activeTexture);
             program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
             blend = GL11.glIsEnabled(GL11.GL_BLEND);
             depthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
@@ -778,14 +794,29 @@ public final class AusmBloomRenderer {
             viewportY = viewportBuffer.get(1);
             viewportWidth = viewportBuffer.get(2);
             viewportHeight = viewportBuffer.get(3);
+            viewportBuffer.clear();
+            GL11.glGetInteger(GL11.GL_SCISSOR_BOX, viewportBuffer);
+            scissorX = viewportBuffer.get(0);
+            scissorY = viewportBuffer.get(1);
+            scissorWidth = viewportBuffer.get(2);
+            scissorHeight = viewportBuffer.get(3);
+            scissorTest = GL11.glIsEnabled(GL11.GL_SCISSOR_TEST);
         }
 
         private void restore() {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFramebuffer);
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, drawFramebuffer);
             GL11.glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
+            GL11.glScissor(scissorX, scissorY, scissorWidth, scissorHeight);
+            if (scissorTest) {
+                GL11.glEnable(GL11.GL_SCISSOR_TEST);
+            } else {
+                GL11.glDisable(GL11.GL_SCISSOR_TEST);
+            }
             OpenGlHelper.glUseProgram(program);
-            GL13.glActiveTexture(activeTexture);
+            GlStateManager.setActiveTexture(GL13.GL_TEXTURE0);
+            GlStateManager.bindTexture(texture0);
+            GlStateManager.setActiveTexture(activeTexture);
             GlStateManager.bindTexture(texture);
             GlStateManager.depthMask(depthMask);
             GL11.glDepthFunc(depthFunc);

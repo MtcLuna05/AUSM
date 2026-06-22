@@ -53,6 +53,10 @@ public final class CustomUniformSet {
         return variables;
     }
 
+    public boolean isEmpty() {
+        return expressions.isEmpty();
+    }
+
     public static CustomUniformSet parse(Map<String, String> expressions) {
         if (expressions.isEmpty()) {
             return empty();

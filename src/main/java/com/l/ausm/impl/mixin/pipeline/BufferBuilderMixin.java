@@ -38,6 +38,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     @Unique
     private int ausm$capturedTranslucentAlphaOffset = -1;
 
+    @Unique
+    private boolean ausm$shaderlessBloomMetadata;
+
     @Shadow
     private ByteBuffer byteBuffer;
 
@@ -80,6 +83,21 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     @Override
     public boolean ausm$isDrawing() {
         return isDrawing;
+    }
+
+    @Override
+    public void ausm$resetShaderlessBloomMetadata() {
+        ausm$shaderlessBloomMetadata = false;
+    }
+
+    @Override
+    public void ausm$markShaderlessBloomMetadata() {
+        ausm$shaderlessBloomMetadata = true;
+    }
+
+    @Override
+    public boolean ausm$hasShaderlessBloomMetadata() {
+        return ausm$shaderlessBloomMetadata;
     }
 
     @ModifyVariable(method = "begin", at = @At("HEAD"), argsOnly = true)
@@ -136,6 +154,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             ausm$writeDerivedBlockAttributesForPolygon(vertexBase + vertex, 4);
         }
 
+        ausm$markCurrentContextShaderlessBloomMetadata();
         ausm$resetPipelineVertexCursor();
         ci.cancel();
     }
@@ -193,6 +212,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             ausm$writeDerivedBlockAttributesForPolygon(vertexBase + vertex, 4);
         }
 
+        ausm$markCurrentContextShaderlessBloomMetadata();
         ausm$resetPipelineVertexCursor();
         ci.cancel();
     }
@@ -280,6 +300,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         rawIntBuffer.position(getBufferSize());
         rawIntBuffer.put(rewrittenData);
         vertexCount += vertexTotal;
+        ausm$markCurrentContextShaderlessBloomMetadata();
         ci.cancel();
         return true;
     }
@@ -311,6 +332,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         rawIntBuffer.position(getBufferSize());
         rawIntBuffer.put(rewrittenData);
         vertexCount += vertexTotal;
+        ausm$markCurrentContextShaderlessBloomMetadata();
         ci.cancel();
         return true;
     }
@@ -324,6 +346,15 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                 && vertexFormat.hasUvOffset(1)
                 && vertexFormat.getColorOffset() % Integer.BYTES == 0
                 && vertexFormat.getUvOffsetById(1) % Integer.BYTES == 0;
+    }
+
+    @Unique
+    private void ausm$markCurrentContextShaderlessBloomMetadata() {
+        if (BlockRenderContext.blockEmission() <= 0 && !BlockRenderContext.bloomMaskFallback()) {
+            return;
+        }
+        ausm$markShaderlessBloomMetadata();
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftForgeClient.getRenderLayer());
     }
 
     private void ausm$applyVanillaEmissiveAttributes(int[] vertexData, int vertexBase) {
@@ -666,6 +697,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return;
         }
         vertexData[vertexBase + 6] = ausm$emissiveLightmap(vertexData[vertexBase + 6], blockEmission);
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftForgeClient.getRenderLayer());
     }
 
     private static void ausm$applyEmissiveVertexColor(int[] vertexData, int vertexBase) {
@@ -677,6 +709,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return;
         }
         vertexData[vertexBase + 3] = ausm$applyBlockAlpha(ausm$brightenColorRgb(vertexData[vertexBase + 3], blockEmission));
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftForgeClient.getRenderLayer());
     }
 
     private void ausm$applyEmissiveCurrentVertexColor() {
@@ -698,6 +731,8 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         byteBuffer.put(colorOffset + 1, (byte) ausm$brightenColorComponent(byteBuffer.get(colorOffset + 1) & 0xFF, blockEmission));
         byteBuffer.put(colorOffset + 2, (byte) ausm$brightenColorComponent(byteBuffer.get(colorOffset + 2) & 0xFF, blockEmission));
         ausm$writeBlockAlpha(colorOffset);
+        ausm$markShaderlessBloomMetadata();
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftForgeClient.getRenderLayer());
         PipelineContext.getInstance().logCurrentRenderContextProbe("buffer-current-vertex-color",
                 "vertex=" + vertexCount
                         + ", before=0x" + Integer.toHexString(before)
@@ -877,6 +912,8 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         byteBuffer.put(colorOffset + 1, (byte) ausm$brightenColorComponent(byteBuffer.get(colorOffset + 1) & 0xFF, blockEmission));
         byteBuffer.put(colorOffset + 2, (byte) ausm$brightenColorComponent(byteBuffer.get(colorOffset + 2) & 0xFF, blockEmission));
         ausm$writeBlockAlpha(colorOffset);
+        ausm$markShaderlessBloomMetadata();
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftForgeClient.getRenderLayer());
         PipelineContext.getInstance().logCurrentRenderContextProbe("buffer-existing-vertex-color",
                 "vertexIndex=" + vertexIndex
                         + ", before=0x" + Integer.toHexString(before)
@@ -897,6 +934,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         vertexData[vertexBase + 4] = Float.floatToRawIntBits(BlockRenderContext.bloomMaskU());
         vertexData[vertexBase + 5] = Float.floatToRawIntBits(BlockRenderContext.bloomMaskV());
         vertexData[vertexBase + 6] = ausm$emissiveLightmap(vertexData[vertexBase + 6], 15);
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftForgeClient.getRenderLayer());
     }
 
     @Unique
@@ -932,6 +970,8 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                 byteBuffer.putShort(lightOffset + 2, (short) 240);
             }
         }
+        ausm$markShaderlessBloomMetadata();
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftForgeClient.getRenderLayer());
     }
 
     @Unique
@@ -963,6 +1003,8 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                 byteBuffer.putShort(lightOffset + 2, (short) 240);
             }
         }
+        ausm$markShaderlessBloomMetadata();
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftForgeClient.getRenderLayer());
     }
 
     @Unique

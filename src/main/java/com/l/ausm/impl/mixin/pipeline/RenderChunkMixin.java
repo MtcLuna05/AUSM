@@ -36,7 +36,10 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
     private boolean ausm$pendingPipelineVertexFormat;
 
     @Unique
-    private final boolean[] ausm$pipelineVertexFormatByLayer = new boolean[BlockRenderLayer.values().length];
+    private boolean[] ausm$pipelineVertexFormatByLayer;
+
+    @Unique
+    private boolean[] ausm$shaderlessBloomMetadataByLayer;
 
     @Unique
     private static boolean ausm$loggedNullWorldRepair;
@@ -69,7 +72,7 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
                 && ExtendedVertexFormats.PIPELINE_BLOCK != null;
         ausm$pipelineVertexFormat = pipelineFormat;
         ausm$pendingPipelineVertexFormat = pipelineFormat;
-        Arrays.fill(ausm$pipelineVertexFormatByLayer, pipelineFormat);
+        Arrays.fill(ausm$pipelineVertexFormatByLayer(), pipelineFormat);
         return pipelineFormat ? ExtendedVertexFormats.PIPELINE_BLOCK : original;
     }
 
@@ -91,19 +94,36 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
                                               BufferBuilder bufferBuilder, CompiledChunk compiledChunk, CallbackInfo ci) {
         int index = ausm$layerIndex(layer);
         if (index >= 0) {
-            ausm$pipelineVertexFormatByLayer[index] = ausm$pendingPipelineVertexFormat;
+            ausm$pipelineVertexFormatByLayer()[index] = ausm$pendingPipelineVertexFormat;
+            boolean hasBloomMetadata = bufferBuilder instanceof com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension extension
+                    && extension.ausm$hasShaderlessBloomMetadata();
+            ausm$shaderlessBloomMetadataByLayer()[index] = hasBloomMetadata;
+            PipelineContext.getInstance().recordShaderlessBloomMetadata(
+                    ((RenderChunk) (Object) this).getPosition(),
+                    layer,
+                    hasBloomMetadata
+            );
+            if (bufferBuilder instanceof com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension extension) {
+                extension.ausm$resetShaderlessBloomMetadata();
+            }
         }
     }
 
     @Override
     public boolean ausm$usesPipelineVertexFormat(BlockRenderLayer layer) {
         int index = ausm$layerIndex(layer);
-        return index >= 0 ? ausm$pipelineVertexFormatByLayer[index] : ausm$pipelineVertexFormat;
+        return index >= 0 ? ausm$pipelineVertexFormatByLayer()[index] : ausm$pipelineVertexFormat;
     }
 
     @Override
     public boolean ausm$usesPipelineVertexFormat() {
         return ausm$pipelineVertexFormat;
+    }
+
+    @Override
+    public boolean ausm$hasShaderlessBloomMetadata(BlockRenderLayer layer) {
+        int index = ausm$layerIndex(layer);
+        return index < 0 || ausm$shaderlessBloomMetadataByLayer()[index];
     }
 
     @Unique
@@ -112,7 +132,24 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
             return -1;
         }
         int ordinal = layer.ordinal();
-        return ordinal >= 0 && ordinal < ausm$pipelineVertexFormatByLayer.length ? ordinal : -1;
+        return ordinal >= 0 && ordinal < BlockRenderLayer.values().length ? ordinal : -1;
+    }
+
+    @Unique
+    private boolean[] ausm$pipelineVertexFormatByLayer() {
+        if (ausm$pipelineVertexFormatByLayer == null) {
+            ausm$pipelineVertexFormatByLayer = new boolean[BlockRenderLayer.values().length];
+            Arrays.fill(ausm$pipelineVertexFormatByLayer, ausm$pipelineVertexFormat);
+        }
+        return ausm$pipelineVertexFormatByLayer;
+    }
+
+    @Unique
+    private boolean[] ausm$shaderlessBloomMetadataByLayer() {
+        if (ausm$shaderlessBloomMetadataByLayer == null) {
+            ausm$shaderlessBloomMetadataByLayer = new boolean[BlockRenderLayer.values().length];
+        }
+        return ausm$shaderlessBloomMetadataByLayer;
     }
 
     @Unique

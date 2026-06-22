@@ -38,7 +38,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(targets = "meldexun.nothirium.mc.renderer.chunk.RenderChunkTaskCompile", remap = false)
-public class NothiriumRenderChunkTaskCompileMixin {
+public abstract class NothiriumRenderChunkTaskCompileMixin {
     @Unique
     private static final int AUSM_FIRE_FALLBACK_LOG_LIMIT = 0;
 

@@ -33,13 +33,26 @@ public class VboRenderListMixin {
     private static final int AUSM_TRANSLUCENT_VBO_LOG_LIMIT = 0;
 
     @Unique
+    private static final int AUSM_ARRAY_POINTER_MODE_UNKNOWN = 0;
+
+    @Unique
+    private static final int AUSM_ARRAY_POINTER_MODE_VANILLA = 1;
+
+    @Unique
+    private static final int AUSM_ARRAY_POINTER_MODE_PIPELINE = 2;
+
+    @Unique
     private static int ausm$translucentVboLogs;
+
+    @Unique
+    private static int ausm$arrayPointerMode = AUSM_ARRAY_POINTER_MODE_UNKNOWN;
 
     @Unique
     private boolean ausm$currentChunkUsesPipelineVertexFormat;
 
     @Inject(method = "renderChunkLayer", at = @At("HEAD"))
     private void ausm$prepareTranslucentChunkLayer(BlockRenderLayer layer, CallbackInfo ci) {
+        ausm$arrayPointerMode = AUSM_ARRAY_POINTER_MODE_UNKNOWN;
         if (layer != BlockRenderLayer.TRANSLUCENT) {
             return;
         }
@@ -106,22 +119,18 @@ public class VboRenderListMixin {
     private static void ausm$setupPipelineArrayPointers() {
         int stride = ExtendedVertexFormats.PIPELINE_BLOCK.getSize();
 
-        GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
+        ausm$preparePipelineArrayPointerState();
+
         GlStateManager.glVertexPointer(3, GL11.GL_FLOAT, stride, 0);
-        GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
         GlStateManager.glColorPointer(4, GL11.GL_UNSIGNED_BYTE, stride, 12);
         OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
         GlStateManager.glTexCoordPointer(2, GL11.GL_FLOAT, stride, 16);
         OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
-        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
         GlStateManager.glTexCoordPointer(2, GL11.GL_SHORT, stride, 24);
         OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
 
-        GL11.glEnableClientState(GL11.GL_NORMAL_ARRAY);
         GL11.glNormalPointer(GL11.GL_BYTE, stride, (long) ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET);
 
-        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
         ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE,
                 2,
@@ -131,7 +140,6 @@ public class VboRenderListMixin {
                 (long) ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET
         );
 
-        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
         ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE,
                 4,
@@ -141,7 +149,6 @@ public class VboRenderListMixin {
                 (long) ExtendedVertexFormats.PIPELINE_BLOCK_TANGENT_OFFSET
         );
 
-        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
         ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE,
                 4,
@@ -151,7 +158,6 @@ public class VboRenderListMixin {
                 (long) ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET
         );
 
-        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
         ExtendedVertexFormats.vertexAttribPointer(
                 ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE,
                 4,
@@ -164,18 +170,51 @@ public class VboRenderListMixin {
 
     @Unique
     private static void ausm$setupVanillaArrayPointers() {
-        GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
+        ausm$prepareVanillaArrayPointerState();
+
         GlStateManager.glVertexPointer(3, GL11.GL_FLOAT, 28, 0);
-        GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
         GlStateManager.glColorPointer(4, GL11.GL_UNSIGNED_BYTE, 28, 12);
         OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
         GlStateManager.glTexCoordPointer(2, GL11.GL_FLOAT, 28, 16);
         OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
-        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
         GlStateManager.glTexCoordPointer(2, GL11.GL_SHORT, 28, 24);
         OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+    }
 
+    @Unique
+    private static void ausm$preparePipelineArrayPointerState() {
+        if (ausm$arrayPointerMode == AUSM_ARRAY_POINTER_MODE_PIPELINE) {
+            return;
+        }
+
+        GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
+        GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        GL11.glEnableClientState(GL11.GL_NORMAL_ARRAY);
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
+        ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
+        ausm$arrayPointerMode = AUSM_ARRAY_POINTER_MODE_PIPELINE;
+    }
+
+    @Unique
+    private static void ausm$prepareVanillaArrayPointerState() {
+        if (ausm$arrayPointerMode == AUSM_ARRAY_POINTER_MODE_VANILLA) {
+            return;
+        }
+
+        GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
+        GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
         GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
         GL11.glNormal3f(0.0F, 1.0F, 0.0F);
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
@@ -186,6 +225,7 @@ public class VboRenderListMixin {
         ausm$setGenericAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE, 0.0F, 0.0F, 0.0F, 1.0F);
         ausm$setGenericAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE, 1.0F, 0.0F, 0.0F, 1.0F);
         ausm$setGenericAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE, 0.0F, 0.0F, 0.0F, 0.0F);
+        ausm$arrayPointerMode = AUSM_ARRAY_POINTER_MODE_VANILLA;
     }
 
     @Unique
@@ -204,6 +244,7 @@ public class VboRenderListMixin {
     @Inject(method = "renderChunkLayer", at = @At("RETURN"))
     private void ausm$disablePipelineAttributes(BlockRenderLayer layer, CallbackInfo ci) {
         ausm$currentChunkUsesPipelineVertexFormat = false;
+        ausm$arrayPointerMode = AUSM_ARRAY_POINTER_MODE_UNKNOWN;
         GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);

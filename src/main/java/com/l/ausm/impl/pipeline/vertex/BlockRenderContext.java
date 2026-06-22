@@ -12,6 +12,9 @@ public final class BlockRenderContext {
     private static final ThreadLocal<Integer> CURRENT_LOCAL_X = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_LOCAL_Y = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_LOCAL_Z = ThreadLocal.withInitial(() -> 0);
+    private static final ThreadLocal<Integer> CURRENT_BLOCK_X = ThreadLocal.withInitial(() -> 0);
+    private static final ThreadLocal<Integer> CURRENT_BLOCK_Y = ThreadLocal.withInitial(() -> 0);
+    private static final ThreadLocal<Integer> CURRENT_BLOCK_Z = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_EMISSION = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_ALPHA = ThreadLocal.withInitial(() -> -1);
     private static final ThreadLocal<Boolean> CURRENT_CRYSTAL_ONLY_EMISSION = ThreadLocal.withInitial(() -> false);
@@ -53,9 +56,24 @@ public final class BlockRenderContext {
     }
 
     public static void setLocalBlockPos(int x, int y, int z) {
+        CURRENT_BLOCK_X.set(x);
+        CURRENT_BLOCK_Y.set(y);
+        CURRENT_BLOCK_Z.set(z);
         CURRENT_LOCAL_X.set(x & 15);
         CURRENT_LOCAL_Y.set(y & 15);
         CURRENT_LOCAL_Z.set(z & 15);
+    }
+
+    public static int blockX() {
+        return CURRENT_BLOCK_X.get();
+    }
+
+    public static int blockY() {
+        return CURRENT_BLOCK_Y.get();
+    }
+
+    public static int blockZ() {
+        return CURRENT_BLOCK_Z.get();
     }
 
     public static int localX() {
@@ -217,6 +235,9 @@ public final class BlockRenderContext {
         CURRENT_LOCAL_X.remove();
         CURRENT_LOCAL_Y.remove();
         CURRENT_LOCAL_Z.remove();
+        CURRENT_BLOCK_X.remove();
+        CURRENT_BLOCK_Y.remove();
+        CURRENT_BLOCK_Z.remove();
         CURRENT_BLOCK_EMISSION.remove();
         CURRENT_BLOCK_ALPHA.remove();
         CURRENT_CRYSTAL_ONLY_EMISSION.remove();

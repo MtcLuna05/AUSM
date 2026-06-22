@@ -22,10 +22,6 @@ public class UniformRegistry {
     private final Map<String, UniformBinding<?>> bindings = new HashMap<>();
 
     // Pre-allocated buffers to avoid memory allocations every frame
-    private static final FloatBuffer FLOAT_BUFFER_1 = BufferUtils.createFloatBuffer(1);
-    private static final FloatBuffer FLOAT_BUFFER_2 = BufferUtils.createFloatBuffer(2);
-    private static final FloatBuffer FLOAT_BUFFER_3 = BufferUtils.createFloatBuffer(3);
-    private static final FloatBuffer FLOAT_BUFFER_4 = BufferUtils.createFloatBuffer(4);
     private static final IntBuffer INT_BUFFER_2 = BufferUtils.createIntBuffer(2);
     private static final IntBuffer INT_BUFFER_3 = BufferUtils.createIntBuffer(3);
     private static final IntBuffer INT_BUFFER_4 = BufferUtils.createIntBuffer(4);
@@ -47,10 +43,7 @@ public class UniformRegistry {
     public void registerFloat(String name, Supplier<Float> supplier) {
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1) {
-                FLOAT_BUFFER_1.clear();
-                FLOAT_BUFFER_1.put(value);
-                FLOAT_BUFFER_1.flip();
-                OpenGlHelper.glUniform1(location, FLOAT_BUFFER_1);
+                GL20.glUniform1f(location, value);
             }
         }));
     }
@@ -92,10 +85,7 @@ public class UniformRegistry {
     public void registerVec2(String name, Supplier<float[]> supplier) {
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1 && value.length >= 2) {
-                FLOAT_BUFFER_2.clear();
-                FLOAT_BUFFER_2.put(value, 0, 2);
-                FLOAT_BUFFER_2.flip();
-                GL20.glUniform2(location, FLOAT_BUFFER_2);
+                GL20.glUniform2f(location, value[0], value[1]);
             }
         }));
     }
@@ -106,10 +96,7 @@ public class UniformRegistry {
     public void registerVec3(String name, Supplier<float[]> supplier) {
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1 && value.length >= 3) {
-                FLOAT_BUFFER_3.clear();
-                FLOAT_BUFFER_3.put(value);
-                FLOAT_BUFFER_3.flip();
-                OpenGlHelper.glUniform3(location, FLOAT_BUFFER_3);
+                GL20.glUniform3f(location, value[0], value[1], value[2]);
             }
         }));
     }
@@ -117,10 +104,7 @@ public class UniformRegistry {
     public void registerVec4(String name, Supplier<float[]> supplier) {
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1 && value.length >= 4) {
-                FLOAT_BUFFER_4.clear();
-                FLOAT_BUFFER_4.put(value, 0, 4);
-                FLOAT_BUFFER_4.flip();
-                GL20.glUniform4(location, FLOAT_BUFFER_4);
+                GL20.glUniform4f(location, value[0], value[1], value[2], value[3]);
             }
         }));
     }

@@ -16,4 +16,14 @@ public interface IBufferBuilderExtension {
     default boolean ausm$isDrawing() {
         return false;
     }
+
+    default void ausm$resetShaderlessBloomMetadata() {
+    }
+
+    default void ausm$markShaderlessBloomMetadata() {
+    }
+
+    default boolean ausm$hasShaderlessBloomMetadata() {
+        return true;
+    }
 }

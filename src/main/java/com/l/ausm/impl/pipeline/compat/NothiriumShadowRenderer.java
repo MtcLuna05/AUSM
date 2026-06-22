@@ -174,6 +174,11 @@ public final class NothiriumShadowRenderer {
 
     public int renderVisibleLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
                                   int fallbackBlockEntityId, short fallbackRenderType) {
+        return renderVisibleLayer(layer, cameraX, cameraY, cameraZ, fallbackBlockEntityId, fallbackRenderType, -1.0D);
+    }
+
+    public int renderVisibleLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
+                                  int fallbackBlockEntityId, short fallbackRenderType, double maxDistance) {
         Reflection reflection = reflection();
         if (disabled || reflection == null) {
             return -1;
@@ -201,7 +206,7 @@ public final class NothiriumShadowRenderer {
             }
 
             boolean requirePipelineStride = layer != BlockRenderLayer.TRANSLUCENT;
-            DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, -1.0D, false,
+            DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, false,
                     fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
             if (stats.unsupportedStride > 0) {
                 refreshUnsupportedPipelineChunks(reflection, stats.unsupportedPipelineChunks);
@@ -364,7 +369,7 @@ public final class NothiriumShadowRenderer {
             throws ReflectiveOperationException {
         LayerGlState layerState = LayerGlState.prepare(layer);
         try {
-            return drawChunks(reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, collectState,
+            return drawChunks(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, collectState,
                     fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
         } finally {
             if (layerState != null) {
@@ -373,7 +378,7 @@ public final class NothiriumShadowRenderer {
         }
     }
 
-    private DrawStats drawChunks(Reflection reflection, Object pass, Iterable<?> chunks,
+    private DrawStats drawChunks(BlockRenderLayer layer, Reflection reflection, Object pass, Iterable<?> chunks,
                                  double cameraX, double cameraY, double cameraZ, double maxDistance, boolean collectState,
                                  int fallbackBlockEntityId, short fallbackRenderType, boolean requirePipelineStride)
             throws ReflectiveOperationException {
@@ -411,6 +416,9 @@ public final class NothiriumShadowRenderer {
                     }
                 }
                 stats.withinDistance++;
+                if (!PipelineContext.getInstance().shouldRenderShaderlessBloomChunkLayer(layer, chunkX, chunkY, chunkZ)) {
+                    continue;
+                }
 
                 Object part = reflection.getVboPart.invoke(chunk, pass);
                 if (part == null) {
