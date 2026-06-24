@@ -22,23 +22,32 @@ import java.util.Map;
  * declared with {@code variable.<type>.<name>}.</p>
  */
 public final class CustomUniformSet {
-    private final Map<String, String> expressions;
-    private final List<CustomUniform> uniforms;
-    private final Map<String, String> variables;
-    private final Map<Integer, SmoothState> smoothStates = new HashMap<>();
+    private static final float[] EMPTY_VALUES = new float[0];
 
-    public CustomUniformSet(
+    private final Map<String, String> expressions;
+    private final List<RawUniform> rawUniforms;
+    private final Map<String, String> variables;
+    private final Map<String, CompiledExpression> compiledVariables;
+    private final Map<Integer, SmoothState> smoothStates = new HashMap<>();
+    private final Map<String, float[]> resolvedScratch = new HashMap<>();
+    private final Map<String, CompiledExpression> unresolvedScratch = new LinkedHashMap<>();
+    private final Map<String, float[]> cachedUniformValues = new HashMap<>();
+    private int cachedUniformFrame = Integer.MIN_VALUE;
+
+    private CustomUniformSet(
             Map<String, String> expressions,
-            List<CustomUniform> uniforms,
-            Map<String, String> variables
+            List<RawUniform> rawUniforms,
+            Map<String, String> variables,
+            Map<String, CompiledExpression> compiledVariables
     ) {
         this.expressions = expressions;
-        this.uniforms = uniforms;
+        this.rawUniforms = rawUniforms;
         this.variables = variables;
+        this.compiledVariables = compiledVariables;
     }
 
     public static CustomUniformSet empty() {
-        return new CustomUniformSet(Map.of(), List.of(), Map.of());
+        return new CustomUniformSet(Map.of(), List.of(), Map.of(), Map.of());
     }
 
     public Map<String, String> expressions() {
@@ -46,7 +55,7 @@ public final class CustomUniformSet {
     }
 
     public List<CustomUniform> uniforms() {
-        return uniforms;
+        return List.of();
     }
 
     public Map<String, String> variables() {
@@ -62,50 +71,87 @@ public final class CustomUniformSet {
             return empty();
         }
 
+        List<RawUniform> rawUniforms = new ArrayList<>();
         Map<String, String> variables = new LinkedHashMap<>();
+        Map<String, CompiledExpression> compiledVariables = new LinkedHashMap<>();
         expressions.forEach((key, expression) -> {
             ParsedKey parsed = ParsedKey.parse(key);
             if (parsed == null) {
                 return;
             }
-            if (!parsed.uniform()) {
-                variables.put(parsed.name(), expression);
-            }
-        });
-
-        return new CustomUniformSet(Map.copyOf(expressions), List.of(), Map.copyOf(variables));
-    }
-
-    public void upload(ShaderProgram program, Map<String, float[]> builtins) {
-        if (expressions.isEmpty()) {
-            return;
-        }
-
-        List<RawUniform> rawUniforms = new ArrayList<>();
-        Map<String, String> variableExpressions = new LinkedHashMap<>();
-        expressions.forEach((key, expression) -> {
-            ParsedKey parsed = ParsedKey.parse(key);
-            if (parsed == null) {
+            CompiledExpression compiled = ExpressionEvaluator.compile(expression);
+            if (compiled == null) {
+                MainMod.LOGGER.warn("[CustomUniforms] Ignoring malformed custom expression '{}': {}", key, expression);
                 return;
             }
             if (parsed.uniform()) {
-                rawUniforms.add(new RawUniform(parsed.type(), parsed.name(), expression));
+                rawUniforms.add(new RawUniform(parsed.type(), parsed.name(), expression, expectedValues(parsed.type()), compiled));
             } else {
-                variableExpressions.put(parsed.name(), expression);
+                variables.put(parsed.name(), expression);
+                compiledVariables.put(parsed.name(), compiled);
             }
         });
 
-        Map<String, float[]> resolved = new LinkedHashMap<>(builtins);
-        resolved.putAll(resolveVariables(variableExpressions, resolved, smoothStates));
+        return new CustomUniformSet(
+                Map.copyOf(expressions),
+                List.copyOf(rawUniforms),
+                Map.copyOf(variables),
+                Map.copyOf(compiledVariables)
+        );
+    }
+
+    public void upload(ShaderProgram program, Map<String, float[]> builtins) {
+        if (rawUniforms.isEmpty()) {
+            return;
+        }
+
+        Map<String, float[]> valuesByName = uniformValuesForFrame(builtins);
         for (RawUniform rawUniform : rawUniforms) {
-            CustomUniform uniform = CustomUniform.parse(rawUniform.type(), rawUniform.name(), rawUniform.expression(), resolved, smoothStates);
-            if (uniform != null) {
-                uniform.upload(program);
-            }
+            float[] values = valuesByName.getOrDefault(rawUniform.name(), EMPTY_VALUES);
+            uploadUniform(program, rawUniform, values);
         }
     }
 
-    private record RawUniform(String type, String name, String expression) {
+    private Map<String, float[]> uniformValuesForFrame(Map<String, float[]> builtins) {
+        int frame = scalarInt(builtins, "frameCounter", Integer.MIN_VALUE);
+        if (frame != Integer.MIN_VALUE && frame == cachedUniformFrame) {
+            return cachedUniformValues;
+        }
+
+        Map<String, float[]> resolved = builtins;
+        if (!compiledVariables.isEmpty()) {
+            resolvedScratch.clear();
+            resolvedScratch.putAll(builtins);
+            resolveVariablesInto(compiledVariables, resolvedScratch, unresolvedScratch, smoothStates);
+            resolved = resolvedScratch;
+        }
+
+        cachedUniformValues.clear();
+        for (RawUniform rawUniform : rawUniforms) {
+            float[] values = rawUniform.compiledExpression().evaluate(rawUniform.expectedValues(), resolved, smoothStates);
+            if (values.length != 0) {
+                cachedUniformValues.put(rawUniform.name(), values);
+            }
+        }
+        cachedUniformFrame = frame;
+        return cachedUniformValues;
+    }
+
+    private static int scalarInt(Map<String, float[]> variables, String name, int fallback) {
+        float[] value = variables.get(name);
+        if (value == null || value.length == 0) {
+            return fallback;
+        }
+        return Math.round(value[0]);
+    }
+
+    private record RawUniform(
+            String type,
+            String name,
+            String expression,
+            int expectedValues,
+            CompiledExpression compiledExpression
+    ) {
     }
 
     private record ParsedKey(boolean uniform, String type, String name) {
@@ -132,23 +178,24 @@ public final class CustomUniformSet {
         }
     }
 
-    private static Map<String, float[]> resolveVariables(
-            Map<String, String> variables,
-            Map<String, float[]> baseVariables,
+    private static void resolveVariablesInto(
+            Map<String, CompiledExpression> variables,
+            Map<String, float[]> resolved,
+            Map<String, CompiledExpression> unresolved,
             Map<Integer, SmoothState> smoothStates
     ) {
         if (variables.isEmpty()) {
-            return Map.of();
+            return;
         }
-        Map<String, float[]> resolved = new LinkedHashMap<>(baseVariables);
-        Map<String, String> unresolved = new LinkedHashMap<>(variables);
+        unresolved.clear();
+        unresolved.putAll(variables);
         boolean progressed;
         do {
             progressed = false;
             var iterator = unresolved.entrySet().iterator();
             while (iterator.hasNext()) {
-                Map.Entry<String, String> entry = iterator.next();
-                float[] values = ExpressionEvaluator.tryEvaluateAny(entry.getValue(), resolved, smoothStates);
+                Map.Entry<String, CompiledExpression> entry = iterator.next();
+                float[] values = entry.getValue().evaluateAny(resolved, smoothStates);
                 if (values.length == 0) {
                     continue;
                 }
@@ -157,57 +204,109 @@ public final class CustomUniformSet {
                 progressed = true;
             }
         } while (progressed && !unresolved.isEmpty());
+    }
 
-        Map<String, float[]> ownVariables = new LinkedHashMap<>(resolved);
-        baseVariables.keySet().forEach(ownVariables::remove);
-        return Map.copyOf(ownVariables);
+    private static void uploadUniform(ShaderProgram program, RawUniform rawUniform, float[] values) {
+        if (values.length == 0) {
+            return;
+        }
+        int expected = rawUniform.expectedValues();
+        if (expected > 0 && values.length < expected) {
+            MainMod.LOGGER.warn("[CustomUniforms] Ignoring custom uniform '{}' with too few values: {}",
+                    rawUniform.name(),
+                    rawUniform.expression());
+            return;
+        }
+
+        int location = program.getUniformLocation(rawUniform.name());
+        if (location == -1) {
+            return;
+        }
+
+        switch (rawUniform.type()) {
+            case "bool", "int" -> GL20.glUniform1i(location, (int) values[0]);
+            case "float" -> GL20.glUniform1f(location, values[0]);
+            case "vec2" -> GL20.glUniform2f(location, values[0], values[1]);
+            case "vec3" -> GL20.glUniform3f(location, values[0], values[1], values[2]);
+            case "vec4" -> GL20.glUniform4f(location, values[0], values[1], values[2], values[3]);
+            default -> {
+            }
+        }
+    }
+
+    private static int expectedValues(String type) {
+        return switch (type) {
+            case "bool", "int", "float" -> 1;
+            case "vec2" -> 2;
+            case "vec3" -> 3;
+            case "vec4" -> 4;
+            default -> -1;
+        };
     }
 
     public record CustomUniform(String type, String name, float[] values) {
-        private static CustomUniform parse(
-                String type,
-                String name,
-                String expression,
-                Map<String, float[]> variables,
-                Map<Integer, SmoothState> smoothStates
-        ) {
-            int expected = expectedValues(type);
-            float[] values = ExpressionEvaluator.tryEvaluate(expression, expected, variables, smoothStates);
-            if (values.length == 0) {
-                return null;
-            }
-            if (expected > 0 && values.length < expected) {
-                MainMod.LOGGER.warn("[CustomUniforms] Ignoring custom uniform '{}' with too few values: {}", name, expression);
-                return null;
-            }
-            return new CustomUniform(type, name, values);
+    }
+
+    private interface CompiledExpression {
+        default float[] evaluateAny(Map<String, float[]> variables, Map<Integer, SmoothState> smoothStates) {
+            return evaluate(-1, variables, smoothStates);
         }
 
-        private void upload(ShaderProgram program) {
-            int location = program.getUniformLocation(name);
-            if (location == -1) {
-                return;
-            }
+        float[] evaluate(int expectedValues, Map<String, float[]> variables, Map<Integer, SmoothState> smoothStates);
+    }
 
-            switch (type) {
-                case "bool", "int" -> GL20.glUniform1i(location, (int) values[0]);
-                case "float" -> GL20.glUniform1f(location, values[0]);
-                case "vec2" -> GL20.glUniform2f(location, values[0], values[1]);
-                case "vec3" -> GL20.glUniform3f(location, values[0], values[1], values[2]);
-                case "vec4" -> GL20.glUniform4f(location, values[0], values[1], values[2], values[3]);
-                default -> {
+    private static final class DirectVariableExpression implements CompiledExpression {
+        private final String name;
+
+        private DirectVariableExpression(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public float[] evaluate(int expectedValues, Map<String, float[]> variables, Map<Integer, SmoothState> smoothStates) {
+            float[] value = variables.get(name);
+            if (value == null || (expectedValues > 0 && value.length != expectedValues)) {
+                return EMPTY_VALUES;
+            }
+            return value;
+        }
+    }
+
+    private static final class ScalarExpression implements CompiledExpression {
+        private final ScalarNode node;
+
+        private ScalarExpression(ScalarNode node) {
+            this.node = node;
+        }
+
+        @Override
+        public float[] evaluate(int expectedValues, Map<String, float[]> variables, Map<Integer, SmoothState> smoothStates) {
+            float value = node.evaluate(new EvalContext(variables, smoothStates));
+            return Float.isNaN(value) ? EMPTY_VALUES : new float[]{value};
+        }
+    }
+
+    private static final class VectorExpression implements CompiledExpression {
+        private final List<ScalarNode> nodes;
+
+        private VectorExpression(List<ScalarNode> nodes) {
+            this.nodes = nodes;
+        }
+
+        @Override
+        public float[] evaluate(int expectedValues, Map<String, float[]> variables, Map<Integer, SmoothState> smoothStates) {
+            if (expectedValues > 0 && nodes.size() < expectedValues) {
+                return EMPTY_VALUES;
+            }
+            EvalContext context = new EvalContext(variables, smoothStates);
+            float[] values = new float[nodes.size()];
+            for (int i = 0; i < nodes.size(); i++) {
+                values[i] = nodes.get(i).evaluate(context);
+                if (Float.isNaN(values[i])) {
+                    return EMPTY_VALUES;
                 }
             }
-        }
-
-        private static int expectedValues(String type) {
-            return switch (type) {
-                case "bool", "int", "float" -> 1;
-                case "vec2" -> 2;
-                case "vec3" -> 3;
-                case "vec4" -> 4;
-                default -> -1;
-            };
+            return values;
         }
     }
 
@@ -215,76 +314,34 @@ public final class CustomUniformSet {
         private ExpressionEvaluator() {
         }
 
-        static float[] tryEvaluateAny(String expression, Map<String, float[]> variables) {
-            return tryEvaluate(expression, -1, variables, new HashMap<>());
-        }
-
-        static float[] tryEvaluateAny(
-                String expression,
-                Map<String, float[]> variables,
-                Map<Integer, SmoothState> smoothStates
-        ) {
-            return tryEvaluate(expression, -1, variables, smoothStates);
-        }
-
-        static float[] tryEvaluate(String expression, int expectedValues, Map<String, float[]> variables) {
-            return tryEvaluate(expression, expectedValues, variables, new HashMap<>());
-        }
-
-        static float[] tryEvaluate(
-                String expression,
-                int expectedValues,
-                Map<String, float[]> variables,
-                Map<Integer, SmoothState> smoothStates
-        ) {
+        static CompiledExpression compile(String expression) {
             if (expression == null) {
-                return new float[0];
+                return null;
             }
             String trimmed = expression.trim();
             if (trimmed.isEmpty()) {
-                return new float[0];
+                return null;
             }
-
-            float[] directVariable = variables.get(trimmed);
-            if (directVariable != null && (expectedValues <= 0 || directVariable.length == expectedValues)) {
-                return directVariable.clone();
+            if (isDirectVariableName(trimmed)) {
+                return new DirectVariableExpression(trimmed);
             }
-
-            float[] vector = tryEvaluateVector(trimmed, variables, smoothStates);
-            if (vector.length > 0) {
-                return expectedValues <= 0 || vector.length >= expectedValues ? vector : new float[0];
-            }
-
             try {
-                return new float[]{new ScalarParser(trimmed, variables, smoothStates).parse()};
-            } catch (IllegalArgumentException e) {
-                return new float[0];
-            }
-        }
-
-        private static float[] tryEvaluateVector(
-                String expression,
-                Map<String, float[]> variables,
-                Map<Integer, SmoothState> smoothStates
-        ) {
-            String body = constructorBody(expression);
-            if (body == null && expression.indexOf(',') < 0) {
-                return new float[0];
-            }
-
-            List<String> parts = splitTopLevel(body == null ? expression : body);
-            if (parts.size() <= 1) {
-                return new float[0];
-            }
-            float[] values = new float[parts.size()];
-            for (int i = 0; i < parts.size(); i++) {
-                try {
-                    values[i] = new ScalarParser(parts.get(i), variables, smoothStates).parse();
-                } catch (IllegalArgumentException e) {
-                    return new float[0];
+                String body = constructorBody(trimmed);
+                List<String> parts = body != null ? splitTopLevel(body) : splitTopLevel(trimmed);
+                if (body != null || parts.size() > 1) {
+                    if (parts.size() <= 1) {
+                        return null;
+                    }
+                    List<ScalarNode> nodes = new ArrayList<>(parts.size());
+                    for (String part : parts) {
+                        nodes.add(new ScalarExpressionParser(part).parse());
+                    }
+                    return new VectorExpression(List.copyOf(nodes));
                 }
+                return new ScalarExpression(new ScalarExpressionParser(trimmed).parse());
+            } catch (ParseException | NumberFormatException e) {
+                return null;
             }
-            return values;
         }
 
         private static String constructorBody(String expression) {
@@ -306,320 +363,162 @@ public final class CustomUniformSet {
                     depth++;
                 } else if (c == ')') {
                     depth--;
+                    if (depth < 0) {
+                        throw new ParseException();
+                    }
                 } else if (c == ',' && depth == 0) {
                     parts.add(expression.substring(start, i).trim());
                     start = i + 1;
                 }
             }
+            if (depth != 0) {
+                throw new ParseException();
+            }
             parts.add(expression.substring(start).trim());
             return parts;
         }
+
+        private static boolean isDirectVariableName(String expression) {
+            if ("true".equalsIgnoreCase(expression) || "false".equalsIgnoreCase(expression)) {
+                return false;
+            }
+            if (expression.isEmpty() || !Character.isJavaIdentifierStart(expression.charAt(0))) {
+                return false;
+            }
+            for (int i = 1; i < expression.length(); i++) {
+                char c = expression.charAt(i);
+                if (!Character.isJavaIdentifierPart(c) && c != '.') {
+                    return false;
+                }
+            }
+            return true;
+        }
     }
 
-    private static final class ScalarParser {
-        private final String expression;
-        private final Map<String, float[]> variables;
-        private final Map<Integer, SmoothState> smoothStates;
-        private int index;
+    private interface ScalarNode {
+        float evaluate(EvalContext context);
+    }
 
-        private ScalarParser(
-                String expression,
-                Map<String, float[]> variables,
-                Map<Integer, SmoothState> smoothStates
-        ) {
-            this.expression = expression;
-            this.variables = variables;
-            this.smoothStates = smoothStates;
-        }
-
-        private float parse() {
-            float value = parseLogicalOr();
-            skipWhitespace();
-            if (index != expression.length()) {
-                throw new IllegalArgumentException("Unexpected token");
-            }
+    private record ConstantNode(float value) implements ScalarNode {
+        @Override
+        public float evaluate(EvalContext context) {
             return value;
         }
+    }
 
-        private float parseLogicalOr() {
-            float value = parseLogicalAnd();
-            while (true) {
-                skipWhitespace();
-                if (match("||")) {
-                    float right = parseLogicalAnd();
-                    value = truthy(value) || truthy(right) ? 1.0f : 0.0f;
-                } else {
-                    return value;
-                }
-            }
+    private record VariableNode(String name) implements ScalarNode {
+        @Override
+        public float evaluate(EvalContext context) {
+            float[] value = context.variables().get(name);
+            return value == null || value.length != 1 ? Float.NaN : value[0];
         }
+    }
 
-        private float parseLogicalAnd() {
-            float value = parseComparison();
-            while (true) {
-                skipWhitespace();
-                if (match("&&")) {
-                    float right = parseComparison();
-                    value = truthy(value) && truthy(right) ? 1.0f : 0.0f;
-                } else {
-                    return value;
-                }
+    private record UnaryNode(char operator, ScalarNode node) implements ScalarNode {
+        @Override
+        public float evaluate(EvalContext context) {
+            float value = node.evaluate(context);
+            if (Float.isNaN(value)) {
+                return Float.NaN;
             }
+            return switch (operator) {
+                case '-' -> -value;
+                case '!' -> truthy(value) ? 0.0f : 1.0f;
+                default -> value;
+            };
         }
+    }
 
-        private float parseComparison() {
-            float value = parseExpression();
-            while (true) {
-                skipWhitespace();
-                if (match(">=")) {
-                    value = value >= parseExpression() ? 1.0f : 0.0f;
-                } else if (match("<=")) {
-                    value = value <= parseExpression() ? 1.0f : 0.0f;
-                } else if (match("==")) {
-                    value = value == parseExpression() ? 1.0f : 0.0f;
-                } else if (match("!=")) {
-                    value = value != parseExpression() ? 1.0f : 0.0f;
-                } else if (match('>')) {
-                    value = value > parseExpression() ? 1.0f : 0.0f;
-                } else if (match('<')) {
-                    value = value < parseExpression() ? 1.0f : 0.0f;
-                } else {
-                    return value;
-                }
+    private record BinaryNode(String operator, ScalarNode left, ScalarNode right) implements ScalarNode {
+        @Override
+        public float evaluate(EvalContext context) {
+            float leftValue = left.evaluate(context);
+            float rightValue = right.evaluate(context);
+            if (Float.isNaN(leftValue) || Float.isNaN(rightValue)) {
+                return Float.NaN;
             }
+            return switch (operator) {
+                case "||" -> truthy(leftValue) || truthy(rightValue) ? 1.0f : 0.0f;
+                case "&&" -> truthy(leftValue) && truthy(rightValue) ? 1.0f : 0.0f;
+                case ">=" -> leftValue >= rightValue ? 1.0f : 0.0f;
+                case "<=" -> leftValue <= rightValue ? 1.0f : 0.0f;
+                case "==" -> leftValue == rightValue ? 1.0f : 0.0f;
+                case "!=" -> leftValue != rightValue ? 1.0f : 0.0f;
+                case ">" -> leftValue > rightValue ? 1.0f : 0.0f;
+                case "<" -> leftValue < rightValue ? 1.0f : 0.0f;
+                case "+" -> leftValue + rightValue;
+                case "-" -> leftValue - rightValue;
+                case "*" -> leftValue * rightValue;
+                case "/" -> leftValue / rightValue;
+                case "%" -> leftValue % rightValue;
+                default -> Float.NaN;
+            };
         }
+    }
 
-        private float parseExpression() {
-            float value = parseTerm();
-            while (true) {
-                skipWhitespace();
-                if (match('+')) {
-                    value += parseTerm();
-                } else if (match('-')) {
-                    value -= parseTerm();
-                } else {
-                    return value;
+    private record FunctionNode(String identifier, List<ScalarNode> arguments) implements ScalarNode {
+        @Override
+        public float evaluate(EvalContext context) {
+            float[] values = new float[arguments.size()];
+            for (int i = 0; i < arguments.size(); i++) {
+                values[i] = arguments.get(i).evaluate(context);
+                if (Float.isNaN(values[i])) {
+                    return Float.NaN;
                 }
             }
-        }
-
-        private float parseTerm() {
-            float value = parseFactor();
-            while (true) {
-                skipWhitespace();
-                if (match('*')) {
-                    value *= parseFactor();
-                } else if (match('/')) {
-                    value /= parseFactor();
-                } else if (match('%')) {
-                    value %= parseFactor();
-                } else {
-                    return value;
-                }
-            }
-        }
-
-        private float parseFactor() {
-            skipWhitespace();
-            if (match('+')) {
-                return parseFactor();
-            }
-            if (match('-')) {
-                return -parseFactor();
-            }
-            if (match('!')) {
-                return truthy(parseFactor()) ? 0.0f : 1.0f;
-            }
-            if (match('(')) {
-                float value = parseLogicalOr();
-                if (!match(')')) {
-                    throw new IllegalArgumentException("Missing closing parenthesis");
-                }
-                return value;
-            }
-            if (index >= expression.length()) {
-                throw new IllegalArgumentException("Unexpected end of expression");
-            }
-            char c = expression.charAt(index);
-            if (Character.isDigit(c) || c == '.') {
-                return parseNumber();
-            }
-            if (Character.isJavaIdentifierStart(c)) {
-                return parseIdentifierOrFunction();
-            }
-            throw new IllegalArgumentException("Unexpected token");
-        }
-
-        private float parseNumber() {
-            int start = index;
-            while (index < expression.length()) {
-                char c = expression.charAt(index);
-                if (Character.isDigit(c) || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') {
-                    if ((c == '+' || c == '-') && index > start) {
-                        char previous = expression.charAt(index - 1);
-                        if (previous != 'e' && previous != 'E') {
-                            break;
-                        }
-                    }
-                    index++;
-                } else {
-                    break;
-                }
-            }
-            return Float.parseFloat(expression.substring(start, index));
-        }
-
-        private float parseIdentifierOrFunction() {
-            int start = index;
-            index++;
-            while (index < expression.length()) {
-                char c = expression.charAt(index);
-                if (!Character.isJavaIdentifierPart(c) && c != '.') {
-                    break;
-                }
-                index++;
-            }
-            String identifier = expression.substring(start, index);
-            skipWhitespace();
-            if (match('(')) {
-                List<Float> arguments = parseArguments();
-                return evaluateFunction(identifier, arguments);
-            }
-            if ("true".equalsIgnoreCase(identifier)) {
-                return 1.0f;
-            }
-            if ("false".equalsIgnoreCase(identifier)) {
-                return 0.0f;
-            }
-            float[] value = variables.get(identifier);
-            if (value == null || value.length != 1) {
-                throw new IllegalArgumentException("Unknown scalar variable");
-            }
-            return value[0];
-        }
-
-        private List<Float> parseArguments() {
-            List<Float> arguments = new ArrayList<>();
-            skipWhitespace();
-            if (match(')')) {
-                return arguments;
-            }
-            while (true) {
-                arguments.add(parseLogicalOr());
-                skipWhitespace();
-                if (match(')')) {
-                    return arguments;
-                }
-                if (!match(',')) {
-                    throw new IllegalArgumentException("Missing function argument separator");
-                }
-            }
-        }
-
-        private float evaluateFunction(String identifier, List<Float> arguments) {
             return switch (identifier) {
-                case "if" -> {
-                    if (arguments.size() < 3 || arguments.size() % 2 == 0) {
-                        throw new IllegalArgumentException("Function if expects condition/value pairs plus a fallback");
-                    }
-                    float result = arguments.get(arguments.size() - 1);
-                    for (int i = 0; i < arguments.size() - 1; i += 2) {
-                        if (truthy(arguments.get(i))) {
-                            result = arguments.get(i + 1);
-                            break;
-                        }
-                    }
-                    yield result;
-                }
-                case "min" -> {
-                    requireArguments(identifier, arguments, 2);
-                    yield Math.min(arguments.get(0), arguments.get(1));
-                }
-                case "max" -> {
-                    requireArguments(identifier, arguments, 2);
-                    yield Math.max(arguments.get(0), arguments.get(1));
-                }
-                case "clamp" -> {
-                    requireArguments(identifier, arguments, 3);
-                    yield Math.max(arguments.get(1), Math.min(arguments.get(2), arguments.get(0)));
-                }
-                case "in" -> {
-                    if (arguments.size() < 2) {
-                        throw new IllegalArgumentException("Function in expects at least two arguments");
-                    }
-                    float needle = arguments.get(0);
-                    boolean found = false;
-                    for (int i = 1; i < arguments.size(); i++) {
-                        if (Math.abs(needle - arguments.get(i)) <= 0.000001f) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    yield found ? 1.0f : 0.0f;
-                }
-                case "smooth" -> {
-                    if (arguments.size() != 4) {
-                        throw new IllegalArgumentException("Function smooth expects id, value, fadeUp, fadeDown");
-                    }
-                    yield smooth(arguments.get(0), arguments.get(1), arguments.get(2), arguments.get(3));
-                }
-                case "fmod", "mod" -> {
-                    requireArguments(identifier, arguments, 2);
-                    yield arguments.get(0) % arguments.get(1);
-                }
-                case "abs" -> {
-                    requireArguments(identifier, arguments, 1);
-                    yield Math.abs(arguments.get(0));
-                }
-                case "sqrt" -> {
-                    requireArguments(identifier, arguments, 1);
-                    yield (float) Math.sqrt(arguments.get(0));
-                }
-                case "floor" -> {
-                    requireArguments(identifier, arguments, 1);
-                    yield (float) Math.floor(arguments.get(0));
-                }
-                case "ceil" -> {
-                    requireArguments(identifier, arguments, 1);
-                    yield (float) Math.ceil(arguments.get(0));
-                }
-                case "round" -> {
-                    requireArguments(identifier, arguments, 1);
-                    yield Math.round(arguments.get(0));
-                }
-                case "fract" -> {
-                    requireArguments(identifier, arguments, 1);
-                    float value = arguments.get(0);
-                    yield value - (float) Math.floor(value);
-                }
-                case "sign" -> {
-                    requireArguments(identifier, arguments, 1);
-                    yield Math.signum(arguments.get(0));
-                }
-                case "pow" -> {
-                    requireArguments(identifier, arguments, 2);
-                    yield (float) Math.pow(arguments.get(0), arguments.get(1));
-                }
-                case "log" -> {
-                    requireArguments(identifier, arguments, 1);
-                    yield (float) Math.log(arguments.get(0));
-                }
-                case "atan" -> {
-                    requireArguments(identifier, arguments, 1);
-                    yield (float) Math.atan(arguments.get(0));
-                }
-                case "sin" -> {
-                    requireArguments(identifier, arguments, 1);
-                    yield (float) Math.sin(arguments.get(0));
-                }
-                case "cos" -> {
-                    requireArguments(identifier, arguments, 1);
-                    yield (float) Math.cos(arguments.get(0));
-                }
-                default -> throw new IllegalArgumentException("Unknown function");
+                case "if" -> evaluateIf(values);
+                case "min" -> values.length == 2 ? Math.min(values[0], values[1]) : Float.NaN;
+                case "max" -> values.length == 2 ? Math.max(values[0], values[1]) : Float.NaN;
+                case "clamp" -> values.length == 3 ? Math.max(values[1], Math.min(values[2], values[0])) : Float.NaN;
+                case "in" -> evaluateIn(values);
+                case "smooth" -> values.length == 4 ? context.smooth(values[0], values[1], values[2], values[3]) : Float.NaN;
+                case "fmod", "mod" -> values.length == 2 ? values[0] % values[1] : Float.NaN;
+                case "abs" -> values.length == 1 ? Math.abs(values[0]) : Float.NaN;
+                case "sqrt" -> values.length == 1 ? (float) Math.sqrt(values[0]) : Float.NaN;
+                case "floor" -> values.length == 1 ? (float) Math.floor(values[0]) : Float.NaN;
+                case "ceil" -> values.length == 1 ? (float) Math.ceil(values[0]) : Float.NaN;
+                case "round" -> values.length == 1 ? Math.round(values[0]) : Float.NaN;
+                case "fract" -> values.length == 1 ? values[0] - (float) Math.floor(values[0]) : Float.NaN;
+                case "sign" -> values.length == 1 ? Math.signum(values[0]) : Float.NaN;
+                case "pow" -> values.length == 2 ? (float) Math.pow(values[0], values[1]) : Float.NaN;
+                case "log" -> values.length == 1 ? (float) Math.log(values[0]) : Float.NaN;
+                case "atan" -> values.length == 1 ? (float) Math.atan(values[0]) : Float.NaN;
+                case "sin" -> values.length == 1 ? (float) Math.sin(values[0]) : Float.NaN;
+                case "cos" -> values.length == 1 ? (float) Math.cos(values[0]) : Float.NaN;
+                default -> Float.NaN;
             };
         }
 
+        private static float evaluateIf(float[] values) {
+            if (values.length < 3 || values.length % 2 == 0) {
+                return Float.NaN;
+            }
+            float result = values[values.length - 1];
+            for (int i = 0; i < values.length - 1; i += 2) {
+                if (truthy(values[i])) {
+                    result = values[i + 1];
+                    break;
+                }
+            }
+            return result;
+        }
+
+        private static float evaluateIn(float[] values) {
+            if (values.length < 2) {
+                return Float.NaN;
+            }
+            float needle = values[0];
+            for (int i = 1; i < values.length; i++) {
+                if (Math.abs(needle - values[i]) <= 0.000001f) {
+                    return 1.0f;
+                }
+            }
+            return 0.0f;
+        }
+    }
+
+    private record EvalContext(Map<String, float[]> variables, Map<Integer, SmoothState> smoothStates) {
         private float smooth(float rawId, float target, float fadeUp, float fadeDown) {
             int id = Math.round(rawId);
             float currentFrame = scalarVariable("frameCounter", 0.0f);
@@ -654,10 +553,190 @@ public final class CustomUniformSet {
             }
             return value[0];
         }
+    }
 
-        private void requireArguments(String identifier, List<Float> arguments, int count) {
-            if (arguments.size() != count) {
-                throw new IllegalArgumentException("Function " + identifier + " expects " + count + " arguments");
+    private static final class ScalarExpressionParser {
+        private final String expression;
+        private int index;
+
+        private ScalarExpressionParser(String expression) {
+            this.expression = expression;
+        }
+
+        private ScalarNode parse() {
+            ScalarNode value = parseLogicalOr();
+            skipWhitespace();
+            if (index != expression.length()) {
+                throw new ParseException();
+            }
+            return value;
+        }
+
+        private ScalarNode parseLogicalOr() {
+            ScalarNode value = parseLogicalAnd();
+            while (true) {
+                skipWhitespace();
+                if (match("||")) {
+                    value = new BinaryNode("||", value, parseLogicalAnd());
+                } else {
+                    return value;
+                }
+            }
+        }
+
+        private ScalarNode parseLogicalAnd() {
+            ScalarNode value = parseComparison();
+            while (true) {
+                skipWhitespace();
+                if (match("&&")) {
+                    value = new BinaryNode("&&", value, parseComparison());
+                } else {
+                    return value;
+                }
+            }
+        }
+
+        private ScalarNode parseComparison() {
+            ScalarNode value = parseExpression();
+            while (true) {
+                skipWhitespace();
+                if (match(">=")) {
+                    value = new BinaryNode(">=", value, parseExpression());
+                } else if (match("<=")) {
+                    value = new BinaryNode("<=", value, parseExpression());
+                } else if (match("==")) {
+                    value = new BinaryNode("==", value, parseExpression());
+                } else if (match("!=")) {
+                    value = new BinaryNode("!=", value, parseExpression());
+                } else if (match('>')) {
+                    value = new BinaryNode(">", value, parseExpression());
+                } else if (match('<')) {
+                    value = new BinaryNode("<", value, parseExpression());
+                } else {
+                    return value;
+                }
+            }
+        }
+
+        private ScalarNode parseExpression() {
+            ScalarNode value = parseTerm();
+            while (true) {
+                skipWhitespace();
+                if (match('+')) {
+                    value = new BinaryNode("+", value, parseTerm());
+                } else if (match('-')) {
+                    value = new BinaryNode("-", value, parseTerm());
+                } else {
+                    return value;
+                }
+            }
+        }
+
+        private ScalarNode parseTerm() {
+            ScalarNode value = parseFactor();
+            while (true) {
+                skipWhitespace();
+                if (match('*')) {
+                    value = new BinaryNode("*", value, parseFactor());
+                } else if (match('/')) {
+                    value = new BinaryNode("/", value, parseFactor());
+                } else if (match('%')) {
+                    value = new BinaryNode("%", value, parseFactor());
+                } else {
+                    return value;
+                }
+            }
+        }
+
+        private ScalarNode parseFactor() {
+            skipWhitespace();
+            if (match('+')) {
+                return parseFactor();
+            }
+            if (match('-')) {
+                return new UnaryNode('-', parseFactor());
+            }
+            if (match('!')) {
+                return new UnaryNode('!', parseFactor());
+            }
+            if (match('(')) {
+                ScalarNode value = parseLogicalOr();
+                if (!match(')')) {
+                    throw new ParseException();
+                }
+                return value;
+            }
+            if (index >= expression.length()) {
+                throw new ParseException();
+            }
+            char c = expression.charAt(index);
+            if (Character.isDigit(c) || c == '.') {
+                return parseNumber();
+            }
+            if (Character.isJavaIdentifierStart(c)) {
+                return parseIdentifierOrFunction();
+            }
+            throw new ParseException();
+        }
+
+        private ScalarNode parseNumber() {
+            int start = index;
+            while (index < expression.length()) {
+                char c = expression.charAt(index);
+                if (Character.isDigit(c) || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') {
+                    if ((c == '+' || c == '-') && index > start) {
+                        char previous = expression.charAt(index - 1);
+                        if (previous != 'e' && previous != 'E') {
+                            break;
+                        }
+                    }
+                    index++;
+                } else {
+                    break;
+                }
+            }
+            return new ConstantNode(Float.parseFloat(expression.substring(start, index)));
+        }
+
+        private ScalarNode parseIdentifierOrFunction() {
+            int start = index;
+            index++;
+            while (index < expression.length()) {
+                char c = expression.charAt(index);
+                if (!Character.isJavaIdentifierPart(c) && c != '.') {
+                    break;
+                }
+                index++;
+            }
+            String identifier = expression.substring(start, index);
+            skipWhitespace();
+            if (match('(')) {
+                return new FunctionNode(identifier, parseArguments());
+            }
+            if ("true".equalsIgnoreCase(identifier)) {
+                return new ConstantNode(1.0f);
+            }
+            if ("false".equalsIgnoreCase(identifier)) {
+                return new ConstantNode(0.0f);
+            }
+            return new VariableNode(identifier);
+        }
+
+        private List<ScalarNode> parseArguments() {
+            List<ScalarNode> arguments = new ArrayList<>();
+            skipWhitespace();
+            if (match(')')) {
+                return arguments;
+            }
+            while (true) {
+                arguments.add(parseLogicalOr());
+                skipWhitespace();
+                if (match(')')) {
+                    return List.copyOf(arguments);
+                }
+                if (!match(',')) {
+                    throw new ParseException();
+                }
             }
         }
 
@@ -679,14 +758,20 @@ public final class CustomUniformSet {
             return false;
         }
 
-        private boolean truthy(float value) {
-            return Math.abs(value) > 0.000001f;
-        }
-
         private void skipWhitespace() {
             while (index < expression.length() && Character.isWhitespace(expression.charAt(index))) {
                 index++;
             }
+        }
+    }
+
+    private static boolean truthy(float value) {
+        return Math.abs(value) > 0.000001f;
+    }
+
+    private static final class ParseException extends RuntimeException {
+        private ParseException() {
+            super(null, null, false, false);
         }
     }
 

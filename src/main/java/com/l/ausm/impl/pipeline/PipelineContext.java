@@ -196,6 +196,7 @@ public class PipelineContext {
     private static final int BIOME_BASALT_DELTAS_ID = 100_003;
     private static final int BIOME_SOUL_SAND_VALLEY_ID = 100_004;
     private static final int BIOME_PALE_GARDEN_ID = 100_005;
+    private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
     private static final int FORCE_LIGHT_RECALC_MIN_RADIUS = 16;
     private static final int FORCE_LIGHT_RECALC_MAX_RADIUS = 32;
     private static final int WORLD_LOAD_FORCE_LIGHT_RECALC_ATTEMPTS = 12;
@@ -204,15 +205,17 @@ public class PipelineContext {
     private static final int WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS = 1;
     private static final int WORLD_LOAD_TERRAIN_REFRESH_INITIAL_DELAY_FRAMES = 8;
     private static final int WORLD_LOAD_TERRAIN_REFRESH_REPEAT_DELAY_FRAMES = 8;
+    private static final int PARTICLE_DIMENSION_RECOVERY_FRAMES = 80;
     private static final int MAX_PENDING_SHADER_CHUNK_REFRESHES = 2048;
     private static final int MAX_PENDING_CLIENT_CHUNK_RENDER_REFRESHES = 1024;
-    private static final int MAX_CLIENT_CHUNK_RENDER_REFRESHES_PER_FRAME = 2;
+    private static final int MAX_CLIENT_CHUNK_RENDER_REFRESHES_PER_FRAME = 4;
+    private static final int MAX_CLIENT_CHUNK_RENDER_REFRESH_SECTIONS_PER_FRAME = 16;
+    private static final int CLIENT_CHUNK_RENDER_REFRESH_RECENT_TTL_FRAMES = 12;
     private static final int MAX_STALE_CLIENT_CHUNK_REFRESHES_AGED_PER_FRAME = 32;
-    private static final int CLIENT_CHUNK_RENDER_REFRESH_ATTEMPTS = 4;
+    private static final int CLIENT_CHUNK_RENDER_REFRESH_ATTEMPTS = 8;
     private static final int CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES = 1;
-    private static final int CLIENT_CHUNK_RENDER_REFRESH_REPEAT_DELAY_FRAMES = 4;
-    private static final int BETTER_PORTALS_PORTAL_RENDER_DISTANCE_CAP = 6;
-    private static final int BETTER_PORTALS_NESTED_VANILLA_RENDER_DISTANCE_CAP = 4;
+    private static final int CLIENT_CHUNK_RENDER_REFRESH_REPEAT_DELAY_FRAMES = 1;
+    private static final int BETTER_PORTALS_VANILLA_RENDER_DISTANCE_CAP = 4;
     private static final int MAX_CHUNK_FADE_STATES = 8192;
     private static final int CHUNK_FADE_STALE_FRAMES = 600;
     private static final int CHUNK_FADE_WARMUP_FRAMES = 20;
@@ -236,10 +239,21 @@ public class PipelineContext {
     private static final int MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_CURRENT_PROBLEM_PROBE_LOGS = 0;
+    private static final int MAX_INACTIVE_SKY_PIPELINE_PROBE_LOGS = 0;
+    private static final int MAX_ACTIVE_SKY_PIPELINE_PROBE_LOGS = 0;
+    private static final int MAX_HAND_ITEM_DRAW_STATE_LOGS = 0;
+    private static final int MAX_HAND_GBUFFER_PROBE_LOGS = 0;
+    private static final int MAX_HAND_PASS_BIND_LOGS = 2;
+    private static final boolean FRAMED_BLOCK_DIAGNOSTICS_ENABLED =
+            MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS > 0
+                    || MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS > 0
+                    || MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS > 0;
+    private static final boolean CURRENT_PROBLEM_PROBES_ENABLED = MAX_CURRENT_PROBLEM_PROBE_LOGS > 0;
     private static final int MAX_HARDWARE_CAPABILITY_LOGS = 4;
     private static final int MAX_HARDWARE_TERRAIN_FALLBACK_LOGS = 12;
     private static final int HARDWARE_TERRAIN_FALLBACK_ZERO_FRAMES = 5;
     private static final boolean ENABLE_CHUNK_FADE = false;
+    private static final boolean ENABLE_SYNCHRONOUS_CENTER_DEPTH_READBACK = false;
     private static final long WORLD_TERRAIN_TRANSITION_DEBOUNCE_MS = 750L;
     private static final long BETTER_PORTALS_PORTAL_BLOCK_REFRESH_DEBOUNCE_MS = 1000L;
     private static final String RANDOM_THINGS_LUMINOUS_BLOCK_CLASS = "lumien.randomthings.lib.ILuminousBlock";
@@ -257,6 +271,8 @@ public class PipelineContext {
     private static final float NETHER_SHADER_FOG_COLOR_SCALE = 0.25f;
     private static final float SHADER_OVERWORLD_FOG_START_RATIO = 0.85f;
     private static int maxDrawBuffers = -1;
+    private static int maxShaderStorageBufferBindings = -1;
+    private static boolean shaderStorageBuffersKnownUnbound = true;
     private static boolean celeritasShadowCameraWarningLogged;
 
     private final PingPongManager pingPongManager = new PingPongManager();
@@ -264,6 +280,7 @@ public class PipelineContext {
     private final Map<RenderPass, PipelineProgram> programs = new EnumMap<>(RenderPass.class);
     private final Map<RenderPass, List<LoadedCustomTexture>> customTextures = new EnumMap<>(RenderPass.class);
     private final UniformRegistry uniformRegistry = new UniformRegistry();
+    private final Map<String, float[]> customUniformScalarScratch = new HashMap<>();
     private ShadowFramebuffer shadowFramebuffer;
     private ShaderProperties shaderProperties = emptyShaderProperties();
     private ShaderPackDirectives packDirectives = emptyShaderProperties().packDirectives();
@@ -300,6 +317,7 @@ public class PipelineContext {
     private final Set<ClientChunkRenderRefresh> pendingClientChunkRenderRefreshes = new LinkedHashSet<>();
     private final Map<WorldClient, Map<Long, ClientChunkRenderRefresh>> pendingClientChunkRenderRefreshLookupByWorld = new IdentityHashMap<>();
     private final Map<WorldClient, LinkedHashSet<ClientChunkRenderRefresh>> pendingClientChunkRenderRefreshesByWorld = new IdentityHashMap<>();
+    private final Map<WorldClient, Map<Long, Long>> recentlyCompletedClientChunkRenderRefreshes = new IdentityHashMap<>();
     private int pendingWorldLoadLightRecalculationAttempts = 0;
     private int pendingWorldLoadLightRecalculationDelay = 0;
     private int pendingWorldTerrainRefreshAttempts = 0;
@@ -322,8 +340,14 @@ public class PipelineContext {
     private Method architectureCraftGetTileMethod;
     private Method architectureCraftBaseStateMethod;
     private Method architectureCraftSecondaryStateMethod;
+    private boolean celeritasShadowCameraResolved;
+    private Class<?> celeritasViewportProviderClass;
+    private Constructor<?> celeritasViewportConstructor;
+    private Constructor<?> celeritasVectorConstructor;
+    private Object celeritasAlwaysVisibleFrustum;
 
     private final Deque<PassScope> passStack = new ArrayDeque<>();
+    private final Deque<Integer> renderedItemIdStack = new ArrayDeque<>();
     private final Deque<Boolean> worldPassBypassStack = new ArrayDeque<>();
     private final Deque<Long> worldPassSerialStack = new ArrayDeque<>();
     private final Deque<Long> nothiriumPipelineTranslucentFrameStack = new ArrayDeque<>();
@@ -335,6 +359,7 @@ public class PipelineContext {
     private WorldRenderingPhase overridePhase = null;
     private volatile boolean isPipelineActive = false;
     private boolean shaderlessWorldPassActive = false;
+    private int vanillaParticleRecoveryFrames = 0;
     private String activePackName = "(internal)";
     private float centerDepth = 1.0f;
     private float centerDepthSmooth = 1.0f;
@@ -343,10 +368,13 @@ public class PipelineContext {
     private final FloatBuffer centerDepthTextureBuffer = org.lwjgl.BufferUtils.createFloatBuffer(1);
     private final FloatBuffer fogColorBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
     private int currentEntityId = 0;
+    private int currentRenderedItemId = -1;
+    private String currentRenderedItemDebugName = "";
     private ResourceLocation currentEntityKey = null;
     private float[] currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
     private final float[] currentAstralConstellationColor = new float[]{1.0f, 1.0f, 1.0f};
     private final float[] currentAstralTierColor = new float[]{1.0f, 1.0f, 1.0f};
+    private float currentAstralSolarEclipseFactor;
     private float currentAlphaTestReference = 0.1f;
     private float shadowMapDistance = 128.0f;
     private float shadowDistanceRenderMul = -1.0f;
@@ -365,6 +393,11 @@ public class PipelineContext {
     private float shadowPolygonOffsetUnits = 4.0f;
     private int shadowFrameCount = 1_000_000;
     private long lastShadowFrameId = -1L;
+    private int lastShadowRenderDimensionId = Integer.MIN_VALUE;
+    private long lastShadowRenderWorldTime = Long.MIN_VALUE;
+    private double lastShadowRenderX = Double.NaN;
+    private double lastShadowRenderY = Double.NaN;
+    private double lastShadowRenderZ = Double.NaN;
     private long pipelineFrameId = 0L;
     private World cpuLightTileEntitySnapshotWorld = null;
     private long cpuLightTileEntitySnapshotFrame = Long.MIN_VALUE;
@@ -376,6 +409,8 @@ public class PipelineContext {
     private float currentChunkFade = 1.0f;
     private long chunkFadeWarmupUntilFrame = 0L;
     private final Map<ChunkFadeKey, ChunkFadeState> chunkFadeStates = new LinkedHashMap<>();
+    private boolean terrainRebuiltDuringLastInitialization = false;
+    private boolean terrainCacheReusableDuringLastInitialization = false;
     private float frameTimeCounter = 0.0f;
     private float frameTimeSmooth = 0.016f;
     private boolean frameTimeSmoothInitialized = false;
@@ -408,6 +443,7 @@ public class PipelineContext {
     private int zeroOpaqueTerrainFrames = 0;
     private boolean hardwareSafeVanillaTerrain = false;
     private String hardwareSafeVanillaTerrainReason = "";
+    private boolean pipelineTerrainFormatSupported = false;
     private boolean deferredPassesRenderedThisFrame = false;
     private boolean preTranslucentDepthCopiedThisFrame = false;
     private boolean preHandDepthCopiedThisFrame = false;
@@ -449,6 +485,12 @@ public class PipelineContext {
     private boolean shadowHealthLogged = false;
     private int shadowHealthLogAttempts = 0;
     private int guiRenderDepth = 0;
+    private int guiEntityPreviewStateDepth = 0;
+    private int handItemDrawStateLogs = 0;
+    private int handGbufferProbeLogs = 0;
+    private int handPassBindLogs = 0;
+    private int inactiveSkyPipelineProbeLogs = 0;
+    private int activeSkyPipelineProbeLogs = 0;
     private int vanillaRecoveryFrames = 0;
     private int pendingBloomTerrainRefreshAttempts = 0;
     private int pendingBloomTerrainRefreshDelay = 0;
@@ -612,7 +654,7 @@ public class PipelineContext {
         uniformRegistry.registerFloat("iris_FogDensity", () -> Math.max(0.0f, effectiveFogDensity(mc)));
         uniformRegistry.registerInt("fogMode", () -> effectiveFogMode(mc));
         uniformRegistry.registerInt("fogShape", () -> 1);
-        uniformRegistry.registerFloat("rainStrength", () -> renderWorld(mc) != null ? renderWorld(mc).getRainStrength(mc.getRenderPartialTicks()) : 0.0f);
+        uniformRegistry.registerFloat("rainStrength", () -> rainStrength(mc));
         uniformRegistry.registerFloat("thunderStrength", () -> renderWorld(mc) != null ? renderWorld(mc).getThunderStrength(mc.getRenderPartialTicks()) : 0.0f);
         uniformRegistry.registerFloat("wetness", () -> wetnessSmooth);
         uniformRegistry.registerInt("biome", () -> currentBiomeExpressionId(mc));
@@ -655,6 +697,8 @@ public class PipelineContext {
         uniformRegistry.registerFloat("mc_chunkFade", () -> ENABLE_CHUNK_FADE ? currentChunkFade : 1.0f);
         uniformRegistry.registerVec3("ausmAstralConstellationColor", () -> currentAstralConstellationColor.clone());
         uniformRegistry.registerVec3("ausmAstralTierColor", () -> currentAstralTierColor.clone());
+        uniformRegistry.registerFloat("ausmAstralSolarEclipse", () -> currentAstralSolarEclipseFactor);
+        uniformRegistry.registerVec4("ausmVoidSkyParams", () -> new float[]{1.0f, 1.0f, 1.0f, 1.0f});
         uniformRegistry.registerFloat("dayMoment", () -> dayMoment(mc));
         uniformRegistry.registerFloat("timeAngle", () -> dayMoment(mc));
         uniformRegistry.registerFloat("timeBrightness", () -> Math.max((float) Math.sin(dayMoment(mc) * Math.PI * 2.0), 0.0f));
@@ -668,10 +712,10 @@ public class PipelineContext {
         uniformRegistry.registerFloat("night", () -> nightHelper(mc));
         uniformRegistry.registerFloat("dawnDusk", () -> (1.0f - dayHelper(mc)) - nightHelper(mc));
         uniformRegistry.registerFloat("shdFade", () -> shadowFade(mc, 0.225f, 40.0f));
-        uniformRegistry.registerFloat("rainFactor", () -> wetnessSmooth);
-        uniformRegistry.registerFloat("rainStrengthS", () -> wetnessSmooth);
-        uniformRegistry.registerFloat("rainStrengthShiningStars", () -> wetnessSmooth);
-        uniformRegistry.registerFloat("rainStrengthS2", () -> wetnessSmooth);
+        uniformRegistry.registerFloat("rainFactor", () -> rainStrength(mc));
+        uniformRegistry.registerFloat("rainStrengthS", () -> rainStrength(mc));
+        uniformRegistry.registerFloat("rainStrengthShiningStars", () -> rainStrength(mc));
+        uniformRegistry.registerFloat("rainStrengthS2", () -> rainStrength(mc));
         uniformRegistry.registerInt("entityId", () -> currentEntityId);
         uniformRegistry.registerFloat("alphaTestRef", () -> currentAlphaTestReference);
         uniformRegistry.registerFloat("iris_currentAlphaTest", () -> currentAlphaTestReference);
@@ -697,7 +741,7 @@ public class PipelineContext {
         uniformRegistry.registerFloat("pi", () -> (float) Math.PI);
         uniformRegistry.registerInt("anisotropicFiltering", () -> 0);
         uniformRegistry.registerInt("blockEntityId", () -> -1);
-        uniformRegistry.registerInt("currentRenderedItemId", () -> -1);
+        uniformRegistry.registerInt("currentRenderedItemId", () -> currentRenderedItemId);
 
         // --- 2. Matrix Uniforms ---
         uniformRegistry.registerMatrix4("gbufferModelView", MatrixState::modelView);
@@ -1020,11 +1064,16 @@ public class PipelineContext {
             float[] fogColor = currentGlFogColor();
             return isProbablyUnsetFogColor(fogColor) ? netherFogColor(mc) : dampenNetherFogColor(fogColor);
         }
-        if (GL11.glIsEnabled(GL11.GL_FOG)) {
-            return currentGlFogColor();
+        float[] fogColor = GL11.glIsEnabled(GL11.GL_FOG) ? currentGlFogColor() : null;
+        return isProbablyUnsetFogColor(fogColor) ? overworldFogColor(mc) : fogColor;
+    }
+
+    private float[] overworldFogColor(Minecraft mc) {
+        World world = renderWorld(mc);
+        if (world != null) {
+            return vec3(world.getFogColor(mc != null ? mc.getRenderPartialTicks() : 0.0f));
         }
-        float[] fogColor = currentGlFogColor();
-        return isProbablyUnsetFogColor(fogColor) ? new float[]{0.0f, 0.0f, 0.0f} : fogColor;
+        return skyColor(mc);
     }
 
     private float[] netherFogColor(Minecraft mc) {
@@ -1226,6 +1275,11 @@ public class PipelineContext {
 
         float halfLife = current > wetnessSmooth ? wetnessHalfLife : drynessHalfLife;
         wetnessSmooth += (current - wetnessSmooth) * smoothingFactor(halfLife, currentFrameTime);
+    }
+
+    private float rainStrength(Minecraft mc) {
+        World world = renderWorld(mc);
+        return world != null ? world.getRainStrength(mc.getRenderPartialTicks()) : 0.0f;
     }
 
     private void updateSmoothedFrameTime() {
@@ -1542,6 +1596,8 @@ public class PipelineContext {
 
     private void initializeInternal(String cacheKey, ShaderPack pack, Map<String, String> optionOverrides, ShaderProperties preloadedProperties,
                                     ShaderLoadingScreen.BackgroundMode loadingBackgroundMode) {
+        terrainRebuiltDuringLastInitialization = false;
+        terrainCacheReusableDuringLastInitialization = false;
         boolean wasPipelineActive = isPipelineActive;
         boolean replacingActiveCacheKey = cacheKey != null && cacheKey.equals(activeCompiledPipelineCacheKey);
         CompiledPipelineState cachedPrograms = replacingActiveCacheKey ? null : removeCachedCompiledPipeline(cacheKey);
@@ -1611,6 +1667,7 @@ public class PipelineContext {
             shadowPolygonOffsetUnits = parseFloatSetting(pack, properties, "shadowPolygonOffsetUnits", 4.0f);
             shadowFrameCount = 1_000_000;
             lastShadowFrameId = -1L;
+            resetShadowRenderCache();
             shadowHealthLogged = false;
             shadowHealthLogAttempts = 0;
             ShaderLoadingScreen.step("Preparing framebuffers");
@@ -1657,6 +1714,9 @@ public class PipelineContext {
             clearColoredLightImages();
             shaderStorageBuffers = ShaderStorageBufferSet.load(pack, packDirectives.storageBuffers());
             shaderStorageBuffers.resize(mc.displayWidth, mc.displayHeight);
+            if (shaderStorageBuffers.active()) {
+                markShaderStorageBuffersBound();
+            }
             if (!usingCachedPrograms) {
                 ShaderLoadingScreen.step("Compiling compute shaders");
                 compileComputePrograms(pack, properties);
@@ -1701,6 +1761,7 @@ public class PipelineContext {
             setupComputePending = hasSetupPrograms();
 
             isPipelineActive = pingPongManager.isInitialized();
+            activeSkyPipelineProbeLogs = 0;
             resetChunkFadeState(true);
             activeCompiledPipelineCacheKey = cacheKey;
             long loadedProgramCount = programs.values().stream().filter(PipelineProgram::hasOwnProgram).count();
@@ -1720,8 +1781,17 @@ public class PipelineContext {
             if (wasPipelineActive) {
                 ShaderLoadingScreen.step("Keeping terrain cache");
             } else {
-                ShaderLoadingScreen.step("Rebuilding terrain");
-                rebuildTerrainRenderers();
+                boolean nothiriumFormatChanged = updateNothiriumPipelineBlockFormatMode();
+                if (nothiriumFormatChanged || !shouldUsePipelineBlockFormat()) {
+                    ShaderLoadingScreen.step("Rebuilding terrain");
+                    rebuildTerrainRenderers(nothiriumFormatChanged);
+                    terrainRebuiltDuringLastInitialization = true;
+                } else {
+                    ShaderLoadingScreen.step("Keeping shader-ready terrain cache");
+                    terrainCacheReusableDuringLastInitialization = true;
+                    logTerrainDiagnostic("initialize-terrain-cache:reuse", mc.world,
+                            "pipelineBlockFormat=" + nothiriumPipelineBlockFormatActive);
+                }
             }
         } finally {
             if (cachedPrograms != null && !restoredCachedPrograms) {
@@ -1769,6 +1839,7 @@ public class PipelineContext {
             setupComputePending = hasSetupPrograms();
             resetTransientWorldRenderState();
             isPipelineActive = true;
+            activeSkyPipelineProbeLogs = 0;
             resetChunkFadeState(true);
             MainMod.LOGGER.debug("[Pipeline] Activated cached compiled shader programs: {}", cacheKey);
             return true;
@@ -1782,6 +1853,18 @@ public class PipelineContext {
     public void clearCompiledPipelineCache() {
         deleteCachedCompiledPipelines();
         activeCompiledPipelineCacheKey = null;
+    }
+
+    public boolean consumeTerrainRebuiltDuringLastInitialization() {
+        boolean rebuilt = terrainRebuiltDuringLastInitialization;
+        terrainRebuiltDuringLastInitialization = false;
+        return rebuilt;
+    }
+
+    public boolean consumeTerrainCacheReusableDuringLastInitialization() {
+        boolean reusable = terrainCacheReusableDuringLastInitialization;
+        terrainCacheReusableDuringLastInitialization = false;
+        return reusable;
     }
 
     private void cacheActiveCompiledPipeline() {
@@ -1883,6 +1966,7 @@ public class PipelineContext {
         resolution = Math.max(16, Math.min(8192, resolution));
         shadowFramebuffer = new ShadowFramebuffer(resolution, packDirectives.renderTargets());
         shadowMapPopulated = false;
+        resetShadowRenderCache();
         MainMod.LOGGER.debug(
                 "[Pipeline] Blank shadow textures initialized: {}x{} (shadowMapResolution={} option={} changedOption={} activeConst={} profile={} distanceSlider={} qualitySlider={})",
                 resolution,
@@ -2567,6 +2651,22 @@ public class PipelineContext {
         zeroOpaqueTerrainFrames = 0;
         hardwareSafeVanillaTerrain = false;
         hardwareSafeVanillaTerrainReason = "";
+        pipelineTerrainFormatSupported = detectPipelineTerrainFormatSupport();
+    }
+
+    private boolean detectPipelineTerrainFormatSupport() {
+        if (ExtendedVertexFormats.PIPELINE_BLOCK == null) {
+            ExtendedVertexFormats.initialize();
+        }
+        return ExtendedVertexFormats.PIPELINE_BLOCK != null
+                && safeGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS) > ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE;
+    }
+
+    private boolean pipelineTerrainFormatSupported() {
+        if (!pipelineTerrainFormatSupported) {
+            pipelineTerrainFormatSupported = detectPipelineTerrainFormatSupport();
+        }
+        return pipelineTerrainFormatSupported;
     }
 
     private void logHardwareCapabilities(String stage, ShaderPackDirectives directives) {
@@ -2718,6 +2818,14 @@ public class PipelineContext {
         return isBlockcrafteryEditableBlock(state) || isArchitectureCraftShapeBlock(state);
     }
 
+    public boolean framedBlockDiagnosticsEnabled() {
+        return FRAMED_BLOCK_DIAGNOSTICS_ENABLED;
+    }
+
+    public boolean currentProblemProbesEnabled() {
+        return CURRENT_PROBLEM_PROBES_ENABLED;
+    }
+
     public boolean isBlockcrafteryEditableState(IBlockState state) {
         return isBlockcrafteryEditableBlock(state);
     }
@@ -2725,6 +2833,9 @@ public class PipelineContext {
     public void logFramedBlockDiagnostic(String source, IBlockState state, IBlockAccess blockAccess, BlockPos pos,
                                          BlockRenderLayer layer, int startVertex, int endVertex, Boolean result,
                                          String extra) {
+        if (!FRAMED_BLOCK_DIAGNOSTICS_ENABLED) {
+            return;
+        }
         if (!isFramedBlockDiagnosticTarget(state)) {
             return;
         }
@@ -2805,6 +2916,9 @@ public class PipelineContext {
     }
 
     public int blockRenderAlpha(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (!CURRENT_PROBLEM_PROBES_ENABLED) {
+            return -1;
+        }
         IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
         if (isCurrentProblemProbeTarget(state) || isCurrentProblemProbeTarget(effectiveState)) {
             logCurrentProblemProbe("alpha-query", state, blockAccess, pos,
@@ -2822,6 +2936,9 @@ public class PipelineContext {
     }
 
     public void setBlockRenderDebugContext(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (!CURRENT_PROBLEM_PROBES_ENABLED) {
+            return;
+        }
         IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
         BlockRenderContext.setDebugBlock(
                 diagnosticBlockKind(state, effectiveState),
@@ -2851,12 +2968,18 @@ public class PipelineContext {
     }
 
     public boolean isCurrentProblemProbeTarget(IBlockState state) {
+        if (!CURRENT_PROBLEM_PROBES_ENABLED) {
+            return false;
+        }
         return isRandomThingsLuminousBlock(state)
                 || isPriorityFramedDiagnosticName(state);
     }
 
     public void logCurrentProblemProbe(String source, IBlockState state, IBlockAccess blockAccess, BlockPos pos,
                                        String detail) {
+        if (!CURRENT_PROBLEM_PROBES_ENABLED) {
+            return;
+        }
         IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
         IBlockState inheritedState = inheritedBloomRenderState(state, blockAccess, pos);
         if (!isCurrentProblemProbeTarget(state)
@@ -2903,6 +3026,9 @@ public class PipelineContext {
     }
 
     public void logCurrentRenderContextProbe(String source, String detail) {
+        if (!CURRENT_PROBLEM_PROBES_ENABLED) {
+            return;
+        }
         String kind = BlockRenderContext.debugKind();
         if (!"blockcraftery".equals(kind)
                 && !"architecturecraft".equals(kind)
@@ -3502,6 +3628,9 @@ public class PipelineContext {
     }
 
     private void auditSyntheticLight(String source, BlockPos pos, SyntheticLightInfo lightInfo, String result) {
+        if (MAX_COLORED_LIGHT_AUDIT_LOGS <= 0) {
+            return;
+        }
         if (lightInfo == null || !shouldAuditSyntheticLight(lightInfo)) {
             return;
         }
@@ -3534,6 +3663,9 @@ public class PipelineContext {
 
     private void logDecoratedLightEmission(IBlockState originalState, IBlockState decoratedState,
                                            IBlockAccess blockAccess, BlockPos pos, int emission) {
+        if (MAX_DECORATED_LIGHT_AUDIT_LOGS <= 0) {
+            return;
+        }
         String key = safeDimensionId(blockAccess instanceof World world ? world : null)
                 + "|" + formatBlockPos(pos)
                 + "|" + stateName(originalState)
@@ -3567,6 +3699,9 @@ public class PipelineContext {
     }
 
     private void auditProjectRedDiagnosis(TileEntity tileEntity, int[] voxelIds, int count, String result, String diagnosis) {
+        if (MAX_COLORED_LIGHT_AUDIT_LOGS <= 0) {
+            return;
+        }
         BlockPos pos = tileEntity != null ? tileEntity.getPos() : null;
         String key = "projectred|" + result + "|" + formatBlockPos(pos) + "|" + diagnosis;
         if (!coloredLightAuditKeys.add(key)) {
@@ -4073,6 +4208,21 @@ public class PipelineContext {
         return isPipelineActive && (!shaderProperties.renderSettings().moon() || shouldSuppressComplementaryVanillaCelestialGeometry());
     }
 
+    public boolean shouldSuppressVanillaSunsetGeometry() {
+        return isPipelineActive && isComplementaryStylePack();
+    }
+
+    public boolean shouldSuppressVoidWorldCustomSkyRenderer(Object skyRenderer, WorldClient world) {
+        if (!isPipelineActive
+                || skyRenderer == null
+                || safeDimensionId(world) != SIMPLE_VOID_WORLD_DIMENSION_ID) {
+            return false;
+        }
+
+        String rendererClass = skyRenderer.getClass().getName();
+        return "vazkii.botania.client.render.world.SkyblockSkyRenderer".equals(rendererClass);
+    }
+
     private boolean shouldSuppressComplementaryVanillaCelestialGeometry() {
         // Complementary style 1 intentionally uses vanilla sun/moon quads as
         // inputs to gbuffers_skytextured. Suppressing them here removes the
@@ -4132,36 +4282,42 @@ public class PipelineContext {
     }
 
     public boolean shouldUsePipelineEntityFormat() {
-        if (!isPipelineActive || !worldFrameActive || activePass == null || renderingGuiScreen()) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || !mc.isCallingFromMinecraftThread()) {
+            return false;
+        }
+        RenderPass pass = activePass;
+        if (!isPipelineActive || !worldFrameActive || pass == null || renderingGuiScreen()) {
             return false;
         }
         if (isBetweenlandsEntity(currentEntityKey) || currentEntityKey == null && isBetweenlandsRenderStack()) {
             return false;
         }
-        if (activePass.stage() == ProgramStage.SHADOW) {
+        if (pass.stage() == ProgramStage.SHADOW) {
             return true;
         }
         WorldRenderingPhase phase = getPhase();
         if (phase != WorldRenderingPhase.NONE) {
             return phase.usesEntityFormat();
         }
-        return activePass.stage() == ProgramStage.SHADOW
-                || activePass == RenderPass.GBUFFERS_ITEM
-                || activePass == RenderPass.GBUFFERS_ENTITIES
-                || activePass == RenderPass.GBUFFERS_ENTITIES_GLOWING
-                || activePass == RenderPass.GBUFFERS_HAND
-                || activePass == RenderPass.GBUFFERS_HAND_WATER
-                || activePass == RenderPass.GBUFFERS_BLOCK
-                || activePass == RenderPass.GBUFFERS_BLOCK_TRANSLUCENT
-                || activePass == RenderPass.GBUFFERS_ENTITIES_TRANSLUCENT;
+        return pass.stage() == ProgramStage.SHADOW
+                || pass == RenderPass.GBUFFERS_ITEM
+                || pass == RenderPass.GBUFFERS_ENTITIES
+                || pass == RenderPass.GBUFFERS_ENTITIES_GLOWING
+                || pass == RenderPass.GBUFFERS_HAND
+                || pass == RenderPass.GBUFFERS_HAND_WATER
+                || pass == RenderPass.GBUFFERS_BLOCK
+                || pass == RenderPass.GBUFFERS_BLOCK_TRANSLUCENT
+                || pass == RenderPass.GBUFFERS_ENTITIES_TRANSLUCENT;
     }
 
     public boolean shouldUsePipelineBlockFormat() {
-        return isPipelineActive && !hardwareSafeVanillaTerrain || shouldUseShaderlessBloomVertexMetadata();
+        return pipelineTerrainFormatSupported() && !hardwareSafeVanillaTerrain;
     }
 
     private boolean shouldUseShaderlessBloomVertexMetadata() {
-        return !isPipelineActive
+        return shouldUsePipelineBlockFormat()
+                && !isPipelineActive
                 && !AusmBloomLayer.shouldUseNativeHook()
                 && bloomRenderer.hasBloomResources();
     }
@@ -4172,6 +4328,42 @@ public class PipelineContext {
 
     public WorldRenderingPhase getPhase() {
         return overridePhase != null ? overridePhase : activePhase;
+    }
+
+    public void logSkyPipelineProbe(String stage) {
+        // Intentionally disabled in normal builds; keep the hook as a cheap
+        // no-op so old probes can be re-enabled locally without touching mixins.
+    }
+
+    private String skyProbeWorldSummary() {
+        Minecraft mc = Minecraft.getMinecraft();
+        World world = mc != null ? mc.world : null;
+        Entity view = mc != null ? mc.getRenderViewEntity() : null;
+        if (world == null) {
+            return "null";
+        }
+        return "dim=" + safeDimensionId(world)
+                + ",time=" + world.getWorldTime()
+                + ",celestial=" + world.getCelestialAngle(0.0f)
+                + ",rain=" + world.getRainStrength(0.0f)
+                + ",thunder=" + world.getThunderStrength(0.0f)
+                + ",viewYaw=" + (view != null ? view.rotationYaw : Float.NaN)
+                + ",viewPitch=" + (view != null ? view.rotationPitch : Float.NaN);
+    }
+
+    private static String skyProbeGlStateSummary() {
+        int activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        int activeTextureBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        int texture0Binding = activeTextureBinding;
+        try {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            texture0Binding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        } finally {
+            GL13.glActiveTexture(activeTexture);
+        }
+        return glStateSummary()
+                + ",texActiveBinding=" + activeTextureBinding
+                + ",tex0Binding=" + texture0Binding;
     }
 
     public int renderNothiriumTerrainLayer(BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
@@ -4211,6 +4403,10 @@ public class PipelineContext {
     }
 
     public boolean renderNothiriumRendererPass(Object chunkRenderPass) {
+        if (shouldBypassWorldPassRendering()
+                || BetterPortalsCompat.shouldUseVanillaRenderGlobalForNestedView()) {
+            return false;
+        }
         boolean translucentPass = isNothiriumTranslucentPass(chunkRenderPass);
         if (shouldCancelDuplicateNothiriumTranslucentPass(translucentPass)) {
             return true;
@@ -4325,6 +4521,35 @@ public class PipelineContext {
         return currentEntityId;
     }
 
+    public void beginRenderedItem(ItemStack stack) {
+        renderedItemIdStack.push(currentRenderedItemId);
+        currentRenderedItemId = currentRenderedItemId(stack);
+        currentRenderedItemDebugName = renderedItemDebugName(stack);
+        uploadCurrentRenderedItemId();
+    }
+
+    public void endRenderedItem() {
+        currentRenderedItemId = renderedItemIdStack.isEmpty() ? -1 : renderedItemIdStack.pop();
+        currentRenderedItemDebugName = "";
+        uploadCurrentRenderedItemId();
+    }
+
+    private String renderedItemDebugName(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return "empty";
+        }
+        ResourceLocation key = stack.getItem().getRegistryName();
+        return (key != null ? key.toString() : stack.getItem().getClass().getName())
+                + ":" + stack.getMetadata();
+    }
+
+    private void uploadCurrentRenderedItemId() {
+        ShaderProgram program = activeProgram();
+        if (program != null) {
+            uniformRegistry.upload(program, "currentRenderedItemId");
+        }
+    }
+
     public boolean shouldRenderEntityWithVanillaProgram(Entity entity) {
         if (!isPipelineActive || !worldFrameActive || activePass == null || renderingShadowMap || renderingGuiScreen()) {
             return false;
@@ -4353,6 +4578,34 @@ public class PipelineContext {
 
     private int heldItemId(ItemStack stack) {
         return shaderProperties.itemIds().idFor(stack);
+    }
+
+    private int currentRenderedItemId(ItemStack stack) {
+        Integer explicitItemId = shaderProperties.itemIds().explicitIdFor(stack);
+        if (explicitItemId != null) {
+            return explicitItemId;
+        }
+        int blockItemId = currentRenderedBlockItemId(stack);
+        return blockItemId != 0 ? blockItemId : 0;
+    }
+
+    private int currentRenderedBlockItemId(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return 0;
+        }
+        Block block = Block.getBlockFromItem(stack.getItem());
+        if (block == null || block == Blocks.AIR) {
+            return 0;
+        }
+        try {
+            int metadata = stack.getMetadata();
+            IBlockState state = block.getStateFromMeta(metadata);
+            if (state != null) {
+                return shaderProperties.blockIds().idFor(state);
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return shaderProperties.blockIds().idFor(block.getDefaultState());
     }
 
     private ItemStack heldMainStack(Minecraft mc) {
@@ -4645,19 +4898,29 @@ public class PipelineContext {
         passStack.push(new PassScope(bound, previousPass, previousShaderKey, previousPhase));
     }
 
-    public void beginPhase(WorldRenderingPhase phase) {
+    public boolean beginPhaseIfActive(WorldRenderingPhase phase) {
         if (renderingGuiScreen()) {
-            return;
+            return false;
         }
         RenderPass pass = passForPhase(phase);
-        if (pass != null) {
-            beginPass(pass, phase);
+        if (pass == null) {
+            return false;
         }
+        beginPass(pass, phase);
+        return true;
+    }
+
+    public void beginPhase(WorldRenderingPhase phase) {
+        beginPhaseIfActive(phase);
     }
 
     public void beginAstralConstellationPhase(Object constellation, WorldRenderingPhase phase) {
         setAstralConstellationColors(constellation);
         beginPhase(phase);
+    }
+
+    public void setAstralSolarEclipseFactor(float factor) {
+        currentAstralSolarEclipseFactor = Math.max(0.0f, Math.min(1.0f, factor));
     }
 
     public void endAstralConstellationPhase() {
@@ -4719,22 +4982,300 @@ public class PipelineContext {
         return true;
     }
 
-    private boolean shouldRouteRenderItemThroughPipeline() {
+    public void prepareHandItemRenderState() {
         if (!isPipelineActive || !worldFrameActive || renderingGuiScreen()) {
+            return;
+        }
+        WorldRenderingPhase phase = getPhase();
+        if (phase != WorldRenderingPhase.HAND_SOLID) {
+            return;
+        }
+        GlStateManager.disableBlend();
+        resetIndexedBlendState();
+        GlStateManager.enableDepth();
+        GlStateManager.depthMask(true);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glColorMask(true, true, true, true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    public void prepareGuiItemRenderState() {
+        if (!isPipelineActive) {
+            return;
+        }
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.currentScreen == null && !renderingGuiScreen()) {
+            return;
+        }
+
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        disablePipelineVertexAttributes();
+        restoreVanillaClientRenderState();
+        unbindShaderStorageBuffers();
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GlStateManager.enableTexture2D();
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GlStateManager.enableDepth();
+        GlStateManager.depthMask(true);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GlStateManager.disableCull();
+        GlStateManager.colorMask(true, true, true, true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    public void prepareFlatGuiBackgroundRenderState() {
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        disablePipelineVertexAttributes();
+        restoreVanillaClientRenderState();
+        unbindShaderStorageBuffers();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(0.0F, 0.0F);
+        GlStateManager.disableLighting();
+        GlStateManager.disableColorMaterial();
+        GlStateManager.disableDepth();
+        GL11.glDepthMask(false);
+        GlStateManager.enableTexture2D();
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(
+                GL11.GL_SRC_ALPHA,
+                GL11.GL_ONE_MINUS_SRC_ALPHA,
+                GL11.GL_ONE,
+                GL11.GL_ZERO
+        );
+        GlStateManager.colorMask(true, true, true, true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    public void prepareGuiEntityPreviewRenderState() {
+        if (!isPipelineActive) {
+            return;
+        }
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.currentScreen == null && !renderingGuiScreen()) {
+            return;
+        }
+
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT
+                | GL11.GL_COLOR_BUFFER_BIT
+                | GL11.GL_DEPTH_BUFFER_BIT
+                | GL11.GL_SCISSOR_BIT
+                | GL11.GL_POLYGON_BIT
+                | GL11.GL_TEXTURE_BIT
+                | GL11.GL_LIGHTING_BIT
+                | GL11.GL_CURRENT_BIT
+                | GL11.GL_TRANSFORM_BIT
+                | GL11.GL_VIEWPORT_BIT);
+        guiEntityPreviewStateDepth++;
+
+        if (mc.getFramebuffer() != null) {
+            mc.getFramebuffer().bindFramebuffer(false);
+            GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
+        }
+        if (mc.entityRenderer != null) {
+            mc.entityRenderer.disableLightmap();
+        }
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        disablePipelineVertexAttributes();
+        restoreVanillaClientRenderState();
+        unbindShaderImages();
+        unbindShaderStorageBuffers();
+        resetIndexedBlendState();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(0.0F, 0.0F);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glColorMask(true, true, true, true);
+        GlStateManager.enableTexture2D();
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GlStateManager.enableDepth();
+        GlStateManager.depthMask(true);
+        GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
+        GlStateManager.disableBlend();
+        GlStateManager.disableLighting();
+        GlStateManager.disableColorMaterial();
+        GlStateManager.disableCull();
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    public void finishGuiEntityPreviewRenderState() {
+        if (guiEntityPreviewStateDepth <= 0) {
+            return;
+        }
+        guiEntityPreviewStateDepth--;
+        GL11.glPopAttrib();
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        disablePipelineVertexAttributes();
+        restoreVanillaClientRenderState();
+        unbindShaderStorageBuffers();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        if (isPipelineActive && isRenderingGuiScreen()) {
+            prepareGuiState();
+        } else {
+            restoreGuiSafeRenderState("gui-entity-preview");
+        }
+    }
+
+    public boolean beginGuiItemStateScope() {
+        if (!isPipelineActive) {
+            return false;
+        }
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.currentScreen == null && !renderingGuiScreen()) {
+            return false;
+        }
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT
+                | GL11.GL_COLOR_BUFFER_BIT
+                | GL11.GL_DEPTH_BUFFER_BIT
+                | GL11.GL_SCISSOR_BIT
+                | GL11.GL_POLYGON_BIT
+                | GL11.GL_TEXTURE_BIT
+                | GL11.GL_LIGHTING_BIT
+                | GL11.GL_CURRENT_BIT
+                | GL11.GL_TRANSFORM_BIT
+                | GL11.GL_VIEWPORT_BIT);
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        disablePipelineVertexAttributes();
+        restoreVanillaClientRenderState();
+        unbindShaderImages();
+        unbindShaderStorageBuffers();
+        resetIndexedBlendState();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(0.0F, 0.0F);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GlStateManager.enableTexture2D();
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GlStateManager.enableDepth();
+        GlStateManager.depthMask(true);
+        GlStateManager.disableCull();
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(
+                GL11.GL_SRC_ALPHA,
+                GL11.GL_ONE_MINUS_SRC_ALPHA,
+                GL11.GL_ONE,
+                GL11.GL_ZERO
+        );
+        GlStateManager.colorMask(true, true, true, true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        return true;
+    }
+
+    public void endGuiItemStateScope() {
+        GL11.glPopAttrib();
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        disablePipelineVertexAttributes();
+        restoreVanillaClientRenderState();
+        unbindShaderStorageBuffers();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        GlStateManager.colorMask(true, true, true, true);
+    }
+
+    public void prepareGuiItemGlintRenderState() {
+        if (!isPipelineActive) {
+            return;
+        }
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc == null || mc.currentScreen == null && !renderingGuiScreen()) {
+            return;
+        }
+
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        disablePipelineVertexAttributes();
+        restoreVanillaClientRenderState();
+        unbindShaderImages();
+        unbindShaderStorageBuffers();
+        resetIndexedBlendState();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(0.0F, 0.0F);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GlStateManager.enableTexture2D();
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GlStateManager.enableDepth();
+        GlStateManager.depthMask(true);
+        GlStateManager.disableCull();
+        GlStateManager.colorMask(true, true, true, true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    public void prepareHandItemDrawState(String source) {
+        prepareHandItemRenderState();
+        if (!isPipelineActive || !worldFrameActive || renderingGuiScreen() || getPhase() != WorldRenderingPhase.HAND_SOLID) {
+            return;
+        }
+        uploadCurrentRenderedItemId();
+    }
+
+    public void probeHandGbufferAfterRender() {
+        // Disabled: this probe performs framebuffer readbacks and is too costly
+        // for regular gameplay.
+    }
+
+    private boolean shouldRouteRenderItemThroughPipeline() {
+        if (!isPipelineActive || !worldFrameActive || renderingShadowMap || renderingGuiScreen()) {
+            return false;
+        }
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc != null && mc.currentScreen != null) {
             return false;
         }
         WorldRenderingPhase phase = getPhase();
         return phase != WorldRenderingPhase.HAND_SOLID
                 && phase != WorldRenderingPhase.HAND_TRANSLUCENT
-                && phase != WorldRenderingPhase.ARMOR_GLINT;
+                && phase != WorldRenderingPhase.ARMOR_GLINT
+                && phase != WorldRenderingPhase.BLOCK_ENTITIES
+                && phase != WorldRenderingPhase.BLOCK_ENTITIES_TRANSLUCENT;
     }
 
     private boolean shouldRouteItemGlintThroughPipeline() {
-        return isPipelineActive && worldFrameActive && !renderingGuiScreen();
+        if (!isPipelineActive || !worldFrameActive || renderingShadowMap || renderingGuiScreen()) {
+            return false;
+        }
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc != null && mc.currentScreen != null) {
+            return false;
+        }
+        WorldRenderingPhase phase = getPhase();
+        return phase != WorldRenderingPhase.BLOCK_ENTITIES
+                && phase != WorldRenderingPhase.BLOCK_ENTITIES_TRANSLUCENT;
     }
 
     private boolean renderingGuiScreen() {
         return renderingGui || guiRenderDepth > 0 || renderingDeferredIngameHud;
+    }
+
+    public boolean isRenderingGuiScreen() {
+        Minecraft mc = Minecraft.getMinecraft();
+        return renderingGuiScreen() || mc != null && mc.currentScreen != null;
     }
 
     private RenderPass passForPhase(WorldRenderingPhase phase) {
@@ -4800,9 +5341,12 @@ public class PipelineContext {
         bindCustomTextures(pass, program);
         shaderImages.bind(program);
         shaderStorageBuffers.bind();
+        if (shaderStorageBuffers.active()) {
+            markShaderStorageBuffersBound();
+        }
         uniformRegistry.uploadAll(program);
         if (!packDirectives.customUniforms().isEmpty()) {
-            packDirectives.customUniforms().upload(program, uniformRegistry.scalarValues());
+            packDirectives.customUniforms().upload(program, uniformRegistry.scalarValuesInto(customUniformScalarScratch));
         }
     }
 
@@ -5023,7 +5567,7 @@ public class PipelineContext {
     }
 
     private void applyHandRenderState(RenderPass pass) {
-        if (pass != RenderPass.GBUFFERS_HAND) {
+        if (pass != RenderPass.GBUFFERS_HAND && pass != RenderPass.GBUFFERS_HAND_WATER) {
             return;
         }
         GlStateManager.disableBlend();
@@ -5032,6 +5576,7 @@ public class PipelineContext {
         GlStateManager.depthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glColorMask(true, true, true, true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     private void applyOitDepthState(RenderPass pass) {
@@ -5243,6 +5788,9 @@ public class PipelineContext {
             bloomLayerRenderedThisWorldFrame = false;
             shaderlessBloomRenderedThisWorldFrame = false;
             resetShaderlessTerrainLayerCounts();
+            if (vanillaParticleRecoveryFrames > 0) {
+                vanillaParticleRecoveryFrames--;
+            }
         }
     }
 
@@ -5409,6 +5957,14 @@ public class PipelineContext {
         if (isPipelineActive && !shouldBypassWorldPassRendering()) {
             return;
         }
+        prepareVanillaParticleRenderingState();
+    }
+
+    public boolean shouldRenderParticlesWithVanillaState() {
+        return vanillaParticleRecoveryFrames > 0;
+    }
+
+    public void prepareVanillaParticleRenderingState() {
         Minecraft mc = Minecraft.getMinecraft();
         OpenGlHelper.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
@@ -5435,6 +5991,10 @@ public class PipelineContext {
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
+    }
+
+    private void startVanillaParticleRecovery() {
+        vanillaParticleRecoveryFrames = Math.max(vanillaParticleRecoveryFrames, PARTICLE_DIMENSION_RECOVERY_FRAMES);
     }
 
     private void restoreVanillaFixedFunctionTextureState(Minecraft mc) {
@@ -5551,9 +6111,11 @@ public class PipelineContext {
         }
         if (accumulatedTemporalYaw > TEMPORAL_HISTORY_ACCUMULATED_YAW_RESET
                 || accumulatedTemporalPitch > TEMPORAL_HISTORY_ACCUMULATED_PITCH_RESET) {
-            resetTemporalHistoryTracking(dimensionId, yaw, pitch);
-            temporalHistoryResetReason = "camera-rotation";
-            return true;
+            // Normal mouse-look should not clear persistent shader history.
+            // Complementary uses those attachments for temporal/deferred effects;
+            // clearing them during rotation looks like distant terrain/chunk flicker.
+            accumulatedTemporalYaw = 0.0f;
+            accumulatedTemporalPitch = 0.0f;
         }
         return false;
     }
@@ -5723,7 +6285,10 @@ public class PipelineContext {
         ViewFrustum savedViewFrustum = state[1] instanceof ViewFrustum viewFrustum ? viewFrustum : null;
 
         Minecraft mc = Minecraft.getMinecraft();
-        if (BetterPortalsCompat.isMainViewSwapRecoveryActive() && mc != null && mc.world != null) {
+        if (BetterPortalsCompat.isMainViewSwapRecoveryActive()
+                && !BetterPortalsCompat.isRenderingNestedView()
+                && mc != null
+                && mc.world != null) {
             ensureVanillaTerrainRenderer(mc.world, true);
             activeVanillaViewFrustumRenderGlobal = null;
             activeVanillaViewFrustumWorld = null;
@@ -5858,6 +6423,7 @@ public class PipelineContext {
         }
 
         logTerrainDiagnostic("bp-main-view-swap:start", mc.world, "");
+        startVanillaParticleRecovery();
         if (!isPipelineActive) {
             BetterPortalsCompat.clearMainViewSwapTransientState();
             BetterPortalsCompat.cancelMainViewSwapRecovery();
@@ -5875,8 +6441,6 @@ public class PipelineContext {
             refreshBetterPortalsMainViewTerrain(mc, "bp-main-view-swap");
             BetterPortalsCompat.startMainViewSwapRecovery(mc.world);
             BetterPortalsCompat.logMainViewSwapRecoveryIfNeeded(mc.world);
-            scheduleDimensionSwitchTerrainRefresh();
-            scheduleBloomTerrainRefresh("better portals main view swap");
             scheduleWorldLoadLightRecalculation();
         } finally {
             BetterPortalsCompat.endMainViewSwapHandling();
@@ -5891,6 +6455,7 @@ public class PipelineContext {
         }
 
         logTerrainDiagnostic("dimension-switch:start", mc.world, "previous=" + previousDimensionId + ", current=" + dimensionId);
+        startVanillaParticleRecovery();
         BetterPortalsCompat.clearMainViewSwapTransientState();
         if (!isPipelineActive) {
             BetterPortalsCompat.cancelMainViewSwapRecovery();
@@ -5917,21 +6482,25 @@ public class PipelineContext {
         }
 
         clearPendingShaderChunkRefreshes();
+        clearPendingBetterPortalsPortalBlockRefresh();
+        boolean betterPortalsRecovery = BetterPortalsCompat.isMainViewSwapRecoveryActive();
+        if (betterPortalsRecovery) {
+            refreshBetterPortalsMainViewTerrain(mc, "dimension-switch");
+            scheduleWorldLoadLightRecalculation();
+            logTerrainDiagnostic("dimension-switch:bp-recovery-deferred", mc.world,
+                    "previous=" + previousDimensionId + ", current=" + dimensionId);
+            return;
+        }
+
         clearPendingClientChunkRenderRefreshes();
         clearShaderlessBloomMetadata();
-        clearPendingBetterPortalsPortalBlockRefresh();
         resetPipelineState(mc.getFramebuffer());
         currentWorldPass = 0;
         currentWorldPartialTicks = 0.0F;
 
-        boolean betterPortalsRecovery = BetterPortalsCompat.isMainViewSwapRecoveryActive();
-        if (betterPortalsRecovery) {
-            refreshBetterPortalsMainViewTerrain(mc, "dimension-switch");
-        } else {
-            BetterPortalsCompat.startMainViewSwapRecovery(mc.world);
-            rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "dimension-switch");
-            resetCameraFrustumSyncState();
-        }
+        BetterPortalsCompat.startMainViewSwapRecovery(mc.world);
+        rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "dimension-switch");
+        resetCameraFrustumSyncState();
         scheduleDimensionSwitchTerrainRefresh();
         scheduleBloomTerrainRefresh("dimension switch");
         scheduleInactiveVanillaRecoveryFrame();
@@ -6296,7 +6865,7 @@ public class PipelineContext {
     private int vanillaTerrainRenderDistanceChunks(World world, Integer cachedRenderDistanceChunks,
                                                    int requestedRenderDistanceChunks) {
         if (shouldUseBetterPortalsPortalRenderDistance(world)) {
-            return Math.min(requestedRenderDistanceChunks, betterPortalsPortalRenderDistanceCap());
+            return Math.min(requestedRenderDistanceChunks, BETTER_PORTALS_VANILLA_RENDER_DISTANCE_CAP);
         }
         if (shouldUseStableMainWorldRenderDistance(world)) {
             if (cachedRenderDistanceChunks != null && cachedRenderDistanceChunks > 0) {
@@ -6312,19 +6881,11 @@ public class PipelineContext {
     private boolean shouldUseBetterPortalsPortalRenderDistance(World world) {
         Minecraft mc = Minecraft.getMinecraft();
         return BetterPortalsCompat.isInstalled()
-                && !isPipelineActive
                 && BetterPortalsCompat.isRenderingRenderPass()
                 && mc != null
                 && mc.world != null
                 && world != null
                 && world != mc.world;
-    }
-
-    private int betterPortalsPortalRenderDistanceCap() {
-        if (BetterPortalsCompat.isRenderingNestedView()) {
-            return BETTER_PORTALS_NESTED_VANILLA_RENDER_DISTANCE_CAP;
-        }
-        return BETTER_PORTALS_PORTAL_RENDER_DISTANCE_CAP;
     }
 
     private boolean canReuseActiveVanillaTerrainRenderer(RenderGlobalAccessor renderGlobal,
@@ -7099,7 +7660,7 @@ public class PipelineContext {
         try {
             logTerrainDiagnostic("bp-refresh-main-view:start", mc.world, "");
             boolean worldChanged = syncRenderGlobalWorld(mc.renderGlobal, mc.world);
-            rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, reason);
+            adoptMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, reason);
             resetCameraFrustumSyncState();
             logTerrainDiagnostic("bp-refresh-main-view:end", mc.world, "worldChanged=" + worldChanged);
         } catch (RuntimeException e) {
@@ -7185,6 +7746,10 @@ public class PipelineContext {
         if (world == null || viewEntity == null || mc.renderGlobal == null) {
             return;
         }
+        if (shouldSkipStationaryShadowMap(world, viewEntity, partialTicks)) {
+            lastShadowFrameId = pipelineFrameId;
+            return;
+        }
 
         BetterPortalsCompat.logRenderStateDiagnostic("pipeline:shadow-begin world=" + safeDimensionId(world));
         lastShadowFrameId = pipelineFrameId;
@@ -7246,9 +7811,7 @@ public class PipelineContext {
                 cutoutCount = renderShadowTerrainLayer(mc, WorldRenderingPhase.TERRAIN_CUTOUT, BlockRenderLayer.CUTOUT, partialTicks, viewEntity);
             }
             if (shaderProperties.renderSettings().shadowEntities()
-                    || shaderProperties.renderSettings().shadowPlayer()
-                    || shaderProperties.renderSettings().shadowBlockEntities()
-                    || shaderProperties.renderSettings().shadowLightBlockEntities()) {
+                    || shaderProperties.renderSettings().shadowPlayer()) {
                 beginPhase(WorldRenderingPhase.ENTITIES);
                 // RenderLib replaces RenderGlobal.renderEntities with a queued renderer
                 // that is only prepared during the normal world pass. The shadow pass
@@ -7268,6 +7831,7 @@ public class PipelineContext {
             logShadowHealth(solidCount, cutoutMippedCount, cutoutCount, translucentCount);
             runComputePrograms(shadowComputePrograms, RenderPass.SHADOW);
             runFullscreenPasses(ProgramArrayId.SHADOWCOMP);
+            rememberShadowMapRender(world, viewEntity, partialTicks);
         } finally {
             mc.renderChunksMany = previousRenderChunksMany;
             renderingShadowMap = false;
@@ -7300,6 +7864,42 @@ public class PipelineContext {
             TextureBinder.restoreDefaultTextureUnit();
             BetterPortalsCompat.logRenderStateDiagnostic("pipeline:shadow-end world=" + safeDimensionId(world));
         }
+    }
+
+    private boolean shouldSkipStationaryShadowMap(World world, Entity viewEntity, float partialTicks) {
+        if (!shadowMapPopulated || shaderProperties == null
+                || shaderProperties.renderSettings().shadowEntities()
+                || shaderProperties.renderSettings().shadowPlayer()) {
+            return false;
+        }
+        int dimensionId = safeDimensionId(world);
+        long worldTime = world.getTotalWorldTime();
+        if (dimensionId != lastShadowRenderDimensionId || worldTime != lastShadowRenderWorldTime) {
+            return false;
+        }
+        double x = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
+        double y = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
+        double z = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        double dx = x - lastShadowRenderX;
+        double dy = y - lastShadowRenderY;
+        double dz = z - lastShadowRenderZ;
+        return dx * dx + dy * dy + dz * dz < 0.0001D;
+    }
+
+    private void rememberShadowMapRender(World world, Entity viewEntity, float partialTicks) {
+        lastShadowRenderDimensionId = safeDimensionId(world);
+        lastShadowRenderWorldTime = world.getTotalWorldTime();
+        lastShadowRenderX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
+        lastShadowRenderY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
+        lastShadowRenderZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+    }
+
+    private void resetShadowRenderCache() {
+        lastShadowRenderDimensionId = Integer.MIN_VALUE;
+        lastShadowRenderWorldTime = Long.MIN_VALUE;
+        lastShadowRenderX = Double.NaN;
+        lastShadowRenderY = Double.NaN;
+        lastShadowRenderZ = Double.NaN;
     }
 
     private void injectMappedTileEntityVoxels(Minecraft mc) {
@@ -7851,23 +8451,9 @@ public class PipelineContext {
 
     private ICamera createCeleritasShadowCamera(Entity viewEntity, float partialTicks) {
         try {
-            ClassLoader loader = PipelineContext.class.getClassLoader();
-            Class<?> viewportProviderClass = Class.forName(
-                    "org.embeddedt.embeddium.impl.render.viewport.ViewportProvider", false, loader);
-            Class<?> viewportClass = Class.forName(
-                    "org.embeddedt.embeddium.impl.render.viewport.Viewport", false, loader);
-            Class<?> frustumClass = Class.forName(
-                    "org.embeddedt.embeddium.impl.render.viewport.frustum.Frustum", false, loader);
-            Class<?> vector3dClass = Class.forName(
-                    "org.embeddedt.embeddium.impl.shadow.joml.Vector3d", false, loader);
-
-            Constructor<?> viewportConstructor = viewportClass.getConstructor(frustumClass, vector3dClass);
-            Constructor<?> vectorConstructor = vector3dClass.getConstructor(double.class, double.class, double.class);
-            Object frustum = Proxy.newProxyInstance(
-                    loader,
-                    new Class<?>[]{frustumClass},
-                    (proxy, method, args) -> boolean.class.equals(method.getReturnType()) ? Boolean.TRUE : null
-            );
+            if (!resolveCeleritasShadowCameraReflection()) {
+                return null;
+            }
 
             double[] position = {
                     interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks),
@@ -7877,8 +8463,8 @@ public class PipelineContext {
             InvocationHandler handler = (proxy, method, args) -> {
                 String name = method.getName();
                 if ("sodium$createViewport".equals(name)) {
-                    Object cameraPosition = vectorConstructor.newInstance(position[0], position[1], position[2]);
-                    return viewportConstructor.newInstance(frustum, cameraPosition);
+                    Object cameraPosition = celeritasVectorConstructor.newInstance(position[0], position[1], position[2]);
+                    return celeritasViewportConstructor.newInstance(celeritasAlwaysVisibleFrustum, cameraPosition);
                 }
                 if ("isBoundingBoxInFrustum".equals(name) || "func_78546_a".equals(name)) {
                     return true;
@@ -7904,18 +8490,49 @@ public class PipelineContext {
             };
 
             return (ICamera) Proxy.newProxyInstance(
-                    loader,
-                    new Class<?>[]{ICamera.class, viewportProviderClass},
+                    PipelineContext.class.getClassLoader(),
+                    new Class<?>[]{ICamera.class, celeritasViewportProviderClass},
                     handler
             );
-        } catch (ClassNotFoundException e) {
-            return null;
         } catch (ReflectiveOperationException | LinkageError | IllegalArgumentException e) {
             if (!celeritasShadowCameraWarningLogged) {
                 celeritasShadowCameraWarningLogged = true;
                 MainMod.LOGGER.warn("[Pipeline] Failed to create Celeritas-compatible shadow camera; falling back to vanilla camera", e);
             }
             return null;
+        }
+    }
+
+    private boolean resolveCeleritasShadowCameraReflection() throws ReflectiveOperationException {
+        if (celeritasShadowCameraResolved) {
+            return celeritasViewportProviderClass != null;
+        }
+        celeritasShadowCameraResolved = true;
+
+        ClassLoader loader = PipelineContext.class.getClassLoader();
+        try {
+            celeritasViewportProviderClass = Class.forName(
+                    "org.embeddedt.embeddium.impl.render.viewport.ViewportProvider", false, loader);
+            Class<?> viewportClass = Class.forName(
+                    "org.embeddedt.embeddium.impl.render.viewport.Viewport", false, loader);
+            Class<?> frustumClass = Class.forName(
+                    "org.embeddedt.embeddium.impl.render.viewport.frustum.Frustum", false, loader);
+            Class<?> vector3dClass = Class.forName(
+                    "org.embeddedt.embeddium.impl.shadow.joml.Vector3d", false, loader);
+            celeritasViewportConstructor = viewportClass.getConstructor(frustumClass, vector3dClass);
+            celeritasVectorConstructor = vector3dClass.getConstructor(double.class, double.class, double.class);
+            celeritasAlwaysVisibleFrustum = Proxy.newProxyInstance(
+                    loader,
+                    new Class<?>[]{frustumClass},
+                    (proxy, method, args) -> boolean.class.equals(method.getReturnType()) ? Boolean.TRUE : null
+            );
+            return true;
+        } catch (ClassNotFoundException e) {
+            celeritasViewportProviderClass = null;
+            celeritasViewportConstructor = null;
+            celeritasVectorConstructor = null;
+            celeritasAlwaysVisibleFrustum = null;
+            return false;
         }
     }
 
@@ -8091,6 +8708,9 @@ public class PipelineContext {
 
     public void snapshotOpaqueTerrainDepth() {
         if (!isPipelineActive || !pingPongManager.isInitialized()) {
+            return;
+        }
+        if (!ENABLE_SYNCHRONOUS_CENTER_DEPTH_READBACK) {
             return;
         }
 
@@ -8573,8 +9193,23 @@ public class PipelineContext {
             return;
         }
 
-        pingPongManager.copyPreHandDepth();
+        // depthtex2 excludes both translucent and hand geometry in OptiFine/Iris.
+        // The live depth buffer can already contain water here, so copy the same
+        // pre-translucent snapshot instead of sampling the current depth.
+        pingPongManager.copyPreTranslucentDepthToPreHandDepth();
         preHandDepthCopiedThisFrame = true;
+    }
+
+    public void finishHand() {
+        if (!isPipelineActive || !pingPongManager.isInitialized()) {
+            return;
+        }
+
+        // Later post-processing passes use depth snapshots to decide whether a
+        // pixel belongs to stable opaque scene history. Refresh depthtex2 after
+        // the hand draw so held items have a current near-depth classification
+        // without disturbing depthtex1's pre-translucent water/refraction role.
+        pingPongManager.copyPreHandDepth();
     }
 
     public void blitWorldFramebufferToMinecraft() {
@@ -9039,6 +9674,7 @@ public class PipelineContext {
             shadowFramebuffer = null;
         }
         shadowMapPopulated = false;
+        resetShadowRenderCache();
         deleteCenterDepthSmoothTexture();
         deleteNoiseTexture();
         bloomRenderer.delete();
@@ -9613,8 +10249,9 @@ public class PipelineContext {
         if (!untouchedBetterPortalsVanillaRendererStack.isEmpty()) {
             untouchedBetterPortalsVanillaRendererStack.pop();
         }
+        boolean nestedBetterPortalsView = isRenderingBetterPortalsNestedView();
         BetterPortalsCompat.logRenderStateDiagnostic("pipeline:bypass-finish-before");
-        restoreVanillaWorldPassState(false, true);
+        restoreVanillaWorldPassState(false, !nestedBetterPortalsView);
         popVanillaTerrainRendererState();
         shaderlessWorldPassActive = false;
         restoreActiveWorldPassAfterExternalShader();
@@ -9910,6 +10547,11 @@ public class PipelineContext {
                     + " world=" + (mc != null && mc.world != null)
                     + " entity=" + (mc != null && mc.getRenderViewEntity() != null)
                     + " framebuffer=" + (mc != null && mc.getFramebuffer() != null));
+            return;
+        }
+        if (mc.currentScreen != null) {
+            logShaderlessBloomHook("skip current-screen " + mc.currentScreen.getClass().getName());
+            restoreShaderlessBloomExitState(mc);
             return;
         }
 
@@ -10254,6 +10896,9 @@ public class PipelineContext {
     }
 
     public void finishExternalWorldOverlayRender(String source) {
+        if (!isPipelineActive) {
+            return;
+        }
         restoreWorldSafeRenderState(source);
     }
 
@@ -10316,6 +10961,10 @@ public class PipelineContext {
 
     public void restoreActiveWorldPassAfterExternalShader() {
         if (!isPipelineActive || !worldFrameActive || activePass == null || renderingGuiScreen()) {
+            return;
+        }
+        if (BetterPortalsCompat.isRenderingRenderPass()
+                || isRenderingBetterPortalsNestedView()) {
             return;
         }
 
@@ -10397,6 +11046,44 @@ public class PipelineContext {
         prepareGuiState();
     }
 
+    public void prepareShaderlessGuiScreenRendering() {
+        if (isPipelineActive) {
+            return;
+        }
+        renderingGui = false;
+        guiRenderDepth = 0;
+        OpenGlHelper.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        disablePipelineVertexAttributes();
+        unbindShaderImages();
+        unbindShaderStorageBuffers();
+        resetIndexedBlendState();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc != null && mc.getFramebuffer() != null) {
+            mc.getFramebuffer().bindFramebuffer(false);
+            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
+        }
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(0.0F, 0.0F);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glDepthMask(true);
+        GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
+        GlStateManager.colorMask(true, true, true, true);
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        GlStateManager.enableTexture2D();
+        GlStateManager.enableAlpha();
+        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        GlStateManager.enableDepth();
+        GlStateManager.depthMask(true);
+        GlStateManager.disableLighting();
+        GlStateManager.disableColorMaterial();
+        GlStateManager.disableBlend();
+    }
+
     public void beginGuiRendering() {
         if (!isPipelineActive || externalWorldFramebufferTarget != null || isRenderingBetterPortalsNestedView()) {
             return;
@@ -10407,6 +11094,9 @@ public class PipelineContext {
     }
 
     public void finishGuiRendering() {
+        if (!isPipelineActive || externalWorldFramebufferTarget != null || isRenderingBetterPortalsNestedView()) {
+            return;
+        }
         if (guiRenderDepth > 0) {
             guiRenderDepth--;
         }
@@ -10442,8 +11132,8 @@ public class PipelineContext {
         GlStateManager.bindTexture(0);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
         GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.enableDepth();
-        GL11.glDepthMask(true);
+        GlStateManager.disableDepth();
+        GL11.glDepthMask(false);
         GlStateManager.enableTexture2D();
         GlStateManager.disableLighting();
         GlStateManager.disableColorMaterial();
@@ -10595,7 +11285,7 @@ public class PipelineContext {
             resetPipelineState();
         }
         boolean nothiriumFormatChanged = updateNothiriumPipelineBlockFormatMode();
-        if (wasPipelineActive != isPipelineActive || nothiriumFormatChanged) {
+        if (nothiriumFormatChanged) {
             rebuildTerrainRenderers(nothiriumFormatChanged);
         }
     }
@@ -10782,6 +11472,11 @@ public class PipelineContext {
 
         synchronized (pendingClientChunkRenderRefreshes) {
             long chunkKey = clientChunkRenderRefreshChunkKey(chunkX, chunkZ);
+            if ("chunk-data".equals(normalizedReason)) {
+                forgetRecentlyCompletedClientChunkRenderRefreshLocked(world, chunkKey);
+            } else if (isRecentlyCompletedClientChunkRenderRefreshLocked(world, chunkKey)) {
+                return;
+            }
             Map<Long, ClientChunkRenderRefresh> worldLookup = pendingClientChunkRenderRefreshLookupByWorld.get(world);
             ClientChunkRenderRefresh existing = worldLookup != null ? worldLookup.get(chunkKey) : null;
             if (existing != null) {
@@ -10811,14 +11506,14 @@ public class PipelineContext {
         existing.attemptsRemaining = Math.max(existing.attemptsRemaining, CLIENT_CHUNK_RENDER_REFRESH_ATTEMPTS);
         if ("chunk-data".equals(reason)) {
             existing.reason = reason;
-            existing.delayFrames = 0;
+            existing.delayFrames = Math.min(existing.delayFrames, CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES);
         } else {
             existing.delayFrames = Math.min(existing.delayFrames, CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES);
         }
     }
 
     private int clientChunkRenderRefreshInitialDelay(String reason) {
-        return "chunk-data".equals(reason) ? 0 : CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES;
+        return CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES;
     }
 
     private static long clientChunkRenderRefreshChunkKey(int chunkX, int chunkZ) {
@@ -10836,6 +11531,7 @@ public class PipelineContext {
             pendingClientChunkRenderRefreshes.clear();
             pendingClientChunkRenderRefreshLookupByWorld.clear();
             pendingClientChunkRenderRefreshesByWorld.clear();
+            recentlyCompletedClientChunkRenderRefreshes.clear();
         }
     }
 
@@ -10988,6 +11684,7 @@ public class PipelineContext {
                     worldIterator.remove();
                 }
             }
+            pruneRecentlyCompletedClientChunkRenderRefreshesLocked();
         }
     }
 
@@ -11049,6 +11746,62 @@ public class PipelineContext {
                 || BetterPortalsCompat.isRenderingNestedView();
     }
 
+    private boolean isRecentlyCompletedClientChunkRenderRefreshLocked(WorldClient world, long chunkKey) {
+        Map<Long, Long> worldRefreshes = recentlyCompletedClientChunkRenderRefreshes.get(world);
+        Long expiresAt = worldRefreshes != null ? worldRefreshes.get(chunkKey) : null;
+        if (expiresAt == null) {
+            return false;
+        }
+        if (expiresAt < pipelineFrameId) {
+            worldRefreshes.remove(chunkKey);
+            if (worldRefreshes.isEmpty()) {
+                recentlyCompletedClientChunkRenderRefreshes.remove(world);
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private void rememberCompletedClientChunkRenderRefresh(WorldClient world, int chunkX, int chunkZ) {
+        if (world == null) {
+            return;
+        }
+        synchronized (pendingClientChunkRenderRefreshes) {
+            recentlyCompletedClientChunkRenderRefreshes
+                    .computeIfAbsent(world, ignored -> new HashMap<>())
+                    .put(clientChunkRenderRefreshChunkKey(chunkX, chunkZ),
+                            pipelineFrameId + CLIENT_CHUNK_RENDER_REFRESH_RECENT_TTL_FRAMES);
+            pruneRecentlyCompletedClientChunkRenderRefreshesLocked();
+        }
+    }
+
+    private void forgetRecentlyCompletedClientChunkRenderRefreshLocked(WorldClient world, long chunkKey) {
+        Map<Long, Long> worldRefreshes = recentlyCompletedClientChunkRenderRefreshes.get(world);
+        if (worldRefreshes == null) {
+            return;
+        }
+        worldRefreshes.remove(chunkKey);
+        if (worldRefreshes.isEmpty()) {
+            recentlyCompletedClientChunkRenderRefreshes.remove(world);
+        }
+    }
+
+    private void pruneRecentlyCompletedClientChunkRenderRefreshesLocked() {
+        Iterator<Map.Entry<WorldClient, Map<Long, Long>>> worldIterator =
+                recentlyCompletedClientChunkRenderRefreshes.entrySet().iterator();
+        while (worldIterator.hasNext()) {
+            Map<Long, Long> worldRefreshes = worldIterator.next().getValue();
+            if (worldRefreshes == null || worldRefreshes.isEmpty()) {
+                worldIterator.remove();
+                continue;
+            }
+            worldRefreshes.entrySet().removeIf(entry -> entry.getValue() == null || entry.getValue() < pipelineFrameId);
+            if (worldRefreshes.isEmpty()) {
+                worldIterator.remove();
+            }
+        }
+    }
+
     private boolean shouldQueueClientChunkRenderRefresh(WorldClient world, String reason) {
         if ("chunk-data".equals(reason)) {
             return true;
@@ -11089,29 +11842,43 @@ public class PipelineContext {
                         targetWorld,
                         chunk,
                         refresh.chunkX,
-                        refresh.chunkZ
+                        refresh.chunkZ,
+                        refresh.nextSectionY,
+                        MAX_CLIENT_CHUNK_RENDER_REFRESH_SECTIONS_PER_FRAME
                 );
+                refresh.nextSectionY = scheduleResult.nextSectionY;
+                refresh.coveredSections += scheduleResult.coveredSections;
+                if (scheduleResult.completed && refresh.coveredSections < scheduleResult.requiredSections) {
+                    refresh.nextSectionY = 0;
+                    refresh.coveredSections = 0;
+                }
                 if (scheduleResult.scheduledChunks > 0) {
                     accessor.ausm$setDisplayListEntitiesDirty(true);
                 }
             }
 
-            if (isPipelineActive && !NothiriumBypass.shouldBypass()) {
+            if (isPipelineActive && !refresh.shadowRefreshed && !NothiriumBypass.shouldBypass()) {
                 nothiriumShadowRenderer.refreshChunkColumn(refresh.chunkX, refresh.chunkZ);
+                refresh.shadowRefreshed = true;
             }
         }
 
         logClientChunkRenderRefresh(refresh, loaded, scheduleResult.scheduledChunks);
-        return !loaded || !scheduleResult.covered;
+        if (loaded && scheduleResult.completed && scheduleResult.coveredSections >= scheduleResult.requiredSections) {
+            rememberCompletedClientChunkRenderRefresh(refresh.world, refresh.chunkX, refresh.chunkZ);
+        }
+        return !loaded || !scheduleResult.completed || refresh.coveredSections < scheduleResult.requiredSections;
     }
 
     private ClientChunkRenderScheduleResult scheduleLoadedClientChunkRenderChunks(RenderGlobalAccessor renderGlobal,
                                                                                  ViewFrustum viewFrustum,
                                                                                  World world, Chunk chunk,
-                                                                                 int chunkX, int chunkZ) {
+                                                                                 int chunkX, int chunkZ,
+                                                                                 int startSectionY,
+                                                                                 int sectionBudget) {
         int requiredSections = countNonEmptyClientChunkSections(chunk);
         if (requiredSections == 0) {
-            return new ClientChunkRenderScheduleResult(0, true);
+            return new ClientChunkRenderScheduleResult(0, 0, 0, true, requiredSections);
         }
         if (renderGlobal == null || viewFrustum == null || viewFrustum.renderChunks == null) {
             return ClientChunkRenderScheduleResult.empty();
@@ -11124,32 +11891,44 @@ public class PipelineContext {
 
         if (viewFrustum instanceof ViewFrustumAccessor accessor) {
             return scheduleLoadedClientChunkRenderChunksIndexed(accessor, viewFrustum.renderChunks,
-                    chunksToUpdate, world, chunk, chunkX, chunkZ, requiredSections);
+                    chunksToUpdate, world, chunk, chunkX, chunkZ, requiredSections, startSectionY, sectionBudget);
         }
 
         int scheduled = 0;
         int covered = 0;
-        for (RenderChunk renderChunk : viewFrustum.renderChunks) {
+        int processed = 0;
+        int maxSections = maxClientChunkRefreshSections(sectionBudget);
+        ExtendedBlockStorage[] sections = chunk.getBlockStorageArray();
+        int sectionCount = sections != null ? sections.length : 0;
+        int start = clampSectionCursor(startSectionY, sectionCount);
+        for (int sectionY = start; sectionY < sectionCount; sectionY++) {
+            if (!hasNonEmptyClientChunkSection(sections, sectionY)) {
+                continue;
+            }
+            RenderChunk renderChunk = findRenderChunkForSection(viewFrustum.renderChunks, chunkX, chunkZ, sectionY);
+            processed++;
             if (renderChunk == null) {
-                continue;
-            }
-            BlockPos position = renderChunk.getPosition();
-            if (position == null || (position.getX() >> 4) != chunkX || (position.getZ() >> 4) != chunkZ) {
-                continue;
-            }
-            if (!shouldScheduleLoadedClientRenderChunk(renderChunk, chunk, position)) {
+                if (processed >= maxSections) {
+                    return new ClientChunkRenderScheduleResult(scheduled, covered, sectionY + 1, false, requiredSections);
+                }
                 continue;
             }
             covered++;
             assignRenderChunkWorld(renderChunk, world);
             if (renderChunk.needsUpdate() || chunksToUpdate.contains(renderChunk)) {
+                if (processed >= maxSections) {
+                    return new ClientChunkRenderScheduleResult(scheduled, covered, sectionY + 1, false, requiredSections);
+                }
                 continue;
             }
             renderChunk.setNeedsUpdate(true);
             chunksToUpdate.add(renderChunk);
             scheduled++;
+            if (processed >= maxSections) {
+                return new ClientChunkRenderScheduleResult(scheduled, covered, sectionY + 1, false, requiredSections);
+            }
         }
-        return new ClientChunkRenderScheduleResult(scheduled, covered >= requiredSections);
+        return new ClientChunkRenderScheduleResult(scheduled, covered, 0, true, requiredSections);
     }
 
     private ClientChunkRenderScheduleResult scheduleLoadedClientChunkRenderChunksIndexed(ViewFrustumAccessor viewFrustum,
@@ -11159,7 +11938,9 @@ public class PipelineContext {
                                                                                         Chunk chunk,
                                                                                         int chunkX,
                                                                                         int chunkZ,
-                                                                                        int requiredSections) {
+                                                                                        int requiredSections,
+                                                                                        int startSectionY,
+                                                                                        int sectionBudget) {
         int countX = viewFrustum.ausm$countChunksX();
         int countY = viewFrustum.ausm$countChunksY();
         int countZ = viewFrustum.ausm$countChunksZ();
@@ -11180,9 +11961,21 @@ public class PipelineContext {
 
         int scheduled = 0;
         int covered = 0;
-        for (int sectionY = 0; sectionY < countY; sectionY++) {
+        int processed = 0;
+        int maxSections = maxClientChunkRefreshSections(sectionBudget);
+        ExtendedBlockStorage[] sections = chunk.getBlockStorageArray();
+        int sectionCount = Math.min(countY, sections != null ? sections.length : 0);
+        int start = clampSectionCursor(startSectionY, sectionCount);
+        for (int sectionY = start; sectionY < sectionCount; sectionY++) {
+            if (!hasNonEmptyClientChunkSection(sections, sectionY)) {
+                continue;
+            }
             int index = (zIndex * countY + sectionY) * countX + xIndex;
             if (index < 0 || index >= renderChunks.length) {
+                processed++;
+                if (processed >= maxSections) {
+                    return new ClientChunkRenderScheduleResult(scheduled, covered, sectionY + 1, false, requiredSections);
+                }
                 continue;
             }
 
@@ -11193,18 +11986,29 @@ public class PipelineContext {
                     || (position.getX() >> 4) != chunkX
                     || (position.getZ() >> 4) != chunkZ
                     || !shouldScheduleLoadedClientRenderChunk(renderChunk, chunk, position)) {
+                processed++;
+                if (processed >= maxSections) {
+                    return new ClientChunkRenderScheduleResult(scheduled, covered, sectionY + 1, false, requiredSections);
+                }
                 continue;
             }
+            processed++;
             covered++;
             assignRenderChunkWorld(renderChunk, world);
             if (renderChunk.needsUpdate() || chunksToUpdate.contains(renderChunk)) {
+                if (processed >= maxSections) {
+                    return new ClientChunkRenderScheduleResult(scheduled, covered, sectionY + 1, false, requiredSections);
+                }
                 continue;
             }
             renderChunk.setNeedsUpdate(true);
             chunksToUpdate.add(renderChunk);
             scheduled++;
+            if (processed >= maxSections) {
+                return new ClientChunkRenderScheduleResult(scheduled, covered, sectionY + 1, false, requiredSections);
+            }
         }
-        return new ClientChunkRenderScheduleResult(scheduled, covered >= requiredSections);
+        return new ClientChunkRenderScheduleResult(scheduled, covered, 0, true, requiredSections);
     }
 
     private int countNonEmptyClientChunkSections(Chunk chunk) {
@@ -11237,6 +12041,41 @@ public class PipelineContext {
 
         ExtendedBlockStorage section = sections[sectionY];
         return section != null && !section.isEmpty();
+    }
+
+    private static int maxClientChunkRefreshSections(int sectionBudget) {
+        return Math.max(1, sectionBudget);
+    }
+
+    private static int clampSectionCursor(int sectionY, int sectionCount) {
+        if (sectionY < 0 || sectionY >= sectionCount) {
+            return 0;
+        }
+        return sectionY;
+    }
+
+    private static boolean hasNonEmptyClientChunkSection(ExtendedBlockStorage[] sections, int sectionY) {
+        return sections != null
+                && sectionY >= 0
+                && sectionY < sections.length
+                && sections[sectionY] != null
+                && !sections[sectionY].isEmpty();
+    }
+
+    private RenderChunk findRenderChunkForSection(RenderChunk[] renderChunks, int chunkX, int chunkZ, int sectionY) {
+        if (renderChunks == null) {
+            return null;
+        }
+        for (RenderChunk renderChunk : renderChunks) {
+            BlockPos position = renderChunk != null ? renderChunk.getPosition() : null;
+            if (position != null
+                    && (position.getX() >> 4) == chunkX
+                    && (position.getZ() >> 4) == chunkZ
+                    && (position.getY() >> 4) == sectionY) {
+                return renderChunk;
+            }
+        }
+        return null;
     }
 
     private void logClientChunkRenderRefresh(ClientChunkRenderRefresh refresh, boolean loaded, int scheduledChunks) {
@@ -11328,6 +12167,13 @@ public class PipelineContext {
 
     public void runScheduledWorldTerrainRefresh() {
         if (pendingWorldTerrainRefreshAttempts <= 0) {
+            return;
+        }
+        if (BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
+            pendingWorldTerrainRefreshDelay = Math.max(pendingWorldTerrainRefreshDelay, 2);
+            logTerrainDiagnostic("run-world-terrain:bp-recovery-defer",
+                    Minecraft.getMinecraft() != null ? Minecraft.getMinecraft().world : null,
+                    "attempts=" + pendingWorldTerrainRefreshAttempts + ", delay=" + pendingWorldTerrainRefreshDelay);
             return;
         }
         if (pendingWorldTerrainRefreshDelay > 0) {
@@ -11619,7 +12465,7 @@ public class PipelineContext {
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
         TextureBinder.unbindAllTextureTargets();
         unbindShaderImages();
-        unbindShaderStorageBuffers();
+        unbindShaderStorageBuffers(true);
         disablePipelineVertexAttributes();
         TextureBinder.restoreDefaultTextureUnit();
         OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
@@ -11740,16 +12586,43 @@ public class PipelineContext {
         }
     }
 
-    private static void unbindShaderStorageBuffers() {
+    private static void markShaderStorageBuffersBound() {
+        if (GLContext.getCapabilities().OpenGL43) {
+            shaderStorageBuffersKnownUnbound = false;
+        }
+    }
+
+    private void unbindShaderStorageBuffers() {
+        unbindShaderStorageBuffers(false);
+    }
+
+    private void unbindShaderStorageBuffers(boolean force) {
         if (!GLContext.getCapabilities().OpenGL43) {
             return;
         }
+        if (!force && shaderStorageBuffersKnownUnbound) {
+            return;
+        }
 
-        int maxBindings = Math.max(0, GL11.glGetInteger(GL43.GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS));
-        for (int index = 0; index < maxBindings; index++) {
-            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, index, 0);
+        if (force || !shaderStorageBuffers.active()) {
+            int maxBindings = maxShaderStorageBufferBindings();
+            for (int index = 0; index < maxBindings; index++) {
+                GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, index, 0);
+            }
+        } else {
+            for (int index : shaderStorageBuffers.bindingIndices()) {
+                GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, index, 0);
+            }
         }
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+        shaderStorageBuffersKnownUnbound = true;
+    }
+
+    private static int maxShaderStorageBufferBindings() {
+        if (maxShaderStorageBufferBindings < 0) {
+            maxShaderStorageBufferBindings = Math.max(0, GL11.glGetInteger(GL43.GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS));
+        }
+        return maxShaderStorageBufferBindings;
     }
 
     private static void disablePipelineVertexAttributes() {
@@ -11758,6 +12631,31 @@ public class PipelineContext {
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
+    }
+
+    private static void restoreVanillaClientRenderState() {
+        GL11.glFrontFace(GL11.GL_CCW);
+        GL11.glCullFace(GL11.GL_BACK);
+        GL11.glDepthRange(0.0D, 1.0D);
+        GL11.glClearDepth(1.0D);
+        GL11.glPolygonMode(GL11.GL_FRONT_AND_BACK, GL11.GL_FILL);
+        GL14.glBlendEquation(GL14.GL_FUNC_ADD);
+
+        GL11.glMatrixMode(GL11.GL_TEXTURE);
+        GL11.glLoadIdentity();
+        GL11.glMatrixMode(GL11.GL_MODELVIEW);
+
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+        GL11.glDisableClientState(GL11.GL_COLOR_ARRAY);
+        GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
+
+        OpenGlHelper.setActiveTexture(OpenGlHelper.lightmapTexUnit);
+        GlStateManager.disableTexture2D();
+        OpenGlHelper.setActiveTexture(OpenGlHelper.defaultTexUnit);
+        GlStateManager.enableTexture2D();
     }
 
     private void loadCustomTextures(ShaderPack pack, ShaderProperties properties) {
@@ -11977,6 +12875,9 @@ public class PipelineContext {
         private String reason;
         private int attemptsRemaining;
         private int delayFrames;
+        private int nextSectionY;
+        private int coveredSections;
+        private boolean shadowRefreshed;
 
         private ClientChunkRenderRefresh(WorldClient world, int chunkX, int chunkZ, String reason,
                                          int attemptsRemaining, int delayFrames) {
@@ -12010,15 +12911,22 @@ public class PipelineContext {
 
     private static final class ClientChunkRenderScheduleResult {
         private final int scheduledChunks;
-        private final boolean covered;
+        private final int coveredSections;
+        private final int nextSectionY;
+        private final boolean completed;
+        private final int requiredSections;
 
-        private ClientChunkRenderScheduleResult(int scheduledChunks, boolean covered) {
+        private ClientChunkRenderScheduleResult(int scheduledChunks, int coveredSections, int nextSectionY,
+                                                boolean completed, int requiredSections) {
             this.scheduledChunks = scheduledChunks;
-            this.covered = covered;
+            this.coveredSections = coveredSections;
+            this.nextSectionY = nextSectionY;
+            this.completed = completed;
+            this.requiredSections = requiredSections;
         }
 
         private static ClientChunkRenderScheduleResult empty() {
-            return new ClientChunkRenderScheduleResult(0, false);
+            return new ClientChunkRenderScheduleResult(0, 0, 0, false, 1);
         }
     }
 

@@ -114,7 +114,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         boolean originalFire = ausm$isFireFallbackTarget(state);
         boolean effectiveFire = ausm$isFireFallbackTarget(effectiveState);
         BufferBuilder buffer = regionBuffers != null ? regionBuffers.getWorldRendererByLayer(BlockRenderLayer.CUTOUT) : null;
-        if (originalFire || effectiveFire) {
+        if (AUSM_FIRE_COMPILE_LOG_LIMIT > 0 && (originalFire || effectiveFire)) {
             ausm$logFireCompileProbe(state, effectiveState, pos, regionBuffers, buffer, originalFire, effectiveFire);
         }
         boolean framedState = pipeline.isFramedBlockDiagnosticTarget(state);
@@ -156,6 +156,8 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         BlockRenderContext.setRenderType((short) contextState.getRenderType().ordinal());
         BlockRenderContext.setMetadata(pipeline.blockMetadata(state, chunkCache, pos));
         BlockRenderContext.setLocalBlockPos(pos.getX(), pos.getY(), pos.getZ());
+        BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
+        BlockRenderContext.setPackedLightmap(ausm$packedLightmap(contextState, chunkCache, pos));
         int blockEmission = pipeline.shouldInheritFramedEmissionInBasePass(state)
                 || BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null
                 ? pipeline.blockRenderEmissionWithFramedInheritance(state, chunkCache, pos)
@@ -164,7 +166,9 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, chunkCache, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, chunkCache, pos));
         BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState, chunkCache, pos));
-        pipeline.setBlockRenderDebugContext(state, chunkCache, pos);
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.setBlockRenderDebugContext(state, chunkCache, pos);
+        }
         pipeline.recordSyntheticLightCandidate(contextState, chunkCache, pos);
 
         ausm$framedDiagnosticStart = -1;
@@ -176,7 +180,8 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                     : null;
             ausm$framedDiagnosticStart = layerBuffer != null ? layerBuffer.getVertexCount() : -1;
         }
-        if (pipeline.isCurrentProblemProbeTarget(state) || pipeline.isCurrentProblemProbeTarget(contextState)) {
+        if (pipeline.currentProblemProbesEnabled()
+                && (pipeline.isCurrentProblemProbeTarget(state) || pipeline.isCurrentProblemProbeTarget(contextState))) {
             BufferBuilder layerBuffer = bufferBuilder != null && MinecraftForgeClient.getRenderLayer() != null
                     ? bufferBuilder.getWorldRendererByLayer(MinecraftForgeClient.getRenderLayer())
                     : null;
@@ -185,6 +190,27 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                             + ", blockEmission=" + blockEmission
                             + ", blockAlpha=" + BlockRenderContext.blockAlpha()
                             + ", layerBuffer=" + ausm$bufferDetails(layerBuffer));
+        }
+    }
+
+    @Unique
+    private static boolean ausm$isAgricraftCropState(IBlockState state) {
+        if (state == null || state.getBlock() == null) {
+            return false;
+        }
+        ResourceLocation name = state.getBlock().getRegistryName();
+        return name != null && "agricraft".equals(name.getNamespace()) && "crop".equals(name.getPath());
+    }
+
+    @Unique
+    private static int ausm$packedLightmap(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (state == null || blockAccess == null || pos == null) {
+            return 0;
+        }
+        try {
+            return state.getPackedLightmapCoords(blockAccess, pos);
+        } catch (RuntimeException ignored) {
+            return 0;
         }
     }
 
@@ -208,22 +234,26 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             BufferBuilder layerBuffer = layer != null && bufferBuilder != null
                     ? bufferBuilder.getWorldRendererByLayer(layer)
                     : null;
-            pipeline.logFramedBlockDiagnostic(
-                    "nothirium-dispatcher",
-                    state,
-                    chunkCache,
-                    pos,
-                    layer,
-                    ausm$framedDiagnosticStart,
-                    layerBuffer != null ? layerBuffer.getVertexCount() : -1,
-                    null,
-                    "buffer=" + (layerBuffer != null ? Integer.toHexString(System.identityHashCode(layerBuffer)) : "null")
-            );
-            pipeline.logCurrentProblemProbe("nothirium-return", state, chunkCache, pos,
-                    "layer=" + layer
-                            + ", start=" + ausm$framedDiagnosticStart
-                            + ", end=" + (layerBuffer != null ? layerBuffer.getVertexCount() : -1)
-                            + ", buffer=" + ausm$bufferDetails(layerBuffer));
+            if (pipeline.framedBlockDiagnosticsEnabled()) {
+                pipeline.logFramedBlockDiagnostic(
+                        "nothirium-dispatcher",
+                        state,
+                        chunkCache,
+                        pos,
+                        layer,
+                        ausm$framedDiagnosticStart,
+                        layerBuffer != null ? layerBuffer.getVertexCount() : -1,
+                        null,
+                        "buffer=" + (layerBuffer != null ? Integer.toHexString(System.identityHashCode(layerBuffer)) : "null")
+                );
+            }
+            if (pipeline.currentProblemProbesEnabled()) {
+                pipeline.logCurrentProblemProbe("nothirium-return", state, chunkCache, pos,
+                        "layer=" + layer
+                                + ", start=" + ausm$framedDiagnosticStart
+                                + ", end=" + (layerBuffer != null ? layerBuffer.getVertexCount() : -1)
+                                + ", buffer=" + ausm$bufferDetails(layerBuffer));
+            }
         }
         ausm$framedDiagnosticStart = -1;
         ausm$framedDiagnosticLayer = null;
@@ -460,6 +490,9 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                                           BlockRenderLayer fallbackLayer, BlockRenderLayer renderLayer,
                                           int normalDelta, boolean rendered, int fallbackDelta,
                                           BufferBuilder buffer, RegionRenderCacheBuilder regionBuffers) {
+        if (AUSM_EMISSIVE_FALLBACK_LOG_LIMIT <= 0) {
+            return;
+        }
         int index = AUSM_EMISSIVE_FALLBACK_LOGS.incrementAndGet();
         if (index > AUSM_EMISSIVE_FALLBACK_LOG_LIMIT) {
             return;
@@ -576,6 +609,9 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     @Unique
     private static void ausm$logFireFallback(String mode, IBlockState originalState, IBlockState renderState,
                                              BlockPos pos, int normalDelta, boolean rendered, int fallbackDelta) {
+        if (AUSM_FIRE_FALLBACK_LOG_LIMIT <= 0) {
+            return;
+        }
         int index = AUSM_FIRE_FALLBACK_LOGS.incrementAndGet();
         if (index > AUSM_FIRE_FALLBACK_LOG_LIMIT) {
             return;
@@ -597,6 +633,9 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private void ausm$logFireCompileProbe(IBlockState originalState, IBlockState effectiveState, BlockPos pos,
                                           RegionRenderCacheBuilder regionBuffers, BufferBuilder cutoutBuffer,
                                           boolean originalFire, boolean effectiveFire) {
+        if (AUSM_FIRE_COMPILE_LOG_LIMIT <= 0) {
+            return;
+        }
         int index = AUSM_FIRE_COMPILE_LOGS.incrementAndGet();
         if (index > AUSM_FIRE_COMPILE_LOG_LIMIT) {
             return;

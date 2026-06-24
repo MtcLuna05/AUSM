@@ -53,20 +53,25 @@ public class BlockRendererDispatcherMixin {
         BlockRenderContext.setRenderType((short) contextState.getRenderType().ordinal());
         BlockRenderContext.setMetadata(pipeline.blockMetadata(state, blockAccess, pos));
         BlockRenderContext.setLocalBlockPos(pos.getX(), pos.getY(), pos.getZ());
+        BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
+        BlockRenderContext.setPackedLightmap(ausm$packedLightmap(contextState, blockAccess, pos));
         BlockRenderContext.setBlockEmission(blockEmission);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, blockAccess, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, blockAccess, pos));
         BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState, blockAccess, pos));
-        pipeline.setBlockRenderDebugContext(state, blockAccess, pos);
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.setBlockRenderDebugContext(state, blockAccess, pos);
+        }
         pipeline.recordSyntheticLightCandidate(contextState, blockAccess, pos);
-        if (pipeline.isCurrentProblemProbeTarget(state) || pipeline.isCurrentProblemProbeTarget(contextState)) {
+        if (pipeline.currentProblemProbesEnabled()
+                && (pipeline.isCurrentProblemProbeTarget(state) || pipeline.isCurrentProblemProbeTarget(contextState))) {
             pipeline.logCurrentProblemProbe("dispatcher-head", state, blockAccess, pos,
                     "context=" + pipeline.diagnosticStateName(contextState)
                             + ", blockEmission=" + blockEmission
                             + ", blockAlpha=" + BlockRenderContext.blockAlpha()
                             + ", buffer=" + ausm$bufferDetails(bufferBuilder));
         }
-        if (ausm$isRenderProbeTarget(state) && bufferBuilder != null) {
+        if (BlockRendererDispatcherHooks.RENDER_PROBE_LOG_LIMIT > 0 && ausm$isRenderProbeTarget(state) && bufferBuilder != null) {
             BlockRendererDispatcherHooks.PROBE_START_VERTEX.set(bufferBuilder.getVertexCount());
         } else {
             BlockRendererDispatcherHooks.PROBE_START_VERTEX.remove();
@@ -78,6 +83,27 @@ public class BlockRendererDispatcherMixin {
         }
     }
 
+    @Unique
+    private static boolean ausm$isAgricraftCropState(IBlockState state) {
+        if (state == null || state.getBlock() == null) {
+            return false;
+        }
+        ResourceLocation name = state.getBlock().getRegistryName();
+        return name != null && "agricraft".equals(name.getNamespace()) && "crop".equals(name.getPath());
+    }
+
+    @Unique
+    private static int ausm$packedLightmap(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (state == null || blockAccess == null || pos == null) {
+            return 0;
+        }
+        try {
+            return state.getPackedLightmapCoords(blockAccess, pos);
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
+    }
+
     @Inject(method = "renderBlock", at = @At("RETURN"), cancellable = true)
     private void ausm$afterRenderBlock(IBlockState state, BlockPos pos, IBlockAccess blockAccess, BufferBuilder bufferBuilder, CallbackInfoReturnable<Boolean> cir) {
         if (ausm$appendBloomFallbackIfMissing(state, pos, blockAccess, bufferBuilder)) {
@@ -86,7 +112,9 @@ public class BlockRendererDispatcherMixin {
         ausm$logRenderProbe(state, pos, blockAccess, bufferBuilder, cir.getReturnValue());
         Integer framedStart = BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.get();
         if (framedStart != null && bufferBuilder != null) {
-            PipelineContext.getInstance().logFramedBlockDiagnostic(
+            PipelineContext pipeline = PipelineContext.getInstance();
+            if (pipeline.framedBlockDiagnosticsEnabled()) {
+                pipeline.logFramedBlockDiagnostic(
                     "dispatcher",
                     state,
                     blockAccess,
@@ -96,12 +124,15 @@ public class BlockRendererDispatcherMixin {
                     bufferBuilder.getVertexCount(),
                     cir.getReturnValue(),
                     "fallbackRender=" + String.valueOf(BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get())
-            );
-            PipelineContext.getInstance().logCurrentProblemProbe("dispatcher-return", state, blockAccess, pos,
+                );
+            }
+            if (pipeline.currentProblemProbesEnabled()) {
+                pipeline.logCurrentProblemProbe("dispatcher-return", state, blockAccess, pos,
                     "result=" + cir.getReturnValue()
                             + ", delta=" + (bufferBuilder.getVertexCount() - framedStart)
                             + ", fallbackRender=" + String.valueOf(BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get())
                             + ", buffer=" + ausm$bufferDetails(bufferBuilder));
+            }
         }
         BlockRendererDispatcherHooks.PROBE_START_VERTEX.remove();
         BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.remove();
@@ -368,6 +399,10 @@ public class BlockRendererDispatcherMixin {
 
     @Unique
     private static boolean ausm$isRenderProbeTarget(IBlockState state) {
+        if (BlockRendererDispatcherHooks.RENDER_PROBE_LOG_LIMIT <= 0
+                && BlockRendererDispatcherHooks.EMISSIVE_DISPATCHER_FALLBACK_SKIP_LOG_LIMIT <= 0) {
+            return false;
+        }
         ResourceLocation name = ausm$registryName(state);
         if (name == null) {
             return false;

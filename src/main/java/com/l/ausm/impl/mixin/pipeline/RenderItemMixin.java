@@ -29,6 +29,12 @@ public class RenderItemMixin {
     private static final ThreadLocal<Deque<Boolean>> AUSM$itemPhaseStack = ThreadLocal.withInitial(ArrayDeque::new);
 
     @Unique
+    private static final ThreadLocal<Deque<Boolean>> AUSM$guiItemStateStack = ThreadLocal.withInitial(ArrayDeque::new);
+
+    @Unique
+    private static final ThreadLocal<Deque<Boolean>> AUSM$renderedItemStack = ThreadLocal.withInitial(ArrayDeque::new);
+
+    @Unique
     private static final ThreadLocal<Deque<Boolean>> AUSM$glintPhaseStack = ThreadLocal.withInitial(ArrayDeque::new);
 
     @Inject(
@@ -54,7 +60,18 @@ public class RenderItemMixin {
     @Inject(method = "renderItem(Lnet/minecraft/item/ItemStack;Lnet/minecraft/client/renderer/block/model/IBakedModel;)V", at = @At("HEAD"))
     private void ausm$onRenderItemHead(ItemStack stack, IBakedModel model, CallbackInfo ci) {
         ProjectRedHaloRenderer.auditRenderItem(stack, "renderItem_model", model != null ? model.getClass().getName() : null);
-        AUSM$itemPhaseStack.get().push(PipelineContext.getInstance().beginItemRenderPhase());
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.isRenderingGuiScreen()) {
+            AUSM$guiItemStateStack.get().push(false);
+            AUSM$renderedItemStack.get().push(false);
+            AUSM$itemPhaseStack.get().push(false);
+            return;
+        }
+        AUSM$guiItemStateStack.get().push(false);
+        context.beginRenderedItem(stack);
+        AUSM$renderedItemStack.get().push(true);
+        context.prepareHandItemRenderState();
+        AUSM$itemPhaseStack.get().push(context.beginItemRenderPhase());
     }
 
     @Inject(method = "renderItem(Lnet/minecraft/item/ItemStack;Lnet/minecraft/client/renderer/block/model/IBakedModel;)V", at = @At("RETURN"))
@@ -63,11 +80,66 @@ public class RenderItemMixin {
         if (!stackState.isEmpty() && stackState.pop()) {
             PipelineContext.getInstance().endPass();
         }
+        Deque<Boolean> renderedItemState = AUSM$renderedItemStack.get();
+        if (!renderedItemState.isEmpty() && renderedItemState.pop()) {
+            PipelineContext.getInstance().endRenderedItem();
+        }
+        Deque<Boolean> guiState = AUSM$guiItemStateStack.get();
+        if (!guiState.isEmpty() && guiState.pop()) {
+            PipelineContext.getInstance().endGuiItemStateScope();
+        }
+    }
+
+    @Inject(
+            method = "renderItem(Lnet/minecraft/item/ItemStack;Lnet/minecraft/client/renderer/block/model/IBakedModel;)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/tileentity/TileEntityItemStackRenderer;renderByItem(Lnet/minecraft/item/ItemStack;)V"
+            )
+    )
+    private void ausm$beforeBuiltInItemRenderer(ItemStack stack, IBakedModel model, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.isRenderingGuiScreen()) {
+            context.prepareHandItemDrawState("built_in_item_renderer");
+        }
+    }
+
+    @Inject(
+            method = "renderModel(Lnet/minecraft/client/renderer/block/model/IBakedModel;ILnet/minecraft/item/ItemStack;)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraftforge/client/ForgeHooksClient;renderLitItem(Lnet/minecraft/client/renderer/RenderItem;Lnet/minecraft/client/renderer/block/model/IBakedModel;ILnet/minecraft/item/ItemStack;)V"
+            )
+    )
+    private void ausm$beforeForgeLitItemDraw(IBakedModel model, int color, ItemStack stack, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.isRenderingGuiScreen()) {
+            context.prepareHandItemDrawState("forge_lit_item");
+        }
+    }
+
+    @Inject(
+            method = "renderModel(Lnet/minecraft/client/renderer/block/model/IBakedModel;ILnet/minecraft/item/ItemStack;)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/Tessellator;draw()V"
+            )
+    )
+    private void ausm$beforeStandardItemDraw(IBakedModel model, int color, ItemStack stack, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.isRenderingGuiScreen()) {
+            context.prepareHandItemDrawState("standard_item");
+        }
     }
 
     @Inject(method = "renderEffect(Lnet/minecraft/client/renderer/block/model/IBakedModel;)V", at = @At("HEAD"))
     private void onRenderEffectHead(IBakedModel model, CallbackInfo ci) {
-        AUSM$glintPhaseStack.get().push(PipelineContext.getInstance().beginItemGlintPhase());
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.isRenderingGuiScreen()) {
+            AUSM$glintPhaseStack.get().push(false);
+            return;
+        }
+        AUSM$glintPhaseStack.get().push(context.beginItemGlintPhase());
     }
 
     @Inject(method = "renderEffect(Lnet/minecraft/client/renderer/block/model/IBakedModel;)V", at = @At("RETURN"))

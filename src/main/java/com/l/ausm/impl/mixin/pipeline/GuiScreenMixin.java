@@ -12,7 +12,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(GuiScreen.class)
 public class GuiScreenMixin {
-    private static final int WORLD_GUI_BACKGROUND = 0x88000000;
+    private static final int WORLD_GUI_BACKGROUND = 0x44000000;
 
     @Shadow
     protected Minecraft mc;
@@ -22,13 +22,6 @@ public class GuiScreenMixin {
 
     @Shadow
     public int height;
-
-    @Inject(method = "drawDefaultBackground", at = @At("HEAD"), cancellable = true)
-    private void ausm$flattenShaderlessDefaultBackground(CallbackInfo ci) {
-        if (ausm$drawFlatWorldBackground()) {
-            ci.cancel();
-        }
-    }
 
     @Inject(method = "drawWorldBackground", at = @At("HEAD"), cancellable = true)
     private void ausm$flattenShaderlessWorldBackground(int tint, CallbackInfo ci) {
@@ -46,7 +39,12 @@ public class GuiScreenMixin {
             return false;
         }
 
-        PipelineContext.getInstance().prepareGuiFramebuffer();
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.isActive()) {
+            return false;
+        }
+        context.prepareGuiFramebuffer();
+        context.prepareFlatGuiBackgroundRenderState();
         Gui.drawRect(0, 0, this.width, this.height, WORLD_GUI_BACKGROUND);
         return true;
     }

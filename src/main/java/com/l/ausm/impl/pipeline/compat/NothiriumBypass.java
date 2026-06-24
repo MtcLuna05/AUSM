@@ -216,7 +216,7 @@ public final class NothiriumBypass {
             return true;
         }
         if (BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
-            return false;
+            return true;
         }
         return !NothiriumShadowRenderer.isAvailable();
     }

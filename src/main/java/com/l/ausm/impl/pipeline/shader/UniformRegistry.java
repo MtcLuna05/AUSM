@@ -10,7 +10,11 @@ import org.lwjgl.opengl.GL20;
 
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
@@ -18,8 +22,10 @@ import java.util.function.Supplier;
  * Handles the declaration, evaluation, and uploading of GLSL Uniforms.
  */
 public class UniformRegistry {
+    private static final int MAX_PROGRAM_UNIFORM_CACHE_ENTRIES = 128;
 
     private final Map<String, UniformBinding<?>> bindings = new HashMap<>();
+    private final Map<ShaderProgram, List<ResolvedUniformBinding>> activeBindingsByProgram = new IdentityHashMap<>();
 
     // Pre-allocated buffers to avoid memory allocations every frame
     private static final IntBuffer INT_BUFFER_2 = BufferUtils.createIntBuffer(2);
@@ -30,6 +36,7 @@ public class UniformRegistry {
      * Registers an integer uniform.
      */
     public void registerInt(String name, Supplier<Integer> supplier) {
+        activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1) {
                 OpenGlHelper.glUniform1i(location, value);
@@ -41,6 +48,7 @@ public class UniformRegistry {
      * Registers a float uniform.
      */
     public void registerFloat(String name, Supplier<Float> supplier) {
+        activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1) {
                 GL20.glUniform1f(location, value);
@@ -49,6 +57,7 @@ public class UniformRegistry {
     }
 
     public void registerVec2i(String name, Supplier<int[]> supplier) {
+        activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1 && value.length >= 2) {
                 INT_BUFFER_2.clear();
@@ -61,6 +70,7 @@ public class UniformRegistry {
     }
 
     public void registerVec3i(String name, Supplier<int[]> supplier) {
+        activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1 && value.length >= 3) {
                 INT_BUFFER_3.clear();
@@ -72,6 +82,7 @@ public class UniformRegistry {
     }
 
     public void registerVec4i(String name, Supplier<int[]> supplier) {
+        activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1 && value.length >= 4) {
                 INT_BUFFER_4.clear();
@@ -83,6 +94,7 @@ public class UniformRegistry {
     }
 
     public void registerVec2(String name, Supplier<float[]> supplier) {
+        activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1 && value.length >= 2) {
                 GL20.glUniform2f(location, value[0], value[1]);
@@ -94,6 +106,7 @@ public class UniformRegistry {
      * Registers a 3-component float vector (vec3).
      */
     public void registerVec3(String name, Supplier<float[]> supplier) {
+        activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1 && value.length >= 3) {
                 GL20.glUniform3f(location, value[0], value[1], value[2]);
@@ -102,6 +115,7 @@ public class UniformRegistry {
     }
 
     public void registerVec4(String name, Supplier<float[]> supplier) {
+        activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1 && value.length >= 4) {
                 GL20.glUniform4f(location, value[0], value[1], value[2], value[3]);
@@ -113,6 +127,7 @@ public class UniformRegistry {
      * Registers a 4x4 matrix uniform.
      */
     public void registerMatrix4(String name, Supplier<FloatBuffer> supplier) {
+        activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1) {
                 OpenGlHelper.glUniformMatrix4(location, false, value);
@@ -121,6 +136,7 @@ public class UniformRegistry {
     }
 
     public void registerMatrix3(String name, Supplier<FloatBuffer> supplier) {
+        activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1) {
                 GL20.glUniformMatrix3(location, false, value);
@@ -132,12 +148,33 @@ public class UniformRegistry {
      * Uploads all registered uniforms to the currently bound ShaderProgram.
      */
     public void uploadAll(ShaderProgram program) {
+        for (ResolvedUniformBinding binding : activeBindingsFor(program)) {
+            binding.upload();
+        }
+    }
+
+    private List<ResolvedUniformBinding> activeBindingsFor(ShaderProgram program) {
+        if (program == null) {
+            return List.of();
+        }
+        List<ResolvedUniformBinding> cached = activeBindingsByProgram.get(program);
+        if (cached != null) {
+            return cached;
+        }
+        if (activeBindingsByProgram.size() > MAX_PROGRAM_UNIFORM_CACHE_ENTRIES) {
+            activeBindingsByProgram.clear();
+        }
+
+        List<ResolvedUniformBinding> active = new ArrayList<>();
         for (UniformBinding<?> binding : bindings.values()) {
             int location = program.getUniformLocation(binding.name);
             if (location != -1) {
-                binding.upload(location);
+                active.add(new ResolvedUniformBinding(binding, location));
             }
         }
+        active = List.copyOf(active);
+        activeBindingsByProgram.put(program, active);
+        return active;
     }
 
     public void upload(ShaderProgram program, String name) {
@@ -153,7 +190,11 @@ public class UniformRegistry {
     }
 
     public Map<String, float[]> scalarValues() {
-        Map<String, float[]> values = new HashMap<>();
+        return scalarValuesInto(new HashMap<>());
+    }
+
+    public Map<String, float[]> scalarValuesInto(Map<String, float[]> values) {
+        values.clear();
         for (UniformBinding<?> binding : bindings.values()) {
             Object value = binding.value();
             if (value instanceof Number number) {
@@ -231,6 +272,82 @@ public class UniformRegistry {
 
         T value() {
             return supplier.get();
+        }
+
+        @SuppressWarnings("unchecked")
+        void uploadValue(int location, Object value) {
+            uploader.upload(location, (T) value);
+        }
+    }
+
+    private static class ResolvedUniformBinding {
+        final UniformBinding<?> binding;
+        final int location;
+        private boolean hasUploadedValue;
+        private Object lastUploadedValue;
+
+        ResolvedUniformBinding(UniformBinding<?> binding, int location) {
+            this.binding = binding;
+            this.location = location;
+        }
+
+        void upload() {
+            Object value = binding.value();
+            if (value == null || isUnchanged(value)) {
+                return;
+            }
+            binding.uploadValue(location, value);
+            lastUploadedValue = snapshotValue(value);
+            hasUploadedValue = true;
+        }
+
+        private boolean isUnchanged(Object value) {
+            if (!hasUploadedValue) {
+                return false;
+            }
+            Object previous = lastUploadedValue;
+            if (previous instanceof float[] previousFloats) {
+                if (value instanceof float[] currentFloats) {
+                    return Arrays.equals(previousFloats, currentFloats);
+                }
+                if (value instanceof FloatBuffer currentMatrix) {
+                    return floatBufferEquals(previousFloats, currentMatrix);
+                }
+                return false;
+            }
+            if (previous instanceof int[] previousInts && value instanceof int[] currentInts) {
+                return Arrays.equals(previousInts, currentInts);
+            }
+            return previous.equals(value);
+        }
+
+        private static Object snapshotValue(Object value) {
+            if (value instanceof float[] vector) {
+                return vector.clone();
+            }
+            if (value instanceof int[] vector) {
+                return vector.clone();
+            }
+            if (value instanceof FloatBuffer matrix) {
+                float[] snapshot = new float[matrix.limit()];
+                for (int i = 0; i < snapshot.length; i++) {
+                    snapshot[i] = matrix.get(i);
+                }
+                return snapshot;
+            }
+            return value;
+        }
+
+        private static boolean floatBufferEquals(float[] previous, FloatBuffer current) {
+            if (previous.length != current.limit()) {
+                return false;
+            }
+            for (int i = 0; i < previous.length; i++) {
+                if (Float.compare(previous[i], current.get(i)) != 0) {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 

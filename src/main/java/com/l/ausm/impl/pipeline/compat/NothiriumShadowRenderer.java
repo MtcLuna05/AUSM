@@ -46,7 +46,7 @@ public final class NothiriumShadowRenderer {
     private static final int MAX_CHUNK_REFRESH_COMPILES = 16;
     private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 0;
     private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 0;
-    private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 24;
+    private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 0;
     private static final long REFLECTION_RETRY_DELAY_MS = 1000L;
     private static Reflection reflection;
     private static long nextReflectionAttemptMillis;
@@ -245,10 +245,8 @@ public final class NothiriumShadowRenderer {
                         if (scheduleCompiles && layer == BlockRenderLayer.SOLID) {
                             scheduleShadowCompiles(reflection, Arrays.asList(chunks), cameraX, cameraY, cameraZ, maxDistance);
                         }
-                        boolean collectState = audit && layer == BlockRenderLayer.SOLID
-                                && (!providerSuccessAuditLogged || providerZeroAuditAttempts < 8);
                         DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, Arrays.asList(chunks), cameraX, cameraY, cameraZ,
-                                maxDistance, collectState, 0, (short) 0, false);
+                                maxDistance, false, 0, (short) 0, false);
                         if (audit) {
                             auditDrawStats("provider", layer, stats);
                         }

@@ -6,10 +6,12 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.matrix.MatrixState;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiIngame;
+import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.EntityRenderer;
 import net.minecraft.client.renderer.OpenGlHelper;
@@ -65,11 +67,15 @@ public class EntityRendererMixin {
             )
     )
     private void onBeforeGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
-        boolean vanillaNoWorldGui = ausm$shouldUseVanillaNoWorldGui();
-        if (vanillaNoWorldGui) {
+        if (ausm$shouldUseVanillaGuiScreen()) {
             return;
         }
-        PipelineContext.getInstance().beginGuiRendering();
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.isActive()) {
+            context.prepareShaderlessGuiScreenRendering();
+            return;
+        }
+        context.beginGuiRendering();
     }
 
     @Inject(
@@ -81,16 +87,17 @@ public class EntityRendererMixin {
             )
     )
     private void onAfterGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
-        boolean vanillaNoWorldGui = ausm$shouldUseVanillaNoWorldGui();
-        if (vanillaNoWorldGui) {
+        if (ausm$shouldUseVanillaGuiScreen()) {
             return;
         }
         PipelineContext.getInstance().finishGuiRendering();
     }
 
-    private boolean ausm$shouldUseVanillaNoWorldGui() {
+    private boolean ausm$shouldUseVanillaGuiScreen() {
         Minecraft minecraft = Minecraft.getMinecraft();
-        return minecraft == null || minecraft.world == null;
+        return minecraft == null
+                || minecraft.world == null
+                || minecraft.currentScreen instanceof GuiContainer;
     }
 
     private void ausm$prepareNoWorldCustomMainMenu() {
@@ -351,6 +358,11 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassBeforeLitParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldRenderParticlesWithVanillaState()) {
+            context.beginTranslucents();
+            context.prepareVanillaParticleRenderingState();
+            return;
+        }
         if (context.shouldBypassWorldPassRendering()) {
             context.prepareVanillaParticleRendering();
             return;
@@ -372,11 +384,12 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterLitParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering() || context.shouldRenderParticlesWithVanillaState()) {
             return;
         }
 
-        PipelineContext.getInstance().endPass();
+        context.endPass();
     }
 
     @Inject(
@@ -389,6 +402,10 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassBeforeParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldRenderParticlesWithVanillaState()) {
+            context.prepareVanillaParticleRenderingState();
+            return;
+        }
         if (context.shouldBypassWorldPassRendering()) {
             context.prepareVanillaParticleRendering();
             return;
@@ -409,11 +426,12 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering() || context.shouldRenderParticlesWithVanillaState()) {
             return;
         }
 
-        PipelineContext.getInstance().endPass();
+        context.endPass();
     }
 
     @Inject(
@@ -595,7 +613,10 @@ public class EntityRendererMixin {
             return;
         }
 
-        PipelineContext.getInstance().endPass();
+        PipelineContext context = PipelineContext.getInstance();
+        context.finishHand();
+        context.probeHandGbufferAfterRender();
+        context.endPass();
     }
 
     @Inject(method = "renderWorldPass", at = @At("RETURN"))

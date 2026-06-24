@@ -31,7 +31,7 @@ public final class ShaderOverrides {
 
     public static boolean isSky(WorldRenderingPhase phase) {
         return switch (phase) {
-            case CUSTOM_SKY, SKY, SUNSET, SUN, STARS, VOID, MOON, SKY_TEXTURED -> true;
+            case CUSTOM_SKY, SKY, SUNSET, SUN, STARS, VOID, MOON, SKY_TEXTURED, ASTRAL_STARS, ASTRAL_SOLAR_ECLIPSE, SKY_GROUND -> true;
             default -> false;
         };
     }

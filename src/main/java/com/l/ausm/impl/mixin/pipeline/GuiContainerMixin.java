@@ -14,13 +14,21 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class GuiContainerMixin {
     @Inject(method = "drawScreen(IIF)V", at = @At("HEAD"))
     private void ausm$beginContainerGui(int mouseX, int mouseY, float partialTicks, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.isActive()) {
+            context.prepareShaderlessGuiScreenRendering();
+            return;
+        }
         ausm$prepareCompatContainerGui();
-        PipelineContext.getInstance().beginGuiRendering();
+        context.beginGuiRendering();
     }
 
     @Inject(method = "drawScreen(IIF)V", at = @At("RETURN"))
     private void ausm$finishContainerGui(int mouseX, int mouseY, float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().finishGuiRendering();
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.isActive()) {
+            context.finishGuiRendering();
+        }
     }
 
     private void ausm$prepareCompatContainerGui() {

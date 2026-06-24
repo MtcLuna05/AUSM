@@ -46,6 +46,7 @@ public class ShaderPackManager implements ShaderPackController {
     private int pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
     private int pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
     private final Set<String> betterPortalsPrewarmedCacheKeys = new HashSet<>();
+    private String lastDeferredBetterPortalsCacheKey = "";
     private String compiledPackName = OFF_PACK_NAME;
 
     public ShaderPackManager(Path minecraftRunDir) {
@@ -308,9 +309,15 @@ public class ShaderPackManager implements ShaderPackController {
         if (PipelineContext.getInstance().isRenderingBetterPortalsExternalWorldFrame()) {
             return;
         }
+        if (BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
+            return;
+        }
         boolean nestedBetterPortalsView = BetterPortalsCompat.isRenderingNestedView();
-        boolean quietBetterPortalsReload = nestedBetterPortalsView
-                || BetterPortalsCompat.consumeQuietDimensionReloadLogRequest();
+        boolean quietBetterPortalsReloadRequest = BetterPortalsCompat.consumeQuietDimensionReloadLogRequest();
+        boolean quietBetterPortalsReload = nestedBetterPortalsView || quietBetterPortalsReloadRequest;
+        if (quietBetterPortalsReload && !BetterPortalsCompat.shouldRenderNestedViewWithShaders()) {
+            return;
+        }
         if (!areShadersEnabled() || isOffPack(selectedPackName)) {
             return;
         }
@@ -398,6 +405,7 @@ public class ShaderPackManager implements ShaderPackController {
             }
             compiledDimensionId = currentDimensionId;
             compiledPackName = currentPack.getName();
+            lastDeferredBetterPortalsCacheKey = "";
             pendingPipelineReload = false;
             if (!quietBetterPortalsReload && currentDimensionId == getClientDimensionId()) {
                 PipelineContext.getInstance().scheduleWorldTerrainRefresh();
@@ -409,11 +417,14 @@ public class ShaderPackManager implements ShaderPackController {
         boolean nestedShaderPipeline = nestedBetterPortalsView && BetterPortalsCompat.shouldRenderNestedViewWithShaders();
         if (quietBetterPortalsReload && nestedBetterPortalsView && !nestedShaderPipeline) {
             pendingBetterPortalsDimensionCompileId = currentDimensionId;
-            MainMod.LOGGER.info("[BetterPortalsPipeline] dimension-switch-deferred nestedDimension={} compiled={} pack={} cacheKey={}",
-                    currentDimensionId,
-                    compiledDimensionId,
-                    selectedPackName,
-                    cacheKey);
+            if (!cacheKey.equals(lastDeferredBetterPortalsCacheKey)) {
+                lastDeferredBetterPortalsCacheKey = cacheKey;
+                MainMod.LOGGER.info("[BetterPortalsPipeline] dimension-switch-deferred nestedDimension={} compiled={} pack={} cacheKey={}",
+                        currentDimensionId,
+                        compiledDimensionId,
+                        selectedPackName,
+                        cacheKey);
+            }
             return;
         }
 
@@ -428,6 +439,7 @@ public class ShaderPackManager implements ShaderPackController {
                     compiledDimensionId, currentDimensionId, selectedPackName);
         }
         initializeCurrentPipeline(properties, true, currentDimensionId, false);
+        lastDeferredBetterPortalsCacheKey = "";
     }
 
     public void runPendingBetterPortalsDimensionCompile() {
@@ -733,6 +745,8 @@ public class ShaderPackManager implements ShaderPackController {
                 markPipelineInactive();
                 return false;
             }
+            boolean terrainAlreadyRebuilt = context.consumeTerrainRebuiltDuringLastInitialization();
+            boolean terrainCacheReusable = context.consumeTerrainCacheReusableDuringLastInitialization();
             compiledDimensionId = dimensionId;
             if (pendingBetterPortalsDimensionCompileId == dimensionId) {
                 pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
@@ -742,7 +756,7 @@ public class ShaderPackManager implements ShaderPackController {
             }
             compiledPackName = currentPack.getName();
             pendingPipelineReload = false;
-            if (activate) {
+            if (activate && !terrainAlreadyRebuilt && !terrainCacheReusable) {
                 if (fullTerrainRefresh && dimensionId == getClientDimensionId()) {
                     context.scheduleFullWorldTerrainRefresh();
                 } else {

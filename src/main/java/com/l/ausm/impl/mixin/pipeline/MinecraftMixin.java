@@ -31,6 +31,16 @@ public class MinecraftMixin {
     // Minecraft 1.12.2 handles resizing via 'resize(int width, int height)'
     @Inject(method = "resize(II)V", at = @At("RETURN"))
     private void onResize(int width, int height, CallbackInfo ci) {
+        Minecraft mc = (Minecraft) (Object) this;
+        if (!mc.isCallingFromMinecraftThread()) {
+            mc.addScheduledTask(() -> ausm$resizePipeline(width, height));
+            return;
+        }
+        ausm$resizePipeline(width, height);
+    }
+
+    @Unique
+    private static void ausm$resizePipeline(int width, int height) {
         if (PipelineContext.getInstance().isActive()) {
             PipelineContext.getInstance().resize(width, height);
         }

@@ -7,9 +7,12 @@ import com.l.ausm.api.pipeline.pack.*;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.Tessellator;
+import net.minecraftforge.client.IRenderHandler;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -45,6 +48,7 @@ public class RenderSkyMixin {
         // Vanilla sky immediately calls BufferBuilder.begin(), which hard-crashes
         // if the previous buffer was not closed.
         ausm$forceResetTessellator();
+        PipelineContext.getInstance().setAstralSolarEclipseFactor(0.0f);
         if (!PipelineContext.getInstance().shouldRenderSkyDisc()) {
             ci.cancel();
             return;
@@ -57,31 +61,28 @@ public class RenderSkyMixin {
         PipelineContext.getInstance().endPass();
     }
 
-    @Inject(
+    @Redirect(
             method = "renderSky(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraftforge/client/IRenderHandler;render(FLnet/minecraft/client/multiplayer/WorldClient;Lnet/minecraft/client/Minecraft;)V",
-                    shift = At.Shift.BEFORE
+                    target = "Lnet/minecraftforge/client/IRenderHandler;render(FLnet/minecraft/client/multiplayer/WorldClient;Lnet/minecraft/client/Minecraft;)V"
             ),
             require = 0
     )
-    private void ausm$beforeCustomSkyRenderer(float partialTicks, int pass, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.CUSTOM_SKY);
-    }
-
-    @Inject(
-            method = "renderSky(FI)V",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraftforge/client/IRenderHandler;render(FLnet/minecraft/client/multiplayer/WorldClient;Lnet/minecraft/client/Minecraft;)V",
-                    shift = At.Shift.AFTER
-            ),
-            require = 0
-    )
-    private void ausm$afterCustomSkyRenderer(float partialTicks, int pass, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
+    private void ausm$renderOrSuppressCustomSkyRenderer(IRenderHandler skyRenderer,
+                                                        float partialTicks,
+                                                        WorldClient world,
+                                                        Minecraft minecraft) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
+        context.beginPhase(WorldRenderingPhase.CUSTOM_SKY);
+        try {
+            if (!context.shouldSuppressVoidWorldCustomSkyRenderer(skyRenderer, world)) {
+                skyRenderer.render(partialTicks, world, minecraft);
+            }
+        } finally {
+            context.endPass();
+        }
     }
 
     @Inject(method = "renderSkyEnd()V", at = @At("HEAD"), require = 0)
@@ -101,13 +102,34 @@ public class RenderSkyMixin {
             method = "renderSky(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/GlStateManager;rotate(FFFF)V",
-                    ordinal = 3,
-                    shift = At.Shift.AFTER
+                    target = "Lnet/minecraft/client/renderer/BufferBuilder;begin(ILnet/minecraft/client/renderer/vertex/VertexFormat;)V",
+                    ordinal = 0,
+                    shift = At.Shift.BEFORE
             )
     )
-    private void onRenderSkyAfterBaseRotation(float partialTicks, int pass, CallbackInfo ci) {
-        PipelineContext.getInstance().applySkySunPathRotation();
+    private void ausm$beforeSunriseSunsetFan(float partialTicks, int pass, CallbackInfo ci) {
+        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.SUNSET);
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/Tessellator;draw()V",
+                    ordinal = 0
+            )
+    )
+    private void ausm$drawOrSuppressSunriseSunsetFan(Tessellator tessellator) {
+        PipelineContext context = PipelineContext.getInstance();
+        try {
+            if (context.shouldSuppressVanillaSunsetGeometry()) {
+                ausm$forceResetTessellator(tessellator);
+                return;
+            }
+            tessellator.draw();
+        } finally {
+            context.endPass();
+        }
     }
 
     @Inject(
@@ -119,9 +141,22 @@ public class RenderSkyMixin {
                     shift = At.Shift.BEFORE
             )
     )
-    private void onRenderSkyBeforeSun(float partialTicks, int pass, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.SUN);
+    private void ausm$beforeSunTextureBind(float partialTicks, int pass, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
+        context.beginPhase(WorldRenderingPhase.SUN);
+    }
+
+    @Inject(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/texture/TextureManager;bindTexture(Lnet/minecraft/util/ResourceLocation;)V",
+                    ordinal = 0,
+                    shift = At.Shift.AFTER
+            )
+    )
+    private void ausm$afterSunTextureBind(float partialTicks, int pass, CallbackInfo ci) {
     }
 
     @Inject(
@@ -133,9 +168,22 @@ public class RenderSkyMixin {
                     shift = At.Shift.BEFORE
             )
     )
-    private void onRenderSkyBeforeMoon(float partialTicks, int pass, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.MOON);
+    private void ausm$beforeMoonTextureBind(float partialTicks, int pass, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
+        context.beginPhase(WorldRenderingPhase.MOON);
+    }
+
+    @Inject(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/texture/TextureManager;bindTexture(Lnet/minecraft/util/ResourceLocation;)V",
+                    ordinal = 1,
+                    shift = At.Shift.AFTER
+            )
+    )
+    private void ausm$afterMoonTextureBind(float partialTicks, int pass, CallbackInfo ci) {
     }
 
     @Redirect(
@@ -147,7 +195,8 @@ public class RenderSkyMixin {
             )
     )
     private void ausm$drawOrSuppressVanillaSun(Tessellator tessellator) {
-        if (PipelineContext.getInstance().shouldSuppressVanillaSunGeometry()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldSuppressVanillaSunGeometry()) {
             ausm$forceResetTessellator(tessellator);
             return;
         }
@@ -163,7 +212,8 @@ public class RenderSkyMixin {
             )
     )
     private void ausm$drawOrSuppressVanillaMoon(Tessellator tessellator) {
-        if (PipelineContext.getInstance().shouldSuppressVanillaMoonGeometry()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldSuppressVanillaMoonGeometry()) {
             ausm$forceResetTessellator(tessellator);
             return;
         }

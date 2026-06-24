@@ -18,7 +18,7 @@ public enum WorldRenderingPhase {
     SUN(RenderPass.GBUFFERS_SKYTEXTURED, RenderPass.SHADOW),
     MOON(RenderPass.GBUFFERS_SKYTEXTURED, RenderPass.SHADOW),
     STARS(RenderPass.GBUFFERS_SKYBASIC, RenderPass.SHADOW),
-    VOID(RenderPass.GBUFFERS_SKYBASIC, RenderPass.SHADOW),
+    VOID(RenderPass.GBUFFERS_SKYTEXTURED, RenderPass.SHADOW),
     TERRAIN_SOLID(RenderPass.GBUFFERS_TERRAIN_SOLID, RenderPass.SHADOW_SOLID),
     TERRAIN_CUTOUT_MIPPED(RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP, RenderPass.SHADOW_CUTOUT),
     TERRAIN_CUTOUT(RenderPass.GBUFFERS_TERRAIN_CUTOUT, RenderPass.SHADOW_CUTOUT),
@@ -46,7 +46,10 @@ public enum WorldRenderingPhase {
     LIGHTNING(RenderPass.GBUFFERS_LIGHTNING, RenderPass.SHADOW_LIGHTNING),
     ARMOR_GLINT(RenderPass.GBUFFERS_ARMOR_GLINT, RenderPass.SHADOW_ENTITIES),
     SPIDER_EYES(RenderPass.GBUFFERS_SPIDEREYES, RenderPass.SHADOW_ENTITIES),
-    PARTICLES_TRANSLUCENT(RenderPass.GBUFFERS_PARTICLES_TRANSLUCENT, RenderPass.SHADOW);
+    PARTICLES_TRANSLUCENT(RenderPass.GBUFFERS_PARTICLES_TRANSLUCENT, RenderPass.SHADOW),
+    ASTRAL_STARS(RenderPass.GBUFFERS_SKYTEXTURED, RenderPass.SHADOW),
+    ASTRAL_SOLAR_ECLIPSE(RenderPass.GBUFFERS_SKYTEXTURED, RenderPass.SHADOW),
+    SKY_GROUND(RenderPass.GBUFFERS_SKYBASIC, RenderPass.SHADOW);
 
     private final RenderPass mainPass;
     private final RenderPass shadowPass;
@@ -67,7 +70,7 @@ public enum WorldRenderingPhase {
     public boolean usesBlockAtlas() {
         return switch (this) {
             case TERRAIN_SOLID, TERRAIN_CUTOUT_MIPPED, TERRAIN_CUTOUT, TERRAIN_TRANSLUCENT, TRIPWIRE,
-                    DESTROY, BLOCK_ENTITIES, BLOCK_ENTITIES_TRANSLUCENT, ITEM -> true;
+                    DESTROY, BLOCK_ENTITIES, BLOCK_ENTITIES_TRANSLUCENT, ITEM, HAND_SOLID, HAND_TRANSLUCENT -> true;
             default -> false;
         };
     }

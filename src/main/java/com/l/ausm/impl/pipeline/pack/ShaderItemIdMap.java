@@ -44,9 +44,8 @@ public final class ShaderItemIdMap {
         Map<Integer, Integer> itemIds = new LinkedHashMap<>();
         Map<ItemMetadataKey, Integer> metadataIds = new LinkedHashMap<>();
         String itemPropertiesPath = layout.rootPath("item.properties");
-        boolean hasItemProperties = pack.hasResource(itemPropertiesPath);
         loadFile(pack, itemPropertiesPath, itemIds, metadataIds);
-        if (hasItemProperties) {
+        if (pack.hasResource(itemPropertiesPath)) {
             addCompatibilityAliases(itemIds, metadataIds);
         }
         return new ItemIdRules(Map.copyOf(itemIds), Map.copyOf(metadataIds));
@@ -256,6 +255,19 @@ public final class ShaderItemIdMap {
                 return metadataId;
             }
             return itemIds.getOrDefault(itemId, 0);
+        }
+
+        public Integer explicitIdFor(ItemStack stack) {
+            if (stack == null || stack.isEmpty()) {
+                return null;
+            }
+
+            int itemId = Item.getIdFromItem(stack.getItem());
+            Integer metadataId = metadataIds.get(new ItemMetadataKey(itemId, stack.getMetadata()));
+            if (metadataId != null) {
+                return metadataId;
+            }
+            return itemIds.get(itemId);
         }
     }
 

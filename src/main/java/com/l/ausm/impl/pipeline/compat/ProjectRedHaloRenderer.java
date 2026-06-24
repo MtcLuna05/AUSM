@@ -19,6 +19,7 @@ import java.lang.reflect.Method;
 
 public final class ProjectRedHaloRenderer {
     private static final int HALO_ALPHA = 112;
+    private static final boolean ITEM_AUDIT_LOGGING = Boolean.getBoolean("ausm.projectred.audit");
 
     private static final int[] HALO_TEXTURE_UNITS = {
             OpenGlHelper.defaultTexUnit,
@@ -145,6 +146,9 @@ public final class ProjectRedHaloRenderer {
     }
 
     public static void auditHeldItems(Minecraft minecraft) {
+        if (!ITEM_AUDIT_LOGGING) {
+            return;
+        }
         if (minecraft == null || minecraft.player == null) {
             return;
         }
@@ -155,6 +159,9 @@ public final class ProjectRedHaloRenderer {
     }
 
     public static void auditRenderItem(ItemStack stack, String source, Object detail) {
+        if (!ITEM_AUDIT_LOGGING) {
+            return;
+        }
         if (stack == null || stack.isEmpty() || stack.getItem() == null) {
             return;
         }
@@ -190,6 +197,9 @@ public final class ProjectRedHaloRenderer {
 
     private static void logItemAudit(String source, ItemStack stack, ResourceLocation name,
                                      String itemClass, Object detail, boolean matched) {
+        if (!ITEM_AUDIT_LOGGING) {
+            return;
+        }
         if (itemAuditLogCount++ >= 32) {
             return;
         }

@@ -242,7 +242,7 @@ public final class ShaderDrawBuffersScanner {
 
         private ScanState(ShaderOptions options) {
             this.options = options;
-            defines.put("MC_VERSION", "11202");
+            seedEnvironmentDefines();
             for (ShaderOption option : options.all().values()) {
                 if (!option.changed()) {
                     continue;
@@ -254,6 +254,26 @@ public final class ShaderDrawBuffersScanner {
                 } else {
                     defines.put(option.name(), option.value());
                 }
+            }
+        }
+
+        private void seedEnvironmentDefines() {
+            defines.put("MC_VERSION", "11202");
+            defines.put("MC_GL_VERSION", "320");
+            defines.put("MC_GLSL_VERSION", "120");
+            defines.put("MC_RENDER_QUALITY", "1.0");
+            defines.put("MC_SHADOW_QUALITY", "1.0");
+            defines.put("MC_HAND_DEPTH", "1.0");
+            defines.put("IS_IRIS", "1");
+            defines.put("IRIS_VERSION", "10902");
+            defines.put("IRIS_FEATURE_CUSTOM_IMAGES", "1");
+            defines.put("IRIS_FEATURE_SSBO", "1");
+            defines.put("IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE", "1");
+            defines.put("IRIS_FEATURE_FADE_VARIABLE", "1");
+            switch (ShaderDimensionContext.currentDimensionId()) {
+                case -1 -> defines.put("NETHER", "1");
+                case 1 -> defines.put("THE_END", "1");
+                default -> defines.put("OVERWORLD", "1");
             }
         }
 

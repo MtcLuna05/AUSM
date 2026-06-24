@@ -72,17 +72,24 @@ public abstract class ArchitectureCraftRenderingManagerMixin {
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, blockAccess, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, blockAccess, pos));
         BlockRenderContext.setSeparateAoEligible(contextState != null && pipeline.shouldSeparateBlockAo(contextState, blockAccess, pos));
-        pipeline.setBlockRenderDebugContext(state, blockAccess, pos);
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.setBlockRenderDebugContext(state, blockAccess, pos);
+        }
         pipeline.recordSyntheticLightCandidate(contextState, blockAccess, pos);
-        pipeline.logCurrentProblemProbe("architecture-manager-context", state, blockAccess, pos,
-                "context=" + pipeline.diagnosticStateName(contextState)
-                        + ", contextEmission=" + BlockRenderContext.blockEmission()
-                        + ", contextAlpha=" + BlockRenderContext.blockAlpha());
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.logCurrentProblemProbe("architecture-manager-context", state, blockAccess, pos,
+                    "context=" + pipeline.diagnosticStateName(contextState)
+                            + ", contextEmission=" + BlockRenderContext.blockEmission()
+                            + ", contextAlpha=" + BlockRenderContext.blockAlpha());
+        }
     }
 
     @Unique
     private static void ausm$logArchitectureManager(String source, IBlockState state, IBlockAccess blockAccess,
                                                    BlockPos pos, Object renderer) {
+        if (AUSM_ARCHITECTURE_MANAGER_LOG_LIMIT <= 0) {
+            return;
+        }
         int count = AUSM_ARCHITECTURE_MANAGER_LOGS.incrementAndGet();
         if (count > AUSM_ARCHITECTURE_MANAGER_LOG_LIMIT) {
             return;

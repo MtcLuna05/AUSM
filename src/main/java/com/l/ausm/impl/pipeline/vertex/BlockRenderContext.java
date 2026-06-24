@@ -15,6 +15,8 @@ public final class BlockRenderContext {
     private static final ThreadLocal<Integer> CURRENT_BLOCK_X = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_Y = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_Z = ThreadLocal.withInitial(() -> 0);
+    private static final ThreadLocal<Boolean> CURRENT_AGRICRAFT_CROP = ThreadLocal.withInitial(() -> false);
+    private static final ThreadLocal<Integer> CURRENT_PACKED_LIGHTMAP = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_EMISSION = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_ALPHA = ThreadLocal.withInitial(() -> -1);
     private static final ThreadLocal<Boolean> CURRENT_CRYSTAL_ONLY_EMISSION = ThreadLocal.withInitial(() -> false);
@@ -74,6 +76,22 @@ public final class BlockRenderContext {
 
     public static int blockZ() {
         return CURRENT_BLOCK_Z.get();
+    }
+
+    public static void setAgricraftCrop(boolean agricraftCrop) {
+        CURRENT_AGRICRAFT_CROP.set(agricraftCrop);
+    }
+
+    public static boolean isAgricraftCrop() {
+        return CURRENT_AGRICRAFT_CROP.get();
+    }
+
+    public static void setPackedLightmap(int packedLightmap) {
+        CURRENT_PACKED_LIGHTMAP.set(packedLightmap);
+    }
+
+    public static int packedLightmap() {
+        return CURRENT_PACKED_LIGHTMAP.get();
     }
 
     public static int localX() {
@@ -238,6 +256,8 @@ public final class BlockRenderContext {
         CURRENT_BLOCK_X.remove();
         CURRENT_BLOCK_Y.remove();
         CURRENT_BLOCK_Z.remove();
+        CURRENT_AGRICRAFT_CROP.remove();
+        CURRENT_PACKED_LIGHTMAP.remove();
         CURRENT_BLOCK_EMISSION.remove();
         CURRENT_BLOCK_ALPHA.remove();
         CURRENT_CRYSTAL_ONLY_EMISSION.remove();

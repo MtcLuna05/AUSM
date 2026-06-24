@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class ShaderImageSet {
+    private static final long MAX_RETAINED_CLEAR_BUFFER_BYTES = 32L * 1024L * 1024L;
     private final List<ShaderImageDirective> images;
     private final List<LoadedImage> loadedImages = new ArrayList<>();
     private static final ByteBuffer ZERO_CLEAR_VALUE = org.lwjgl.BufferUtils.createByteBuffer(16);
@@ -295,22 +296,20 @@ public final class ShaderImageSet {
             GL11.glTexParameteri(target, GL12.GL_TEXTURE_WRAP_R, GL12.GL_CLAMP_TO_EDGE);
         }
 
-        ByteBuffer clearPixels = directive.clear() ? zeroPixels(pixelFormat, pixelType, imageWidth, imageHeight, imageDepth) : null;
         switch (directive.target()) {
-            case TEXTURE_1D -> GL11.glTexImage1D(target, 0, internalFormat, imageWidth, 0, pixelFormat, pixelType, clearPixels);
-            case TEXTURE_2D -> GL11.glTexImage2D(target, 0, internalFormat, imageWidth, imageHeight, 0, pixelFormat, pixelType, clearPixels);
-            case TEXTURE_3D -> GL12.glTexImage3D(target, 0, internalFormat, imageWidth, imageHeight, imageDepth, 0, pixelFormat, pixelType, clearPixels);
+            case TEXTURE_1D -> GL11.glTexImage1D(target, 0, internalFormat, imageWidth, 0, pixelFormat, pixelType, (ByteBuffer) null);
+            case TEXTURE_2D -> GL11.glTexImage2D(target, 0, internalFormat, imageWidth, imageHeight, 0, pixelFormat, pixelType, (ByteBuffer) null);
+            case TEXTURE_3D -> GL12.glTexImage3D(target, 0, internalFormat, imageWidth, imageHeight, imageDepth, 0, pixelFormat, pixelType, (ByteBuffer) null);
         }
-        if (clearPixels != null) {
-            clearPixels.clear();
-        }
-        ByteBuffer perFrameClearPixels = smallClearBuffer(clearPixels, pixelFormat, pixelType, imageWidth, imageHeight, imageDepth);
+        ByteBuffer perFrameClearPixels = directive.clear()
+                ? retainedClearBuffer(pixelFormat, pixelType, imageWidth, imageHeight, imageDepth)
+                : null;
         GL11.glBindTexture(target, 0);
         int error = GL11.glGetError();
         if (error != GL11.GL_NO_ERROR) {
             MainMod.LOGGER.warn("[ShaderImages] GL error allocating image '{}': 0x{}", directive.name(), Integer.toHexString(error));
         }
-        return new LoadedImage(
+        LoadedImage image = new LoadedImage(
                 directive,
                 unit,
                 ShaderBindingLayout.CUSTOM_IMAGE_TEXTURE_BASE_UNIT + unit,
@@ -322,19 +321,23 @@ public final class ShaderImageSet {
                 imageDepth,
                 perFrameClearPixels
         );
+        if (directive.clear()) {
+            clearImage(image, true);
+        }
+        return image;
     }
 
-    private static ByteBuffer smallClearBuffer(ByteBuffer clearPixels, int pixelFormat, int pixelType, int width, int height, int depth) {
-        if (clearPixels == null) {
+    private static ByteBuffer retainedClearBuffer(int pixelFormat, int pixelType, int width, int height, int depth) {
+        long size = (long) componentCount(pixelFormat) * byteSize(pixelType) * width * Math.max(1, height) * Math.max(1, depth);
+        if (size <= 0 || size > MAX_RETAINED_CLEAR_BUFFER_BYTES || size > Integer.MAX_VALUE) {
             return null;
         }
-        long size = (long) componentCount(pixelFormat) * byteSize(pixelType) * width * Math.max(1, height) * Math.max(1, depth);
-        return size > 0 && size <= 32L * 1024L * 1024L ? clearPixels : null;
+        return org.lwjgl.BufferUtils.createByteBuffer((int) size);
     }
 
     private static ByteBuffer zeroPixels(int pixelFormat, int pixelType, int width, int height, int depth) {
         long size = (long) componentCount(pixelFormat) * byteSize(pixelType) * width * Math.max(1, height) * Math.max(1, depth);
-        if (size <= 0 || size > Integer.MAX_VALUE) {
+        if (size <= 0 || size > MAX_RETAINED_CLEAR_BUFFER_BYTES || size > Integer.MAX_VALUE) {
             return null;
         }
         return org.lwjgl.BufferUtils.createByteBuffer((int) size);

@@ -65,6 +65,7 @@ public final class BetterPortalsCompat {
     private static boolean mainViewSwapRecoveryLogged;
     private static final int CAPTURED_TEXTURE_UNITS = 32;
     private static final int VANILLA_GL_STATE_TEXTURE_UNITS = 8;
+    private static int cachedCapturedTextureUnitCount = -1;
     private static final int MAIN_VIEW_SWAP_RECOVERY_FRAMES = 10;
     private static final int MAX_RENDER_STATE_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_TRANSITION_DIAGNOSTIC_LOGS = 0;
@@ -385,10 +386,10 @@ public final class BetterPortalsCompat {
     }
 
     public static boolean shouldSuppressOriginalPortalBlock(IBlockState state) {
-        if (state == null || !isInstalled() || !isSeeThroughPortalsEnabled()) {
+        if (state == null || !shouldUseAusmPortalSurfaceReplacement()) {
             return false;
         }
-        if (!shouldUseAusmPortalSurfaceReplacement()) {
+        if (!isInstalled() || !isSeeThroughPortalsEnabled()) {
             return false;
         }
 
@@ -579,7 +580,7 @@ public final class BetterPortalsCompat {
                 + " fb=" + describeFramebuffer(framebuffer));
         if (shouldProtectBetterPortalsRenderState()) {
             try {
-                glState = PortalRendererGlState.capture();
+                glState = PortalRendererGlState.captureRenderPass();
             } catch (RuntimeException e) {
                 if (!portalRendererStateWarningLogged) {
                     portalRendererStateWarningLogged = true;
@@ -1022,6 +1023,7 @@ public final class BetterPortalsCompat {
     }
 
     private static final class PortalRendererGlState {
+        private final boolean fullCapture;
         private final int program;
         private final int activeTexture;
         private final int[] texture2dBindings;
@@ -1067,13 +1069,10 @@ public final class BetterPortalsCompat {
         private final int matrixMode;
         private final int shadeModel;
 
-        private PortalRendererGlState() {
+        private PortalRendererGlState(boolean fullCapture) {
+            this.fullCapture = fullCapture;
             program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
             activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
-            int textureUnits = capturedTextureUnitCount();
-            texture2dBindings = new int[textureUnits];
-            texture2dEnabled = new boolean[textureUnits];
-            captureTextureBindings(activeTexture, texture2dBindings, texture2dEnabled);
             framebuffer = GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
             readFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
             drawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
@@ -1081,7 +1080,6 @@ public final class BetterPortalsCompat {
             readBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
             viewport = glInt4(GL11.GL_VIEWPORT);
             scissorBox = glInt4(GL11.GL_SCISSOR_BOX);
-            texture2d = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
             depthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
             depthMask = glBoolean(GL11.GL_DEPTH_WRITEMASK);
             depthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
@@ -1095,32 +1093,65 @@ public final class BetterPortalsCompat {
             blendDstAlpha = GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA);
             cullFace = GL11.glIsEnabled(GL11.GL_CULL_FACE);
             cullFaceMode = GL11.glGetInteger(GL11.GL_CULL_FACE_MODE);
-            lighting = GL11.glIsEnabled(GL11.GL_LIGHTING);
-            colorMaterial = GL11.glIsEnabled(GL11.GL_COLOR_MATERIAL);
-            stencilTest = GL11.glIsEnabled(GL11.GL_STENCIL_TEST);
-            stencilFunc = GL11.glGetInteger(GL11.GL_STENCIL_FUNC);
-            stencilRef = GL11.glGetInteger(GL11.GL_STENCIL_REF);
-            stencilValueMask = GL11.glGetInteger(GL11.GL_STENCIL_VALUE_MASK);
-            stencilWriteMask = GL11.glGetInteger(GL11.GL_STENCIL_WRITEMASK);
-            stencilFail = GL11.glGetInteger(GL11.GL_STENCIL_FAIL);
-            stencilPassDepthFail = GL11.glGetInteger(GL11.GL_STENCIL_PASS_DEPTH_FAIL);
-            stencilPassDepthPass = GL11.glGetInteger(GL11.GL_STENCIL_PASS_DEPTH_PASS);
             scissorTest = GL11.glIsEnabled(GL11.GL_SCISSOR_TEST);
-            clipPlanes = new boolean[6];
-            for (int i = 0; i < clipPlanes.length; i++) {
-                clipPlanes[i] = GL11.glIsEnabled(GL11.GL_CLIP_PLANE0 + i);
+            if (fullCapture) {
+                int textureUnits = capturedTextureUnitCount();
+                texture2dBindings = new int[textureUnits];
+                texture2dEnabled = new boolean[textureUnits];
+                captureTextureBindings(activeTexture, texture2dBindings, texture2dEnabled);
+                texture2d = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
+                lighting = GL11.glIsEnabled(GL11.GL_LIGHTING);
+                colorMaterial = GL11.glIsEnabled(GL11.GL_COLOR_MATERIAL);
+                stencilTest = GL11.glIsEnabled(GL11.GL_STENCIL_TEST);
+                stencilFunc = GL11.glGetInteger(GL11.GL_STENCIL_FUNC);
+                stencilRef = GL11.glGetInteger(GL11.GL_STENCIL_REF);
+                stencilValueMask = GL11.glGetInteger(GL11.GL_STENCIL_VALUE_MASK);
+                stencilWriteMask = GL11.glGetInteger(GL11.GL_STENCIL_WRITEMASK);
+                stencilFail = GL11.glGetInteger(GL11.GL_STENCIL_FAIL);
+                stencilPassDepthFail = GL11.glGetInteger(GL11.GL_STENCIL_PASS_DEPTH_FAIL);
+                stencilPassDepthPass = GL11.glGetInteger(GL11.GL_STENCIL_PASS_DEPTH_PASS);
+                clipPlanes = new boolean[6];
+                for (int i = 0; i < clipPlanes.length; i++) {
+                    clipPlanes[i] = GL11.glIsEnabled(GL11.GL_CLIP_PLANE0 + i);
+                }
+                polygonOffsetFill = GL11.glIsEnabled(GL11.GL_POLYGON_OFFSET_FILL);
+                polygonOffsetFactor = GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_FACTOR);
+                polygonOffsetUnits = GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_UNITS);
+                colorMask = glBoolean4(GL11.GL_COLOR_WRITEMASK);
+                color = glFloat4(GL11.GL_CURRENT_COLOR);
+                matrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+                shadeModel = GL11.glGetInteger(GL11.GL_SHADE_MODEL);
+            } else {
+                texture2dBindings = null;
+                texture2dEnabled = null;
+                texture2d = true;
+                lighting = false;
+                colorMaterial = false;
+                stencilTest = false;
+                stencilFunc = GL11.GL_ALWAYS;
+                stencilRef = 0;
+                stencilValueMask = 0xFF;
+                stencilWriteMask = 0xFF;
+                stencilFail = GL11.GL_KEEP;
+                stencilPassDepthFail = GL11.GL_KEEP;
+                stencilPassDepthPass = GL11.GL_KEEP;
+                clipPlanes = null;
+                polygonOffsetFill = false;
+                polygonOffsetFactor = 0.0F;
+                polygonOffsetUnits = 0.0F;
+                colorMask = null;
+                color = null;
+                matrixMode = GL11.GL_MODELVIEW;
+                shadeModel = GL11.GL_SMOOTH;
             }
-            polygonOffsetFill = GL11.glIsEnabled(GL11.GL_POLYGON_OFFSET_FILL);
-            polygonOffsetFactor = GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_FACTOR);
-            polygonOffsetUnits = GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_UNITS);
-            colorMask = glBoolean4(GL11.GL_COLOR_WRITEMASK);
-            color = glFloat4(GL11.GL_CURRENT_COLOR);
-            matrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
-            shadeModel = GL11.glGetInteger(GL11.GL_SHADE_MODEL);
         }
 
         private static PortalRendererGlState capture() {
-            return new PortalRendererGlState();
+            return new PortalRendererGlState(true);
+        }
+
+        private static PortalRendererGlState captureRenderPass() {
+            return new PortalRendererGlState(false);
         }
 
         private String summary() {
@@ -1174,7 +1205,14 @@ public final class BetterPortalsCompat {
 
         private void restore() {
             OpenGlHelper.glUseProgram(program);
-            restoreTextureBindings(activeTexture, texture2dBindings, texture2dEnabled);
+            if (fullCapture) {
+                restoreTextureBindings(activeTexture, texture2dBindings, texture2dEnabled);
+            } else if (isVanillaGlStateTextureUnit(activeTexture)) {
+                GlStateManager.setActiveTexture(activeTexture);
+                GL13.glActiveTexture(activeTexture);
+            } else {
+                TextureBinder.restoreDefaultTextureUnit();
+            }
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFramebuffer);
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, drawFramebuffer);
             if (readFramebuffer == drawFramebuffer && readFramebuffer == framebuffer) {
@@ -1184,7 +1222,6 @@ public final class BetterPortalsCompat {
             GL11.glReadBuffer(readBuffer);
             GL11.glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
             GL11.glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]);
-            setCapability(GL11.GL_TEXTURE_2D, texture2d);
             setCapability(GL11.GL_DEPTH_TEST, depthTest);
             GL11.glDepthMask(depthMask);
             GL11.glDepthFunc(depthFunc);
@@ -1194,22 +1231,25 @@ public final class BetterPortalsCompat {
             GlStateManager.tryBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
             setCapability(GL11.GL_CULL_FACE, cullFace);
             GL11.glCullFace(cullFaceMode);
-            setCapability(GL11.GL_LIGHTING, lighting);
-            setCapability(GL11.GL_COLOR_MATERIAL, colorMaterial);
-            setCapability(GL11.GL_STENCIL_TEST, stencilTest);
-            GL11.glStencilMask(stencilWriteMask);
-            GL11.glStencilFunc(stencilFunc, stencilRef, stencilValueMask);
-            GL11.glStencilOp(stencilFail, stencilPassDepthFail, stencilPassDepthPass);
             setCapability(GL11.GL_SCISSOR_TEST, scissorTest);
-            for (int i = 0; i < clipPlanes.length; i++) {
-                setCapability(GL11.GL_CLIP_PLANE0 + i, clipPlanes[i]);
+            if (fullCapture) {
+                setCapability(GL11.GL_TEXTURE_2D, texture2d);
+                setCapability(GL11.GL_LIGHTING, lighting);
+                setCapability(GL11.GL_COLOR_MATERIAL, colorMaterial);
+                setCapability(GL11.GL_STENCIL_TEST, stencilTest);
+                GL11.glStencilMask(stencilWriteMask);
+                GL11.glStencilFunc(stencilFunc, stencilRef, stencilValueMask);
+                GL11.glStencilOp(stencilFail, stencilPassDepthFail, stencilPassDepthPass);
+                for (int i = 0; i < clipPlanes.length; i++) {
+                    setCapability(GL11.GL_CLIP_PLANE0 + i, clipPlanes[i]);
+                }
+                setCapability(GL11.GL_POLYGON_OFFSET_FILL, polygonOffsetFill);
+                GL11.glPolygonOffset(polygonOffsetFactor, polygonOffsetUnits);
+                GL11.glColorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+                GL11.glColor4f(color[0], color[1], color[2], color[3]);
+                GL11.glShadeModel(shadeModel);
+                GL11.glMatrixMode(matrixMode);
             }
-            setCapability(GL11.GL_POLYGON_OFFSET_FILL, polygonOffsetFill);
-            GL11.glPolygonOffset(polygonOffsetFactor, polygonOffsetUnits);
-            GL11.glColorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
-            GL11.glColor4f(color[0], color[1], color[2], color[3]);
-            GL11.glShadeModel(shadeModel);
-            GL11.glMatrixMode(matrixMode);
         }
 
         private static void captureTextureBindings(int previousActiveTexture, int[] bindings, boolean[] enabled) {
@@ -1225,11 +1265,15 @@ public final class BetterPortalsCompat {
         }
 
         private static int capturedTextureUnitCount() {
+            if (cachedCapturedTextureUnitCount > 0) {
+                return cachedCapturedTextureUnitCount;
+            }
             int maxUnits = GL11.glGetInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
             if (maxUnits <= 0) {
                 maxUnits = CAPTURED_TEXTURE_UNITS;
             }
-            return Math.min(CAPTURED_TEXTURE_UNITS, maxUnits);
+            cachedCapturedTextureUnitCount = Math.min(CAPTURED_TEXTURE_UNITS, maxUnits);
+            return cachedCapturedTextureUnitCount;
         }
 
         private static void restoreTextureBindings(int activeTexture, int[] bindings, boolean[] enabled) {

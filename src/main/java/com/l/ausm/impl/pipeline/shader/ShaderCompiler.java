@@ -129,6 +129,9 @@ public class ShaderCompiler {
                 MainMod.LOGGER.error("[ShaderCompiler] File was empty or null: {}", resourcePath);
                 return -1;
             }
+            if (shouldDumpDebugSource(resourcePath)) {
+                ShaderSourceDumper.dumpDebugSource(debugDumpName(resourcePath, shaderType), source);
+            }
             int shaderId = OpenGlHelper.glCreateShader(shaderType);
             
             GL20.glShaderSource(shaderId, source);
@@ -150,6 +153,26 @@ public class ShaderCompiler {
             ShaderCompileNotifications.reportFailure(resourcePath);
             return -1;
         }
+    }
+
+    private static boolean shouldDumpDebugSource(String resourcePath) {
+        return resourcePath != null
+                && (resourcePath.contains("gbuffers_skybasic")
+                || resourcePath.contains("gbuffers_skytextured")
+                || resourcePath.contains("gbuffers_hand")
+                || resourcePath.contains("composite1"));
+    }
+
+    private static String debugDumpName(String resourcePath, int shaderType) {
+        String suffix = "shader";
+        if (shaderType == OpenGlHelper.GL_VERTEX_SHADER) {
+            suffix = "vertex";
+        } else if (shaderType == OpenGlHelper.GL_FRAGMENT_SHADER) {
+            suffix = "fragment";
+        } else if (shaderType == GL32.GL_GEOMETRY_SHADER) {
+            suffix = "geometry";
+        }
+        return resourcePath + "." + suffix;
     }
 
     private static boolean failedExistingStage(String path, int shaderId) {

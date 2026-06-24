@@ -133,6 +133,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             for (int sourceInt = 0; sourceInt < sourceStride / Integer.BYTES; sourceInt++) {
                 expandedData[target + sourceInt] = source.getInt();
             }
+            ausm$sanitizeAgricraftCropVertex(expandedData, target, sourceStride / Integer.BYTES);
             ausm$applyBloomMaskVertexData(expandedData, target);
             ausm$applyEmissiveVertexColor(expandedData, target);
             ausm$applyEmissiveLightmap(expandedData, target);
@@ -191,6 +192,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             int source = vertex * sourceStride;
             int target = vertex * targetStride;
             System.arraycopy(vertexData, source, expandedData, target, Math.min(sourceStride, targetStride));
+            ausm$sanitizeAgricraftCropVertex(expandedData, target, sourceStride);
             ausm$applyBloomMaskVertexData(expandedData, target);
             ausm$applyEmissiveVertexColor(expandedData, target);
             ausm$applyEmissiveLightmap(expandedData, target);
@@ -249,6 +251,20 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return 14;
         }
         return sourceInts % targetStride == 0 ? targetStride : -1;
+    }
+
+    private static void ausm$sanitizeAgricraftCropVertex(int[] expandedData, int target, int sourceStride) {
+        if (!BlockRenderContext.isAgricraftCrop()
+                || expandedData == null
+                || (sourceStride != 7 && sourceStride != 8 && sourceStride != 14)
+                || target < 0
+                || target + 6 >= expandedData.length) {
+            return;
+        }
+        // AgriCraft/InfinityLib emits dynamic crop quads through an ITEM-like
+        // tessellator. If those quads are later treated as BLOCK vertices, UV0
+        // or packed normal data lands in UV1/lightmap and appears as blue bands.
+        expandedData[target + 6] = BlockRenderContext.packedLightmap();
     }
 
     private static int ausm$pipelineBlockBulkStride(ByteBuffer source, int sourceBytes, int targetStride) {
@@ -368,22 +384,28 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         if (colorIndex >= 0 && colorIndex < vertexData.length) {
             int before = vertexData[colorIndex];
             vertexData[colorIndex] = ausm$applyBlockAlpha(ausm$brightenColorRgb(vertexData[colorIndex], blockEmission));
-            PipelineContext.getInstance().logCurrentRenderContextProbe("buffer-vanilla-data-color",
-                    "vertexBase=" + vertexBase
-                            + ", before=0x" + Integer.toHexString(before)
-                            + ", after=0x" + Integer.toHexString(vertexData[colorIndex])
-                            + ", colorIndex=" + colorIndex
-                            + ", format=" + vertexFormat);
+            PipelineContext pipeline = PipelineContext.getInstance();
+            if (pipeline.currentProblemProbesEnabled()) {
+                pipeline.logCurrentRenderContextProbe("buffer-vanilla-data-color",
+                        "vertexBase=" + vertexBase
+                                + ", before=0x" + Integer.toHexString(before)
+                                + ", after=0x" + Integer.toHexString(vertexData[colorIndex])
+                                + ", colorIndex=" + colorIndex
+                                + ", format=" + vertexFormat);
+            }
         }
         if (lightmapIndex >= 0 && lightmapIndex < vertexData.length) {
             int before = vertexData[lightmapIndex];
             vertexData[lightmapIndex] = ausm$emissiveLightmap(vertexData[lightmapIndex], blockEmission);
-            PipelineContext.getInstance().logCurrentRenderContextProbe("buffer-vanilla-data-light",
-                    "vertexBase=" + vertexBase
-                            + ", before=0x" + Integer.toHexString(before)
-                            + ", after=0x" + Integer.toHexString(vertexData[lightmapIndex])
-                            + ", lightmapIndex=" + lightmapIndex
-                            + ", format=" + vertexFormat);
+            PipelineContext pipeline = PipelineContext.getInstance();
+            if (pipeline.currentProblemProbesEnabled()) {
+                pipeline.logCurrentRenderContextProbe("buffer-vanilla-data-light",
+                        "vertexBase=" + vertexBase
+                                + ", before=0x" + Integer.toHexString(before)
+                                + ", after=0x" + Integer.toHexString(vertexData[lightmapIndex])
+                                + ", lightmapIndex=" + lightmapIndex
+                                + ", format=" + vertexFormat);
+            }
         }
     }
 
@@ -733,12 +755,15 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         ausm$writeBlockAlpha(colorOffset);
         ausm$markShaderlessBloomMetadata();
         PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftForgeClient.getRenderLayer());
-        PipelineContext.getInstance().logCurrentRenderContextProbe("buffer-current-vertex-color",
-                "vertex=" + vertexCount
-                        + ", before=0x" + Integer.toHexString(before)
-                        + ", after=0x" + Integer.toHexString(byteBuffer.getInt(colorOffset))
-                        + ", colorOffset=" + colorOffset
-                        + ", format=" + vertexFormat);
+        PipelineContext pipeline = PipelineContext.getInstance();
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.logCurrentRenderContextProbe("buffer-current-vertex-color",
+                    "vertex=" + vertexCount
+                            + ", before=0x" + Integer.toHexString(before)
+                            + ", after=0x" + Integer.toHexString(byteBuffer.getInt(colorOffset))
+                            + ", colorOffset=" + colorOffset
+                            + ", format=" + vertexFormat);
+        }
     }
 
     private static int ausm$brightenColorRgb(int color, int blockEmission) {
@@ -861,12 +886,15 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         if (alpha > 0 && alpha < 255) {
             ausm$capturedTranslucentAlpha = alpha;
             ausm$capturedTranslucentAlphaOffset = colorOffset + 3;
-            PipelineContext.getInstance().logCurrentRenderContextProbe("buffer-alpha-capture",
-                    "vertexIndex=" + vertexIndex
-                            + ", alpha=" + alpha
-                            + ", color=0x" + Integer.toHexString(byteBuffer.getInt(colorOffset))
-                            + ", colorOffset=" + colorOffset
-                            + ", format=" + vertexFormat);
+            PipelineContext pipeline = PipelineContext.getInstance();
+            if (pipeline.currentProblemProbesEnabled()) {
+                pipeline.logCurrentRenderContextProbe("buffer-alpha-capture",
+                        "vertexIndex=" + vertexIndex
+                                + ", alpha=" + alpha
+                                + ", color=0x" + Integer.toHexString(byteBuffer.getInt(colorOffset))
+                                + ", colorOffset=" + colorOffset
+                                + ", format=" + vertexFormat);
+            }
         }
     }
 
@@ -914,12 +942,15 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         ausm$writeBlockAlpha(colorOffset);
         ausm$markShaderlessBloomMetadata();
         PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftForgeClient.getRenderLayer());
-        PipelineContext.getInstance().logCurrentRenderContextProbe("buffer-existing-vertex-color",
-                "vertexIndex=" + vertexIndex
-                        + ", before=0x" + Integer.toHexString(before)
-                        + ", after=0x" + Integer.toHexString(byteBuffer.getInt(colorOffset))
-                        + ", colorOffset=" + colorOffset
-                        + ", format=" + vertexFormat);
+        PipelineContext pipeline = PipelineContext.getInstance();
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.logCurrentRenderContextProbe("buffer-existing-vertex-color",
+                    "vertexIndex=" + vertexIndex
+                            + ", before=0x" + Integer.toHexString(before)
+                            + ", after=0x" + Integer.toHexString(byteBuffer.getInt(colorOffset))
+                            + ", colorOffset=" + colorOffset
+                            + ", format=" + vertexFormat);
+        }
     }
 
     @Unique

@@ -38,40 +38,47 @@ public abstract class BlockcrafteryBakedModelEditableMixin {
     private void ausm$logFramedModelQuads(IBlockState state, EnumFacing side, long rand,
                                           CallbackInfoReturnable<List<BakedQuad>> cir) {
         List<BakedQuad> quads = cir.getReturnValue();
+        PipelineContext pipeline = PipelineContext.getInstance();
         if (ausm$shouldCreateBloomQuads(state, quads)) {
             List<BakedQuad> bloomQuads = ausm$createBloomQuadsFromSolidLayer(state, side, rand);
-            PipelineContext.getInstance().logCurrentProblemProbe("blockcraftery-model-bloom-create", state, null, null,
-                    "side=" + side
-                            + ", rand=" + rand
-                            + ", inherited=" + PipelineContext.getInstance().diagnosticStateName(ausm$inheritedBloomSource(state))
-                            + ", originalQuads=" + (quads != null ? quads.size() : -1)
-                            + ", bloomQuads=" + bloomQuads.size()
-                            + ", expansion=" + AUSM_BLOOM_MASK_EXPANSION
-                            + ", layer=" + MinecraftForgeClient.getRenderLayer());
+            if (pipeline.currentProblemProbesEnabled()) {
+                pipeline.logCurrentProblemProbe("blockcraftery-model-bloom-create", state, null, null,
+                        "side=" + side
+                                + ", rand=" + rand
+                                + ", inherited=" + pipeline.diagnosticStateName(ausm$inheritedBloomSource(state))
+                                + ", originalQuads=" + (quads != null ? quads.size() : -1)
+                                + ", bloomQuads=" + bloomQuads.size()
+                                + ", expansion=" + AUSM_BLOOM_MASK_EXPANSION
+                                + ", layer=" + MinecraftForgeClient.getRenderLayer());
+            }
             if (!bloomQuads.isEmpty()) {
                 quads = bloomQuads;
                 cir.setReturnValue(bloomQuads);
             }
         } else if (AusmBloomLayer.isBloomLayer(MinecraftForgeClient.getRenderLayer())) {
-            PipelineContext.getInstance().logCurrentProblemProbe("blockcraftery-model-bloom-skip", state, null, null,
-                    "side=" + side
-                            + ", rand=" + rand
-                            + ", inherited=" + PipelineContext.getInstance().diagnosticStateName(ausm$inheritedBloomSource(state))
-                            + ", quads=" + (quads != null ? quads.size() : -1)
-                            + ", fallbackActive=" + AUSM_BLOOM_QUAD_FALLBACK.get()
-                            + ", layer=" + MinecraftForgeClient.getRenderLayer());
+            if (pipeline.currentProblemProbesEnabled()) {
+                pipeline.logCurrentProblemProbe("blockcraftery-model-bloom-skip", state, null, null,
+                        "side=" + side
+                                + ", rand=" + rand
+                                + ", inherited=" + pipeline.diagnosticStateName(ausm$inheritedBloomSource(state))
+                                + ", quads=" + (quads != null ? quads.size() : -1)
+                                + ", fallbackActive=" + AUSM_BLOOM_QUAD_FALLBACK.get()
+                                + ", layer=" + MinecraftForgeClient.getRenderLayer());
+            }
         }
-        PipelineContext.getInstance().logFramedBlockDiagnostic(
-                "blockcraftery-model",
-                state,
-                null,
-                null,
-                MinecraftForgeClient.getRenderLayer(),
-                -1,
-                -1,
-                quads != null && !quads.isEmpty(),
-                "side=" + side + ", rand=" + rand + ", quads=" + (quads != null ? quads.size() : -1)
-        );
+        if (pipeline.framedBlockDiagnosticsEnabled()) {
+            pipeline.logFramedBlockDiagnostic(
+                    "blockcraftery-model",
+                    state,
+                    null,
+                    null,
+                    MinecraftForgeClient.getRenderLayer(),
+                    -1,
+                    -1,
+                    quads != null && !quads.isEmpty(),
+                    "side=" + side + ", rand=" + rand + ", quads=" + (quads != null ? quads.size() : -1)
+            );
+        }
     }
 
     @Unique

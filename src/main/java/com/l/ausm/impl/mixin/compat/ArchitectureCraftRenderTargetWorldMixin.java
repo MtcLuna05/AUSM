@@ -77,11 +77,14 @@ public abstract class ArchitectureCraftRenderTargetWorldMixin {
         }
         vlm1 = Math.max(vlm1, 240);
         vlm2 = Math.max(vlm2, 240);
-        PipelineContext.getInstance().logCurrentRenderContextProbe("architecture-target-force-light",
-                "shade=" + shade
-                        + ", packedLight=" + packedLight
-                        + ", contextEmission=" + contextEmission
-                        + ", vlm=" + vlm1 + "/" + vlm2);
+        PipelineContext pipeline = PipelineContext.getInstance();
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.logCurrentRenderContextProbe("architecture-target-force-light",
+                    "shade=" + shade
+                            + ", packedLight=" + packedLight
+                            + ", contextEmission=" + contextEmission
+                            + ", vlm=" + vlm1 + "/" + vlm2);
+        }
     }
 
     @Inject(method = "end", at = @At("RETURN"), remap = false)
@@ -111,16 +114,23 @@ public abstract class ArchitectureCraftRenderTargetWorldMixin {
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(blockState, world, blockPos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(blockState, world, blockPos));
         BlockRenderContext.setSeparateAoEligible(contextState != null && pipeline.shouldSeparateBlockAo(contextState, world, blockPos));
-        pipeline.setBlockRenderDebugContext(blockState, world, blockPos);
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.setBlockRenderDebugContext(blockState, world, blockPos);
+        }
         pipeline.recordSyntheticLightCandidate(contextState, world, blockPos);
-        pipeline.logCurrentProblemProbe("architecture-target-context", blockState, world, blockPos,
-                "context=" + pipeline.diagnosticStateName(contextState)
-                        + ", contextEmission=" + BlockRenderContext.blockEmission()
-                        + ", contextAlpha=" + BlockRenderContext.blockAlpha()
-                        + ", vlm=" + vlm1 + "/" + vlm2);
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.logCurrentProblemProbe("architecture-target-context", blockState, world, blockPos,
+                    "context=" + pipeline.diagnosticStateName(contextState)
+                            + ", contextEmission=" + BlockRenderContext.blockEmission()
+                            + ", contextAlpha=" + BlockRenderContext.blockAlpha()
+                            + ", vlm=" + vlm1 + "/" + vlm2);
+        }
     }
 
     private void ausm$logTargetDirect(String source, Boolean result) {
+        if (AUSM_ARCHITECTURE_TARGET_LOG_LIMIT <= 0) {
+            return;
+        }
         if (++ausm$architectureTargetLogs > AUSM_ARCHITECTURE_TARGET_LOG_LIMIT) {
             return;
         }
@@ -158,7 +168,11 @@ public abstract class ArchitectureCraftRenderTargetWorldMixin {
     }
 
     private void ausm$log(String source, String extra) {
-        PipelineContext.getInstance().logFramedBlockDiagnostic(
+        PipelineContext pipeline = PipelineContext.getInstance();
+        if (!pipeline.framedBlockDiagnosticsEnabled()) {
+            return;
+        }
+        pipeline.logFramedBlockDiagnostic(
                 source,
                 blockState,
                 world,

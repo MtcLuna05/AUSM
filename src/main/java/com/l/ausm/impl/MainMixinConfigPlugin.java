@@ -57,6 +57,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".RenderLibBetweenlandsEntityRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/renderlib/renderer/entity/EntityRenderer.class", true);
         }
+        if (mixinClassName.endsWith(".RenderLibTileEntityRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/renderlib/renderer/tileentity/TileEntityRenderer.class", true);
+        }
         if (mixinClassName.endsWith(".ThaumcraftFixClientEventHandlerMixin")) {
             return optionalTargetPresent(mixinClassName, "thecodex6824/thaumcraftfix/client/ClientEventHandler.class", false);
         }
@@ -92,9 +95,6 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         }
         if (mixinClassName.endsWith(".BetterPortalsCreateWorldHandlerMixin")) {
             return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/view/impl/net/CreateWorld$Handler.class", true);
-        }
-        if (mixinClassName.endsWith(".BetterPortalsServerWorldsManagerMixin")) {
-            return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/view/impl/server/ServerWorldsManagerImpl.class", false);
         }
         if (mixinClassName.endsWith(".AbyssalCraftPortalLayerMixin")) {
             return optionalTargetPresent(mixinClassName, "com/shinoow/abyssalcraft/common/blocks/BlockAbyssPortal.class", false);
@@ -156,15 +156,6 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
     private static boolean optionalTargetPresent(String mixinClassName, String resourcePath, boolean allowJarFallback) {
         String source = classResourceSource(resourcePath, allowJarFallback);
         boolean present = source != null;
-        if (shouldLogOptionalTargetProbe(mixinClassName)) {
-            MainMod.LOGGER.info("[AUSMMixinProbe] mixin={} target={} present={} source={} allowJarFallback={} userDir={}",
-                    mixinClassName,
-                    resourcePath,
-                    present,
-                    source,
-                    allowJarFallback,
-                    System.getProperty("user.dir", "."));
-        }
         return present;
     }
 
@@ -194,12 +185,6 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         }
         File jar = resourceJarInModsDirectory(resourcePath);
         return jar != null ? "mods-jar:" + jar.getName() : null;
-    }
-
-    private static boolean shouldLogOptionalTargetProbe(String mixinClassName) {
-        return mixinClassName != null
-                && (mixinClassName.contains("ArchitectureCraft")
-                || mixinClassName.contains("Blockcraftery"));
     }
 
     private static boolean resourcePresent(ClassLoader loader, String resourcePath) {

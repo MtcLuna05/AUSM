@@ -14,7 +14,9 @@ import org.lwjgl.opengl.*;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
+import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -31,6 +33,7 @@ public class DeferredFramebuffer {
     private static final int READ_TEXTURE_INDEX = 0;
     private static final int WRITE_TEXTURE_INDEX = 1;
     private static final int MAX_FRAMEBUFFER_STATUS_LOGS = 16;
+    private static final int UNKNOWN_ATTACHMENT_TEXTURE = Integer.MIN_VALUE;
     private static int maxDrawBufferSlots = -1;
     private static int framebufferStatusLogs;
 
@@ -58,6 +61,10 @@ public class DeferredFramebuffer {
     private final FloatBuffer depthReadBuffer = org.lwjgl.BufferUtils.createFloatBuffer(1);
     private final FloatBuffer colorReadBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
     private final FloatBuffer clearColorBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
+    private final Map<Integer, int[]> attachedColorTexturesByFramebuffer = new HashMap<>();
+    private final Map<Integer, Integer> attachedDepthTexturesByFramebuffer = new HashMap<>();
+    private final Map<Integer, int[]> drawBuffersByFramebuffer = new HashMap<>();
+    private int currentFramebufferId = -1;
     private boolean usable = true;
 
     public DeferredFramebuffer(int width, int height) {
@@ -89,7 +96,7 @@ public class DeferredFramebuffer {
         fullscreenFboId = OpenGlHelper.glGenFramebuffers();
         readFboId = OpenGlHelper.glGenFramebuffers();
         depthCopyFboId = OpenGlHelper.glGenFramebuffers();
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+        bindFramebuffer(fboId);
 
         // Standard depth buffer. Shader depth samplers are views/copies of this texture.
         depthTextureId = GL11.glGenTextures();
@@ -101,7 +108,7 @@ public class DeferredFramebuffer {
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_DEPTH_TEXTURE_MODE, GL11.GL_LUMINANCE);
         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_DEPTH_COMPONENT, width, height, 0, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, (FloatBuffer) null);
 
-        OpenGlHelper.glFramebufferTexture2D(OpenGlHelper.GL_FRAMEBUFFER, OpenGlHelper.GL_DEPTH_ATTACHMENT, GL11.GL_TEXTURE_2D, depthTextureId, 0);
+        attachFramebufferDepthTexture(depthTextureId);
         for (int i = 0; i < DEPTH_SNAPSHOT_COUNT; i++) {
             depthSnapshotTextureIds[i] = allocateDepthTexture();
         }
@@ -111,7 +118,7 @@ public class DeferredFramebuffer {
             allocateColorAttachment(attachment, formats.getOrDefault(attachment, ColorBufferFormat.RGBA8));
         }
 
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, 0);
+        bindFramebuffer(0);
     }
 
     private void allocateColorAttachment(Attachment attachment, ColorBufferFormat format) {
@@ -172,10 +179,11 @@ public class DeferredFramebuffer {
     }
 
     public void bind() {
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+        bindFramebuffer(fboId);
         GL11.glViewport(0, 0, width, height);
 
         GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        invalidateDrawBufferState(fboId);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
     }
 
@@ -196,40 +204,31 @@ public class DeferredFramebuffer {
     }
 
     private void bindPipelineFramebuffer(int framebufferId, boolean withDepth, boolean readTextures, Attachment... drawTargets) {
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, framebufferId);
+        bindFramebuffer(framebufferId);
+        boolean attachmentsChanged;
         if (withDepth) {
-            attachDepthTexture();
+            attachmentsChanged = attachDepthTextureInternal();
         } else {
-            detachDepthTexture();
+            attachmentsChanged = detachDepthTextureInternal();
         }
-        attachTextures(readTextures, drawTargets);
+        attachmentsChanged |= attachTextures(readTextures, drawTargets);
         setDrawBuffers(drawTargets);
         if (drawTargets.length > 0) {
             GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         } else {
             GL11.glReadBuffer(GL11.GL_NONE);
         }
-        checkStatus("bindPipelineFramebuffer:" + framebufferId + ", depth=" + withDepth + ", read=" + readTextures + ", targets=" + java.util.Arrays.toString(drawTargets));
+        if (attachmentsChanged) {
+            checkStatus("bindPipelineFramebuffer:" + framebufferId + ", depth=" + withDepth + ", read=" + readTextures + ", targets=" + java.util.Arrays.toString(drawTargets));
+        }
     }
 
     public void attachDepthTexture() {
-        OpenGlHelper.glFramebufferTexture2D(
-                OpenGlHelper.GL_FRAMEBUFFER,
-                OpenGlHelper.GL_DEPTH_ATTACHMENT,
-                GL11.GL_TEXTURE_2D,
-                depthTextureId,
-                0
-        );
+        attachDepthTextureInternal();
     }
 
     public void detachDepthTexture() {
-        OpenGlHelper.glFramebufferTexture2D(
-                OpenGlHelper.GL_FRAMEBUFFER,
-                OpenGlHelper.GL_DEPTH_ATTACHMENT,
-                GL11.GL_TEXTURE_2D,
-                0,
-                0
-        );
+        detachDepthTextureInternal();
     }
 
     public int getFramebufferId() {
@@ -287,30 +286,19 @@ public class DeferredFramebuffer {
     }
 
     private void blitColorTexture(int sourceTexture, int sourceWidth, int sourceHeight, int targetTexture, int targetWidth, int targetHeight) {
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, readFboId);
+        bindFramebuffer(readFboId);
         detachDepthTexture();
-        OpenGlHelper.glFramebufferTexture2D(
-                OpenGlHelper.GL_FRAMEBUFFER,
-                OpenGlHelper.GL_COLOR_ATTACHMENT0,
-                GL11.GL_TEXTURE_2D,
-                sourceTexture,
-                0
-        );
+        attachFramebufferColorTexture(0, sourceTexture);
 
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fullscreenFboId);
+        bindFramebuffer(fullscreenFboId);
         detachDepthTexture();
-        OpenGlHelper.glFramebufferTexture2D(
-                OpenGlHelper.GL_FRAMEBUFFER,
-                OpenGlHelper.GL_COLOR_ATTACHMENT0,
-                GL11.GL_TEXTURE_2D,
-                targetTexture,
-                0
-        );
+        attachFramebufferColorTexture(0, targetTexture);
 
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, fullscreenFboId);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        invalidateDrawBufferState(fullscreenFboId);
         GL30.glBlitFramebuffer(
                 0,
                 0,
@@ -326,7 +314,7 @@ public class DeferredFramebuffer {
     }
 
     public void blitTo(int targetFramebuffer, int targetWidth, int targetHeight) {
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, readFboId);
+        bindFramebuffer(readFboId);
         attachDepthTexture();
         attachReadTextures(Attachment.COLOR);
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
@@ -334,6 +322,7 @@ public class DeferredFramebuffer {
 
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glDrawBuffer(targetFramebuffer == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+        invalidateDrawBufferState(targetFramebuffer);
 
         GL30.glBlitFramebuffer(
                 0,
@@ -350,7 +339,7 @@ public class DeferredFramebuffer {
     }
 
     public void blitDepthTo(int targetFramebuffer, int targetWidth, int targetHeight) {
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, readFboId);
+        bindFramebuffer(readFboId);
         attachDepthTexture();
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, targetFramebuffer);
@@ -375,6 +364,12 @@ public class DeferredFramebuffer {
      */
     public void setDrawBuffers(Attachment... attachments) {
         int maxSlots = maxDrawBufferSlots();
+        if (currentFramebufferId >= 0) {
+            int[] cached = drawBuffersByFramebuffer.get(currentFramebufferId);
+            if (drawBufferStateMatches(cached, attachments, maxSlots)) {
+                return;
+            }
+        }
         if (drawBuffers == null || drawBuffers.capacity() < Math.min(attachments.length, maxSlots)) {
             drawBuffers = org.lwjgl.BufferUtils.createIntBuffer(Math.max(8, Math.min(attachments.length, maxSlots)));
         }
@@ -391,11 +386,40 @@ public class DeferredFramebuffer {
             drawBuffers.put(OpenGlHelper.GL_COLOR_ATTACHMENT0 + i);
         }
         drawBuffers.flip();
+        int[] uploadedState = new int[drawBuffers.remaining()];
+        for (int i = 0; i < uploadedState.length; i++) {
+            uploadedState[i] = drawBuffers.get(drawBuffers.position() + i);
+        }
         if (drawBuffers.hasRemaining()) {
             GL20.glDrawBuffers(drawBuffers);
         } else {
             GL11.glDrawBuffer(GL11.GL_NONE);
         }
+        if (currentFramebufferId >= 0) {
+            drawBuffersByFramebuffer.put(currentFramebufferId, uploadedState);
+        }
+    }
+
+    private boolean drawBufferStateMatches(int[] cached, Attachment[] attachments, int maxSlots) {
+        if (cached == null) {
+            return false;
+        }
+        int count = 0;
+        for (int i = 0; i < attachments.length && i < maxSlots; i++) {
+            Attachment attachment = attachments[i];
+            if (!hasColorAttachment(attachment)) {
+                continue;
+            }
+            if (count >= cached.length || cached[count] != OpenGlHelper.GL_COLOR_ATTACHMENT0 + i) {
+                return false;
+            }
+            count++;
+        }
+        return count == cached.length;
+    }
+
+    private void invalidateDrawBufferState(int framebufferId) {
+        drawBuffersByFramebuffer.remove(framebufferId);
     }
 
     public int getTexture(Attachment attachment) {
@@ -439,11 +463,11 @@ public class DeferredFramebuffer {
             int width = getAttachmentWidth(attachment);
             int height = getAttachmentHeight(attachment);
 
-            OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, readFboId);
+            bindFramebuffer(readFboId);
             detachDepthTexture();
             attachReadTextures(attachment);
 
-            OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fullscreenFboId);
+            bindFramebuffer(fullscreenFboId);
             detachDepthTexture();
             attachWriteTextures(attachment);
 
@@ -451,6 +475,7 @@ public class DeferredFramebuffer {
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, fullscreenFboId);
             GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
             GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+            invalidateDrawBufferState(fullscreenFboId);
 
             GL30.glBlitFramebuffer(
                     0,
@@ -475,16 +500,11 @@ public class DeferredFramebuffer {
         }
     }
 
-    private void attachTextures(boolean readTextures, Attachment... attachments) {
+    private boolean attachTextures(boolean readTextures, Attachment... attachments) {
+        boolean changed = false;
         int maxSlots = maxDrawBufferSlots();
         for (int i = 0; i < maxSlots; i++) {
-            OpenGlHelper.glFramebufferTexture2D(
-                    OpenGlHelper.GL_FRAMEBUFFER,
-                    OpenGlHelper.GL_COLOR_ATTACHMENT0 + i,
-                    GL11.GL_TEXTURE_2D,
-                    0,
-                    0
-            );
+            changed |= attachFramebufferColorTexture(i, 0);
         }
 
         for (int i = 0; i < attachments.length; i++) {
@@ -496,14 +516,68 @@ public class DeferredFramebuffer {
             if (textureId == -1) {
                 continue;
             }
-            OpenGlHelper.glFramebufferTexture2D(
-                    OpenGlHelper.GL_FRAMEBUFFER,
-                    OpenGlHelper.GL_COLOR_ATTACHMENT0 + i,
-                    GL11.GL_TEXTURE_2D,
-                    textureId,
-                    0
-            );
+            changed |= attachFramebufferColorTexture(i, textureId);
         }
+        return changed;
+    }
+
+    private void bindFramebuffer(int framebufferId) {
+        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, framebufferId);
+        currentFramebufferId = framebufferId;
+    }
+
+    private boolean attachDepthTextureInternal() {
+        return attachFramebufferDepthTexture(depthTextureId);
+    }
+
+    private boolean detachDepthTextureInternal() {
+        return attachFramebufferDepthTexture(0);
+    }
+
+    private boolean attachFramebufferDepthTexture(int textureId) {
+        if (currentFramebufferId >= 0) {
+            Integer currentTexture = attachedDepthTexturesByFramebuffer.get(currentFramebufferId);
+            if (currentTexture != null && currentTexture == textureId) {
+                return false;
+            }
+            attachedDepthTexturesByFramebuffer.put(currentFramebufferId, textureId);
+        }
+        OpenGlHelper.glFramebufferTexture2D(
+                OpenGlHelper.GL_FRAMEBUFFER,
+                OpenGlHelper.GL_DEPTH_ATTACHMENT,
+                GL11.GL_TEXTURE_2D,
+                textureId,
+                0
+        );
+        return true;
+    }
+
+    private boolean attachFramebufferColorTexture(int slot, int textureId) {
+        int maxSlots = maxDrawBufferSlots();
+        if (slot < 0 || slot >= maxSlots) {
+            return false;
+        }
+        if (currentFramebufferId >= 0) {
+            int[] currentTextures = attachedColorTexturesByFramebuffer.computeIfAbsent(currentFramebufferId, ignored -> {
+                int[] textures = new int[maxSlots];
+                Arrays.fill(textures, UNKNOWN_ATTACHMENT_TEXTURE);
+                return textures;
+            });
+            if (slot < currentTextures.length && currentTextures[slot] == textureId) {
+                return false;
+            }
+            if (slot < currentTextures.length) {
+                currentTextures[slot] = textureId;
+            }
+        }
+        OpenGlHelper.glFramebufferTexture2D(
+                OpenGlHelper.GL_FRAMEBUFFER,
+                OpenGlHelper.GL_COLOR_ATTACHMENT0 + slot,
+                GL11.GL_TEXTURE_2D,
+                textureId,
+                0
+        );
+        return true;
     }
 
     private boolean hasColorAttachment(Attachment attachment) {
@@ -547,7 +621,7 @@ public class DeferredFramebuffer {
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
 
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, readFboId);
+        bindFramebuffer(readFboId);
         attachDepthTexture();
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, depthCopyFboId);
@@ -560,6 +634,54 @@ public class DeferredFramebuffer {
         );
         GL11.glReadBuffer(GL11.GL_NONE);
         GL11.glDrawBuffer(GL11.GL_NONE);
+        invalidateDrawBufferState(depthCopyFboId);
+        GL30.glBlitFramebuffer(
+                0,
+                0,
+                width,
+                height,
+                0,
+                0,
+                width,
+                height,
+                GL11.GL_DEPTH_BUFFER_BIT,
+                GL11.GL_NEAREST
+        );
+
+        bindFramebuffer(readFboId);
+        attachDepthTexture();
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+    }
+
+    public void copyDepthSnapshot(int sourceIndex, int targetIndex) {
+        if (sourceIndex < 0
+                || sourceIndex >= depthSnapshotTextureIds.length
+                || targetIndex < 0
+                || targetIndex >= depthSnapshotTextureIds.length
+                || depthSnapshotTextureIds[sourceIndex] == -1
+                || depthSnapshotTextureIds[targetIndex] == -1
+                || sourceIndex == targetIndex) {
+            return;
+        }
+
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+
+        bindFramebuffer(readFboId);
+        attachFramebufferDepthTexture(depthSnapshotTextureIds[sourceIndex]);
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, depthCopyFboId);
+        OpenGlHelper.glFramebufferTexture2D(
+                GL30.GL_DRAW_FRAMEBUFFER,
+                OpenGlHelper.GL_DEPTH_ATTACHMENT,
+                GL11.GL_TEXTURE_2D,
+                depthSnapshotTextureIds[targetIndex],
+                0
+        );
+        GL11.glReadBuffer(GL11.GL_NONE);
+        GL11.glDrawBuffer(GL11.GL_NONE);
+        invalidateDrawBufferState(depthCopyFboId);
         GL30.glBlitFramebuffer(
                 0,
                 0,
@@ -581,9 +703,25 @@ public class DeferredFramebuffer {
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
 
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, readFboId);
+        bindFramebuffer(readFboId);
         attachDepthTexture();
         float depth = readDepthAt(width / 2, height / 2);
+
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+        return depth;
+    }
+
+    public float readDepthAtPixel(int x, int y) {
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+
+        bindFramebuffer(readFboId);
+        attachDepthTexture();
+        float depth = readDepthAt(
+                Math.max(0, Math.min(width - 1, x)),
+                Math.max(0, Math.min(height - 1, y))
+        );
 
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
@@ -603,15 +741,9 @@ public class DeferredFramebuffer {
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
 
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, readFboId);
+        bindFramebuffer(readFboId);
         detachDepthTexture();
-        OpenGlHelper.glFramebufferTexture2D(
-                OpenGlHelper.GL_FRAMEBUFFER,
-                OpenGlHelper.GL_COLOR_ATTACHMENT0,
-                GL11.GL_TEXTURE_2D,
-                textureId,
-                0
-        );
+        attachFramebufferColorTexture(0, textureId);
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
 
@@ -731,6 +863,10 @@ public class DeferredFramebuffer {
         colorWidths.clear();
         colorHeights.clear();
         flippedTextures.clear();
+        attachedColorTexturesByFramebuffer.clear();
+        attachedDepthTexturesByFramebuffer.clear();
+        drawBuffersByFramebuffer.clear();
+        currentFramebufferId = -1;
     }
 
     /**
@@ -745,10 +881,11 @@ public class DeferredFramebuffer {
     }
 
     public void clearDepth() {
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, readFboId);
+        bindFramebuffer(readFboId);
         attachDepthTexture();
         attachReadTextures();
         GL11.glDrawBuffer(GL11.GL_NONE);
+        invalidateDrawBufferState(readFboId);
         GL11.glViewport(0, 0, width, height);
         GlStateManager.clearDepth(1.0);
         GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
@@ -764,7 +901,7 @@ public class DeferredFramebuffer {
 
         GL11.glDisable(GL11.GL_BLEND);
 
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fullscreenFboId);
+        bindFramebuffer(fullscreenFboId);
         detachDepthTexture();
         for (Attachment attachment : attachmentsToClear) {
             attachTextures(readTextures, attachment);
@@ -776,10 +913,11 @@ public class DeferredFramebuffer {
         }
 
         if (readTextures) {
-            OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, readFboId);
+            bindFramebuffer(readFboId);
             attachReadTextures();
             attachDepthTexture();
             GL11.glDrawBuffer(GL11.GL_NONE);
+            invalidateDrawBufferState(readFboId);
             GL11.glViewport(0, 0, width, height);
             GlStateManager.clearDepth(1.0);
             GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);

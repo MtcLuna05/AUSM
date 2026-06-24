@@ -2,6 +2,7 @@ package com.l.ausm.impl.core;
 
 import com.google.common.collect.ImmutableList;
 import net.minecraft.block.state.IBlockState;
+import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.launchwrapper.IClassTransformer;
@@ -30,12 +31,15 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
     private static final String BAKED_MODEL_TARGET = "com.infinityraider.infinitylib.render.block.BakedInfBlockModel";
     private static final String TESSELLATOR_TARGET = "com.infinityraider.infinitylib.render.tessellation.TessellatorBakedQuad";
     private static final String CUSTOM_WOOD_REGISTRY_TARGET = "com.infinityraider.agricraft.utility.CustomWoodTypeRegistry";
+    private static final String CROP_BLOCK_TARGET = "com.infinityraider.agricraft.blocks.BlockCrop";
     private static final String BAKED_MODEL_INTERNAL = "com/infinityraider/infinitylib/render/block/BakedInfBlockModel";
     private static final String TESSELLATOR_INTERNAL = "com/infinityraider/infinitylib/render/tessellation/TessellatorBakedQuad";
     private static final String EXTENDED_BLOCK_STATE_INTERNAL = "net/minecraftforge/common/property/IExtendedBlockState";
     private static final String CUSTOM_WOOD_TYPE_INTERNAL = "com/infinityraider/agricraft/utility/CustomWoodType";
+    private static final String BLOCK_RENDER_LAYER_INTERNAL = "net/minecraft/util/BlockRenderLayer";
     private static final String GET_QUADS_DESC = "(Lnet/minecraft/block/state/IBlockState;Lnet/minecraft/util/EnumFacing;J)Lcom/google/common/collect/ImmutableList;";
     private static final String CREATE_QUADS_DESC = "(Lnet/minecraft/block/state/IBlockState;Lnet/minecraft/util/EnumFacing;J)Lcom/google/common/collect/ImmutableList;";
+    private static final String RENDER_LAYER_DESC = "()Lnet/minecraft/util/BlockRenderLayer;";
     private static final String AUSM_PARENT_FIELD = "ausm$parent";
 
     @Override
@@ -51,6 +55,9 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
         }
         if (CUSTOM_WOOD_REGISTRY_TARGET.equals(name) || CUSTOM_WOOD_REGISTRY_TARGET.equals(transformedName)) {
             return transformCustomWoodTypeRegistry(basicClass);
+        }
+        if (CROP_BLOCK_TARGET.equals(name) || CROP_BLOCK_TARGET.equals(transformedName)) {
+            return transformCropBlock(basicClass);
         }
         return basicClass;
     }
@@ -86,14 +93,6 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
 
         code.add(new VarInsnNode(Opcodes.ALOAD, 1));
         code.add(new JumpInsnNode(Opcodes.IFNULL, continueOriginal));
-        code.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        code.add(new VarInsnNode(Opcodes.ALOAD, 1));
-        code.add(new MethodInsnNode(Opcodes.INVOKESTATIC,
-                "com/l/ausm/impl/core/InfinityLibBakedModelTransformer",
-                "rendererBlockMismatch",
-                "(Ljava/lang/Object;Lnet/minecraft/block/state/IBlockState;)Z",
-                false));
-        code.add(new JumpInsnNode(Opcodes.IFEQ, continueOriginal));
         code.add(new VarInsnNode(Opcodes.ALOAD, 1));
         code.add(new MethodInsnNode(Opcodes.INVOKESTATIC,
                 "com/l/ausm/impl/core/InfinityLibBakedModelTransformer",
@@ -115,10 +114,6 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
                 "(Lnet/minecraft/client/renderer/vertex/VertexFormat;Ljava/util/function/Function;Lnet/minecraft/block/state/IBlockState;Lnet/minecraft/util/EnumFacing;)Lcom/google/common/collect/ImmutableList;",
                 false));
         code.add(new VarInsnNode(Opcodes.ASTORE, quadsLocal));
-        code.add(new VarInsnNode(Opcodes.ALOAD, quadsLocal));
-        code.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "com/google/common/collect/ImmutableList",
-                "isEmpty", "()Z", false));
-        code.add(new JumpInsnNode(Opcodes.IFNE, continueOriginal));
         code.add(new VarInsnNode(Opcodes.ALOAD, quadsLocal));
         code.add(new InsnNode(Opcodes.ARETURN));
         code.add(continueOriginal);
@@ -261,6 +256,30 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
         return changed ? writeClass(reader, classNode) : basicClass;
     }
 
+    private static byte[] transformCropBlock(byte[] basicClass) {
+        ClassReader reader = new ClassReader(basicClass);
+        ClassNode classNode = new ClassNode();
+        reader.accept(classNode, ClassReader.EXPAND_FRAMES);
+
+        boolean changed = false;
+        for (MethodNode method : classNode.methods) {
+            if (("getRenderLayer".equals(method.name) || "func_180664_k".equals(method.name))
+                    && RENDER_LAYER_DESC.equals(method.desc)) {
+                method.instructions.clear();
+                method.tryCatchBlocks.clear();
+                method.localVariables.clear();
+                method.maxLocals = Math.max(method.maxLocals, 1);
+                method.maxStack = 1;
+                method.instructions.add(new FieldInsnNode(Opcodes.GETSTATIC, BLOCK_RENDER_LAYER_INTERNAL,
+                        "CUTOUT", "L" + BLOCK_RENDER_LAYER_INTERNAL + ";"));
+                method.instructions.add(new InsnNode(Opcodes.ARETURN));
+                changed = true;
+            }
+        }
+
+        return changed ? writeClass(reader, classNode) : basicClass;
+    }
+
     private static InsnList safeCustomWoodGetFromState(MethodNode method) {
         LabelNode tryStart = new LabelNode();
         LabelNode tryEnd = new LabelNode();
@@ -383,7 +402,8 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
             Object tessellator = tessellatorClass.getMethod("getInstance").invoke(null);
             tessellatorClass.getMethod("setCurrentFace", EnumFacing.class).invoke(tessellator, side);
             tessellatorClass.getMethod("setTextureFunction", Function.class).invoke(tessellator, textureFunction);
-            tessellatorClass.getMethod("startDrawingQuads", VertexFormat.class).invoke(tessellator, format);
+            tessellatorClass.getMethod("setApplyDiffuseLighting", boolean.class).invoke(tessellator, true);
+            tessellatorClass.getMethod("startDrawingQuads", VertexFormat.class).invoke(tessellator, DefaultVertexFormats.ITEM);
 
             Class<?> rendererClass = Class.forName("com.infinityraider.agricraft.renderers.blocks.RenderCrop");
             Constructor<?> constructor = rendererClass.getConstructor(cropBlockClass);

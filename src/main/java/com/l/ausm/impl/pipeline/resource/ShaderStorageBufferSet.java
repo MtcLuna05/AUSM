@@ -57,6 +57,10 @@ public final class ShaderStorageBufferSet {
         return buffers.size();
     }
 
+    public Iterable<Integer> bindingIndices() {
+        return glBuffers.keySet();
+    }
+
     public void resize(int width, int height) {
         for (BuiltShaderStorageBuffer buffer : buffers.values()) {
             if (!buffer.relative()) {

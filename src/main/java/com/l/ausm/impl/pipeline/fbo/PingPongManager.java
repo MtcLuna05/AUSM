@@ -56,6 +56,15 @@ public class PingPongManager {
         snapshotReadBufferDepth(DeferredFramebuffer.DEPTHTEX2_SNAPSHOT);
     }
 
+    public void copyPreTranslucentDepthToPreHandDepth() {
+        if (framebuffer != null) {
+            framebuffer.copyDepthSnapshot(
+                    DeferredFramebuffer.DEPTHTEX1_SNAPSHOT,
+                    DeferredFramebuffer.DEPTHTEX2_SNAPSHOT
+            );
+        }
+    }
+
     public void resize(int width, int height) {
         initialize(width, height, currentSettings);
     }

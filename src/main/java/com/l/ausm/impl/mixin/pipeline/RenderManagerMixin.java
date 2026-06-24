@@ -29,6 +29,9 @@ public class RenderManagerMixin {
     )
     private void ausm$beforeRenderEntity(Entity entity, double x, double y, double z, float entityYaw, float partialTicks, boolean debugBoundingBox, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.isRenderingGuiScreen()) {
+            return;
+        }
         if (!context.shouldBypassWorldPassRendering()) {
             if (BetterPortalsCompat.isPortalEntity(entity)) {
                 context.prepareExternalWorldOverlayRender();
@@ -49,6 +52,9 @@ public class RenderManagerMixin {
     )
     private void ausm$afterRenderEntity(Entity entity, double x, double y, double z, float entityYaw, float partialTicks, boolean debugBoundingBox, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.isRenderingGuiScreen()) {
+            return;
+        }
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }
@@ -65,6 +71,9 @@ public class RenderManagerMixin {
     )
     private void ausm$beforeRenderMultipass(Entity entity, float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.isRenderingGuiScreen()) {
+            return;
+        }
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }
@@ -86,6 +95,9 @@ public class RenderManagerMixin {
     )
     private void ausm$afterRenderMultipass(Entity entity, float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.isRenderingGuiScreen()) {
+            return;
+        }
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }

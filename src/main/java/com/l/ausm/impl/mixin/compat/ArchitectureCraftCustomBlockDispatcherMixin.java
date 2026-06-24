@@ -85,12 +85,16 @@ public abstract class ArchitectureCraftCustomBlockDispatcherMixin {
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, blockAccess, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, blockAccess, pos));
         BlockRenderContext.setSeparateAoEligible(contextState != null && pipeline.shouldSeparateBlockAo(contextState, blockAccess, pos));
-        pipeline.setBlockRenderDebugContext(state, blockAccess, pos);
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.setBlockRenderDebugContext(state, blockAccess, pos);
+        }
         pipeline.recordSyntheticLightCandidate(contextState, blockAccess, pos);
-        pipeline.logCurrentProblemProbe("architecture-dispatcher-context", state, blockAccess, pos,
-                "context=" + pipeline.diagnosticStateName(contextState)
-                        + ", contextEmission=" + BlockRenderContext.blockEmission()
-                        + ", contextAlpha=" + BlockRenderContext.blockAlpha());
+        if (pipeline.currentProblemProbesEnabled()) {
+            pipeline.logCurrentProblemProbe("architecture-dispatcher-context", state, blockAccess, pos,
+                    "context=" + pipeline.diagnosticStateName(contextState)
+                            + ", contextEmission=" + BlockRenderContext.blockEmission()
+                            + ", contextAlpha=" + BlockRenderContext.blockAlpha());
+        }
     }
 
     @Unique
@@ -101,11 +105,16 @@ public abstract class ArchitectureCraftCustomBlockDispatcherMixin {
         PipelineContext pipeline = PipelineContext.getInstance();
         BlockRenderLayer layer = MinecraftForgeClient.getRenderLayer();
         int vertexCount = buffer != null ? buffer.getVertexCount() : -1;
-        pipeline.logFramedBlockDiagnostic(source, state, blockAccess, pos, layer, vertexCount, vertexCount, result,
-                "buffer=" + (buffer != null ? Integer.toHexString(System.identityHashCode(buffer)) : "null")
-                        + ", overrideTexture=" + (overrideTexture != null ? overrideTexture.getIconName() : "null")
-                        + ", renderer=" + (customRenderer != null ? customRenderer.getClass().getName() : "null"));
+        if (pipeline.framedBlockDiagnosticsEnabled()) {
+            pipeline.logFramedBlockDiagnostic(source, state, blockAccess, pos, layer, vertexCount, vertexCount, result,
+                    "buffer=" + (buffer != null ? Integer.toHexString(System.identityHashCode(buffer)) : "null")
+                            + ", overrideTexture=" + (overrideTexture != null ? overrideTexture.getIconName() : "null")
+                            + ", renderer=" + (customRenderer != null ? customRenderer.getClass().getName() : "null"));
+        }
 
+        if (AUSM_ARCHITECTURE_DISPATCHER_LOG_LIMIT <= 0) {
+            return;
+        }
         int count = AUSM_ARCHITECTURE_DISPATCHER_LOGS.incrementAndGet();
         if (count > AUSM_ARCHITECTURE_DISPATCHER_LOG_LIMIT) {
             return;
