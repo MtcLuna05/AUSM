@@ -82,6 +82,7 @@ public class RenderSkyMixin {
             }
         } finally {
             context.endPass();
+            context.finishExternalWorldOverlayRender("custom sky renderer");
         }
     }
 

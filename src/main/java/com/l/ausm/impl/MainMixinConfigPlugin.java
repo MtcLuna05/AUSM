@@ -84,6 +84,15 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".AstralSorceryEffectHandlerMixin")) {
             return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/effect/EffectHandler.class", false);
         }
+        if (mixinClassName.endsWith(".ActuallyAdditionsAssetUtilMixin")) {
+            return optionalTargetPresent(mixinClassName, "de/ellpeck/actuallyadditions/mod/util/AssetUtil.class", false);
+        }
+        if (mixinClassName.endsWith(".AppliedEnergisticsCableBusBakedModelMixin")) {
+            return optionalTargetPresent(mixinClassName, "appeng/client/render/cablebus/CableBusBakedModel.class", false);
+        }
+        if (mixinClassName.endsWith(".AppliedEnergisticsFacadeBuilderMixin")) {
+            return optionalTargetPresent(mixinClassName, "appeng/client/render/cablebus/FacadeBuilder.class", false);
+        }
         if (mixinClassName.endsWith(".CodeChickenRenderItemMixin")) {
             return optionalTargetPresent(mixinClassName, "codechicken/lib/render/item/CCRenderItem.class", false);
         }

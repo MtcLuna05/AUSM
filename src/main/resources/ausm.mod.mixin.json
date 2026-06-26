@@ -6,6 +6,9 @@
   "refmap": "ausm.refmap.json",
   "compatibilityLevel": "JAVA_8",
   "mixins": [
+    "compat.ActuallyAdditionsAssetUtilMixin",
+    "compat.AppliedEnergisticsCableBusBakedModelMixin",
+    "compat.AppliedEnergisticsFacadeBuilderMixin",
     "compat.ProjectRedLampRendererMixin",
     "compat.AstralSorceryConstellationRendererMixin",
     "compat.AstralSorceryEffectHandlerMixin",
@@ -69,6 +72,7 @@
     "pipeline.TileEntityRendererDispatcherMixin",
     "pipeline.AmbientOcclusionFaceMixin",
     "pipeline.BlockModelRendererMixin",
+    "pipeline.BlockMixin",
     "pipeline.BlockStateContainerStateImplementationMixin",
     "pipeline.BlockRendererDispatcherMixin",
     "pipeline.BufferBuilderMixin",

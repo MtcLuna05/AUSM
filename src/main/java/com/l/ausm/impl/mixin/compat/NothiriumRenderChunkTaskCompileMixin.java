@@ -162,6 +162,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                 || BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null
                 ? pipeline.blockRenderEmissionWithFramedInheritance(state, chunkCache, pos)
                 : pipeline.blockRenderEmission(state, chunkCache, pos);
+        blockEmission = Math.max(blockEmission, pipeline.shaderlessFramedBloomExtractionEmission(state, chunkCache, pos));
         BlockRenderContext.setBlockEmission(blockEmission);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, chunkCache, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, chunkCache, pos));
@@ -199,7 +200,13 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             return false;
         }
         ResourceLocation name = state.getBlock().getRegistryName();
-        return name != null && "agricraft".equals(name.getNamespace()) && "crop".equals(name.getPath());
+        if (name == null) {
+            return false;
+        }
+        if ("agricraft".equals(name.getNamespace()) && "crop".equals(name.getPath())) {
+            return true;
+        }
+        return "natura".equals(name.getNamespace()) && "cotton_crop".equals(name.getPath());
     }
 
     @Unique
@@ -752,8 +759,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (PipelineContext.getInstance().isBlockcrafteryEditableState(state)) {
             return false;
         }
-        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        if (bloomLayer != null && ausm$canRenderInLayer(state.getBlock(), state, bloomLayer)) {
+        if (PipelineContext.getInstance().stateHasBloomLayerGeometry(state)) {
             return true;
         }
         if (name == null || name.getPath() == null) {

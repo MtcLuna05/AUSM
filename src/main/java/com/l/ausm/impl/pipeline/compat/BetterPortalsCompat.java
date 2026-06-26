@@ -66,7 +66,7 @@ public final class BetterPortalsCompat {
     private static final int CAPTURED_TEXTURE_UNITS = 32;
     private static final int VANILLA_GL_STATE_TEXTURE_UNITS = 8;
     private static int cachedCapturedTextureUnitCount = -1;
-    private static final int MAIN_VIEW_SWAP_RECOVERY_FRAMES = 10;
+    private static final int MAIN_VIEW_SWAP_RECOVERY_FRAMES = 40;
     private static final int MAX_RENDER_STATE_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_TRANSITION_DIAGNOSTIC_LOGS = 0;
     private static final int RENDER_STATE_DIAGNOSTIC_FRAMES_AFTER_NESTED = 180;
@@ -266,6 +266,13 @@ public final class BetterPortalsCompat {
         mainViewSwapRecoveryFrames = Math.max(mainViewSwapRecoveryFrames, MAIN_VIEW_SWAP_RECOVERY_FRAMES);
         mainViewSwapRecoveryDimensionId = dimensionId;
         mainViewSwapRecoveryLogged = false;
+    }
+
+    public static void keepMainViewSwapRecoveryAlive(WorldClient world) {
+        if (!isMainViewSwapRecoveryActive()) {
+            return;
+        }
+        startMainViewSwapRecovery(world);
     }
 
     public static void beginMainViewSwapHandling() {

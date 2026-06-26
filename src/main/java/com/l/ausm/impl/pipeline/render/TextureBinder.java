@@ -42,6 +42,7 @@ public class TextureBinder {
     public static final int CENTER_DEPTH_SMOOTH_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 4;
     public static final int SPECULAR_TEXTURE_UNIT = ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT - 1;
     private static int fallbackBlackTexture = -1;
+    private static int fallbackWhiteTexture = -1;
     private static int fallbackNormalTexture = -1;
     private static int fallbackSpecularTexture = -1;
     private static int neutralShadowDepthTexture = -1;
@@ -129,6 +130,11 @@ public class TextureBinder {
     public static void bindMaterialFallbackTextures() {
         bindRawTexture(textureUnitForSampler("normals"), fallbackNormalTexture());
         bindRawTexture(textureUnitForSampler("specular"), fallbackSpecularTexture());
+        restoreDefaultTextureUnit();
+    }
+
+    public static void bindFallbackWhiteTexture() {
+        bindRawTexture(0, fallbackWhiteTexture());
         restoreDefaultTextureUnit();
     }
 
@@ -275,6 +281,15 @@ public class TextureBinder {
 
         fallbackBlackTexture = createFallbackTexture((byte) 0, (byte) 0, (byte) 0, (byte) 255);
         return fallbackBlackTexture;
+    }
+
+    private static int fallbackWhiteTexture() {
+        if (fallbackWhiteTexture != -1) {
+            return fallbackWhiteTexture;
+        }
+
+        fallbackWhiteTexture = createFallbackTexture((byte) 255, (byte) 255, (byte) 255, (byte) 255);
+        return fallbackWhiteTexture;
     }
 
     private static int fallbackNormalTexture() {

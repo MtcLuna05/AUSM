@@ -72,7 +72,6 @@ public class EntityRendererMixin {
         }
         PipelineContext context = PipelineContext.getInstance();
         if (!context.isActive()) {
-            context.prepareShaderlessGuiScreenRendering();
             return;
         }
         context.beginGuiRendering();

@@ -111,11 +111,22 @@ public final class NothiriumShadowRenderer {
 
             Object renderer = reflection.getRenderer.invoke(null);
             Object dispatcher = reflection.getTaskDispatcher.invoke(null);
-            ChunkRefreshStats stats = new ChunkRefreshStats(chunkX, chunkZ);
+            int total = 0;
+            int nullChunks = 0;
+            int matched = 0;
+            int alreadyDirty = 0;
+            int running = 0;
+            int released = 0;
+            int marked = 0;
+            int canCompile = 0;
+            int cannotCompile = 0;
+            int noDispatcher = 0;
+            int scheduled = 0;
+            int deferred = 0;
             for (Object chunk : chunks) {
-                stats.total++;
+                total++;
                 if (chunk == null) {
-                    stats.nullChunks++;
+                    nullChunks++;
                     continue;
                 }
 
@@ -125,42 +136,43 @@ public final class NothiriumShadowRenderer {
                     continue;
                 }
 
-                stats.matched++;
+                matched++;
                 if (reflection.isChunkDirty(chunk)) {
-                    stats.alreadyDirty++;
+                    alreadyDirty++;
                 }
                 if (futureIsRunning(reflection.lastCompileTaskResult(chunk))) {
-                    stats.running++;
+                    running++;
                 }
 
                 reflection.releaseBuffers.invoke(chunk);
-                stats.released++;
+                released++;
                 reflection.markDirty.invoke(chunk);
-                stats.marked++;
+                marked++;
 
                 if (renderer == null || dispatcher == null) {
-                    stats.noDispatcher++;
+                    noDispatcher++;
                     continue;
                 }
                 if (!Boolean.TRUE.equals(reflection.canCompile(chunk))) {
-                    stats.cannotCompile++;
+                    cannotCompile++;
                     continue;
                 }
-                stats.canCompile++;
-                if (stats.scheduled >= MAX_CHUNK_REFRESH_COMPILES) {
-                    stats.deferred++;
+                canCompile++;
+                if (scheduled >= MAX_CHUNK_REFRESH_COMPILES) {
+                    deferred++;
                     continue;
                 }
 
                 reflection.compileAsync.invoke(chunk, renderer, dispatcher);
-                stats.scheduled++;
+                scheduled++;
             }
 
-            if (stats.scheduled > 0 && dispatcher != null) {
+            if (scheduled > 0 && dispatcher != null) {
                 reflection.dispatcherUpdate.invoke(dispatcher);
             }
-            auditChunkRefresh(stats);
-            return stats.matched > 0;
+            auditChunkRefresh(chunkX, chunkZ, total, nullChunks, matched, alreadyDirty, running,
+                    released, marked, canCompile, cannotCompile, noDispatcher, scheduled, deferred);
+            return matched > 0;
         } catch (ReflectiveOperationException | RuntimeException e) {
             disabled = true;
             warnOnce(e);
@@ -907,8 +919,10 @@ public final class NothiriumShadowRenderer {
         );
     }
 
-    private void auditChunkRefresh(ChunkRefreshStats stats) {
-        if (stats.matched <= 0) {
+    private void auditChunkRefresh(int chunkX, int chunkZ, int total, int nullChunks, int matched, int alreadyDirty,
+                                   int running, int released, int marked, int canCompile, int cannotCompile,
+                                   int noDispatcher, int scheduled, int deferred) {
+        if (matched <= 0) {
             return;
         }
         if (chunkRefreshAuditAttempts >= MAX_CHUNK_REFRESH_AUDIT_LOGS) {
@@ -918,20 +932,20 @@ public final class NothiriumShadowRenderer {
         MainMod.LOGGER.debug(
                 "[NothiriumShadowBridge] refreshedChunkColumn attempt={} chunk={},{} total={} null={} matched={} alreadyDirty={} running={} released={} marked={} canCompile={} cannotCompile={} noDispatcher={} scheduled={} deferred={}",
                 chunkRefreshAuditAttempts,
-                stats.chunkX,
-                stats.chunkZ,
-                stats.total,
-                stats.nullChunks,
-                stats.matched,
-                stats.alreadyDirty,
-                stats.running,
-                stats.released,
-                stats.marked,
-                stats.canCompile,
-                stats.cannotCompile,
-                stats.noDispatcher,
-                stats.scheduled,
-                stats.deferred
+                chunkX,
+                chunkZ,
+                total,
+                nullChunks,
+                matched,
+                alreadyDirty,
+                running,
+                released,
+                marked,
+                canCompile,
+                cannotCompile,
+                noDispatcher,
+                scheduled,
+                deferred
         );
     }
 
@@ -1077,28 +1091,6 @@ public final class NothiriumShadowRenderer {
             if (firstChunk.equals("n/a")) {
                 firstChunk = x + "," + y + "," + z;
             }
-        }
-    }
-
-    private static final class ChunkRefreshStats {
-        private final int chunkX;
-        private final int chunkZ;
-        private int total;
-        private int nullChunks;
-        private int matched;
-        private int alreadyDirty;
-        private int running;
-        private int released;
-        private int marked;
-        private int canCompile;
-        private int cannotCompile;
-        private int noDispatcher;
-        private int scheduled;
-        private int deferred;
-
-        private ChunkRefreshStats(int chunkX, int chunkZ) {
-            this.chunkX = chunkX;
-            this.chunkZ = chunkZ;
         }
     }
 

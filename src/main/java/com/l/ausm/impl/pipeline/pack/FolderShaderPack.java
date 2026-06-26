@@ -58,7 +58,13 @@ public final class FolderShaderPack implements ShaderPack {
         if (path == null) {
             return false;
         }
-        return resourceExistenceCache.computeIfAbsent(path, this::hasResourceUncached);
+        Boolean cached = resourceExistenceCache.get(path);
+        if (cached != null) {
+            return cached;
+        }
+        boolean exists = hasResourceUncached(path);
+        resourceExistenceCache.put(path, exists);
+        return exists;
     }
 
     @Override

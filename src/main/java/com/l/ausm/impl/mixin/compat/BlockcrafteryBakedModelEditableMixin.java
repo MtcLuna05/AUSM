@@ -133,17 +133,10 @@ public abstract class BlockcrafteryBakedModelEditableMixin {
                 || pipeline.isBlockcrafteryEditableState(inheritedState)) {
             return null;
         }
-        if (pipeline.blockRenderEmission(inheritedState, null, null) > 0) {
+        if (pipeline.blockIntrinsicEmission(inheritedState) > 0) {
             return inheritedState;
         }
-        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        try {
-            return bloomLayer != null && inheritedState.getBlock().canRenderInLayer(inheritedState, bloomLayer)
-                    ? inheritedState
-                    : null;
-        } catch (RuntimeException | LinkageError ignored) {
-            return null;
-        }
+        return pipeline.stateHasBloomLayerGeometry(inheritedState) ? inheritedState : null;
     }
 
     @Unique

@@ -22,6 +22,7 @@ public final class ShaderTransformPipeline {
             new ComplementaryHandCompositeTerrainBleedTransformStage(),
             new ComplementaryBlockIpbrTransformStage(),
             new ComplementaryWaterVersionTransformStage(),
+            new ComplementarySupportedVersionFeaturesTransformStage(),
             new ComplementaryNetherExposureTransformStage(),
             new ComplementaryDistantHorizonBlendTransformStage(),
             new ComplementaryBorderFogDistanceTransformStage(),

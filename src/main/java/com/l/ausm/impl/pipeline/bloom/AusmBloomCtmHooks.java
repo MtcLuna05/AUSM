@@ -8,6 +8,7 @@ import net.minecraft.client.renderer.block.model.IBakedModel;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraft.util.EnumFacing;
 import net.minecraftforge.client.ForgeHooksClient;
+import net.minecraftforge.client.MinecraftForgeClient;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -106,6 +107,39 @@ public final class AusmBloomCtmHooks {
             logFailure(error);
             return original;
         }
+    }
+
+    public static boolean hasBloomLayerQuads(IBakedModel model, IBlockState state) {
+        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
+        if (model == null
+                || state == null
+                || bloomLayer == null
+                || mergingBloomQuads.get() != null) {
+            return false;
+        }
+
+        BlockRenderLayer restoreLayer = MinecraftForgeClient.getRenderLayer();
+        try {
+            if (hasBloomLayerQuads(model, state, null, restoreLayer)) {
+                return true;
+            }
+            for (EnumFacing side : EnumFacing.values()) {
+                if (hasBloomLayerQuads(model, state, side, restoreLayer)) {
+                    return true;
+                }
+            }
+        } catch (RuntimeException | LinkageError error) {
+            logFailure(error);
+        }
+        return false;
+    }
+
+    private static boolean hasBloomLayerQuads(IBakedModel model,
+                                              IBlockState state,
+                                              EnumFacing side,
+                                              BlockRenderLayer restoreLayer) {
+        List<BakedQuad> quads = getBloomLayerQuads(model, state, side, 0L, restoreLayer);
+        return quads != null && !quads.isEmpty();
     }
 
     private static boolean shouldMergeBloomIntoLayer(List<BakedQuad> original, IBlockState state, BlockRenderLayer layer) {

@@ -102,10 +102,18 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @ModifyVariable(method = "begin", at = @At("HEAD"), argsOnly = true)
     private VertexFormat ausm$usePipelineEntityFormat(VertexFormat original) {
+        if (ausm$isCodeChickenBakingBuffer()) {
+            return original;
+        }
         if (original == DefaultVertexFormats.ITEM && PipelineContext.getInstance().shouldUsePipelineEntityFormat()) {
             return ExtendedVertexFormats.PIPELINE_ENTITY;
         }
         return original;
+    }
+
+    @Unique
+    private boolean ausm$isCodeChickenBakingBuffer() {
+        return "codechicken.lib.render.buffer.BakingVertexBuffer".equals(((Object) this).getClass().getName());
     }
 
     @Inject(method = "putBulkData", at = @At("HEAD"), cancellable = true)
@@ -477,6 +485,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "endVertex", at = @At("HEAD"))
     private void ausm$applyEmissiveLightmap(CallbackInfo ci) {
+        ausm$sanitizeCurrentAgricraftCropVertex();
         ausm$applyBloomMaskCurrentVertex();
         ausm$applyEmissiveCurrentVertexColor();
 
@@ -495,6 +504,22 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         packed = ausm$emissiveLightmap(packed, blockEmission);
         byteBuffer.putShort(offset, (short) (packed & 0xFFFF));
         byteBuffer.putShort(offset + 2, (short) ((packed >>> 16) & 0xFFFF));
+    }
+
+    private void ausm$sanitizeCurrentAgricraftCropVertex() {
+        if (!BlockRenderContext.isAgricraftCrop()
+                || !ExtendedVertexFormats.isPipelineBlock(vertexFormat)
+                || !vertexFormat.hasUvOffset(1)) {
+            return;
+        }
+
+        int offset = vertexCount * vertexFormat.getSize() + vertexFormat.getUvOffsetById(1);
+        if (offset < 0 || offset + 4 > byteBuffer.capacity()) {
+            return;
+        }
+        int packedLightmap = BlockRenderContext.packedLightmap();
+        byteBuffer.putShort(offset, (short) (packedLightmap & 0xFFFF));
+        byteBuffer.putShort(offset + 2, (short) ((packedLightmap >>> 16) & 0xFFFF));
     }
 
     @Inject(method = "endVertex", at = @At("HEAD"))

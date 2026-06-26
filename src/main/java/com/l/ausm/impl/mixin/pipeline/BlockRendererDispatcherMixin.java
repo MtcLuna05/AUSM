@@ -49,6 +49,7 @@ public class BlockRendererDispatcherMixin {
                 || pipeline.shouldInheritFramedEmissionInBasePass(state)
                 ? pipeline.blockRenderEmissionWithFramedInheritance(state, blockAccess, pos)
                 : pipeline.blockRenderEmission(state, blockAccess, pos);
+        blockEmission = Math.max(blockEmission, pipeline.shaderlessFramedBloomExtractionEmission(state, blockAccess, pos));
         BlockRenderContext.setBlockEntityId(blockEntityId);
         BlockRenderContext.setRenderType((short) contextState.getRenderType().ordinal());
         BlockRenderContext.setMetadata(pipeline.blockMetadata(state, blockAccess, pos));
@@ -89,7 +90,13 @@ public class BlockRendererDispatcherMixin {
             return false;
         }
         ResourceLocation name = state.getBlock().getRegistryName();
-        return name != null && "agricraft".equals(name.getNamespace()) && "crop".equals(name.getPath());
+        if (name == null) {
+            return false;
+        }
+        if ("agricraft".equals(name.getNamespace()) && "crop".equals(name.getPath())) {
+            return true;
+        }
+        return "natura".equals(name.getNamespace()) && "cotton_crop".equals(name.getPath());
     }
 
     @Unique
@@ -436,8 +443,7 @@ public class BlockRendererDispatcherMixin {
         if (PipelineContext.getInstance().isBlockcrafteryEditableState(state)) {
             return false;
         }
-        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        if (bloomLayer != null && ausm$canRenderInLayer(state, bloomLayer)) {
+        if (PipelineContext.getInstance().stateHasBloomLayerGeometry(state)) {
             return true;
         }
         String path = name.getPath().toLowerCase(java.util.Locale.ROOT);

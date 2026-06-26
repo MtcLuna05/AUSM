@@ -21,6 +21,9 @@ public final class BlockRenderContext {
     private static final ThreadLocal<Integer> CURRENT_BLOCK_ALPHA = ThreadLocal.withInitial(() -> -1);
     private static final ThreadLocal<Boolean> CURRENT_CRYSTAL_ONLY_EMISSION = ThreadLocal.withInitial(() -> false);
     private static final ThreadLocal<Integer> CURRENT_QUAD_EMISSION_OVERRIDE = new ThreadLocal<>();
+    private static final ThreadLocal<Integer> CURRENT_QUAD_BLOCK_ENTITY_ID_OVERRIDE = new ThreadLocal<>();
+    private static final ThreadLocal<Short> CURRENT_QUAD_RENDER_TYPE_OVERRIDE = new ThreadLocal<>();
+    private static final ThreadLocal<Short> CURRENT_QUAD_METADATA_OVERRIDE = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> SEPARATE_AO_ELIGIBLE = ThreadLocal.withInitial(() -> false);
     private static final ThreadLocal<float[]> CURRENT_QUAD_AO = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> BLOOM_MASK_FALLBACK = ThreadLocal.withInitial(() -> false);
@@ -38,7 +41,8 @@ public final class BlockRenderContext {
     }
 
     public static int blockEntityId() {
-        return CURRENT_BLOCK_ENTITY_ID.get();
+        Integer override = CURRENT_QUAD_BLOCK_ENTITY_ID_OVERRIDE.get();
+        return override != null ? override : CURRENT_BLOCK_ENTITY_ID.get();
     }
 
     public static void setRenderType(short renderType) {
@@ -46,7 +50,8 @@ public final class BlockRenderContext {
     }
 
     public static short renderType() {
-        return CURRENT_RENDER_TYPE.get();
+        Short override = CURRENT_QUAD_RENDER_TYPE_OVERRIDE.get();
+        return override != null ? override : CURRENT_RENDER_TYPE.get();
     }
 
     public static void setMetadata(int metadata) {
@@ -54,7 +59,8 @@ public final class BlockRenderContext {
     }
 
     public static short metadata() {
-        return CURRENT_METADATA.get();
+        Short override = CURRENT_QUAD_METADATA_OVERRIDE.get();
+        return override != null ? override : CURRENT_METADATA.get();
     }
 
     public static void setLocalBlockPos(int x, int y, int z) {
@@ -145,6 +151,20 @@ public final class BlockRenderContext {
     }
 
     public static void clearQuadEmissionOverride() {
+        clearQuadOverrides();
+    }
+
+    public static void setQuadBlockMetadata(int blockEntityId, short renderType, int metadata, int emission) {
+        CURRENT_QUAD_BLOCK_ENTITY_ID_OVERRIDE.set(blockEntityId);
+        CURRENT_QUAD_RENDER_TYPE_OVERRIDE.set(renderType);
+        CURRENT_QUAD_METADATA_OVERRIDE.set((short) (metadata & 0xFFFF));
+        CURRENT_QUAD_EMISSION_OVERRIDE.set(Math.max(0, Math.min(15, emission)));
+    }
+
+    public static void clearQuadOverrides() {
+        CURRENT_QUAD_BLOCK_ENTITY_ID_OVERRIDE.remove();
+        CURRENT_QUAD_RENDER_TYPE_OVERRIDE.remove();
+        CURRENT_QUAD_METADATA_OVERRIDE.remove();
         CURRENT_QUAD_EMISSION_OVERRIDE.remove();
     }
 
@@ -261,7 +281,7 @@ public final class BlockRenderContext {
         CURRENT_BLOCK_EMISSION.remove();
         CURRENT_BLOCK_ALPHA.remove();
         CURRENT_CRYSTAL_ONLY_EMISSION.remove();
-        CURRENT_QUAD_EMISSION_OVERRIDE.remove();
+        clearQuadOverrides();
         SEPARATE_AO_ELIGIBLE.remove();
         CURRENT_QUAD_AO.remove();
         BLOOM_MASK_FALLBACK.remove();

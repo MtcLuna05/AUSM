@@ -12,6 +12,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(GuiScreen.class)
 public class GuiScreenMixin {
+    private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
     private static final int WORLD_GUI_BACKGROUND = 0x44000000;
 
     @Shadow
@@ -40,13 +41,26 @@ public class GuiScreenMixin {
         }
 
         PipelineContext context = PipelineContext.getInstance();
-        if (!context.isActive()) {
+        if (!context.isActive() && !ausm$isSimpleVoidWorld()) {
             return false;
         }
-        context.prepareGuiFramebuffer();
+        boolean shaderlessVoidBackground = !context.isActive();
+        if (shaderlessVoidBackground) {
+            context.prepareShaderlessGuiScreenRendering();
+        } else {
+            context.prepareGuiFramebuffer();
+        }
         context.prepareFlatGuiBackgroundRenderState();
         Gui.drawRect(0, 0, this.width, this.height, WORLD_GUI_BACKGROUND);
+        if (shaderlessVoidBackground) {
+            context.prepareShaderlessGuiScreenRendering();
+        }
         return true;
+    }
+
+    private boolean ausm$isSimpleVoidWorld() {
+        return this.mc.world.provider != null
+                && this.mc.world.provider.getDimension() == SIMPLE_VOID_WORLD_DIMENSION_ID;
     }
 
     private boolean ausm$shouldUseVanillaWorldBackground() {

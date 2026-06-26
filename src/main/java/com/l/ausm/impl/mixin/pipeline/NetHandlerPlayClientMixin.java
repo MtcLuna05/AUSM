@@ -19,6 +19,7 @@ import net.minecraft.network.play.server.SPacketUpdateHealth;
 import net.minecraft.world.chunk.BlockStateContainer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -27,6 +28,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class NetHandlerPlayClientMixin {
     @Shadow
     private WorldClient world;
+
+    @Unique
+    private double ausm$preTeleportX;
+    @Unique
+    private double ausm$preTeleportY;
+    @Unique
+    private double ausm$preTeleportZ;
+    @Unique
+    private int ausm$preTeleportDimension = Integer.MIN_VALUE;
+    @Unique
+    private boolean ausm$hasPreTeleportPosition;
 
     @Inject(method = "handleTeams", at = @At("HEAD"), cancellable = true)
     private void ausm$ignoreTeamPacketWithoutWorld(SPacketTeams packetIn, CallbackInfo ci) {
@@ -71,8 +83,36 @@ public class NetHandlerPlayClientMixin {
     private void ausm$ignorePlayerPosLookWithoutPlayer(SPacketPlayerPosLook packetIn, CallbackInfo ci) {
         Minecraft mc = Minecraft.getMinecraft();
         if (world == null || mc == null || mc.player == null) {
+            ausm$hasPreTeleportPosition = false;
             ci.cancel();
+            return;
         }
+        ausm$preTeleportX = mc.player.posX;
+        ausm$preTeleportY = mc.player.posY;
+        ausm$preTeleportZ = mc.player.posZ;
+        ausm$preTeleportDimension = world.provider != null ? world.provider.getDimension() : Integer.MIN_VALUE;
+        ausm$hasPreTeleportPosition = true;
+    }
+
+    @Inject(method = "handlePlayerPosLook", at = @At("RETURN"))
+    private void ausm$resyncTerrainAfterTeleport(SPacketPlayerPosLook packetIn, CallbackInfo ci) {
+        if (!ausm$hasPreTeleportPosition) {
+            return;
+        }
+        ausm$hasPreTeleportPosition = false;
+        Minecraft mc = Minecraft.getMinecraft();
+        if (world == null || mc == null || mc.player == null) {
+            return;
+        }
+        double dx = mc.player.posX - ausm$preTeleportX;
+        double dy = mc.player.posY - ausm$preTeleportY;
+        double dz = mc.player.posZ - ausm$preTeleportZ;
+        int currentDimension = world.provider != null ? world.provider.getDimension() : Integer.MIN_VALUE;
+        PipelineContext.getInstance().handleClientTeleportResync(
+                ausm$preTeleportDimension,
+                currentDimension,
+                dx * dx + dy * dy + dz * dz
+        );
     }
 
     @Inject(method = "handleSetExperience", at = @At("HEAD"), cancellable = true)
@@ -128,8 +168,11 @@ public class NetHandlerPlayClientMixin {
     }
 
     private boolean ausm$isChunkDataReadable(SPacketChunkData packetIn) {
+        PacketBuffer buffer = null;
+        int readerIndex = -1;
         try {
-            PacketBuffer buffer = packetIn.getReadBuffer();
+            buffer = packetIn.getReadBuffer();
+            readerIndex = buffer.readerIndex();
             int sections = packetIn.getExtractedSize();
             boolean hasSkyLight = world.provider != null && world.provider.hasSkyLight();
 
@@ -165,6 +208,10 @@ public class NetHandlerPlayClientMixin {
             return true;
         } catch (RuntimeException ignored) {
             return false;
+        } finally {
+            if (buffer != null && readerIndex >= 0) {
+                buffer.readerIndex(readerIndex);
+            }
         }
     }
 

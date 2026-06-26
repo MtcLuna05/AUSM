@@ -407,8 +407,10 @@ public class ShaderPackManager implements ShaderPackController {
             compiledPackName = currentPack.getName();
             lastDeferredBetterPortalsCacheKey = "";
             pendingPipelineReload = false;
-            if (!quietBetterPortalsReload && currentDimensionId == getClientDimensionId()) {
-                PipelineContext.getInstance().scheduleWorldTerrainRefresh();
+            if (currentDimensionId == getClientDimensionId()) {
+                PipelineContext context = PipelineContext.getInstance();
+                context.scheduleFullWorldTerrainRefresh();
+                context.scheduleWorldLoadLightRecalculation();
             }
             return;
         }
@@ -438,7 +440,8 @@ public class ShaderPackManager implements ShaderPackController {
             MainMod.LOGGER.info("Shader dimension changed from {} to {}; compiling shaderpack '{}' for this dimension",
                     compiledDimensionId, currentDimensionId, selectedPackName);
         }
-        initializeCurrentPipeline(properties, true, currentDimensionId, false);
+        boolean fullTerrainRefresh = currentDimensionId == getClientDimensionId() && !quietBetterPortalsReload;
+        initializeCurrentPipeline(properties, true, currentDimensionId, fullTerrainRefresh);
         lastDeferredBetterPortalsCacheKey = "";
     }
 
@@ -506,7 +509,8 @@ public class ShaderPackManager implements ShaderPackController {
 
     private boolean isBetterPortalsPipelineBusy() {
         return BetterPortalsCompat.isRenderingNestedView()
-                || PipelineContext.getInstance().isRenderingBetterPortalsExternalWorldFrame();
+                || PipelineContext.getInstance().isRenderingBetterPortalsExternalWorldFrame()
+                || BetterPortalsCompat.isMainViewSwapRecoveryActive();
     }
 
     public String describeBetterPortalsPipelineState() {

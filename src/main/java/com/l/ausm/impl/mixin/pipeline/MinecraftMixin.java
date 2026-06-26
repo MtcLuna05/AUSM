@@ -70,6 +70,12 @@ public class MinecraftMixin {
         PipelineContext.getInstance().runScheduledWorldLoadLightRecalculation();
     }
 
+    @Inject(method = "refreshResources", at = @At("RETURN"))
+    private void ausm$recoverAfterResourcePackReload(CallbackInfo ci) {
+        Minecraft mc = (Minecraft) (Object) this;
+        mc.addScheduledTask(() -> PipelineContext.getInstance().handleResourcePackReload());
+    }
+
     @Inject(
             method = "runGameLoop",
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/shader/Framebuffer;framebufferRender(II)V", shift = At.Shift.AFTER)

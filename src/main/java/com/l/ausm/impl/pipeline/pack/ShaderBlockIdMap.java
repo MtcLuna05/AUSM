@@ -132,6 +132,9 @@ public final class ShaderBlockIdMap {
     }
 
     private static void addModdedColoredLightCompatibility(Map<Block, Integer> blockIds, List<StateRule> stateRules) {
+        addBlockAlias(blockIds, "appliedenergistics2", "cable_bus", 12120);
+        addStateAlias(stateRules, "minecraft", "concrete", "color", "black", 12130);
+
         for (ColorAlias color : THAUMCRAFT_COLORS) {
             addBlockAlias(blockIds, "thaumcraft", "candle_" + color.name(), color.materialId());
             addBlockAlias(blockIds, "thaumcraft", "nitor_" + color.name(), color.materialId());

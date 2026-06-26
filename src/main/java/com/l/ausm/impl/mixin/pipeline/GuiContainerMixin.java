@@ -16,7 +16,6 @@ public class GuiContainerMixin {
     private void ausm$beginContainerGui(int mouseX, int mouseY, float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (!context.isActive()) {
-            context.prepareShaderlessGuiScreenRendering();
             return;
         }
         ausm$prepareCompatContainerGui();

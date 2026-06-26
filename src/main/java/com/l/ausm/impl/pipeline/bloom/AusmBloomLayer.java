@@ -45,12 +45,16 @@ public final class AusmBloomLayer {
     }
 
     public static BlockRenderLayer layer() {
-        if (bloomLayer != null || standaloneCreateAttempted) {
+        if (bloomLayer != null) {
             return bloomLayer;
         }
 
-        standaloneCreateAttempted = true;
         bloomLayer = existingLayer();
+        if (bloomLayer == null && Loader.isModLoaded(LUMENIZED_MOD_ID) && !standaloneCreateAttempted) {
+            standaloneCreateAttempted = true;
+            initializeLumenizedBloomLayer();
+            bloomLayer = existingLayer();
+        }
 
         if (bloomLayer != null) {
             sanitizeNothiriumLayerArrays();
@@ -120,8 +124,11 @@ public final class AusmBloomLayer {
 
     private static void initializeLumenizedBloomLayer() {
         try {
-            Class.forName(LUMENIZED_BLOOM_EFFECT_UTIL, true, AusmBloomLayer.class.getClassLoader());
-        } catch (ClassNotFoundException | LinkageError | RuntimeException error) {
+            Class<?> bloomEffectUtil = Class.forName(LUMENIZED_BLOOM_EFFECT_UTIL, true, AusmBloomLayer.class.getClassLoader());
+            if (existingLayer() == null) {
+                bloomEffectUtil.getMethod("init").invoke(null);
+            }
+        } catch (ReflectiveOperationException | LinkageError | RuntimeException error) {
             if (!loggedLumenizedInitFailure) {
                 loggedLumenizedInitFailure = true;
                 MainMod.LOGGER.warn("[AUSMBloom] Failed to initialize Lumenized BLOOM layer early", error);

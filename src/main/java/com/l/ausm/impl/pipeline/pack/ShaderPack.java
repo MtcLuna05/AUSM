@@ -7,7 +7,7 @@ import com.l.ausm.api.pipeline.pack.*;
 import java.io.IOException;
 import java.io.InputStream;
 
-public sealed interface ShaderPack permits FolderShaderPack, ZipShaderPack, NoneShaderPack {
+public interface ShaderPack {
     /**
      * Gets the name of the shader pack.
      */
