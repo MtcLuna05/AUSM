@@ -3773,7 +3773,7 @@ public class PipelineContext {
     }
 
     private boolean stateHasBloomResourceGeometry(IBlockState state) {
-        if (state == null || state.getBlock() == null || !bloomRenderer.hasBloomResources()) {
+        if (state == null || state.getBlock() == null) {
             return false;
         }
         String key = stateName(state);
@@ -3839,11 +3839,26 @@ public class PipelineContext {
         }
         for (BakedQuad quad : quads) {
             TextureAtlasSprite sprite = quad != null ? quad.getSprite() : null;
-            if (sprite != null && bloomRenderer.hasBloomSprite(sprite.getIconName())) {
+            if (sprite != null && (isEmissiveSpriteName(sprite.getIconName()) || bloomRenderer.hasBloomSprite(sprite.getIconName()))) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static boolean isEmissiveSpriteName(String spriteName) {
+        if (spriteName == null) {
+            return false;
+        }
+        String normalized = spriteName.toLowerCase(java.util.Locale.ROOT);
+        return normalized.endsWith("_e")
+                || normalized.contains("_e/")
+                || normalized.contains("/emissive")
+                || normalized.contains("_emissive")
+                || normalized.contains("/glow")
+                || normalized.contains("_glow")
+                || normalized.contains("/bloom")
+                || normalized.contains("_bloom");
     }
 
     private boolean isExplicitBloomState(IBlockState state) {
@@ -8678,6 +8693,7 @@ public class PipelineContext {
             activeVanillaViewFrustumRenderGlobal = null;
             activeVanillaViewFrustumWorld = null;
             activeVanillaViewFrustumRenderDistanceChunks = -1;
+            lastStableMainWorldVanillaRenderDistanceChunks = -1;
             return;
         }
 
@@ -8704,6 +8720,7 @@ public class PipelineContext {
         activeVanillaViewFrustumRenderGlobal = null;
         activeVanillaViewFrustumWorld = null;
         activeVanillaViewFrustumRenderDistanceChunks = -1;
+        lastStableMainWorldVanillaRenderDistanceChunks = -1;
     }
 
     private void clearCachedVanillaTerrainRendererReferences() {
@@ -13018,8 +13035,9 @@ public class PipelineContext {
         }
 
         bloomZeroGeometryFrames = 0;
-        bloomZeroGeometryRefreshCooldown = 240;
-        MainMod.LOGGER.info("[AUSMBloom] BLOOM resources are present, but no BLOOM geometry was produced; skipping terrain refresh to avoid chunk rebuild flashes.");
+        bloomZeroGeometryRefreshCooldown = 120;
+        scheduleBloomTerrainRefresh("zero-bloom-geometry");
+        MainMod.LOGGER.info("[AUSMBloom] BLOOM resources are present, but no BLOOM geometry was produced; scheduled terrain refresh.");
     }
 
     private void renderPostWorldBloom(Framebuffer target, boolean externalTarget) {
@@ -14349,9 +14367,6 @@ public class PipelineContext {
         }
         logTerrainDiagnostic("rebuild-terrain-renderers", mc.world, "recreateNothirium=" + recreateNothiriumRenderer
                 + ", reloadVanilla=" + reloadVanillaRenderGlobal);
-        if (isPipelineActive) {
-            ensureVanillaTerrainRenderer();
-        }
         if (recreateNothiriumRenderer) {
             NothiriumBypass.recreateRenderer();
         } else {
@@ -14359,6 +14374,12 @@ public class PipelineContext {
         }
         if (reloadVanillaRenderGlobal) {
             mc.renderGlobal.loadRenderers();
+        }
+        if (isPipelineActive && mc.world != null) {
+            rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "rebuild-terrain-renderers");
+            resetCameraFrustumSyncState();
+        } else if (isPipelineActive) {
+            ensureVanillaTerrainRenderer();
         }
     }
 
@@ -15187,9 +15208,14 @@ public class PipelineContext {
     }
 
     public void scheduleBloomTerrainRefresh(String reason) {
-        // Rebuilding chunks as a bloom recovery mechanism causes visible F3+A-like terrain flashes,
-        // especially with Nothirium. Bloom must be produced by the render hooks, not by repeated
-        // global terrain invalidation.
+        if (!AusmBloomLayer.isAvailable()) {
+            return;
+        }
+        pendingBloomTerrainRefreshAttempts = Math.max(pendingBloomTerrainRefreshAttempts, 3);
+        if (pendingBloomTerrainRefreshDelay <= 0) {
+            pendingBloomTerrainRefreshDelay = 1;
+        }
+        pendingBloomTerrainRefreshReason = reason != null && !reason.isEmpty() ? reason : "unspecified";
     }
 
     public void clearScheduledBloomTerrainRefresh() {
@@ -15287,9 +15313,11 @@ public class PipelineContext {
         activeVanillaViewFrustumRenderGlobal = null;
         activeVanillaViewFrustumWorld = null;
         activeVanillaViewFrustumRenderDistanceChunks = -1;
-        ensureVanillaTerrainRenderer(mc.world, true);
+        resetCameraFrustumSyncState();
         boolean nothiriumRecreated = NothiriumBypass.recreateRenderer();
         mc.renderGlobal.loadRenderers();
+        rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "render-distance-change");
+        NothiriumBypass.markAllChanged();
         scheduleInactiveVanillaRecoveryFrame();
         MainMod.LOGGER.info("[Pipeline] Forced terrain renderer reload for render distance change: world={} old={} new={} nothiriumRecreated={}",
                 safeDimensionId(mc.world),
@@ -15344,13 +15372,13 @@ public class PipelineContext {
         }
 
         BlockPos center = new BlockPos(mc.player);
-        int radius = Math.max(24, Math.min(64, mc.gameSettings.renderDistanceChunks * 8));
+        int radius = Math.max(64, Math.min(512, (mc.gameSettings.renderDistanceChunks * 16) + 16));
         mc.world.markBlockRangeForRenderUpdate(
                 center.getX() - radius,
-                Math.max(0, center.getY() - radius),
+                0,
                 center.getZ() - radius,
                 center.getX() + radius,
-                Math.min(255, center.getY() + radius),
+                255,
                 center.getZ() + radius
         );
         boolean nothiriumDirty = NothiriumBypass.markAllChanged();
