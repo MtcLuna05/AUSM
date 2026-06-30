@@ -27,6 +27,7 @@ dependencies {
     modImplementation 'curse.maven:hei-557549:6187146' // Use for mod Mixin example
     compileOnly 'curse.maven:nothirium-624960:7207682'
     compileOnly 'curse.maven:renderlib-624967:6461209'
+    compileOnly 'curse.maven:ae2-extended-life-570458:6302098'
 
     def configuredMinecraftDir = project.findProperty('meatball_minecraft_dir')?.toString()
     if (configuredMinecraftDir == null || configuredMinecraftDir.trim().isEmpty()) {

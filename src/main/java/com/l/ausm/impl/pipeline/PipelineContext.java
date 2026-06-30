@@ -13492,9 +13492,17 @@ public class PipelineContext {
     }
 
     private void restoreGuiSafeRenderState(String source) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc != null && mc.getFramebuffer() != null) {
+            mc.getFramebuffer().bindFramebuffer(false);
+            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
+        }
         OpenGlHelper.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
+        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        resetIndexedBlendState();
         disablePipelineVertexAttributes();
+        unbindShaderImages();
         unbindShaderStorageBuffers();
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
