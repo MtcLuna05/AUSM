@@ -12,9 +12,12 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URL;
+import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 
 public final class ThaumcraftParticleBridge {
@@ -28,6 +31,8 @@ public final class ThaumcraftParticleBridge {
     private static Method renderTickMethod;
     private static Method renderWorldLastMethod;
     private static Method updateParticlesMethod;
+    private static Field particlesField;
+    private static Field particlesDelayedField;
     private static int resolveLogs;
     private static int invokeFailureLogs;
 
@@ -46,6 +51,33 @@ public final class ThaumcraftParticleBridge {
 
     public static boolean isParticleEngineAvailable() {
         return INSTANCE.resolveEngine();
+    }
+
+    public static void clearParticles(String reason) {
+        if (!INSTANCE.resolveEngine()) {
+            return;
+        }
+        try {
+            Object particles = particlesField != null ? particlesField.get(null) : null;
+            if (particles instanceof Object[] layers) {
+                for (Object layer : layers) {
+                    if (layer instanceof Map<?, ?> map) {
+                        for (Object bucket : map.values()) {
+                            if (bucket instanceof Collection<?> collection) {
+                                collection.clear();
+                            }
+                        }
+                        map.clear();
+                    }
+                }
+            }
+            Object delayed = particlesDelayedField != null ? particlesDelayedField.get(null) : null;
+            if (delayed instanceof Collection<?> collection) {
+                collection.clear();
+            }
+        } catch (IllegalAccessException | RuntimeException failure) {
+            logInvokeFailure("clearParticles:" + reason, failure);
+        }
     }
 
     @SubscribeEvent(priority = EventPriority.LOWEST)
@@ -99,9 +131,13 @@ public final class ThaumcraftParticleBridge {
                 renderTickMethod = resolved.getDeclaredMethod("renderTick", TickEvent.RenderTickEvent.class);
                 renderWorldLastMethod = resolved.getDeclaredMethod("onRenderWorldLast", RenderWorldLastEvent.class);
                 updateParticlesMethod = resolved.getDeclaredMethod("updateParticles", TickEvent.ClientTickEvent.class);
+                particlesField = resolved.getDeclaredField("particles");
+                particlesDelayedField = resolved.getDeclaredField("particlesDelayed");
                 renderTickMethod.setAccessible(true);
                 renderWorldLastMethod.setAccessible(true);
                 updateParticlesMethod.setAccessible(true);
+                particlesField.setAccessible(true);
+                particlesDelayedField.setAccessible(true);
                 engineClass = resolved;
                 MainMod.LOGGER.info("[AUSMThaumcraftParticles] Resolved {} with loader={} source={}",
                         ENGINE_CLASS,

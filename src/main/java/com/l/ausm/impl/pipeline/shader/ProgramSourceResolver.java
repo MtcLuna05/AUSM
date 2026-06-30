@@ -24,6 +24,8 @@ public final class ProgramSourceResolver {
         return new ProgramSourceSet(
                 programId,
                 resolveStage(pack, layout, dimensionId, programId, ".vsh"),
+                resolveStage(pack, layout, dimensionId, programId, ".tcs"),
+                resolveStage(pack, layout, dimensionId, programId, ".tes"),
                 resolveStage(pack, layout, dimensionId, programId, ".fsh"),
                 resolveStage(pack, layout, dimensionId, programId, ".gsh")
         );

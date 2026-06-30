@@ -47,6 +47,8 @@ public enum ProgramId {
     WEATHER(ProgramGroup.GBUFFERS, "weather", TEXTURED_LIT),
     WATER(ProgramGroup.GBUFFERS, "water", TERRAIN),
     HAND_WATER(ProgramGroup.GBUFFERS, "hand_water", HAND),
+    DH_TERRAIN(ProgramGroup.DH, "terrain", null),
+    DH_WATER(ProgramGroup.DH, "water", DH_TERRAIN),
 
     PREPARE(ProgramGroup.PREPARE, "", null),
     DEFERRED(ProgramGroup.DEFERRED, "", null),

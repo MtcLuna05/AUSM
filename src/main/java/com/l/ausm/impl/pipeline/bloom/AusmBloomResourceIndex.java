@@ -15,6 +15,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
@@ -30,6 +32,7 @@ public final class AusmBloomResourceIndex {
     private int bloomMetadata;
     private int ctmBloomMetadata;
     private int declaredLightMetadata;
+    private final Set<String> bloomSpriteIds = ConcurrentHashMap.newKeySet();
 
     public void scanOnce() {
         if (!scanned.compareAndSet(false, true)) {
@@ -136,10 +139,16 @@ public final class AusmBloomResourceIndex {
         String withoutExtension = path.substring(0, path.length() - ".png".length()).toLowerCase(Locale.ROOT);
         if (withoutExtension.endsWith("_glow")) {
             glowTextures++;
+            addBloomSpriteId(withoutExtension);
+            addBloomSpriteId(withoutExtension.substring(0, withoutExtension.length() - "_glow".length()));
         } else if (withoutExtension.endsWith("_emissive")) {
             emissiveTextures++;
+            addBloomSpriteId(withoutExtension);
+            addBloomSpriteId(withoutExtension.substring(0, withoutExtension.length() - "_emissive".length()));
         } else if (withoutExtension.endsWith("_bloom")) {
             bloomTextures++;
+            addBloomSpriteId(withoutExtension);
+            addBloomSpriteId(withoutExtension.substring(0, withoutExtension.length() - "_bloom".length()));
         }
     }
 
@@ -165,6 +174,7 @@ public final class AusmBloomResourceIndex {
 
             if (ctm.has("layer") && "BLOOM".equalsIgnoreCase(ctm.get("layer").getAsString())) {
                 ctmBloomMetadata++;
+                addBloomSpriteId(path.substring(0, path.length() - ".png.mcmeta".length()).toLowerCase(Locale.ROOT));
             }
 
             JsonObject extra = ctm.has("extra") && ctm.get("extra").isJsonObject()
@@ -186,5 +196,47 @@ public final class AusmBloomResourceIndex {
 
     private static String normalizePath(String path) {
         return path.replace('\\', '/');
+    }
+
+    public boolean hasBloomSprite(String spriteName) {
+        scanOnce();
+        String id = normalizeSpriteId(spriteName);
+        return id != null && bloomSpriteIds.contains(id);
+    }
+
+    private void addBloomSpriteId(String texturePathWithoutExtension) {
+        String id = normalizeTexturePathToSpriteId(texturePathWithoutExtension);
+        if (id != null) {
+            bloomSpriteIds.add(id);
+        }
+    }
+
+    private static String normalizeTexturePathToSpriteId(String path) {
+        if (path == null) {
+            return null;
+        }
+        String normalized = normalizePath(path).toLowerCase(Locale.ROOT);
+        if (!normalized.startsWith("assets/") || !normalized.contains("/textures/")) {
+            return null;
+        }
+        int namespaceStart = "assets/".length();
+        int textureStart = normalized.indexOf("/textures/");
+        if (textureStart <= namespaceStart) {
+            return null;
+        }
+        String namespace = normalized.substring(namespaceStart, textureStart);
+        String texture = normalized.substring(textureStart + "/textures/".length());
+        return namespace + ":" + texture;
+    }
+
+    private static String normalizeSpriteId(String spriteName) {
+        if (spriteName == null || spriteName.isEmpty()) {
+            return null;
+        }
+        String normalized = normalizePath(spriteName).toLowerCase(Locale.ROOT);
+        if (normalized.endsWith(".png")) {
+            normalized = normalized.substring(0, normalized.length() - ".png".length());
+        }
+        return normalized;
     }
 }

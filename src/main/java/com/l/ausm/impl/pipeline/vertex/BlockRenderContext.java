@@ -4,6 +4,9 @@ import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.IBlockAccess;
+
 public final class BlockRenderContext {
 
     private static final ThreadLocal<Integer> CURRENT_BLOCK_ENTITY_ID = ThreadLocal.withInitial(() -> 0);
@@ -15,6 +18,8 @@ public final class BlockRenderContext {
     private static final ThreadLocal<Integer> CURRENT_BLOCK_X = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_Y = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_Z = ThreadLocal.withInitial(() -> 0);
+    private static final ThreadLocal<IBlockAccess> CURRENT_BLOCK_ACCESS = new ThreadLocal<>();
+    private static final ThreadLocal<BlockPos> CURRENT_BLOCK_POS = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> CURRENT_AGRICRAFT_CROP = ThreadLocal.withInitial(() -> false);
     private static final ThreadLocal<Integer> CURRENT_PACKED_LIGHTMAP = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_EMISSION = ThreadLocal.withInitial(() -> 0);
@@ -70,6 +75,27 @@ public final class BlockRenderContext {
         CURRENT_LOCAL_X.set(x & 15);
         CURRENT_LOCAL_Y.set(y & 15);
         CURRENT_LOCAL_Z.set(z & 15);
+    }
+
+    public static void setWorldBlockContext(IBlockAccess blockAccess, BlockPos pos) {
+        if (blockAccess != null) {
+            CURRENT_BLOCK_ACCESS.set(blockAccess);
+        } else {
+            CURRENT_BLOCK_ACCESS.remove();
+        }
+        if (pos != null) {
+            CURRENT_BLOCK_POS.set(pos.toImmutable());
+        } else {
+            CURRENT_BLOCK_POS.remove();
+        }
+    }
+
+    public static IBlockAccess blockAccess() {
+        return CURRENT_BLOCK_ACCESS.get();
+    }
+
+    public static BlockPos blockPos() {
+        return CURRENT_BLOCK_POS.get();
     }
 
     public static int blockX() {
@@ -276,6 +302,8 @@ public final class BlockRenderContext {
         CURRENT_BLOCK_X.remove();
         CURRENT_BLOCK_Y.remove();
         CURRENT_BLOCK_Z.remove();
+        CURRENT_BLOCK_ACCESS.remove();
+        CURRENT_BLOCK_POS.remove();
         CURRENT_AGRICRAFT_CROP.remove();
         CURRENT_PACKED_LIGHTMAP.remove();
         CURRENT_BLOCK_EMISSION.remove();

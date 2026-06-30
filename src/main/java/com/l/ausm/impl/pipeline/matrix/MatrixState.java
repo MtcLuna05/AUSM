@@ -31,6 +31,7 @@ public final class MatrixState {
     private static final float[] PROJECTION = IDENTITY.clone();
     private static final float[] PROJECTION_INVERSE = IDENTITY.clone();
     private static final float[] PREVIOUS_PROJECTION = IDENTITY.clone();
+    private static final float[] MODEL_VIEW_PROJECTION = IDENTITY.clone();
     private static final float[] SHADOW_MODEL_VIEW = IDENTITY.clone();
     private static final float[] SHADOW_MODEL_VIEW_INVERSE = IDENTITY.clone();
     private static final float[] SHADOW_PROJECTION = IDENTITY.clone();
@@ -87,6 +88,11 @@ public final class MatrixState {
 
     public static FloatBuffer projection() {
         return buffer(PROJECTION);
+    }
+
+    public static FloatBuffer modelViewProjection() {
+        multiply(PROJECTION, MODEL_VIEW, MODEL_VIEW_PROJECTION);
+        return buffer(MODEL_VIEW_PROJECTION);
     }
 
     public static FloatBuffer projectionInverse() {
@@ -177,6 +183,18 @@ public final class MatrixState {
 
     private static void copy(float[] source, float[] target) {
         System.arraycopy(source, 0, target, 0, MATRIX_SIZE);
+    }
+
+    private static void multiply(float[] left, float[] right, float[] target) {
+        for (int column = 0; column < 4; column++) {
+            for (int row = 0; row < 4; row++) {
+                target[row + column * 4] =
+                        left[row] * right[column * 4]
+                                + left[row + 4] * right[1 + column * 4]
+                                + left[row + 8] * right[2 + column * 4]
+                                + left[row + 12] * right[3 + column * 4];
+            }
+        }
     }
 
     private static void copyVec3(float[] source, float[] target) {

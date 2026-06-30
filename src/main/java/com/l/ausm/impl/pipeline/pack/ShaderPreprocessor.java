@@ -20,10 +20,31 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.lwjgl.opengl.GL32;
+import org.lwjgl.opengl.GL40;
+import org.lwjgl.opengl.GL43;
 
 public class ShaderPreprocessor {
     private static final Pattern DEFINE_PATTERN = Pattern.compile("^\\s*(?://\\s*)?#define\\s+([A-Za-z_][A-Za-z0-9_]*)\\b.*$");
     private static final Pattern CONST_PATTERN = Pattern.compile("^(\\s*const\\s+\\w+\\s+)([A-Za-z_][A-Za-z0-9_]*)(\\s*=\\s*)([^;]+)(;.*)$");
+    private static final Pattern CONDITION_DIRECTIVE_PATTERN = Pattern.compile("^(\\s*#(?:if|elif)\\s+)(.*)$");
+    private static final Pattern INFIX_IN_PATTERN = Pattern.compile("([A-Za-z_][A-Za-z0-9_\\.]*|[-+]?\\d+(?:\\.\\d+)?)\\s+in\\s*\\(([^()]*)\\)");
+    private static final Pattern FUNCTION_IN_PATTERN = Pattern.compile("\\bin\\s*\\(([^()]*)\\)");
+    private static final String DISTANT_LIGHT_BOKEH_FUNCTION = "DoDistantLightBokehMaterial";
+    private static final String DISTANT_LIGHT_BOKEH_FALLBACK = """
+            #ifndef AUSM_DISTANT_LIGHT_BOKEH_FALLBACK
+            #define AUSM_DISTANT_LIGHT_BOKEH_FALLBACK
+            void DoDistantLightBokehMaterial(inout vec4 color, vec4 distantColor, inout float emission, float distantEmission, float lViewPos) {
+                float dlbMix = clamp(0.005 * (lViewPos - 60.0), 0.0, 1.0);
+                color = mix(color, distantColor, dlbMix);
+                emission = mix(emission, distantEmission, dlbMix);
+            }
+            void DoDistantLightBokehMaterial(inout float emission, float distantEmission, float lViewPos) {
+                float dlbMix = clamp(0.005 * (lViewPos - 60.0), 0.0, 1.0);
+                emission = mix(emission, distantEmission, dlbMix);
+            }
+            #endif
+            """;
 
     /**
      * Main entry point for the compiler.
@@ -63,6 +84,7 @@ public class ShaderPreprocessor {
         if (parseGlslVersion(versionLine) < 130 && rawLines.stream().anyMatch(line -> line.contains("gl_VertexID"))) {
             versionLine = "#version 130";
         }
+        versionLine = ensureStageMinimumVersion(versionLine, shaderType);
         int glslVersion = parseGlslVersion(versionLine);
 
         StringBuilder finalSource = new StringBuilder();
@@ -83,14 +105,30 @@ public class ShaderPreprocessor {
         for (String extensionLine : extensionLines) {
             out.append(extensionLine).append("\n");
         }
-        out.append(getOptiFineEnvironmentDefines()).append("\n");
+        out.append(getOptiFineEnvironmentDefines(options, glslVersion)).append("\n");
         out.append(getRenderStageDefines()).append("\n");
         out.append(getProgramDefines(pass)).append("\n");
         out.append(getOptiFineMetadataDefines()).append("\n");
         out.append(finalSource);
 
-        String source = out.toString();
+        String source = addMissingDistantLightBokehFallback(out.toString());
         return ShaderTransformPipeline.transform(source, shaderType, pass);
+    }
+
+    private static String addMissingDistantLightBokehFallback(String source) {
+        if (!source.contains(DISTANT_LIGHT_BOKEH_FUNCTION + "(")
+                || source.contains("void " + DISTANT_LIGHT_BOKEH_FUNCTION)) {
+            return source;
+        }
+
+        int insert = source.indexOf("//Program//");
+        if (insert < 0) {
+            insert = source.indexOf("void main");
+        }
+        if (insert < 0) {
+            return source + "\n" + DISTANT_LIGHT_BOKEH_FALLBACK;
+        }
+        return source.substring(0, insert) + DISTANT_LIGHT_BOKEH_FALLBACK + "\n" + source.substring(insert);
     }
 
     private static String getProgramDefines(RenderPass pass) {
@@ -148,7 +186,7 @@ public class ShaderPreprocessor {
     private static boolean isTerrainAlias(RenderPass pass) {
         return switch (pass) {
             case GBUFFERS_TERRAIN_SOLID, GBUFFERS_TERRAIN_CUTOUT_MIP, GBUFFERS_TERRAIN_CUTOUT,
-                    GBUFFERS_DAMAGEDBLOCK, GBUFFERS_BLOCK -> true;
+                    GBUFFERS_DAMAGEDBLOCK -> true;
             default -> false;
         };
     }
@@ -179,20 +217,17 @@ public class ShaderPreprocessor {
     private static String applyOptionOverride(String line, ShaderOptions options) {
         Matcher matcher = DEFINE_PATTERN.matcher(line);
         if (matcher.matches()) {
-            ShaderOption option = options.get(matcher.group(1));
+            String name = matcher.group(1);
+            if (isGeneratedPreludeDefine(name)) {
+                return "// AUSM generated prelude define already supplied: #define " + name;
+            }
+
+            ShaderOption option = options.get(name);
             if (option == null || !option.changed()) {
                 return line;
             }
 
-            if (option.toggle() && !option.asBoolean()) {
-                return "// AUSM option disabled: #define " + option.name();
-            }
-
-            if (option.toggle()) {
-                return "#define " + option.name();
-            }
-
-            return "#define " + option.name() + " " + option.value();
+            return "// AUSM option overridden by prelude: #define " + option.name();
         }
 
         matcher = CONST_PATTERN.matcher(line);
@@ -205,7 +240,26 @@ public class ShaderPreprocessor {
             return line;
         }
 
-        return matcher.group(1) + option.name() + matcher.group(3) + option.value() + matcher.group(5);
+        return "// AUSM option overridden by prelude: const " + option.name();
+    }
+
+    private static boolean isGeneratedPreludeDefine(String name) {
+        if (name == null) {
+            return false;
+        }
+        if (name.equals("OVERWORLD") || name.equals("NETHER") || name.equals("THE_END")) {
+            return true;
+        }
+        if (name.startsWith("MC_RENDER_STAGE_")) {
+            return true;
+        }
+        if (name.startsWith("GBUFFERS_") || name.startsWith("GBUFFER_")) {
+            return true;
+        }
+        return switch (name) {
+            case "PREPARE", "SHADOW", "DEFERRED", "COMPOSITE", "FINAL" -> true;
+            default -> false;
+        };
     }
 
     private static int parseGlslVersion(String versionLine) {
@@ -221,6 +275,43 @@ public class ShaderPreprocessor {
         }
     }
 
+    private static String ensureStageMinimumVersion(String versionLine, int shaderType) {
+        int minimumVersion = minimumGlslVersion(shaderType);
+        if (minimumVersion <= 0 || parseGlslVersion(versionLine) >= minimumVersion) {
+            return versionLine;
+        }
+
+        return "#version " + minimumVersion + stageProfileSuffix(versionLine, shaderType, minimumVersion);
+    }
+
+    private static int minimumGlslVersion(int shaderType) {
+        if (shaderType == GL32.GL_GEOMETRY_SHADER) {
+            return 150;
+        }
+        if (shaderType == GL40.GL_TESS_CONTROL_SHADER || shaderType == GL40.GL_TESS_EVALUATION_SHADER) {
+            return 400;
+        }
+        if (shaderType == GL43.GL_COMPUTE_SHADER) {
+            return 430;
+        }
+        return 0;
+    }
+
+    private static String stageProfileSuffix(String versionLine, int shaderType, int minimumVersion) {
+        if (shaderType == GL43.GL_COMPUTE_SHADER) {
+            return "";
+        }
+
+        String[] parts = versionLine.trim().split("\\s+");
+        if (parts.length > 2) {
+            String profile = parts[2].trim();
+            if ("core".equals(profile) || "compatibility".equals(profile)) {
+                return " " + profile;
+            }
+        }
+        return minimumVersion >= 150 ? " compatibility" : "";
+    }
+
     private static String normalizeLegacyGlsl(String line, int glslVersion) {
         if (glslVersion >= 130) {
             return line;
@@ -230,11 +321,81 @@ public class ShaderPreprocessor {
     }
 
     private static String normalizeUnsupportedPreprocessor(String line) {
-        String trimmed = line.trim();
-        if (trimmed.startsWith("#if") && trimmed.contains("in(")) {
-            return line.replaceFirst("#if\\b.*", "#if 0 // AUSM: disabled unsupported OptiFine biome preprocessor expression");
+        Matcher directiveMatcher = CONDITION_DIRECTIVE_PATTERN.matcher(line);
+        if (!directiveMatcher.matches()) {
+            return line;
         }
-        return line;
+
+        String expression = directiveMatcher.group(2);
+        String comment = "";
+        int lineComment = expression.indexOf("//");
+        if (lineComment >= 0) {
+            comment = expression.substring(lineComment);
+            expression = expression.substring(0, lineComment);
+        }
+
+        String normalized = normalizeInExpression(expression);
+        return directiveMatcher.group(1) + normalized + (comment.isEmpty() ? "" : " " + comment);
+    }
+
+    private static String normalizeInExpression(String expression) {
+        String normalized = replaceInfixInExpressions(expression);
+        normalized = replaceFunctionInExpressions(normalized);
+        return normalized;
+    }
+
+    private static String replaceInfixInExpressions(String expression) {
+        Matcher matcher = INFIX_IN_PATTERN.matcher(expression);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement(inExpression(matcher.group(1), matcher.group(2))));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
+    }
+
+    private static String replaceFunctionInExpressions(String expression) {
+        Matcher matcher = FUNCTION_IN_PATTERN.matcher(expression);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            String[] values = matcher.group(1).split(",");
+            if (values.length < 2) {
+                matcher.appendReplacement(buffer, "0");
+                continue;
+            }
+            String left = values[0].trim();
+            StringBuilder rightValues = new StringBuilder();
+            for (int i = 1; i < values.length; i++) {
+                if (!rightValues.isEmpty()) {
+                    rightValues.append(',');
+                }
+                rightValues.append(values[i]);
+            }
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement(inExpression(left, rightValues.toString())));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
+    }
+
+    private static String inExpression(String left, String commaSeparatedValues) {
+        String[] values = commaSeparatedValues.split(",");
+        StringBuilder expression = new StringBuilder("(");
+        int comparisons = 0;
+        for (String rawValue : values) {
+            String value = rawValue.trim();
+            if (value.isEmpty()) {
+                continue;
+            }
+            if (comparisons++ > 0) {
+                expression.append(" || ");
+            }
+            expression.append(left.trim()).append(" == ").append(value);
+        }
+        if (comparisons == 0) {
+            return "0";
+        }
+        expression.append(')');
+        return expression.toString();
     }
 
     /**
@@ -273,31 +434,10 @@ public class ShaderPreprocessor {
     }
 
     /**
-     * Generates the standard OptiFine hidden variables that advanced packs like BSL require.
+     * Generates standard OptiFine hidden variables expected by advanced packs.
      */
-    private static String getOptiFineEnvironmentDefines() {
-        StringBuilder defines = new StringBuilder("""
-                #define MC_VERSION 11202
-                #define MC_GL_VERSION 320
-                #define MC_GLSL_VERSION 120
-                #define MC_RENDER_QUALITY 1.0
-                #define MC_SHADOW_QUALITY 1.0
-                #define MC_HAND_DEPTH 1.0
-                #define IS_IRIS
-                #define IRIS_VERSION 10902
-                #define IRIS_FEATURE_CUSTOM_IMAGES
-                #define IRIS_FEATURE_SSBO
-                #define IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE
-                #define IRIS_FEATURE_FADE_VARIABLE
-                """);
-
-        switch (ShaderDimensionContext.currentDimensionId()) {
-            case -1 -> defines.append("#define NETHER\n");
-            case 1 -> defines.append("#define THE_END\n");
-            default -> defines.append("#define OVERWORLD\n");
-        }
-
-        return defines.toString();
+    private static String getOptiFineEnvironmentDefines(ShaderOptions options, int glslVersion) {
+        return ShaderEnvironmentDefines.shaderSourceDefines(options, glslVersion);
     }
 
     static String extractIncludePath(String includeLine, String currentFile) {

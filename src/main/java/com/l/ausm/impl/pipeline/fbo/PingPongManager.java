@@ -97,6 +97,10 @@ public class PingPongManager {
     }
 
     public void beginFrame(Attachment... clearAttachments) {
+        beginFrameWithInitialTarget(Attachment.COLOR, clearAttachments);
+    }
+
+    public void beginFrameWithInitialTarget(Attachment initialDrawTarget, Attachment... clearAttachments) {
         if (framebuffer == null) {
             return;
         }
@@ -108,7 +112,7 @@ public class PingPongManager {
             framebuffer.clearDepth();
         }
 
-        bindForGbuffers(Attachment.COLOR);
+        bindForGbuffers(initialDrawTarget == null ? Attachment.COLOR : initialDrawTarget);
     }
 
     public void clear(Attachment... clearAttachments) {

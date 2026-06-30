@@ -6,18 +6,21 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.pack.ShaderRenderTargetSettings;
+import com.l.ausm.impl.pipeline.render.ShaderSamplerState;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
 import org.lwjgl.opengl.ARBTextureSwizzle;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL14;
+import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GLContext;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
+import java.util.Arrays;
 
 /**
  * Minimal shadow depth target.
@@ -27,12 +30,14 @@ import java.nio.IntBuffer;
  * 1.0, which means "fully lit" for packs that sample shadowtex0/1.
  */
 public final class ShadowFramebuffer {
+    public static final int SHADOW_COLOR_TARGET_COUNT = ShaderRenderTargetSettings.SHADOW_COLOR_TARGET_COUNT;
     private int fboId = -1;
     private int depthTextureId = -1;
     private int depthSnapshotTextureId = -1;
-    private int colorTextureId = -1;
+    private final int[] colorTextureIds;
     private final int resolution;
     private final ShaderRenderTargetSettings settings;
+    private final IntBuffer drawBufferList;
     private final IntBuffer viewportBuffer = org.lwjgl.BufferUtils.createIntBuffer(16);
     private final ByteBuffer colorMaskBuffer = org.lwjgl.BufferUtils.createByteBuffer(4);
     private final FloatBuffer clearColorBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
@@ -41,7 +46,20 @@ public final class ShadowFramebuffer {
     public ShadowFramebuffer(int resolution, ShaderRenderTargetSettings settings) {
         this.resolution = resolution;
         this.settings = settings;
+        this.colorTextureIds = new int[supportedShadowColorTargetCount()];
+        this.drawBufferList = org.lwjgl.BufferUtils.createIntBuffer(colorTextureIds.length);
+        Arrays.fill(colorTextureIds, -1);
         create();
+    }
+
+    private static int supportedShadowColorTargetCount() {
+        int maxDrawBuffers = GL11.glGetInteger(GL20.GL_MAX_DRAW_BUFFERS);
+        int maxColorAttachments = GL11.glGetInteger(GL30.GL_MAX_COLOR_ATTACHMENTS);
+        int hardwareLimit = Math.min(maxDrawBuffers, maxColorAttachments);
+        if (hardwareLimit <= 0) {
+            return 1;
+        }
+        return Math.min(SHADOW_COLOR_TARGET_COUNT, hardwareLimit);
     }
 
     private void create() {
@@ -52,7 +70,9 @@ public final class ShadowFramebuffer {
 
         depthTextureId = allocateDepthTexture(0);
         depthSnapshotTextureId = allocateDepthTexture(1);
-        colorTextureId = allocateColorTexture();
+        for (int i = 0; i < colorTextureIds.length; i++) {
+            colorTextureIds[i] = allocateColorTexture(i);
+        }
         OpenGlHelper.glFramebufferTexture2D(
                 OpenGlHelper.GL_FRAMEBUFFER,
                 OpenGlHelper.GL_DEPTH_ATTACHMENT,
@@ -60,15 +80,17 @@ public final class ShadowFramebuffer {
                 depthTextureId,
                 0
         );
-        OpenGlHelper.glFramebufferTexture2D(
-                OpenGlHelper.GL_FRAMEBUFFER,
-                GL30.GL_COLOR_ATTACHMENT0,
-                GL11.GL_TEXTURE_2D,
-                colorTextureId,
-                0
-        );
+        for (int i = 0; i < colorTextureIds.length; i++) {
+            OpenGlHelper.glFramebufferTexture2D(
+                    OpenGlHelper.GL_FRAMEBUFFER,
+                    GL30.GL_COLOR_ATTACHMENT0 + i,
+                    GL11.GL_TEXTURE_2D,
+                    colorTextureIds[i],
+                    0
+            );
+        }
 
-        GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        setDrawBuffers(Attachment.COLOR);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
 
         int status = OpenGlHelper.glCheckFramebufferStatus(OpenGlHelper.GL_FRAMEBUFFER);
@@ -121,10 +143,10 @@ public final class ShadowFramebuffer {
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, ARBTextureSwizzle.GL_TEXTURE_SWIZZLE_A, GL11.GL_ONE);
     }
 
-    private int allocateColorTexture() {
+    private int allocateColorTexture(int index) {
         int textureId = GL11.glGenTextures();
         GlStateManager.bindTexture(textureId);
-        applyColorTextureFilters(0);
+        applyColorTextureFilters(index);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexImage2D(
@@ -153,6 +175,7 @@ public final class ShadowFramebuffer {
         }
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, minFilter);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, magFilter);
+        ShaderSamplerState.clampTextureAnisotropyIfNeeded(GL11.GL_TEXTURE_2D);
     }
 
     private void applyDepthTextureFilters(int index) {
@@ -167,27 +190,34 @@ public final class ShadowFramebuffer {
         }
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, minFilter);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, magFilter);
+        ShaderSamplerState.clampTextureAnisotropyIfNeeded(GL11.GL_TEXTURE_2D);
     }
 
     public void clear() {
         // Iris always clears shadow depth before rendering shadows; shadowcolor
         // uses the pack's shadowcolor*Clear directive separately.
-        clear(settings.shadowColorClear(0), true);
+        boolean[] clearColors = new boolean[colorTextureIds.length];
+        for (int i = 0; i < clearColors.length; i++) {
+            clearColors[i] = settings.shadowColorClear(i);
+        }
+        clear(clearColors, true);
     }
 
     private void clearAll() {
-        clear(true, true);
+        boolean[] clearColors = new boolean[colorTextureIds.length];
+        Arrays.fill(clearColors, true);
+        clear(clearColors, true);
     }
 
-    private void clear(boolean clearColor, boolean clearDepth) {
+    private void clear(boolean[] clearColors, boolean clearDepth) {
         SavedFramebufferState previous = saveFramebufferState();
-        bindForRendering();
+        bindForRendering(clearColors);
         GL11.glColorMask(true, true, true, true);
         GlStateManager.clearColor(1.0F, 1.0F, 1.0F, 1.0F);
         GL11.glDepthMask(true);
         GlStateManager.clearDepth(1.0);
         int clearMask = 0;
-        if (clearColor) {
+        if (hasAnyClearColor(clearColors)) {
             clearMask |= GL11.GL_COLOR_BUFFER_BIT;
         }
         if (clearDepth) {
@@ -202,8 +232,77 @@ public final class ShadowFramebuffer {
     public void bindForRendering() {
         OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
         GL11.glViewport(0, 0, resolution, resolution);
-        GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        setDrawBuffers(0);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+    }
+
+    private void bindForRendering(boolean[] writeColors) {
+        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+        GL11.glViewport(0, 0, resolution, resolution);
+        setDrawBuffers(writeColors);
+        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+    }
+
+    public void bindForProgramWrite(Attachment... drawTargets) {
+        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+        GL11.glViewport(0, 0, resolution, resolution);
+        setDrawBuffers(drawTargets);
+        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+    }
+
+    private void setDrawBuffers(boolean[] writeColors) {
+        drawBufferList.clear();
+        if (writeColors != null) {
+            for (int i = 0; i < Math.min(writeColors.length, colorTextureIds.length); i++) {
+                if (writeColors[i]) {
+                    drawBufferList.put(GL30.GL_COLOR_ATTACHMENT0 + i);
+                }
+            }
+        }
+        uploadDrawBuffers();
+    }
+
+    private void setDrawBuffers(int... colorIndices) {
+        drawBufferList.clear();
+        for (int colorIndex : colorIndices) {
+            if (colorIndex < 0 || colorIndex >= colorTextureIds.length) {
+                continue;
+            }
+            drawBufferList.put(GL30.GL_COLOR_ATTACHMENT0 + colorIndex);
+        }
+        uploadDrawBuffers();
+    }
+
+    private void setDrawBuffers(Attachment... drawTargets) {
+        drawBufferList.clear();
+        for (Attachment attachment : drawTargets) {
+            if (attachment == null || attachment.getIndex() < 0 || attachment.getIndex() >= colorTextureIds.length) {
+                continue;
+            }
+            drawBufferList.put(GL30.GL_COLOR_ATTACHMENT0 + attachment.getIndex());
+        }
+        uploadDrawBuffers();
+    }
+
+    private void uploadDrawBuffers() {
+        drawBufferList.flip();
+        if (drawBufferList.hasRemaining()) {
+            GL20.glDrawBuffers(drawBufferList);
+            return;
+        }
+        GL11.glDrawBuffer(GL11.GL_NONE);
+    }
+
+    private static boolean hasAnyClearColor(boolean[] clearColors) {
+        if (clearColors == null) {
+            return false;
+        }
+        for (boolean clearColor : clearColors) {
+            if (clearColor) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void copyDepthToSnapshot() {
@@ -239,13 +338,15 @@ public final class ShadowFramebuffer {
     }
 
     public void generateShadowColorMipmaps() {
-        if (!settings.shadowColorMipmap(0)) {
-            return;
-        }
         SavedFramebufferState previous = saveFramebufferState();
         int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, colorTextureId);
-        GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
+        for (int i = 0; i < colorTextureIds.length; i++) {
+            if (!settings.shadowColorMipmap(i) || colorTextureIds[i] == -1) {
+                continue;
+            }
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, colorTextureIds[i]);
+            GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
+        }
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
         previous.restore();
     }
@@ -365,7 +466,11 @@ public final class ShadowFramebuffer {
     }
 
     public int colorTextureId() {
-        return colorTextureId;
+        return colorTextureId(0);
+    }
+
+    public int colorTextureId(int index) {
+        return index >= 0 && index < colorTextureIds.length ? colorTextureIds[index] : -1;
     }
 
     public int resolution() {
@@ -388,9 +493,11 @@ public final class ShadowFramebuffer {
             GL11.glDeleteTextures(depthSnapshotTextureId);
             depthSnapshotTextureId = -1;
         }
-        if (colorTextureId != -1) {
-            GL11.glDeleteTextures(colorTextureId);
-            colorTextureId = -1;
+        for (int i = 0; i < colorTextureIds.length; i++) {
+            if (colorTextureIds[i] != -1) {
+                GL11.glDeleteTextures(colorTextureIds[i]);
+                colorTextureIds[i] = -1;
+            }
         }
     }
 }

@@ -24,6 +24,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
@@ -61,7 +62,10 @@ public class VboRenderListMixin {
         if (mc != null && mc.entityRenderer != null) {
             mc.entityRenderer.enableLightmap();
         }
-        OpenGlHelper.glUseProgram(0);
+        boolean shaderPipelineActive = PipelineContext.getInstance().isActive();
+        if (!shaderPipelineActive) {
+            OpenGlHelper.glUseProgram(0);
+        }
         OpenGlHelper.setActiveTexture(OpenGlHelper.defaultTexUnit);
         GlStateManager.enableTexture2D();
         if (mc != null && mc.getTextureManager() != null) {
@@ -81,7 +85,9 @@ public class VboRenderListMixin {
         );
         GlStateManager.depthMask(false);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        ausm$forceTranslucentFixedFunctionState();
+        if (!shaderPipelineActive) {
+            ausm$forceTranslucentFixedFunctionState();
+        }
         ausm$logTranslucentVboState("head", layer, false);
     }
 
@@ -113,6 +119,15 @@ public class VboRenderListMixin {
         } else {
             ausm$setupVanillaArrayPointers();
         }
+    }
+
+    @ModifyArg(
+            method = "renderChunkLayer",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;drawArrays(I)V"),
+            index = 0
+    )
+    private int ausm$tessellatedChunkDrawMode(int drawMode) {
+        return PipelineContext.getInstance().drawModeForActiveProgram(drawMode);
     }
 
     @Unique

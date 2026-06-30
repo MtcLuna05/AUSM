@@ -10,18 +10,27 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 
 @Mixin(targets = "de.johni0702.minecraft.view.impl.server.ServerWorldsManagerImpl", remap = false)
 public abstract class BetterPortalsServerWorldsManagerMixin {
     private static final String WORLDS_MANAGER_CLASS = "de.johni0702.minecraft.view.impl.server.ServerWorldsManagerImpl";
     private static final String WORLD_MANAGER_CLASS = "de.johni0702.minecraft.view.impl.server.ServerWorldManager";
+    private static final String VIEW_ENTITY_CLASS = "de.johni0702.minecraft.view.impl.server.ViewEntity";
 
     @Shadow
     public abstract Map getWorldManagers();
 
     @Shadow
     public abstract EntityPlayerMP getPlayer();
+
+    @Inject(method = "beforeTransferToDimension", at = @At("HEAD"))
+    private void ausm$repairStaleManagersBeforeTransfer(WorldServer destination, CallbackInfo ci) {
+        ausm$removeStaleNonViewManagers("before-transfer", destination);
+    }
 
     @Inject(method = "updateActiveViews", at = @At("HEAD"))
     private void ausm$repairMissedDimensionTransfer(CallbackInfo ci) {
@@ -43,6 +52,77 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
                     playerWorld.provider != null ? playerWorld.provider.getDimension() : "null");
         } catch (RuntimeException e) {
             MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to repair missed Better Portals server view transfer", e);
+        }
+    }
+
+    private void ausm$removeStaleNonViewManagers(String reason, WorldServer destination) {
+        EntityPlayerMP player = getPlayer();
+        if (player == null) {
+            return;
+        }
+
+        WorldServer currentWorld = player.getServerWorld();
+        Map worldManagers = getWorldManagers();
+        if (currentWorld == null || worldManagers == null || worldManagers.size() <= 1) {
+            return;
+        }
+
+        int removed = 0;
+        try {
+            Iterator iterator = worldManagers.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry entry = (Map.Entry) iterator.next();
+                Object world = entry.getKey();
+                Object manager = entry.getValue();
+                if (world == currentWorld || manager == null) {
+                    continue;
+                }
+                Object managerPlayer = ausm$invoke(manager, "getPlayer");
+                if (managerPlayer != player || ausm$isViewEntity(managerPlayer) || !ausm$hasNoViews(manager)) {
+                    continue;
+                }
+                iterator.remove();
+                removed++;
+            }
+        } catch (RuntimeException e) {
+            MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to prune stale Better Portals world managers before {}", reason, e);
+            return;
+        }
+
+        if (removed > 0) {
+            MainMod.LOGGER.warn("[BetterPortalsCompat] Removed {} stale Better Portals server world manager(s) before {} player={} currentDim={} destinationDim={} remaining={}",
+                    removed,
+                    reason,
+                    player.getName(),
+                    currentWorld.provider != null ? currentWorld.provider.getDimension() : "null",
+                    destination != null && destination.provider != null ? destination.provider.getDimension() : "null",
+                    worldManagers.size());
+        }
+    }
+
+    private boolean ausm$hasNoViews(Object manager) {
+        Object views = ausm$invoke(manager, "getViews");
+        return views instanceof List && ((List) views).isEmpty();
+    }
+
+    private boolean ausm$isViewEntity(Object player) {
+        if (player == null) {
+            return false;
+        }
+        try {
+            Class<?> viewEntityClass = Class.forName(VIEW_ENTITY_CLASS, false, getClass().getClassLoader());
+            return viewEntityClass.isInstance(player);
+        } catch (ClassNotFoundException | LinkageError e) {
+            return false;
+        }
+    }
+
+    private Object ausm$invoke(Object target, String methodName) {
+        try {
+            Method method = target.getClass().getMethod(methodName);
+            return method.invoke(target);
+        } catch (ReflectiveOperationException | LinkageError e) {
+            throw new IllegalStateException("Unable to invoke Better Portals " + methodName, e);
         }
     }
 

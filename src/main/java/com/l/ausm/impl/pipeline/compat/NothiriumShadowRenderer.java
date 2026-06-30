@@ -22,7 +22,10 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -42,11 +45,14 @@ public final class NothiriumShadowRenderer {
     private static final int TEX_COORD_OFFSET = 16;
     private static final int LIGHT_COORD_OFFSET = 24;
     private static final int MAX_SHADOW_COMPILES_PER_FRAME = 8;
+    private static final int MAX_MAIN_TERRAIN_COMPILES_PER_FRAME = 32;
     private static final int MAX_PENDING_SHADOW_COMPILES = 64;
     private static final int MAX_CHUNK_REFRESH_COMPILES = 16;
     private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 0;
     private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 0;
     private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 0;
+    private static final long MAIN_TERRAIN_COMPILE_RETRY_DELAY_MS = 750L;
+    private static final long MAIN_TERRAIN_COMPILE_TRACK_TTL_MS = 5000L;
     private static final long REFLECTION_RETRY_DELAY_MS = 1000L;
     private static Reflection reflection;
     private static long nextReflectionAttemptMillis;
@@ -61,9 +67,11 @@ public final class NothiriumShadowRenderer {
     private int providerZeroAuditAttempts;
     private int uploadAuditAttempts;
     private int compileAuditAttempts;
+    private int mainCompileAuditAttempts;
     private int chunkRefreshAuditAttempts;
     private int visibleTranslucentAuditAttempts;
     private int visibleTerrainFailureAttempts;
+    private final Map<Object, Long> mainTerrainCompileAttempts = new IdentityHashMap<>();
     private static int visibleTranslucentStateLogs;
 
     public static boolean isAvailable() {
@@ -184,6 +192,38 @@ public final class NothiriumShadowRenderer {
         return renderLayer(layer, cameraX, cameraY, cameraZ, maxDistance, false, true, false);
     }
 
+    public int renderLayerSchedulingCompiles(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ, double maxDistance) {
+        return renderLayer(layer, cameraX, cameraY, cameraZ, maxDistance, true, true, false);
+    }
+
+    public int scheduleLayerCompiles(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ, double maxDistance) {
+        Reflection reflection = reflection();
+        if (disabled || reflection == null) {
+            return 0;
+        }
+
+        Object pass = reflection.passFor(layer);
+        if (pass == null) {
+            return 0;
+        }
+
+        try {
+            Object provider = reflection.getProvider.invoke(null);
+            if (provider == null) {
+                return 0;
+            }
+            Object chunksArray = reflection.providerChunks.get(provider);
+            if (!(chunksArray instanceof Object[] chunks) || chunks.length == 0) {
+                return 0;
+            }
+            return scheduleMissingLayerCompiles(reflection, pass, Arrays.asList(chunks), cameraX, cameraY, cameraZ, maxDistance);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            disabled = true;
+            warnOnce(e);
+            return 0;
+        }
+    }
+
     public int renderVisibleLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
                                   int fallbackBlockEntityId, short fallbackRenderType) {
         return renderVisibleLayer(layer, cameraX, cameraY, cameraZ, fallbackBlockEntityId, fallbackRenderType, -1.0D);
@@ -191,6 +231,17 @@ public final class NothiriumShadowRenderer {
 
     public int renderVisibleLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
                                   int fallbackBlockEntityId, short fallbackRenderType, double maxDistance) {
+        return renderVisibleLayer(layer, cameraX, cameraY, cameraZ, fallbackBlockEntityId, fallbackRenderType, maxDistance, true);
+    }
+
+    public int renderVisibleLayerAllowingVanillaStride(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
+                                                       int fallbackBlockEntityId, short fallbackRenderType) {
+        return renderVisibleLayer(layer, cameraX, cameraY, cameraZ, fallbackBlockEntityId, fallbackRenderType, -1.0D, false);
+    }
+
+    private int renderVisibleLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
+                                   int fallbackBlockEntityId, short fallbackRenderType, double maxDistance,
+                                   boolean requirePipelineStride) {
         Reflection reflection = reflection();
         if (disabled || reflection == null) {
             return -1;
@@ -217,7 +268,6 @@ public final class NothiriumShadowRenderer {
                 return -1;
             }
 
-            boolean requirePipelineStride = layer != BlockRenderLayer.TRANSLUCENT;
             DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, false,
                     fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
             if (stats.unsupportedStride > 0) {
@@ -254,8 +304,8 @@ public final class NothiriumShadowRenderer {
                 if (provider != null) {
                     Object chunksArray = reflection.providerChunks.get(provider);
                     if (chunksArray instanceof Object[] chunks && chunks.length > 0) {
-                        if (scheduleCompiles && layer == BlockRenderLayer.SOLID) {
-                            scheduleShadowCompiles(reflection, Arrays.asList(chunks), cameraX, cameraY, cameraZ, maxDistance);
+                        if (scheduleCompiles) {
+                            scheduleMissingLayerCompiles(reflection, pass, Arrays.asList(chunks), cameraX, cameraY, cameraZ, maxDistance);
                         }
                         DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, Arrays.asList(chunks), cameraX, cameraY, cameraZ,
                                 maxDistance, false, 0, (short) 0, false);
@@ -367,6 +417,115 @@ public final class NothiriumShadowRenderer {
             }
         }
         auditCompileStats(stats);
+    }
+
+    private int scheduleMissingLayerCompiles(Reflection reflection, Object pass, Iterable<?> chunks,
+                                              double cameraX, double cameraY, double cameraZ, double maxDistance)
+            throws ReflectiveOperationException {
+        Object renderer = reflection.getRenderer.invoke(null);
+        Object dispatcher = reflection.getTaskDispatcher.invoke(null);
+        if (renderer == null || dispatcher == null) {
+            return 0;
+        }
+
+        CompileStats stats = new CompileStats();
+        int scheduled = 0;
+        int running = 0;
+        long now = System.currentTimeMillis();
+        pruneMainTerrainCompileAttempts(now);
+        double maxDistanceSquared = maxDistance >= 0.0D ? maxDistance * maxDistance : -1.0D;
+        for (Object chunk : chunks) {
+            stats.total++;
+            if (chunk == null) {
+                stats.nullChunks++;
+                continue;
+            }
+            if (scheduled >= MAX_MAIN_TERRAIN_COMPILES_PER_FRAME) {
+                continue;
+            }
+
+            int chunkX = (Integer) reflection.getX.invoke(chunk);
+            int chunkY = (Integer) reflection.getY.invoke(chunk);
+            int chunkZ = (Integer) reflection.getZ.invoke(chunk);
+            stats.captureFirstChunk(chunkX, chunkY, chunkZ);
+            if (maxDistanceSquared >= 0.0D) {
+                double dx = chunkX + 8.0D - cameraX;
+                double dy = chunkY + 8.0D - cameraY;
+                double dz = chunkZ + 8.0D - cameraZ;
+                if (dx * dx + dy * dy + dz * dz > maxDistanceSquared) {
+                    stats.distanceCulled++;
+                    continue;
+                }
+            }
+            stats.withinDistance++;
+
+            Object part = reflection.getVboPart.invoke(chunk, pass);
+            boolean missingPart = part == null;
+            boolean invalidPart = false;
+            boolean emptyPart = false;
+            if (part != null) {
+                invalidPart = !((Boolean) reflection.isValid.invoke(part));
+                if (!invalidPart) {
+                    emptyPart = ((Integer) reflection.getCount.invoke(part)) <= 0
+                            || ((Integer) reflection.getVbo.invoke(part)) <= 0;
+                }
+            }
+            if (!missingPart && !invalidPart && !emptyPart) {
+                stats.clean++;
+                continue;
+            }
+            stats.dirty++;
+
+            Object future = reflection.lastCompileTaskResult(chunk);
+            if (futureIsRunning(future)) {
+                running++;
+                stats.running++;
+                if (running >= MAX_PENDING_SHADOW_COMPILES) {
+                    break;
+                }
+                continue;
+            }
+
+            Long lastAttempt = mainTerrainCompileAttempts.get(chunk);
+            if (lastAttempt != null && now - lastAttempt < MAIN_TERRAIN_COMPILE_RETRY_DELAY_MS) {
+                stats.throttled++;
+                continue;
+            }
+
+            if (invalidPart) {
+                reflection.releaseBuffers.invoke(chunk);
+            }
+            reflection.markDirty.invoke(chunk);
+            if (!Boolean.TRUE.equals(reflection.canCompile(chunk))) {
+                stats.cannotCompile++;
+                continue;
+            }
+            stats.canCompile++;
+
+            reflection.compileAsync.invoke(chunk, renderer, dispatcher);
+            mainTerrainCompileAttempts.put(chunk, now);
+            scheduled++;
+            stats.scheduled++;
+        }
+
+        if (scheduled > 0) {
+            reflection.dispatcherUpdate.invoke(dispatcher);
+        }
+        auditMainCompileStats(stats);
+        return scheduled;
+    }
+
+    private void pruneMainTerrainCompileAttempts(long now) {
+        if (mainTerrainCompileAttempts.size() < 256) {
+            return;
+        }
+        Iterator<Map.Entry<Object, Long>> iterator = mainTerrainCompileAttempts.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<Object, Long> entry = iterator.next();
+            if (now - entry.getValue() > MAIN_TERRAIN_COMPILE_TRACK_TTL_MS) {
+                iterator.remove();
+            }
+        }
     }
 
     private static boolean futureIsRunning(Object futureObject) {
@@ -491,7 +650,7 @@ public final class NothiriumShadowRenderer {
                 try {
                     PipelineContext.getInstance().applyChunkFade(chunkX, chunkY, chunkZ);
                     GL11.glTranslated(chunkX - cameraX, chunkY - cameraY, chunkZ - cameraZ);
-                    GL11.glDrawArrays(GL11.GL_QUADS, first, count);
+                    GL11.glDrawArrays(PipelineContext.getInstance().drawModeForActiveProgram(GL11.GL_QUADS), first, count);
                 } finally {
                     GL11.glPopMatrix();
                 }
@@ -919,6 +1078,32 @@ public final class NothiriumShadowRenderer {
         );
     }
 
+    private void auditMainCompileStats(CompileStats stats) {
+        if (mainCompileAuditAttempts >= 12) {
+            return;
+        }
+        if (stats.scheduled <= 0 && stats.running <= 0 && stats.dirty <= 0 && stats.canCompile <= 0 && stats.cannotCompile <= 0) {
+            return;
+        }
+        mainCompileAuditAttempts++;
+        MainMod.LOGGER.info(
+                "[NothiriumShadowBridge] mainCompile attempt={} total={} null={} within={} distCull={} missingOrInvalid={} alreadyReady={} canCompile={} cannotCompile={} running={} throttled={} scheduled={} firstChunk={}",
+                mainCompileAuditAttempts,
+                stats.total,
+                stats.nullChunks,
+                stats.withinDistance,
+                stats.distanceCulled,
+                stats.dirty,
+                stats.clean,
+                stats.canCompile,
+                stats.cannotCompile,
+                stats.running,
+                stats.throttled,
+                stats.scheduled,
+                stats.firstChunk
+        );
+    }
+
     private void auditChunkRefresh(int chunkX, int chunkZ, int total, int nullChunks, int matched, int alreadyDirty,
                                    int running, int released, int marked, int canCompile, int cannotCompile,
                                    int noDispatcher, int scheduled, int deferred) {
@@ -972,9 +1157,6 @@ public final class NothiriumShadowRenderer {
 
     private void auditDrawStats(String source, BlockRenderLayer layer, DrawStats stats) {
         if (source.equals("provider")) {
-            if (layer != BlockRenderLayer.SOLID) {
-                return;
-            }
             if (stats.drawn > 0) {
                 if (providerSuccessAuditLogged) {
                     return;
@@ -993,8 +1175,8 @@ public final class NothiriumShadowRenderer {
             fallbackAuditLogged = true;
         }
 
-        MainMod.LOGGER.debug(
-                "[NothiriumShadowBridge] source={} layer={} attempt={} total={} null={} within={} distCull={} part={} valid={} count={} vbo={} badStride={} rangeSkip={} drawn={} firstChunk={} firstPart={} state={}",
+        MainMod.LOGGER.info(
+                "[NothiriumShadowBridge] source={} layer={} attempt={} total={} null={} within={} distCull={} missingPart={} part={} invalidPart={} valid={} emptyCount={} count={} badVbo={} vbo={} badStride={} unsupportedStride={} rangeSkip={} drawn={} firstChunk={} firstPart={} state={}",
                 source,
                 layer,
                 source.equals("provider") ? providerZeroAuditAttempts : -1,
@@ -1002,11 +1184,16 @@ public final class NothiriumShadowRenderer {
                 stats.nullChunks,
                 stats.withinDistance,
                 stats.distanceCulled,
+                stats.missingPart,
                 stats.partPresent,
+                stats.invalidPart,
                 stats.validPart,
+                stats.emptyCount,
                 stats.positiveCount,
+                stats.badVbo,
                 stats.positiveVbo,
                 stats.badStride,
+                stats.unsupportedStride,
                 stats.invalidRange,
                 stats.drawn,
                 stats.firstChunk,
@@ -1043,7 +1230,7 @@ public final class NothiriumShadowRenderer {
             MainMod.LOGGER.debug("[NothiriumShadowBridge] Empty-list audit failed", e);
         }
 
-        MainMod.LOGGER.debug(
+        MainMod.LOGGER.info(
                 "[NothiriumShadowBridge] layer={} renderer={} listSize={} renderedChunks={} renderedSections={} totalRenderedSections={}",
                 layer,
                 renderer != null ? renderer.getClass().getName() : "null",
@@ -1084,6 +1271,7 @@ public final class NothiriumShadowRenderer {
         private int canCompile;
         private int cannotCompile;
         private int running;
+        private int throttled;
         private int scheduled;
         private String firstChunk = "n/a";
 

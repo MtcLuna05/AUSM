@@ -1365,3 +1365,160 @@ Temporary local shaderpack test patches:
   `glowstone/lit_redstone_lamp -> 15105`, `sea_lantern -> 15109`,
   `lava -> 15302`, `fire -> 15402`, `beacon -> 15519`.
   Remove this patch after the MCBL test pass.
+    Follow-up: added the first runtime tessellation bridge for Iris-style
+    tessellation shader sources. AUSM now marks linked programs that include
+    `.tcs`/`.tes` stages, advertises `IRIS_FEATURE_TESSELLATION_SHADERS` when
+    OpenGL 4.0/ARB tessellation is available, sets `GL_PATCH_VERTICES=4`, and
+    converts active quad draw paths to `GL_PATCHES` for Tessellator draws,
+    vanilla chunk VBO rendering, fullscreen array passes, and the Nothirium
+    shadow fallback. This is not a full modern Iris terrain backend, but it
+    removes the previous loader-only tessellation support gap for 1.12 quad
+    streams.
+    Follow-up: made geometry shaders a first-class internal pipeline
+    capability. Upstream Iris does not advertise a
+    `IRIS_FEATURE_GEOMETRY_SHADERS` flag; geometry is just a supported shader
+    stage. AUSM now keeps `.gsh` source detection in capability logging and
+    cached pipeline activation, validates it against OpenGL 3.2 support, and
+    intentionally does not emit a non-upstream feature define.
+    Follow-up: aligned shader-stage GLSL version normalization for non-fragment
+    stages. Geometry shaders are raised to GLSL 150 compatibility when a pack
+    leaves them at the OptiFine 120 fallback, tessellation control/evaluation
+    stages are raised to GLSL 400 compatibility, and compute shaders are now
+    preprocessed as compute shaders and raised to GLSL 430. This backports the
+    Iris expectation that stage-specific sources compile under a valid stage
+    language level even when older pack files omit explicit versions.
+    Follow-up: changed shader option override handling so changed `#define`
+    options are injected into the prelude before the source body, while the
+    original changed source `#define` is commented out to avoid duplicate macro
+    definitions. Const-style options still use the existing typed `const`
+    replacement path. This improves profile/option parity for early `#if` and
+    include-gated branches without mass-injecting every untouched default.
+    Follow-up: made `MC_GLSL_VERSION` in the shader prelude match the actual
+    emitted stage version after AUSM's stage-version normalization. Metadata
+    scanners still use the legacy 120 default, but compiled `.gsh`, `.tcs`,
+    `.tes`, and `.csh` sources now see the same GLSL version in
+    `MC_GLSL_VERSION` that appears in their final `#version` line.
+    Follow-up: added fullscreen geometry-shader draw parity for composite,
+    deferred, final, and shadow-composite style fullscreen paths. Linked
+    `ShaderProgram`s now track whether a geometry stage is present; fullscreen
+    passes with geometry but no tessellation emit two `GL_TRIANGLES` instead
+    of one `GL_QUADS` primitive so geometry shaders with triangle input can
+    actually run. Terrain remains on the existing quad path until the chunk
+    backend can be widened safely.
+    Follow-up: ported Iris' `texture.noise` handling from `ShaderProperties` /
+    `ShaderPack` / `CustomTextureManager`. AUSM now parses `texture.noise` as
+    the shaderpack noisetex source, honors `.mcmeta` blur/clamp metadata, loads
+    it into the shared `noisetex` binding used by gbuffers, fullscreen, and
+    compute paths, and falls back to generated deterministic noise when the
+    file is missing or invalid. `texture.noise` is no longer double-counted as
+    a generic global custom texture, and `noiseTextureResolution` now uses the
+    same active setting scan path as other Iris-style pack constants before
+    generated noise is allocated.
+    Follow-up: added 1.12-compatible `dimension.properties` source-folder
+    aliases, behaviorally matched to Iris' shaderpack dimension map while
+    keeping legacy numeric fallbacks. AUSM now reads `dimension.<folder>`
+    entries, maps numeric ids plus `minecraft:overworld`,
+    `minecraft:the_nether`, `minecraft:the_end`, and `*`, then resolves normal
+    program stages, indexed fullscreen arrays, and compute sources through
+    those folders before the old literal `world<id>` fallback. This improves
+    dimension override parity without requiring modern namespaced dimension
+    runtime plumbing in 1.12.2.
+    Follow-up: ported Iris compute indirect-dispatch metadata from
+    `ShaderProperties` / `ComputeSource` / `ComputeProgram`. AUSM now parses
+    `indirect.<compute>=<ssboBinding> <offset>`, stores the pointer on the
+    compute source, resolves it through the runtime SSBO owner, and dispatches
+    with `glDispatchComputeIndirect` when the backing buffer exists. Missing
+    indirect buffers are logged and skipped instead of crashing the 1.12 client,
+    which is a deliberate backport safety deviation from modern Iris.
+    Follow-up: widened pack-level render directive coverage to retain Iris'
+    remaining low-risk booleans: `dynamicHandLight`, `breaksAnisotropy`,
+    `voxelizeLightBlocks`, `endFlashShadows`, `allowConcurrentCompute`, and
+    `prepareBeforeShadow`. Not all of these have a direct 1.12 runtime hook yet,
+    but the parsed settings now survive into AUSM's `ShaderRenderSettings`
+    bundle instead of being dropped during pack load.
+    Follow-up: wired the `prepareBeforeShadow` directive into the 1.12 shadow
+    path. Packs that opt in now run `prepare` once before the shadow map pass
+    consumes frame state, with the normal after-camera prepare hook sharing the
+    same once-per-frame guard. Packs that leave the directive disabled keep the
+    previous prepare timing and repetition behavior.
+    Follow-up: changed compute-array loading and execution to match Iris'
+    indexed `programIndex x computeSuffix` model. AUSM now discovers compute
+    families for `setup`, `setup1`, ..., `composite`, `composite1`, etc.,
+    tags each compute with its fullscreen array index, and schedules computes
+    immediately before the matching fixed or indexed fullscreen pass instead
+    of running every compute in the array before every fullscreen pass. This is
+    a breaking ordering change for packs that accidentally depended on AUSM's
+    older flattened compute behavior, but it matches Iris' pass-local compute
+    ownership more closely.
+    Follow-up: moved fixed fullscreen passes (`prepare`, legacy
+    `deferred*`, legacy `composite*`, and `final`) off the world/gbuffer
+    `beginPass` stack and onto the same fullscreen directive path used by
+    indexed program-array passes. Fixed fullscreen draws now apply fullscreen
+    alpha/blend directives, bind deferred and shadow samplers, upload program
+    resources, and restore active pass state through a fullscreen-specific
+    binder. This is a breaking state-ordering change for any pack relying on
+    AUSM's old fullscreen-through-gbuffer bind behavior, but it is closer to
+    Iris' composite renderer model.
+    Follow-up: wired `breaksAnisotropy` beyond parsing. AUSM now stores the
+    directive in a global sampler state during active/cached pipeline setup,
+    clears it on pipeline teardown, exposes `anisotropicFiltering` from an
+    OptiFine-style `ofAfLevel` setting when present, forces that uniform to
+    `0` when the pack declares broken anisotropy, and clamps shader-owned
+    textures plus the bound block atlas to `GL_TEXTURE_MAX_ANISOTROPY_EXT=1`
+    when the extension is available. This mirrors Iris' terrain sampler
+    clamping behavior in the 1.12 adapter without adding a new user-facing
+    anisotropy option.
+    Follow-up: finished the remaining low-risk runtime parity hooks. AUSM now
+    honors `allowConcurrentCompute` when inserting compute barriers, keeps
+    `GL_COMMAND_BARRIER_BIT` for indirect dispatch visibility, exposes a real
+    `textureReloadCount` incremented by the existing resource-pack recovery
+    hook, adds neutral `heldBlockLightColor` uniforms beside the existing held
+    light-value uniforms, and registers small Iris-exclusive time/player/world
+    uniforms backed by 1.12 state (`currentDate`, `currentTime`,
+    `currentYearTime`, `isRiding`, `isElytraFlying`, `vehicleId`,
+    `bedrockLevel`, `heightLimit`, `logicalHeightLimit`, `cloudHeight`,
+    `hasCeiling`, `hasSkylight`, `ambientLight`, and explicit zero end-flash
+    intensity placeholders). Larger leftovers such as true end-flash state,
+    colored held-item providers, fallback framebuffer routing, and voxelized
+    light-block behavior still need non-small adapter work.
+    Follow-up: closed the remaining non-big uniform parity gaps. AUSM now
+    exposes direct 1.12-backed Iris uniforms for biome category/rainfall/
+    temperature, precipitation mode helpers, cave/weather/player/vehicle state,
+    lightning position, cloud time, chunk-fade inverse time, texture filtering
+    mode, and Sodium/Iris render-system aliases such as `iris_ScreenSize`,
+    `iris_ColorModulator`, `iris_GlintAlpha`, `iris_ModelOffset`,
+    `iris_ModelScale`, `iris_TextureScale`, `iris_CameraTranslation`,
+    `u_ModelScale`, `u_TextureScale`, `u_RegionOffset`, and
+    `u_ModelViewProjectionMatrix`. MatrixState now computes a proper
+    projection * model-view MVP buffer for that alias. The remaining uniform
+    diff against the local Iris reference is limited to DH uniforms, which are
+    intentionally out of scope for 1.12, plus name-fragment artifacts from the
+    comparison script.
+    Follow-up: started the big-runtime parity pass. AUSM now honors
+    `fallbackTex` for default gbuffers/fullscreen draw targets, initial world
+    framebuffer binding, external overlay binding, and direct fallback blits
+    back into Minecraft's framebuffer, so packs that intentionally render the
+    unresolved scene into a non-zero colortex are no longer forced through
+    `colortex0`. Held-light color uniforms now derive ACT/ProjectRed/
+    Thaumcraft-compatible RGB from shader item/block IDs instead of always
+    reporting white. `voxelizeLightBlocks` is also wired to a bounded 1.12
+    fallback scanner that injects mapped emissive blocks into the existing
+    voxel image only when the shaderpack explicitly enables that directive.
+    Follow-up: expanded the big-runtime pass with End flash and selected-block
+    parity. AUSM now derives `endFlashPosition`, `endFlashIntensity`, and
+    `previousEndFlashIntensity` from active 1.12 Ender Dragon death state,
+    gates it to the End dimension, resets it on pipeline cleanup, and uses the
+    active flash as `shadowLightPosition` plus the shadow camera orientation
+    while `endFlashShadows` is enabled and a real flash is active. This is a
+    1.12-safe approximation of Iris' modern `EndFlashState` path. Also fixed
+    `currentSelectedBlockPos` to expose the selected block center relative to
+    the camera with Iris' `vec3(-256.0)` miss sentinel instead of absolute
+    block coordinates.
+    Follow-up: prioritized parity with direct visual impact. AUSM now honors
+    the shaderpack `stars=false` directive by suppressing the vanilla star VBO
+    and display-list draw paths without cancelling sky/sun/moon rendering.
+    Player status uniforms were also aligned to Iris' shader-facing values:
+    current health, hunger, air, and armor are normalized survival/adventure
+    ratios, return `-1` outside those modes, and `maxPlayerArmor` reports
+    Iris' `50.0` baseline. This prevents shaderpack damage/oxygen/armor
+    effects from being scaled against 1.12's raw HUD values.

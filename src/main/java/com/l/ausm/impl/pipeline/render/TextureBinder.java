@@ -7,6 +7,7 @@ import com.l.ausm.api.pipeline.pack.*;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.impl.pipeline.fbo.DeferredFramebuffer;
+import com.l.ausm.impl.pipeline.fbo.ShadowFramebuffer;
 import com.l.ausm.impl.pipeline.shader.ShaderBindingLayout;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
@@ -15,6 +16,8 @@ import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL33;
+import org.lwjgl.opengl.GLContext;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
@@ -27,7 +30,10 @@ public class TextureBinder {
     public static final int LIGHTMAP_TEXTURE_UNIT = 2;
     public static final int SHADOWTEX0_TEXTURE_UNIT = ShaderBindingLayout.SHADOW_TEXTURE_BASE_UNIT;
     public static final int SHADOWTEX1_TEXTURE_UNIT = ShaderBindingLayout.SHADOW_TEXTURE_BASE_UNIT + 1;
-    public static final int SHADOWCOLOR0_TEXTURE_UNIT = ShaderBindingLayout.SHADOW_TEXTURE_BASE_UNIT + 2;
+    public static final int SHADOWCOLOR0_TEXTURE_UNIT = ShaderBindingLayout.SHADOW_COLOR_TEXTURE_BASE_UNIT;
+    public static final int SHADOWCOLOR1_TEXTURE_UNIT = ShaderBindingLayout.SHADOW_COLOR_TEXTURE_BASE_UNIT + 1;
+    public static final int SHADOWTEX0_HW_TEXTURE_UNIT = ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT - 2;
+    public static final int SHADOWTEX1_HW_TEXTURE_UNIT = ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT - 1;
     public static final int DEPTHTEX0_TEXTURE_UNIT = ShaderBindingLayout.DEPTH_TEXTURE_BASE_UNIT;
     public static final int COLORTEX4_TEXTURE_UNIT = ShaderBindingLayout.HIGH_COLOR_TEXTURE_BASE_UNIT;
     public static final int COLORTEX5_TEXTURE_UNIT = ShaderBindingLayout.HIGH_COLOR_TEXTURE_BASE_UNIT + 1;
@@ -40,13 +46,15 @@ public class TextureBinder {
     public static final int COLORTEX9_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 2;
     public static final int COLORTEX16_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 3;
     public static final int CENTER_DEPTH_SMOOTH_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 4;
-    public static final int SPECULAR_TEXTURE_UNIT = ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT - 1;
+    public static final int SPECULAR_TEXTURE_UNIT = ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT - 3;
     private static int fallbackBlackTexture = -1;
     private static int fallbackWhiteTexture = -1;
     private static int fallbackNormalTexture = -1;
     private static int fallbackSpecularTexture = -1;
     private static int neutralShadowDepthTexture = -1;
     private static int neutralShadowColorTexture = -1;
+    private static int shadowDepthSampler = -1;
+    private static int shadowDepthHardwareSampler = -1;
     private static int maxCombinedTextureUnits = -1;
 
     /**
@@ -113,16 +121,23 @@ public class TextureBinder {
 
         int shadowDepthTexture = context.getShadowDepthTexture();
         int shadowDepthSnapshotTexture = context.getShadowDepthSnapshotTexture();
-        int shadowColorTexture = context.getShadowColor0Texture();
         if (shadowDepthTexture == -1 || shadowDepthSnapshotTexture == -1) {
             return;
         }
 
-        context.configureShadowDepthTextureCompareMode();
-        bindRawTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture);
-        bindRawTexture(SHADOWTEX1_TEXTURE_UNIT, shadowDepthSnapshotTexture);
-        if (shadowColorTexture != -1) {
-            bindRawTexture(SHADOWCOLOR0_TEXTURE_UNIT, shadowColorTexture);
+        bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture, true);
+        bindShadowDepthTexture(SHADOWTEX1_TEXTURE_UNIT, shadowDepthSnapshotTexture, true);
+        if (supportsSamplerObjects()) {
+            bindShadowDepthTexture(SHADOWTEX0_HW_TEXTURE_UNIT, shadowDepthTexture, true);
+            bindShadowDepthTexture(SHADOWTEX1_HW_TEXTURE_UNIT, shadowDepthSnapshotTexture, true);
+        } else {
+            context.configureShadowDepthTextureCompareMode();
+        }
+        for (int i = 0; i < ShadowFramebuffer.SHADOW_COLOR_TARGET_COUNT; i++) {
+            int shadowColorTexture = context.getShadowColorTexture(i);
+            if (shadowColorTexture != -1) {
+                bindRawTexture(shadowColorTextureUnit(i), shadowColorTexture);
+            }
         }
         restoreDefaultTextureUnit();
     }
@@ -206,6 +221,17 @@ public class TextureBinder {
             }
         }
 
+        if (samplerName.startsWith("shadowcolor")) {
+            if ("shadowcolor".equals(samplerName)) {
+                return SHADOWCOLOR0_TEXTURE_UNIT;
+            }
+            try {
+                return shadowColorTextureUnit(Integer.parseInt(samplerName.substring("shadowcolor".length())));
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+        }
+
         return switch (samplerName) {
             case "tex", "texture", "gtexture", "u_MainSampler", "gcolor" -> 0;
             case "iris_overlay" -> 1;
@@ -215,10 +241,10 @@ public class TextureBinder {
             case "normals" -> 3;
             case "composite" -> 3;
             case "specular" -> SPECULAR_TEXTURE_UNIT;
-            case "shadow", "watershadow", "shadowtex0", "shadowtex0HW" -> SHADOWTEX0_TEXTURE_UNIT;
-            case "shadowtex1", "shadowtex1HW" -> SHADOWTEX1_TEXTURE_UNIT;
-            case "shadowcolor", "shadowcolor0" -> SHADOWCOLOR0_TEXTURE_UNIT;
-            case "shadowcolor1" -> COLORTEX4_TEXTURE_UNIT;
+            case "shadow", "watershadow", "shadowtex0" -> SHADOWTEX0_TEXTURE_UNIT;
+            case "shadowtex1" -> SHADOWTEX1_TEXTURE_UNIT;
+            case "shadowtex0HW" -> supportsSamplerObjects() ? SHADOWTEX0_HW_TEXTURE_UNIT : SHADOWTEX0_TEXTURE_UNIT;
+            case "shadowtex1HW" -> supportsSamplerObjects() ? SHADOWTEX1_HW_TEXTURE_UNIT : SHADOWTEX1_TEXTURE_UNIT;
             case "gaux1" -> COLORTEX4_TEXTURE_UNIT;
             case "gaux2" -> COLORTEX5_TEXTURE_UNIT;
             case "gaux3" -> COLORTEX6_TEXTURE_UNIT;
@@ -232,6 +258,13 @@ public class TextureBinder {
         };
     }
 
+    public static int shadowColorTextureUnit(int index) {
+        if (index < 0 || index >= ShadowFramebuffer.SHADOW_COLOR_TARGET_COUNT) {
+            return -1;
+        }
+        return ShaderBindingLayout.SHADOW_COLOR_TEXTURE_BASE_UNIT + index;
+    }
+
     public static void bindRawTexture(int textureUnitIndex, int textureId) {
         bindTexture(GL11.GL_TEXTURE_2D, textureUnitIndex, textureId);
     }
@@ -241,13 +274,37 @@ public class TextureBinder {
             return;
         }
         GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnitIndex);
+        if (supportsSamplerObjects()) {
+            GL33.glBindSampler(textureUnitIndex, 0);
+        }
         GL11.glBindTexture(textureTarget, textureId);
+    }
+
+    private static void bindShadowDepthTexture(int textureUnitIndex, int textureId, boolean hardwareFiltering) {
+        if (!isValidTextureUnit(textureUnitIndex)) {
+            return;
+        }
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnitIndex);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
+        if (supportsSamplerObjects()) {
+            GL33.glBindSampler(textureUnitIndex, hardwareFiltering ? shadowDepthHardwareSampler() : shadowDepthSampler());
+        } else {
+            GL11.glTexParameteri(
+                    GL11.GL_TEXTURE_2D,
+                    GL14.GL_TEXTURE_COMPARE_MODE,
+                    hardwareFiltering ? GL14.GL_COMPARE_R_TO_TEXTURE : GL11.GL_NONE
+            );
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
+        }
     }
 
     public static void unbindAllTextureTargets() {
         int maxUnits = maxCombinedTextureUnits();
         for (int unit = 0; unit < maxUnits; unit++) {
             GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
+            if (supportsSamplerObjects()) {
+                GL33.glBindSampler(unit, 0);
+            }
             GL11.glBindTexture(GL11.GL_TEXTURE_1D, 0);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
             GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0);
@@ -313,9 +370,15 @@ public class TextureBinder {
     private static void bindNeutralShadowTextures(boolean hardwareFiltering) {
         int depthTexture = neutralShadowDepthTexture(hardwareFiltering);
         int colorTexture = neutralShadowColorTexture();
-        bindRawTexture(SHADOWTEX0_TEXTURE_UNIT, depthTexture);
-        bindRawTexture(SHADOWTEX1_TEXTURE_UNIT, depthTexture);
-        bindRawTexture(SHADOWCOLOR0_TEXTURE_UNIT, colorTexture);
+        bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, depthTexture, true);
+        bindShadowDepthTexture(SHADOWTEX1_TEXTURE_UNIT, depthTexture, true);
+        if (supportsSamplerObjects()) {
+            bindShadowDepthTexture(SHADOWTEX0_HW_TEXTURE_UNIT, depthTexture, true);
+            bindShadowDepthTexture(SHADOWTEX1_HW_TEXTURE_UNIT, depthTexture, true);
+        }
+        for (int i = 0; i < ShadowFramebuffer.SHADOW_COLOR_TARGET_COUNT; i++) {
+            bindRawTexture(shadowColorTextureUnit(i), colorTexture);
+        }
         restoreDefaultTextureUnit();
     }
 
@@ -348,10 +411,43 @@ public class TextureBinder {
         GL11.glTexParameteri(
                 GL11.GL_TEXTURE_2D,
                 GL14.GL_TEXTURE_COMPARE_MODE,
-                hardwareFiltering ? GL14.GL_COMPARE_R_TO_TEXTURE : GL11.GL_NONE
+                    GL14.GL_COMPARE_R_TO_TEXTURE
         );
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
         return neutralShadowDepthTexture;
+    }
+
+    public static boolean supportsSamplerObjects() {
+        return GLContext.getCapabilities().OpenGL33;
+    }
+
+    private static int shadowDepthSampler() {
+        if (shadowDepthSampler == -1) {
+            shadowDepthSampler = createShadowDepthSampler(false);
+        }
+        return shadowDepthSampler;
+    }
+
+    private static int shadowDepthHardwareSampler() {
+        if (shadowDepthHardwareSampler == -1) {
+            shadowDepthHardwareSampler = createShadowDepthSampler(true);
+        }
+        return shadowDepthHardwareSampler;
+    }
+
+    private static int createShadowDepthSampler(boolean hardwareFiltering) {
+        int sampler = GL33.glGenSamplers();
+        GL33.glSamplerParameteri(sampler, GL11.GL_TEXTURE_MIN_FILTER, hardwareFiltering ? GL11.GL_LINEAR : GL11.GL_NEAREST);
+        GL33.glSamplerParameteri(sampler, GL11.GL_TEXTURE_MAG_FILTER, hardwareFiltering ? GL11.GL_LINEAR : GL11.GL_NEAREST);
+        GL33.glSamplerParameteri(sampler, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+        GL33.glSamplerParameteri(sampler, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+        GL33.glSamplerParameteri(
+                sampler,
+                GL14.GL_TEXTURE_COMPARE_MODE,
+                GL14.GL_COMPARE_R_TO_TEXTURE
+        );
+        GL33.glSamplerParameteri(sampler, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
+        return sampler;
     }
 
     private static int neutralShadowColorTexture() {

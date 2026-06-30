@@ -105,6 +105,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".BetterPortalsCreateWorldHandlerMixin")) {
             return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/view/impl/net/CreateWorld$Handler.class", true);
         }
+        if (mixinClassName.endsWith(".BetterPortalsServerWorldsManagerMixin")) {
+            return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/view/impl/server/ServerWorldsManagerImpl.class", false);
+        }
         if (mixinClassName.endsWith(".AbyssalCraftPortalLayerMixin")) {
             return optionalTargetPresent(mixinClassName, "com/shinoow/abyssalcraft/common/blocks/BlockAbyssPortal.class", false);
         }

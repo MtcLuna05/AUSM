@@ -49,11 +49,14 @@ public final class AusmBloomCtmHooks {
             return true;
         }
 
-        if (!loggedForcedLayer) {
-            loggedForcedLayer = true;
-            MainMod.LOGGER.info("[AUSMBloom] Forcing CTM BLOOM layer visibility; models without BLOOM quads still return empty geometry.");
+        if (model instanceof IBakedModel bakedModel && hasBloomLayerQuads(bakedModel, state)) {
+            if (!loggedForcedLayer) {
+                loggedForcedLayer = true;
+                MainMod.LOGGER.info("[AUSMBloom] Enabling CTM BLOOM layer only for models with actual BLOOM quads.");
+            }
+            return true;
         }
-        return true;
+        return false;
     }
 
     public static List<BakedQuad> getQuadsWithAusmBloom(List<BakedQuad> original,

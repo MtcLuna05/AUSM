@@ -1,6 +1,7 @@
 package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -19,6 +20,7 @@ public class GpomBetterPortalsClientWorldCleanupMixin {
     private static void ausm$scheduleCleanupOnClientThread(String reason, CallbackInfo ci) {
         Minecraft mc = Minecraft.getMinecraft();
         if (mc != null && mc.isCallingFromMinecraftThread()) {
+            PipelineContext.getInstance().clearClientParticles("gpom-better-portals-cleanup:" + reason);
             return;
         }
 
@@ -36,6 +38,7 @@ public class GpomBetterPortalsClientWorldCleanupMixin {
 
     private static void ausm$invokeCleanup(String reason) {
         try {
+            PipelineContext.getInstance().clearClientParticles("gpom-better-portals-cleanup:" + reason);
             Class<?> cleanupClass = Class.forName(TARGET_CLASS, false, GpomBetterPortalsClientWorldCleanupMixin.class.getClassLoader());
             Method cleanup = cleanupClass.getMethod("cleanup", String.class);
             cleanup.invoke(null, reason + " (client thread)");

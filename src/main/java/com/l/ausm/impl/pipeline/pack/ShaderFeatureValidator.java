@@ -1,6 +1,7 @@
 package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.pack.ShaderFeatureSet;
+import org.lwjgl.opengl.GLContext;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,9 +31,11 @@ public final class ShaderFeatureValidator {
         validateImplicitCapability(capabilities.images(), ShaderFeatureFlag.CUSTOM_IMAGES, "image directives", errors);
         validateImplicitCapability(capabilities.storageBuffers(), ShaderFeatureFlag.SSBO, "bufferObject directives", errors);
         validateImplicitCapability(capabilities.perBufferBlending(), ShaderFeatureFlag.PER_BUFFER_BLENDING, "per-buffer blend directives", errors);
+        validateGeometryCapability(capabilities.geometry(), errors);
+        validateImplicitCapability(capabilities.tessellation(), ShaderFeatureFlag.TESSELLATION_SHADERS, "tessellation shader sources", errors);
 
         if (capabilities.extraProgramArrayEntries()) {
-            warnings.add("Pack declares program array entries beyond AUSM's fixed 1.12 fullscreen pass slots; extra entries will be ignored.");
+            warnings.add("Pack declares indexed fullscreen program-array entries outside AUSM's current 1.12 adapter coverage.");
         }
         return new Result(List.copyOf(errors), List.copyOf(warnings));
     }
@@ -56,6 +59,13 @@ public final class ShaderFeatureValidator {
             return;
         }
         errors.add(source + " require " + flag.name().toLowerCase(java.util.Locale.ROOT) + ": " + flag.unavailableReason());
+    }
+
+    private static void validateGeometryCapability(boolean used, List<String> errors) {
+        if (!used || GLContext.getCapabilities().OpenGL32) {
+            return;
+        }
+        errors.add("geometry shader sources require OpenGL 3.2 geometry shader support");
     }
 
     public record Result(List<String> errors, List<String> warnings) {

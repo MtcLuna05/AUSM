@@ -111,7 +111,8 @@ public class NetHandlerPlayClientMixin {
         PipelineContext.getInstance().handleClientTeleportResync(
                 ausm$preTeleportDimension,
                 currentDimension,
-                dx * dx + dy * dy + dz * dz
+                dx * dx + dy * dy + dz * dz,
+                dx * dx + dz * dz
         );
     }
 

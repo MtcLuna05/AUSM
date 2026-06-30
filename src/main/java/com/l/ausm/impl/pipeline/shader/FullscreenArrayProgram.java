@@ -14,7 +14,7 @@ public final class FullscreenArrayProgram {
     private final String name;
     private final RenderPass bindingPass;
     private final ShaderProgramDirectives directives;
-    private final List<Attachment> drawBuffers;
+    private List<Attachment> drawBuffers;
     private ShaderProgram shaderProgram;
     private boolean enabled = true;
 
@@ -36,7 +36,7 @@ public final class FullscreenArrayProgram {
     }
 
     private static List<Attachment> defaultDrawBuffers(ProgramArrayId arrayId) {
-        return arrayId == ProgramArrayId.SHADOWCOMP ? List.of() : List.of(Attachment.COLOR);
+        return List.of(Attachment.COLOR);
     }
 
     public ProgramArrayId arrayId() {
@@ -61,6 +61,10 @@ public final class FullscreenArrayProgram {
 
     public List<Attachment> drawBuffers() {
         return drawBuffers;
+    }
+
+    public void setDrawBuffers(List<Attachment> drawBuffers) {
+        this.drawBuffers = List.copyOf(drawBuffers);
     }
 
     public ShaderProgram shaderProgram() {

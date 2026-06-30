@@ -15,11 +15,13 @@ import java.util.Map;
 public record ShaderTextureDirectives(
         List<ShaderCustomTextureBinding> globalTextures,
         Map<ProgramId, List<ShaderCustomTextureBinding>> programTextures,
+        Map<ShaderProgramArrayKey, List<ShaderCustomTextureBinding>> programArrayTextures,
         List<ShaderRawTextureDirective> rawTextures,
-        Map<ProgramId, List<ShaderRawTextureDirective>> programRawTextures
+        Map<ProgramId, List<ShaderRawTextureDirective>> programRawTextures,
+        Map<ShaderProgramArrayKey, List<ShaderRawTextureDirective>> programArrayRawTextures
 ) {
     public static ShaderTextureDirectives empty() {
-        return new ShaderTextureDirectives(List.of(), Map.of(), List.of(), Map.of());
+        return new ShaderTextureDirectives(List.of(), Map.of(), Map.of(), List.of(), Map.of(), Map.of());
     }
 
     public List<ShaderCustomTextureBinding> texturesFor(ProgramId programId) {
@@ -46,7 +48,33 @@ public record ShaderTextureDirectives(
         return List.copyOf(merged);
     }
 
+    public List<ShaderCustomTextureBinding> texturesFor(ProgramArrayId arrayId, int index) {
+        List<ShaderCustomTextureBinding> local = programArrayTextures.get(new ShaderProgramArrayKey(arrayId, index));
+        if (local == null || local.isEmpty()) {
+            return globalTextures;
+        }
+
+        List<ShaderCustomTextureBinding> merged = new ArrayList<>(globalTextures.size() + local.size());
+        merged.addAll(globalTextures);
+        merged.addAll(local);
+        return List.copyOf(merged);
+    }
+
+    public List<ShaderRawTextureDirective> rawTexturesFor(ProgramArrayId arrayId, int index) {
+        List<ShaderRawTextureDirective> local = programArrayRawTextures.get(new ShaderProgramArrayKey(arrayId, index));
+        if (local == null || local.isEmpty()) {
+            return rawTextures;
+        }
+
+        List<ShaderRawTextureDirective> merged = new ArrayList<>(rawTextures.size() + local.size());
+        merged.addAll(rawTextures);
+        merged.addAll(local);
+        return List.copyOf(merged);
+    }
+
     public int rawTextureCount() {
-        return rawTextures.size() + programRawTextures.values().stream().mapToInt(List::size).sum();
+        return rawTextures.size()
+                + programRawTextures.values().stream().mapToInt(List::size).sum()
+                + programArrayRawTextures.values().stream().mapToInt(List::size).sum();
     }
 }

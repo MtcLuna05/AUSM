@@ -5,12 +5,11 @@ import com.l.ausm.impl.MainMod;
 import java.util.regex.Pattern;
 
 /**
- * BSL 10.x references its RGB blocklight/tint color tables from shadowcomp even
- * when the table declaration guard is false in some option combinations. Iris'
- * preprocessor path still leaves those declarations available; keep the tables
- * compiled without forcing the rest of the multicolored blocklight feature on.
+ * Some packs reference RGB blocklight/tint lookup tables outside the same
+ * preprocessor guard that declares them. Keep those pure constant tables
+ * available without forcing the guarded lighting feature itself on.
  */
-public final class BslBlocklightColorTableTransformStage implements ShaderTransformStage {
+public final class GuardedBlocklightColorTableTransformStage implements ShaderTransformStage {
     private static final Pattern GUARDED_RGB_TABLES = Pattern.compile(
             "(?m)^\\s*#if\\s+defined\\s+MULTICOLORED_BLOCKLIGHT\\s*\\|\\|\\s*defined\\s+MCBL_SS\\s*\\R(?=\\s*vec3\\s*\\[\\s*50\\s*]\\s+lightColorsRGB\\b)"
     );
@@ -25,10 +24,10 @@ public final class BslBlocklightColorTableTransformStage implements ShaderTransf
         }
 
         String transformed = GUARDED_RGB_TABLES.matcher(source).replaceFirst(
-                "#if 1 // AUSM: BSL shadowcomp color tables are referenced unconditionally\n"
+                "#if 1 // AUSM: guarded blocklight color tables are referenced unconditionally\n"
         );
         if (!transformed.equals(source)) {
-            MainMod.LOGGER.debug("[ShaderTransform] Unguarded BSL shadowcomp blocklight color tables");
+            MainMod.LOGGER.debug("[ShaderTransform] Unguarded referenced blocklight color tables");
         }
         return transformed;
     }

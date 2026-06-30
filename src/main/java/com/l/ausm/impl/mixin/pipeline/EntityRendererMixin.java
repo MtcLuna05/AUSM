@@ -12,10 +12,14 @@ import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiIngame;
 import net.minecraft.client.gui.inventory.GuiContainer;
+import net.minecraft.client.particle.ParticleManager;
+import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.EntityRenderer;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.RenderGlobal;
+import net.minecraft.client.renderer.Tessellator;
+import net.minecraft.client.renderer.culling.ICamera;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.BlockRenderLayer;
 import org.lwjgl.opengl.GL11;
@@ -34,6 +38,10 @@ public class EntityRendererMixin {
 
     @Shadow
     protected void renderRainSnow(float partialTicks) {
+    }
+
+    @Shadow
+    protected void renderHand(float partialTicks, int pass) {
     }
 
     @Inject(method = "updateCameraAndRender(FJ)V", at = @At("HEAD"))
@@ -56,6 +64,20 @@ public class EntityRendererMixin {
         }
 
         guiIngame.renderGameOverlay(partialTicks);
+    }
+
+    @Inject(
+            method = "updateCameraAndRender(FJ)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/EntityRenderer;renderWorld(FJ)V",
+                    shift = At.Shift.AFTER
+            )
+    )
+    private void onAfterWorldBeforeUi(float partialTicks, long nanoTime, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.renderShaderlessBloomBeforeGui();
+        context.prepareShaderlessUiRenderingBoundary();
     }
 
     @Inject(
@@ -193,12 +215,24 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterSetupTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        if (PipelineContext.getInstance().shouldRenderShadowMapAfterTerrainSetup()) {
-            PipelineContext.getInstance().renderShadowMap(partialTicks);
+        if (context.shouldRenderShadowMapAfterTerrainSetup()) {
+            context.renderShadowMap(partialTicks);
+        }
+    }
+
+    @Redirect(
+            method = "renderWorldPass",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;renderEntities(Lnet/minecraft/entity/Entity;Lnet/minecraft/client/renderer/culling/ICamera;F)V")
+    )
+    private void ausm$renderEntitiesIfGbufferRenderingEnabled(RenderGlobal renderGlobal, Entity renderViewEntity, ICamera camera, float partialTicks) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.shouldSkipAllMainGbufferRendering()) {
+            renderGlobal.renderEntities(renderViewEntity, camera, partialTicks);
         }
     }
 
@@ -370,7 +404,9 @@ public class EntityRendererMixin {
         if (!context.isActive()) {
             context.prepareVanillaParticleRendering();
         }
-        context.beginTranslucents();
+        if (context.shouldRunDeferredBeforeParticlePhase(WorldRenderingPhase.PARTICLES)) {
+            context.beginTranslucents();
+        }
         context.beginPhase(WorldRenderingPhase.PARTICLES);
     }
 
@@ -413,6 +449,9 @@ public class EntityRendererMixin {
         if (!context.isActive()) {
             context.prepareVanillaParticleRendering();
         }
+        if (context.shouldRunDeferredBeforeParticlePhase(WorldRenderingPhase.PARTICLES_TRANSLUCENT)) {
+            context.beginTranslucents();
+        }
         context.beginPhase(WorldRenderingPhase.PARTICLES_TRANSLUCENT);
     }
 
@@ -431,6 +470,26 @@ public class EntityRendererMixin {
         }
 
         context.endPass();
+    }
+
+    @Redirect(
+            method = "renderWorldPass",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/particle/ParticleManager;renderLitParticles(Lnet/minecraft/entity/Entity;F)V")
+    )
+    private void ausm$renderLitParticlesIfGbufferRenderingEnabled(ParticleManager particleManager, Entity entity, float partialTicks) {
+        if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
+            particleManager.renderLitParticles(entity, partialTicks);
+        }
+    }
+
+    @Redirect(
+            method = "renderWorldPass",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/particle/ParticleManager;renderParticles(Lnet/minecraft/entity/Entity;F)V")
+    )
+    private void ausm$renderParticlesIfGbufferRenderingEnabled(ParticleManager particleManager, Entity entity, float partialTicks) {
+        if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
+            particleManager.renderParticles(entity, partialTicks);
+        }
     }
 
     @Inject(
@@ -463,6 +522,16 @@ public class EntityRendererMixin {
         }
 
         PipelineContext.getInstance().endPass();
+    }
+
+    @Redirect(
+            method = "renderWorldPass",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;drawBlockDamageTexture(Lnet/minecraft/client/renderer/Tessellator;Lnet/minecraft/client/renderer/BufferBuilder;Lnet/minecraft/entity/Entity;F)V")
+    )
+    private void ausm$drawBlockDamageIfGbufferRenderingEnabled(RenderGlobal renderGlobal, Tessellator tessellator, BufferBuilder bufferBuilder, Entity entity, float partialTicks) {
+        if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
+            renderGlobal.drawBlockDamageTexture(tessellator, bufferBuilder, entity, partialTicks);
+        }
     }
 
     @Inject(
@@ -498,6 +567,9 @@ public class EntityRendererMixin {
         if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
             return;
         }
+        if (!PipelineContext.getInstance().shouldRenderWeather()) {
+            return;
+        }
 
         PipelineContext.getInstance().endPass();
         PipelineContext.getInstance().restoreWeatherRenderState();
@@ -510,6 +582,16 @@ public class EntityRendererMixin {
     private void ausm$renderWeatherIfEnabled(EntityRenderer renderer, float partialTicks) {
         if (PipelineContext.getInstance().shouldRenderWeather()) {
             renderRainSnow(partialTicks);
+        }
+    }
+
+    @Redirect(
+            method = "renderWorldPass",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/EntityRenderer;renderHand(FI)V")
+    )
+    private void ausm$renderHandIfGbufferRenderingEnabled(EntityRenderer renderer, float partialTicks, int pass) {
+        if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
+            renderHand(partialTicks, pass);
         }
     }
 

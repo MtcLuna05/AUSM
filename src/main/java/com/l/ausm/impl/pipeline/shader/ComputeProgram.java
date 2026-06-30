@@ -4,6 +4,7 @@ import com.l.ausm.api.pipeline.shader.ComputeProgramSource;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.client.ShaderCompileNotifications;
 import com.l.ausm.impl.pipeline.pack.ShaderPack;
+import com.l.ausm.impl.pipeline.pack.ShaderExpressionEvaluator;
 import com.l.ausm.impl.pipeline.pack.ShaderPreprocessor;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
 import net.minecraft.client.renderer.OpenGlHelper;
@@ -39,7 +40,7 @@ public final class ComputeProgram {
         }
 
         try {
-            String processed = ShaderPreprocessor.processShaderSource(pack, source.path(), properties.options(), null, -1);
+            String processed = ShaderPreprocessor.processShaderSource(pack, source.path(), properties.options(), null, GL43.GL_COMPUTE_SHADER);
             if (processed == null || processed.isBlank()) {
                 return null;
             }
@@ -99,6 +100,22 @@ public final class ComputeProgram {
 
     public String name() {
         return source.name();
+    }
+
+    public int arrayIndex() {
+        return Math.max(0, source.arrayIndex());
+    }
+
+    public boolean hasIndirectPointer() {
+        return source.hasIndirectPointer();
+    }
+
+    public int indirectBuffer() {
+        return source.indirectPointer() == null ? -1 : source.indirectPointer().buffer();
+    }
+
+    public long indirectOffset() {
+        return source.indirectPointer() == null ? 0L : Math.max(0L, source.indirectPointer().offset());
     }
 
     public int[] workGroups(int renderWidth, int renderHeight) {
@@ -235,99 +252,7 @@ public final class ComputeProgram {
     }
 
     private static boolean evaluateCondition(String expression, Map<String, String> defines) {
-        String normalized = expression.replaceAll("\\s+", "");
-        while (normalized.startsWith("(") && normalized.endsWith(")") && balancedParentheses(normalized.substring(1, normalized.length() - 1))) {
-            normalized = normalized.substring(1, normalized.length() - 1);
-        }
-        if (normalized.startsWith("!")) {
-            return !evaluateCondition(normalized.substring(1), defines);
-        }
-        int orIndex = findTopLevelOperator(normalized, "||");
-        if (orIndex >= 0) {
-            return evaluateCondition(normalized.substring(0, orIndex), defines)
-                    || evaluateCondition(normalized.substring(orIndex + 2), defines);
-        }
-        int andIndex = findTopLevelOperator(normalized, "&&");
-        if (andIndex >= 0) {
-            return evaluateCondition(normalized.substring(0, andIndex), defines)
-                    && evaluateCondition(normalized.substring(andIndex + 2), defines);
-        }
-        Matcher equality = Pattern.compile("([A-Za-z_][A-Za-z0-9_]*)(==|!=|>=|<=|>|<)(-?\\d+)").matcher(normalized);
-        if (equality.matches()) {
-            Integer left = intValue(resolveValue(equality.group(1), defines));
-            Integer right = intValue(equality.group(3));
-            if (left == null || right == null) {
-                return false;
-            }
-            return switch (equality.group(2)) {
-                case "==" -> left.equals(right);
-                case "!=" -> !left.equals(right);
-                case ">=" -> left >= right;
-                case "<=" -> left <= right;
-                case ">" -> left > right;
-                case "<" -> left < right;
-                default -> false;
-            };
-        }
-        Matcher defined = Pattern.compile("defined\\(?([A-Za-z_][A-Za-z0-9_]*)\\)?").matcher(normalized);
-        if (defined.matches()) {
-            return defines.containsKey(defined.group(1));
-        }
-        if (defines.containsKey(normalized)) {
-            return booleanValue(resolveValue(normalized, defines));
-        }
-        return booleanValue(normalized);
-    }
-
-    private static int findTopLevelOperator(String expression, String operator) {
-        int depth = 0;
-        for (int i = 0; i <= expression.length() - operator.length(); i++) {
-            char c = expression.charAt(i);
-            if (c == '(') {
-                depth++;
-            } else if (c == ')') {
-                depth = Math.max(0, depth - 1);
-            } else if (depth == 0 && expression.startsWith(operator, i)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private static boolean balancedParentheses(String expression) {
-        int depth = 0;
-        for (int i = 0; i < expression.length(); i++) {
-            char c = expression.charAt(i);
-            if (c == '(') {
-                depth++;
-            } else if (c == ')') {
-                depth--;
-                if (depth < 0) {
-                    return false;
-                }
-            }
-        }
-        return depth == 0;
-    }
-
-    private static String resolveValue(String token, Map<String, String> defines) {
-        String value = token;
-        for (int i = 0; i < 8; i++) {
-            String next = defines.get(value);
-            if (next == null || next.equals(value)) {
-                return value;
-            }
-            value = next;
-        }
-        return value;
-    }
-
-    private static Integer intValue(String value) {
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            return null;
-        }
+        return ShaderExpressionEvaluator.evaluate(stripLineComment(expression), defines);
     }
 
     private static String stripLineComment(String line) {
@@ -348,16 +273,6 @@ public final class ComputeProgram {
             }
         }
         return whitespace < 0 ? stripped : stripped.substring(0, whitespace);
-    }
-
-    private static boolean booleanValue(String value) {
-        if (value == null || value.isBlank()) {
-            return false;
-        }
-        return switch (value.toLowerCase(java.util.Locale.ROOT)) {
-            case "0", "false", "off" -> false;
-            default -> true;
-        };
     }
 
     private record ConditionFrame(boolean parentEnabled, boolean active, boolean branchMatched) {

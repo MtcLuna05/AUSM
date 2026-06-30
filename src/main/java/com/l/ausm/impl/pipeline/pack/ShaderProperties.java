@@ -50,7 +50,8 @@ public record ShaderProperties(
         ShaderPackDirectives packDirectives,
         ShaderOitSettings oitSettings,
         Map<ProgramArrayKey, ShaderProgramDirectives> programArrayDirectives,
-        Map<ProgramArrayKey, String> programArrayEnabledExpressions
+        Map<ProgramArrayKey, String> programArrayEnabledExpressions,
+        Map<String, ShaderIndirectPointer> indirectPointers
 ) {
 
     public static ShaderProperties load(ShaderPack pack) {
@@ -97,6 +98,7 @@ public record ShaderProperties(
                     ShaderFeatureSet.empty(),
                     256,
                     null,
+                    null,
                     programDirectives,
                     CustomUniformSet.empty()
             );
@@ -125,6 +127,7 @@ public record ShaderProperties(
                     CustomUniformSet.empty(),
                     packDirectives,
                     oitSettings,
+                    Map.of(),
                     Map.of(),
                     Map.of()
             );
@@ -226,21 +229,28 @@ public record ShaderProperties(
 
         Map<RenderPass, List<ShaderCustomTextureBinding>> passTextures = new EnumMap<>(RenderPass.class);
         Map<ProgramId, List<ShaderCustomTextureBinding>> programTextures = new EnumMap<>(ProgramId.class);
+        Map<ShaderProgramArrayKey, List<ShaderCustomTextureBinding>> programArrayTextures = new java.util.LinkedHashMap<>();
         List<ShaderRawTextureDirective> rawTextures = new ArrayList<>();
         Map<ProgramId, List<ShaderRawTextureDirective>> programRawTextures = new EnumMap<>(ProgramId.class);
+        Map<ShaderProgramArrayKey, List<ShaderRawTextureDirective>> programArrayRawTextures = new java.util.LinkedHashMap<>();
         List<ShaderCustomTextureBinding> globalTextures = parseCustomTextures(
+                pack,
                 layout,
                 properties,
                 passTextures,
                 programTextures,
+                programArrayTextures,
                 rawTextures,
-                programRawTextures
+                programRawTextures,
+                programArrayRawTextures
         );
         ShaderTextureDirectives textureDirectives = new ShaderTextureDirectives(
                 globalTextures,
                 copyProgramTextureMap(programTextures),
+                copyProgramArrayTextureMap(programArrayTextures),
                 List.copyOf(rawTextures),
-                copyProgramRawTextureMap(programRawTextures)
+                copyProgramRawTextureMap(programRawTextures),
+                copyProgramArrayRawTextureMap(programArrayRawTextures)
         );
 
         BlendModes blendModes = parseBlendModes(properties, options);
@@ -272,8 +282,10 @@ public record ShaderProperties(
         CustomUniformSet customUniforms = parseCustomUniforms(properties);
         List<ShaderImageDirective> images = parseImages(properties, options);
         Map<Integer, ShaderStorageBufferDirective> storageBuffers = parseStorageBuffers(properties, options);
+        Map<String, ShaderIndirectPointer> indirectPointers = parseIndirectPointers(properties);
         ShaderFeatureSet features = ShaderFeatureSet.parse(properties);
         int noiseTextureResolution = parsePositiveInt(properties.getProperty("noiseTextureResolution"), 256);
+        ShaderCustomTextureBinding noiseTexture = parseNoiseTexture(pack, layout, properties);
         ShaderPackDirectives packDirectives = new ShaderPackDirectives(
                 renderTargets,
                 renderSettings,
@@ -283,6 +295,7 @@ public record ShaderProperties(
                 storageBuffers,
                 features,
                 noiseTextureResolution,
+                noiseTexture,
                 null,
                 programDirectives,
                 customUniforms
@@ -314,8 +327,13 @@ public record ShaderProperties(
                 packDirectives,
                 oitSettings,
                 programArrayDirectives,
-                Map.copyOf(programArrayEnabledExpressions)
+                Map.copyOf(programArrayEnabledExpressions),
+                indirectPointers
         );
+    }
+
+    public ShaderIndirectPointer indirectPointer(String sourceName) {
+        return indirectPointers.get(sourceName);
     }
 
     public String translate(String key, String fallback) {
@@ -849,6 +867,29 @@ public record ShaderProperties(
         return Map.copyOf(buffers);
     }
 
+    private static Map<String, ShaderIndirectPointer> parseIndirectPointers(Properties properties) {
+        Map<String, ShaderIndirectPointer> pointers = new java.util.LinkedHashMap<>();
+        for (String key : properties.stringPropertyNames()) {
+            if (!key.startsWith("indirect.")) {
+                continue;
+            }
+
+            String sourceName = key.substring("indirect.".length()).trim();
+            String[] parts = properties.getProperty(key, "").trim().split("\\s+");
+            if (sourceName.isEmpty() || parts.length < 2) {
+                MainMod.LOGGER.warn("[ShaderProperties] Ignoring malformed indirect directive: {}={}", key, properties.getProperty(key));
+                continue;
+            }
+
+            try {
+                pointers.put(sourceName, new ShaderIndirectPointer(Integer.parseInt(parts[0]), Long.parseLong(parts[1])));
+            } catch (NumberFormatException e) {
+                MainMod.LOGGER.warn("[ShaderProperties] Ignoring malformed indirect directive: {}={}", key, properties.getProperty(key));
+            }
+        }
+        return Map.copyOf(pointers);
+    }
+
     private static Map<ProgramId, Map<Attachment, ShaderBlendMode>> copyProgramBlendAttachmentMap(Map<ProgramId, Map<Attachment, ShaderBlendMode>> source) {
         Map<ProgramId, Map<Attachment, ShaderBlendMode>> copy = new EnumMap<>(ProgramId.class);
         source.forEach((programId, modes) -> {
@@ -1216,12 +1257,15 @@ public record ShaderProperties(
     }
 
     private static List<ShaderCustomTextureBinding> parseCustomTextures(
+            ShaderPack pack,
             ShaderPackLayout layout,
             Properties properties,
             Map<RenderPass, List<ShaderCustomTextureBinding>> passTextures,
             Map<ProgramId, List<ShaderCustomTextureBinding>> programTextures,
+            Map<ShaderProgramArrayKey, List<ShaderCustomTextureBinding>> programArrayTextures,
             List<ShaderRawTextureDirective> rawTextures,
-            Map<ProgramId, List<ShaderRawTextureDirective>> programRawTextures
+            Map<ProgramId, List<ShaderRawTextureDirective>> programRawTextures,
+            Map<ShaderProgramArrayKey, List<ShaderRawTextureDirective>> programArrayRawTextures
     ) {
         List<ShaderCustomTextureBinding> globalTextures = new ArrayList<>();
         int generatedTextureIndex = 0;
@@ -1231,7 +1275,7 @@ public record ShaderProperties(
                 if (key.startsWith("customTexture.")) {
                     String samplerName = normalizeSamplerName(key.substring("customTexture.".length()));
                     String value = properties.getProperty(key);
-                    ShaderRawTextureDirective rawTexture = parseRawTextureDirective(layout, samplerName, samplerName, value);
+                    ShaderRawTextureDirective rawTexture = parseRawTextureDirective(pack, layout, samplerName, samplerName, value);
                     if (rawTexture != null) {
                         rawTextures.add(rawTexture);
                         continue;
@@ -1239,7 +1283,8 @@ public record ShaderProperties(
 
                     String resourcePath = layout.normalizeTexturePath(value);
                     if (resourcePath != null) {
-                        globalTextures.add(new ShaderCustomTextureBinding(samplerName, resourcePath));
+                        TextureFiltering filtering = textureFiltering(pack, resourcePath, false, false);
+                        globalTextures.add(new ShaderCustomTextureBinding(samplerName, resourcePath, filtering.blur(), filtering.clamp()));
                     }
                 }
                 continue;
@@ -1247,6 +1292,9 @@ public record ShaderProperties(
 
             String suffix = key.substring("texture.".length());
             String value = properties.getProperty(key);
+            if ("noise".equals(suffix)) {
+                continue;
+            }
 
             int dot = suffix.indexOf('.');
             if (dot < 0) {
@@ -1255,19 +1303,22 @@ public record ShaderProperties(
                     continue;
                 }
                 String samplerName = normalizeSamplerName(suffix);
-                globalTextures.add(new ShaderCustomTextureBinding(samplerName, resourcePath));
+                TextureFiltering filtering = textureFiltering(pack, resourcePath, false, false);
+                globalTextures.add(new ShaderCustomTextureBinding(samplerName, resourcePath, filtering.blur(), filtering.clamp()));
                 continue;
             }
 
             String scope = suffix.substring(0, dot);
             List<ProgramId> programIds = resolveTextureProgramScope(scope);
-            if (programIds.isEmpty()) {
+            ShaderProgramArrayKey arrayKey = resolveTextureProgramArrayScope(scope);
+            if (programIds.isEmpty() && arrayKey == null) {
                 MainMod.LOGGER.warn("[ShaderProperties] Ignoring texture binding for unknown program: {}", suffix);
                 continue;
             }
 
             String samplerName = normalizeSamplerName(suffix.substring(dot + 1));
             ShaderRawTextureDirective rawTexture = parseRawTextureDirective(
+                    pack,
                     layout,
                     samplerName,
                     "customtex" + generatedTextureIndex,
@@ -1278,6 +1329,9 @@ public record ShaderProperties(
                 for (ProgramId programId : programIds) {
                     programRawTextures.computeIfAbsent(programId, ignored -> new ArrayList<>()).add(rawTexture);
                 }
+                if (arrayKey != null) {
+                    programArrayRawTextures.computeIfAbsent(arrayKey, ignored -> new ArrayList<>()).add(rawTexture);
+                }
                 continue;
             }
 
@@ -1285,9 +1339,13 @@ public record ShaderProperties(
             if (resourcePath == null) {
                 continue;
             }
-            ShaderCustomTextureBinding binding = new ShaderCustomTextureBinding(samplerName, resourcePath);
+            TextureFiltering filtering = textureFiltering(pack, resourcePath, false, false);
+            ShaderCustomTextureBinding binding = new ShaderCustomTextureBinding(samplerName, resourcePath, filtering.blur(), filtering.clamp());
             for (ProgramId programId : programIds) {
                 programTextures.computeIfAbsent(programId, ignored -> new ArrayList<>()).add(binding);
+            }
+            if (arrayKey != null) {
+                programArrayTextures.computeIfAbsent(arrayKey, ignored -> new ArrayList<>()).add(binding);
             }
             for (RenderPass pass : adaptTextureScopeToRenderPasses(programIds)) {
                 passTextures.computeIfAbsent(pass, ignored -> new ArrayList<>()).add(binding);
@@ -1297,7 +1355,19 @@ public record ShaderProperties(
         return List.copyOf(globalTextures);
     }
 
+    private static ShaderCustomTextureBinding parseNoiseTexture(ShaderPack pack, ShaderPackLayout layout, Properties properties) {
+        String value = properties.getProperty("texture.noise");
+        String resourcePath = layout.normalizeTexturePath(value);
+        if (resourcePath == null) {
+            return null;
+        }
+
+        TextureFiltering filtering = textureFiltering(pack, resourcePath, false, false);
+        return new ShaderCustomTextureBinding("noisetex", resourcePath, filtering.blur(), filtering.clamp());
+    }
+
     private static ShaderRawTextureDirective parseRawTextureDirective(
+            ShaderPack pack,
             ShaderPackLayout layout,
             String samplerName,
             String replacementSamplerName,
@@ -1329,6 +1399,7 @@ public record ShaderProperties(
         }
 
         try {
+            TextureFiltering filtering = textureFiltering(pack, resourcePath, true, true);
             return switch (target) {
                 case TEXTURE_1D -> new ShaderRawTextureDirective(
                         samplerName,
@@ -1340,7 +1411,9 @@ public record ShaderProperties(
                         0,
                         0,
                         parts[4],
-                        parts[5]
+                        parts[5],
+                        filtering.blur(),
+                        filtering.clamp()
                 );
                 case TEXTURE_2D -> new ShaderRawTextureDirective(
                         samplerName,
@@ -1352,7 +1425,9 @@ public record ShaderProperties(
                         Integer.parseInt(parts[4]),
                         0,
                         parts[5],
-                        parts[6]
+                        parts[6],
+                        filtering.blur(),
+                        filtering.clamp()
                 );
                 case TEXTURE_3D -> new ShaderRawTextureDirective(
                         samplerName,
@@ -1364,13 +1439,46 @@ public record ShaderProperties(
                         Integer.parseInt(parts[4]),
                         Integer.parseInt(parts[5]),
                         parts[6],
-                        parts[7]
+                        parts[7],
+                        filtering.blur(),
+                        filtering.clamp()
                 );
             };
         } catch (NumberFormatException e) {
             MainMod.LOGGER.warn("[ShaderProperties] Ignoring raw texture directive with malformed size for sampler '{}': {}", samplerName, value);
             return null;
         }
+    }
+
+    private static TextureFiltering textureFiltering(ShaderPack pack, String resourcePath, boolean defaultBlur, boolean defaultClamp) {
+        String metaPath = resourcePath + ".mcmeta";
+        if (resourcePath.indexOf(':') >= 0 || !pack.hasResource(metaPath)) {
+            return new TextureFiltering(defaultBlur, defaultClamp);
+        }
+
+        try (InputStream stream = pack.getResourceAsStream(metaPath)) {
+            if (stream == null) {
+                return new TextureFiltering(defaultBlur, defaultClamp);
+            }
+            String meta = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            return new TextureFiltering(
+                    parseMcmetaBoolean(meta, "blur", defaultBlur),
+                    parseMcmetaBoolean(meta, "clamp", defaultClamp)
+            );
+        } catch (IOException e) {
+            MainMod.LOGGER.warn("[ShaderProperties] Failed to read texture metadata {}", metaPath, e);
+            return new TextureFiltering(defaultBlur, defaultClamp);
+        }
+    }
+
+    private static boolean parseMcmetaBoolean(String content, String key, boolean fallback) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("\"" + key + "\"\\s*:\\s*(true|false)", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(content);
+        return matcher.find() ? Boolean.parseBoolean(matcher.group(1)) : fallback;
+    }
+
+    private record TextureFiltering(boolean blur, boolean clamp) {
     }
 
     private static ShaderImageTarget parseRawTextureTarget(String token, ShaderImageTarget fallback) {
@@ -1500,6 +1608,14 @@ public record ShaderProperties(
         };
     }
 
+    private static ShaderProgramArrayKey resolveTextureProgramArrayScope(String scope) {
+        ProgramArrayKey key = ProgramArrayKey.parse(scope);
+        if (key == null || key.dimensionId() != null) {
+            return null;
+        }
+        return new ShaderProgramArrayKey(key.arrayId(), key.index());
+    }
+
     private static String normalizeSamplerName(String name) {
         return switch (name) {
             case "noise" -> "noisetex";
@@ -1517,11 +1633,35 @@ public record ShaderProperties(
         return Map.copyOf(copy);
     }
 
+    private static Map<ShaderProgramArrayKey, List<ShaderCustomTextureBinding>> copyProgramArrayTextureMap(
+            Map<ShaderProgramArrayKey, List<ShaderCustomTextureBinding>> source
+    ) {
+        Map<ShaderProgramArrayKey, List<ShaderCustomTextureBinding>> copy = new java.util.LinkedHashMap<>();
+        source.forEach((key, textures) -> {
+            if (!textures.isEmpty()) {
+                copy.put(key, List.copyOf(textures));
+            }
+        });
+        return Map.copyOf(copy);
+    }
+
     private static Map<ProgramId, List<ShaderRawTextureDirective>> copyProgramRawTextureMap(Map<ProgramId, List<ShaderRawTextureDirective>> source) {
         Map<ProgramId, List<ShaderRawTextureDirective>> copy = new EnumMap<>(ProgramId.class);
         source.forEach((programId, textures) -> {
             if (!textures.isEmpty()) {
                 copy.put(programId, List.copyOf(textures));
+            }
+        });
+        return Map.copyOf(copy);
+    }
+
+    private static Map<ShaderProgramArrayKey, List<ShaderRawTextureDirective>> copyProgramArrayRawTextureMap(
+            Map<ShaderProgramArrayKey, List<ShaderRawTextureDirective>> source
+    ) {
+        Map<ShaderProgramArrayKey, List<ShaderRawTextureDirective>> copy = new java.util.LinkedHashMap<>();
+        source.forEach((key, textures) -> {
+            if (!textures.isEmpty()) {
+                copy.put(key, List.copyOf(textures));
             }
         });
         return Map.copyOf(copy);

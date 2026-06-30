@@ -5,12 +5,15 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
+import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL20;
 
+import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -23,6 +26,7 @@ import java.util.Map;
  */
 public final class CustomUniformSet {
     private static final float[] EMPTY_VALUES = new float[0];
+    private static final FloatBuffer MATRIX_BUFFER = BufferUtils.createFloatBuffer(16);
 
     private final Map<String, String> expressions;
     private final List<RawUniform> rawUniforms;
@@ -31,8 +35,7 @@ public final class CustomUniformSet {
     private final Map<Integer, SmoothState> smoothStates = new HashMap<>();
     private final Map<String, float[]> resolvedScratch = new HashMap<>();
     private final Map<String, CompiledExpression> unresolvedScratch = new LinkedHashMap<>();
-    private final Map<String, float[]> cachedUniformValues = new HashMap<>();
-    private int cachedUniformFrame = Integer.MIN_VALUE;
+    private final Map<String, float[]> uniformValueScratch = new HashMap<>();
 
     private CustomUniformSet(
             Map<String, String> expressions,
@@ -113,11 +116,6 @@ public final class CustomUniformSet {
     }
 
     private Map<String, float[]> uniformValuesForFrame(Map<String, float[]> builtins) {
-        int frame = scalarInt(builtins, "frameCounter", Integer.MIN_VALUE);
-        if (frame != Integer.MIN_VALUE && frame == cachedUniformFrame) {
-            return cachedUniformValues;
-        }
-
         Map<String, float[]> resolved = builtins;
         if (!compiledVariables.isEmpty()) {
             resolvedScratch.clear();
@@ -126,23 +124,14 @@ public final class CustomUniformSet {
             resolved = resolvedScratch;
         }
 
-        cachedUniformValues.clear();
+        uniformValueScratch.clear();
         for (RawUniform rawUniform : rawUniforms) {
             float[] values = rawUniform.compiledExpression().evaluate(rawUniform.expectedValues(), resolved, smoothStates);
             if (values.length != 0) {
-                cachedUniformValues.put(rawUniform.name(), values);
+                uniformValueScratch.put(rawUniform.name(), values);
             }
         }
-        cachedUniformFrame = frame;
-        return cachedUniformValues;
-    }
-
-    private static int scalarInt(Map<String, float[]> variables, String name, int fallback) {
-        float[] value = variables.get(name);
-        if (value == null || value.length == 0) {
-            return fallback;
-        }
-        return Math.round(value[0]);
+        return uniformValueScratch;
     }
 
     private record RawUniform(
@@ -174,7 +163,11 @@ public final class CustomUniformSet {
                 MainMod.LOGGER.warn("[CustomUniforms] Ignoring malformed custom uniform key: {}", key);
                 return null;
             }
-            return new ParsedKey(uniform, suffix.substring(0, separator), suffix.substring(separator + 1));
+            return new ParsedKey(
+                    uniform,
+                    suffix.substring(0, separator).toLowerCase(Locale.ROOT),
+                    suffix.substring(separator + 1)
+            );
         }
     }
 
@@ -199,11 +192,21 @@ public final class CustomUniformSet {
                 if (values.length == 0) {
                     continue;
                 }
-                resolved.put(entry.getKey(), values);
+                putResolvedValue(resolved, entry.getKey(), values);
                 iterator.remove();
                 progressed = true;
             }
         } while (progressed && !unresolved.isEmpty());
+    }
+
+    private static void putResolvedValue(Map<String, float[]> resolved, String name, float[] values) {
+        resolved.put(name, values);
+        int count = Math.min(values.length, 4);
+        for (int i = 0; i < count; i++) {
+            float[] component = new float[]{values[i]};
+            resolved.put(name + "." + "xyzw".charAt(i), component);
+            resolved.put(name + "." + "rgba".charAt(i), component);
+        }
     }
 
     private static void uploadUniform(ShaderProgram program, RawUniform rawUniform, float[] values) {
@@ -229,6 +232,28 @@ public final class CustomUniformSet {
             case "vec2" -> GL20.glUniform2f(location, values[0], values[1]);
             case "vec3" -> GL20.glUniform3f(location, values[0], values[1], values[2]);
             case "vec4" -> GL20.glUniform4f(location, values[0], values[1], values[2], values[3]);
+            case "ivec2" -> GL20.glUniform2i(location, (int) values[0], (int) values[1]);
+            case "ivec3" -> GL20.glUniform3i(location, (int) values[0], (int) values[1], (int) values[2]);
+            case "ivec4" -> GL20.glUniform4i(location, (int) values[0], (int) values[1], (int) values[2], (int) values[3]);
+            case "bvec2" -> GL20.glUniform2i(location, truthy(values[0]) ? 1 : 0, truthy(values[1]) ? 1 : 0);
+            case "bvec3" -> GL20.glUniform3i(location, truthy(values[0]) ? 1 : 0, truthy(values[1]) ? 1 : 0, truthy(values[2]) ? 1 : 0);
+            case "bvec4" -> GL20.glUniform4i(location, truthy(values[0]) ? 1 : 0, truthy(values[1]) ? 1 : 0, truthy(values[2]) ? 1 : 0, truthy(values[3]) ? 1 : 0);
+            case "mat2" -> uploadMatrix(location, values, 4, 2);
+            case "mat3" -> uploadMatrix(location, values, 9, 3);
+            case "mat4" -> uploadMatrix(location, values, 16, 4);
+            default -> {
+            }
+        }
+    }
+
+    private static void uploadMatrix(int location, float[] values, int count, int dimension) {
+        MATRIX_BUFFER.clear();
+        MATRIX_BUFFER.put(values, 0, count);
+        MATRIX_BUFFER.flip();
+        switch (dimension) {
+            case 2 -> GL20.glUniformMatrix2(location, false, MATRIX_BUFFER);
+            case 3 -> GL20.glUniformMatrix3(location, false, MATRIX_BUFFER);
+            case 4 -> GL20.glUniformMatrix4(location, false, MATRIX_BUFFER);
             default -> {
             }
         }
@@ -237,9 +262,12 @@ public final class CustomUniformSet {
     private static int expectedValues(String type) {
         return switch (type) {
             case "bool", "int", "float" -> 1;
-            case "vec2" -> 2;
-            case "vec3" -> 3;
-            case "vec4" -> 4;
+            case "vec2", "ivec2", "bvec2" -> 2;
+            case "vec3", "ivec3", "bvec3" -> 3;
+            case "vec4", "ivec4", "bvec4" -> 4;
+            case "mat2" -> 4;
+            case "mat3" -> 9;
+            case "mat4" -> 16;
             default -> -1;
         };
     }
@@ -326,15 +354,23 @@ public final class CustomUniformSet {
                 return new DirectVariableExpression(trimmed);
             }
             try {
-                String body = constructorBody(trimmed);
+                String constructorName = constructorName(trimmed);
+                String body = constructorName == null ? null : constructorBody(trimmed, constructorName);
                 List<String> parts = body != null ? splitTopLevel(body) : splitTopLevel(trimmed);
                 if (body != null || parts.size() > 1) {
-                    if (parts.size() <= 1) {
+                    int expectedComponents = constructorExpectedComponents(constructorName);
+                    if (body == null && parts.size() <= 1) {
                         return null;
                     }
                     List<ScalarNode> nodes = new ArrayList<>(parts.size());
                     for (String part : parts) {
                         nodes.add(new ScalarExpressionParser(part).parse());
+                    }
+                    if (body != null) {
+                        nodes = expandConstructorNodes(constructorName, expectedComponents, nodes);
+                        if (nodes == null) {
+                            return null;
+                        }
                     }
                     return new VectorExpression(List.copyOf(nodes));
                 }
@@ -344,13 +380,72 @@ public final class CustomUniformSet {
             }
         }
 
-        private static String constructorBody(String expression) {
-            for (String prefix : List.of("vec2", "vec3", "vec4")) {
+        private static String constructorName(String expression) {
+            for (String prefix : List.of(
+                    "vec2", "vec3", "vec4",
+                    "ivec2", "ivec3", "ivec4",
+                    "bvec2", "bvec3", "bvec4",
+                    "mat2", "mat3", "mat4"
+            )) {
                 if (expression.startsWith(prefix + "(") && expression.endsWith(")")) {
-                    return expression.substring(prefix.length() + 1, expression.length() - 1);
+                    return prefix;
                 }
             }
             return null;
+        }
+
+        private static String constructorBody(String expression, String constructorName) {
+            return expression.substring(constructorName.length() + 1, expression.length() - 1);
+        }
+
+        private static int constructorExpectedComponents(String constructorName) {
+            return switch (constructorName) {
+                case "vec2", "ivec2", "bvec2" -> 2;
+                case "vec3", "ivec3", "bvec3" -> 3;
+                case "vec4", "ivec4", "bvec4" -> 4;
+                case "mat2" -> 4;
+                case "mat3" -> 9;
+                case "mat4" -> 16;
+                default -> -1;
+            };
+        }
+
+        private static List<ScalarNode> expandConstructorNodes(String constructorName, int expectedComponents, List<ScalarNode> nodes) {
+            if (expectedComponents <= 0) {
+                return null;
+            }
+            if (nodes.size() == expectedComponents) {
+                return nodes;
+            }
+            if (nodes.size() != 1) {
+                return null;
+            }
+
+            ScalarNode scalar = nodes.get(0);
+            if (!constructorName.startsWith("mat")) {
+                List<ScalarNode> expanded = new ArrayList<>(expectedComponents);
+                for (int i = 0; i < expectedComponents; i++) {
+                    expanded.add(scalar);
+                }
+                return expanded;
+            }
+
+            int dimension = switch (constructorName) {
+                case "mat2" -> 2;
+                case "mat3" -> 3;
+                case "mat4" -> 4;
+                default -> 0;
+            };
+            if (dimension <= 0) {
+                return null;
+            }
+            List<ScalarNode> expanded = new ArrayList<>(expectedComponents);
+            for (int column = 0; column < dimension; column++) {
+                for (int row = 0; row < dimension; row++) {
+                    expanded.add(row == column ? scalar : new ConstantNode(0.0f));
+                }
+            }
+            return expanded;
         }
 
         private static List<String> splitTopLevel(String expression) {
@@ -380,6 +475,9 @@ public final class CustomUniformSet {
 
         private static boolean isDirectVariableName(String expression) {
             if ("true".equalsIgnoreCase(expression) || "false".equalsIgnoreCase(expression)) {
+                return false;
+            }
+            if ("pi".equalsIgnoreCase(expression) || "e".equalsIgnoreCase(expression)) {
                 return false;
             }
             if (expression.isEmpty() || !Character.isJavaIdentifierStart(expression.charAt(0))) {
@@ -433,13 +531,29 @@ public final class CustomUniformSet {
         @Override
         public float evaluate(EvalContext context) {
             float leftValue = left.evaluate(context);
+            if (Float.isNaN(leftValue)) {
+                return Float.NaN;
+            }
+            if ("||".equals(operator)) {
+                if (truthy(leftValue)) {
+                    return 1.0f;
+                }
+                float rightValue = right.evaluate(context);
+                return Float.isNaN(rightValue) ? Float.NaN : truthy(rightValue) ? 1.0f : 0.0f;
+            }
+            if ("&&".equals(operator)) {
+                if (!truthy(leftValue)) {
+                    return 0.0f;
+                }
+                float rightValue = right.evaluate(context);
+                return Float.isNaN(rightValue) ? Float.NaN : truthy(rightValue) ? 1.0f : 0.0f;
+            }
+
             float rightValue = right.evaluate(context);
-            if (Float.isNaN(leftValue) || Float.isNaN(rightValue)) {
+            if (Float.isNaN(rightValue)) {
                 return Float.NaN;
             }
             return switch (operator) {
-                case "||" -> truthy(leftValue) || truthy(rightValue) ? 1.0f : 0.0f;
-                case "&&" -> truthy(leftValue) && truthy(rightValue) ? 1.0f : 0.0f;
                 case ">=" -> leftValue >= rightValue ? 1.0f : 0.0f;
                 case "<=" -> leftValue <= rightValue ? 1.0f : 0.0f;
                 case "==" -> leftValue == rightValue ? 1.0f : 0.0f;
@@ -459,6 +573,16 @@ public final class CustomUniformSet {
     private record FunctionNode(String identifier, List<ScalarNode> arguments) implements ScalarNode {
         @Override
         public float evaluate(EvalContext context) {
+            if ("if".equals(identifier) || "ifb".equals(identifier)) {
+                return evaluateIfLazy(context);
+            }
+            if ("and".equals(identifier)) {
+                return evaluateAndLazy(context);
+            }
+            if ("or".equals(identifier)) {
+                return evaluateOrLazy(context);
+            }
+
             float[] values = new float[arguments.size()];
             for (int i = 0; i < arguments.size(); i++) {
                 values[i] = arguments.get(i).evaluate(context);
@@ -467,11 +591,13 @@ public final class CustomUniformSet {
                 }
             }
             return switch (identifier) {
-                case "if" -> evaluateIf(values);
-                case "min" -> values.length == 2 ? Math.min(values[0], values[1]) : Float.NaN;
-                case "max" -> values.length == 2 ? Math.max(values[0], values[1]) : Float.NaN;
+                case "not" -> values.length == 1 ? (truthy(values[0]) ? 0.0f : 1.0f) : Float.NaN;
+                case "min" -> evaluateMin(values);
+                case "max" -> evaluateMax(values);
                 case "clamp" -> values.length == 3 ? Math.max(values[1], Math.min(values[2], values[0])) : Float.NaN;
                 case "in" -> evaluateIn(values);
+                case "between" -> values.length == 3 ? between(values[0], values[1], values[2]) : Float.NaN;
+                case "equals" -> evaluateEquals(values);
                 case "smooth" -> values.length == 4 ? context.smooth(values[0], values[1], values[2], values[3]) : Float.NaN;
                 case "fmod", "mod" -> values.length == 2 ? values[0] % values[1] : Float.NaN;
                 case "abs" -> values.length == 1 ? Math.abs(values[0]) : Float.NaN;
@@ -479,27 +605,91 @@ public final class CustomUniformSet {
                 case "floor" -> values.length == 1 ? (float) Math.floor(values[0]) : Float.NaN;
                 case "ceil" -> values.length == 1 ? (float) Math.ceil(values[0]) : Float.NaN;
                 case "round" -> values.length == 1 ? Math.round(values[0]) : Float.NaN;
-                case "fract" -> values.length == 1 ? values[0] - (float) Math.floor(values[0]) : Float.NaN;
+                case "fract", "frac" -> values.length == 1 ? values[0] - (float) Math.floor(values[0]) : Float.NaN;
                 case "sign" -> values.length == 1 ? Math.signum(values[0]) : Float.NaN;
                 case "pow" -> values.length == 2 ? (float) Math.pow(values[0], values[1]) : Float.NaN;
+                case "exp" -> values.length == 1 ? (float) Math.exp(values[0]) : Float.NaN;
                 case "log" -> values.length == 1 ? (float) Math.log(values[0]) : Float.NaN;
-                case "atan" -> values.length == 1 ? (float) Math.atan(values[0]) : Float.NaN;
+                case "asin" -> values.length == 1 ? (float) Math.asin(values[0]) : Float.NaN;
+                case "acos" -> values.length == 1 ? (float) Math.acos(values[0]) : Float.NaN;
+                case "atan" -> values.length == 1 ? (float) Math.atan(values[0]) : values.length == 2 ? (float) Math.atan2(values[0], values[1]) : Float.NaN;
+                case "atan2" -> values.length == 2 ? (float) Math.atan2(values[0], values[1]) : Float.NaN;
                 case "sin" -> values.length == 1 ? (float) Math.sin(values[0]) : Float.NaN;
                 case "cos" -> values.length == 1 ? (float) Math.cos(values[0]) : Float.NaN;
+                case "tan" -> values.length == 1 ? (float) Math.tan(values[0]) : Float.NaN;
+                case "torad" -> values.length == 1 ? (float) Math.toRadians(values[0]) : Float.NaN;
+                case "todeg" -> values.length == 1 ? (float) Math.toDegrees(values[0]) : Float.NaN;
+                case "smoothstep" -> values.length == 3 ? smoothstep(values[0], values[1], values[2]) : Float.NaN;
                 default -> Float.NaN;
             };
         }
 
-        private static float evaluateIf(float[] values) {
-            if (values.length < 3 || values.length % 2 == 0) {
+        private float evaluateIfLazy(EvalContext context) {
+            if (arguments.size() < 3 || arguments.size() % 2 == 0) {
                 return Float.NaN;
             }
-            float result = values[values.length - 1];
-            for (int i = 0; i < values.length - 1; i += 2) {
-                if (truthy(values[i])) {
-                    result = values[i + 1];
-                    break;
+            for (int i = 0; i < arguments.size() - 1; i += 2) {
+                float condition = arguments.get(i).evaluate(context);
+                if (Float.isNaN(condition)) {
+                    return Float.NaN;
                 }
+                if (truthy(condition)) {
+                    return arguments.get(i + 1).evaluate(context);
+                }
+            }
+            return arguments.get(arguments.size() - 1).evaluate(context);
+        }
+
+        private float evaluateAndLazy(EvalContext context) {
+            if (arguments.isEmpty()) {
+                return Float.NaN;
+            }
+            for (ScalarNode argument : arguments) {
+                float value = argument.evaluate(context);
+                if (Float.isNaN(value)) {
+                    return Float.NaN;
+                }
+                if (!truthy(value)) {
+                    return 0.0f;
+                }
+            }
+            return 1.0f;
+        }
+
+        private float evaluateOrLazy(EvalContext context) {
+            if (arguments.isEmpty()) {
+                return Float.NaN;
+            }
+            for (ScalarNode argument : arguments) {
+                float value = argument.evaluate(context);
+                if (Float.isNaN(value)) {
+                    return Float.NaN;
+                }
+                if (truthy(value)) {
+                    return 1.0f;
+                }
+            }
+            return 0.0f;
+        }
+
+        private static float evaluateMin(float[] values) {
+            if (values.length == 0) {
+                return Float.NaN;
+            }
+            float result = values[0];
+            for (int i = 1; i < values.length; i++) {
+                result = Math.min(result, values[i]);
+            }
+            return result;
+        }
+
+        private static float evaluateMax(float[] values) {
+            if (values.length == 0) {
+                return Float.NaN;
+            }
+            float result = values[0];
+            for (int i = 1; i < values.length; i++) {
+                result = Math.max(result, values[i]);
             }
             return result;
         }
@@ -515,6 +705,29 @@ public final class CustomUniformSet {
                 }
             }
             return 0.0f;
+        }
+
+        private static float evaluateEquals(float[] values) {
+            if (values.length != 2 && values.length != 3) {
+                return Float.NaN;
+            }
+            float epsilon = values.length == 3 ? Math.abs(values[2]) : 0.000001f;
+            return Math.abs(values[0] - values[1]) <= epsilon ? 1.0f : 0.0f;
+        }
+
+        private static float between(float value, float min, float max) {
+            float lower = Math.min(min, max);
+            float upper = Math.max(min, max);
+            return value >= lower && value <= upper ? 1.0f : 0.0f;
+        }
+
+        private static float smoothstep(float edge0, float edge1, float value) {
+            float denominator = edge1 - edge0;
+            if (Math.abs(denominator) <= 0.000001f) {
+                return value < edge0 ? 0.0f : 1.0f;
+            }
+            float t = Math.max(0.0f, Math.min(1.0f, (value - edge0) / denominator));
+            return t * t * (3.0f - 2.0f * t);
         }
     }
 
@@ -711,13 +924,19 @@ public final class CustomUniformSet {
             String identifier = expression.substring(start, index);
             skipWhitespace();
             if (match('(')) {
-                return new FunctionNode(identifier, parseArguments());
+                return new FunctionNode(identifier.toLowerCase(Locale.ROOT), parseArguments());
             }
             if ("true".equalsIgnoreCase(identifier)) {
                 return new ConstantNode(1.0f);
             }
             if ("false".equalsIgnoreCase(identifier)) {
                 return new ConstantNode(0.0f);
+            }
+            if ("pi".equalsIgnoreCase(identifier)) {
+                return new ConstantNode((float) Math.PI);
+            }
+            if ("e".equalsIgnoreCase(identifier)) {
+                return new ConstantNode((float) Math.E);
             }
             return new VariableNode(identifier);
         }

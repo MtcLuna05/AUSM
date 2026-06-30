@@ -47,6 +47,8 @@ public enum RenderPass {
     GBUFFERS_WEATHER(ProgramId.WEATHER, ProgramStage.GBUFFERS, GBUFFERS_TEXTURED_LIT),
     GBUFFERS_WATER(ProgramId.WATER, ProgramStage.GBUFFERS, GBUFFERS_TERRAIN),
     GBUFFERS_HAND_WATER(ProgramId.HAND_WATER, ProgramStage.GBUFFERS, GBUFFERS_HAND),
+    DH_TERRAIN(ProgramId.DH_TERRAIN, ProgramStage.GBUFFERS, null),
+    DH_WATER(ProgramId.DH_WATER, ProgramStage.GBUFFERS, DH_TERRAIN),
 
     DEFERRED(ProgramId.DEFERRED, ProgramStage.DEFERRED, null),
     DEFERRED1(ProgramId.DEFERRED1, ProgramStage.DEFERRED, null),

@@ -21,6 +21,10 @@ public record ShaderProgramSource(
         String sourceName,
         String vertexPath,
         String vertexSource,
+        String tessellationControlPath,
+        String tessellationControlSource,
+        String tessellationEvaluationPath,
+        String tessellationEvaluationSource,
         String geometryPath,
         String geometrySource,
         String fragmentPath,
@@ -35,6 +39,14 @@ public record ShaderProgramSource(
         return Optional.ofNullable(vertexSource);
     }
 
+    public Optional<String> tessellationControlSourceOptional() {
+        return Optional.ofNullable(tessellationControlSource);
+    }
+
+    public Optional<String> tessellationEvaluationSourceOptional() {
+        return Optional.ofNullable(tessellationEvaluationSource);
+    }
+
     public Optional<String> geometrySourceOptional() {
         return Optional.ofNullable(geometrySource);
     }
@@ -44,7 +56,11 @@ public record ShaderProgramSource(
     }
 
     public boolean hasAnyStage() {
-        return vertexPath != null || geometryPath != null || fragmentPath != null;
+        return vertexPath != null
+                || tessellationControlPath != null
+                || tessellationEvaluationPath != null
+                || geometryPath != null
+                || fragmentPath != null;
     }
 
     public boolean isValid() {
