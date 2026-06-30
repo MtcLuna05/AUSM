@@ -81,11 +81,7 @@ public final class AusmBloomLayer {
     public static boolean shouldUseNativeHook() {
         if (Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
             sanitizeNothiriumLayerArrays();
-            if (!loggedNativeLayerDisabledForNothirium) {
-                loggedNativeLayerDisabledForNothirium = true;
-                MainMod.LOGGER.info("[AUSMBloom] Disabled native BLOOM chunk layer while Nothirium is installed; using framebuffer fallback.");
-            }
-            return false;
+            return isAvailable();
         }
         return isAvailable();
     }

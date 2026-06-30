@@ -209,7 +209,13 @@ public final class NothiriumBypass {
             return false;
         }
 
+        if (PipelineContext.getInstance().shouldForceVanillaTerrainRenderer()) {
+            return true;
+        }
         if (isNothiriumRendererDisposed()) {
+            return true;
+        }
+        if (BetterPortalsCompat.isRenderingRenderPass()) {
             return true;
         }
         if (BetterPortalsCompat.shouldUseVanillaRenderGlobalForNestedView()) {

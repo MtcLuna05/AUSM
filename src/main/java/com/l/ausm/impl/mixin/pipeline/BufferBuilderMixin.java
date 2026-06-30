@@ -29,6 +29,7 @@ import org.lwjgl.opengl.GL11;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 
 @Mixin(BufferBuilder.class)
 public class BufferBuilderMixin implements IBufferBuilderExtension {
@@ -40,6 +41,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Unique
     private boolean ausm$shaderlessBloomMetadata;
+
+    @Unique
+    private static final ThreadLocal<int[]> AUSM$VERTEX_SCRATCH = ThreadLocal.withInitial(() -> new int[16]);
 
     @Shadow
     private ByteBuffer byteBuffer;
@@ -135,28 +139,29 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         int vertexBase = vertexCount;
         int vertexTotal = sourceBytes / sourceStride;
         int targetIntStride = vertexFormat.getIntegerSize();
-        int[] expandedData = new int[vertexTotal * targetIntStride];
+        int sourceIntStride = sourceStride / Integer.BYTES;
+        int[] scratch = ausm$vertexScratch(targetIntStride);
+        growBuffer(vertexTotal * targetStride + targetStride);
+        rawIntBuffer.position(getBufferSize());
         for (int vertex = 0; vertex < vertexTotal; vertex++) {
-            int target = vertex * targetIntStride;
-            for (int sourceInt = 0; sourceInt < sourceStride / Integer.BYTES; sourceInt++) {
-                expandedData[target + sourceInt] = source.getInt();
+            Arrays.fill(scratch, 0, targetIntStride, 0);
+            for (int sourceInt = 0; sourceInt < sourceIntStride; sourceInt++) {
+                scratch[sourceInt] = source.getInt();
             }
-            ausm$sanitizeAgricraftCropVertex(expandedData, target, sourceStride / Integer.BYTES);
-            ausm$applyBloomMaskVertexData(expandedData, target);
-            ausm$applyEmissiveVertexColor(expandedData, target);
-            ausm$applyEmissiveLightmap(expandedData, target);
-            expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity();
-            expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh();
-            expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
-                    Float.intBitsToFloat(expandedData[target]),
-                    Float.intBitsToFloat(expandedData[target + 1]),
-                    Float.intBitsToFloat(expandedData[target + 2])
+            ausm$sanitizeAgricraftCropVertex(scratch, 0, sourceIntStride);
+            ausm$applyBloomMaskVertexData(scratch, 0);
+            ausm$applyEmissiveVertexColor(scratch, 0);
+            ausm$applyEmissiveLightmap(scratch, 0);
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity();
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh();
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
+                    Float.intBitsToFloat(scratch[0]),
+                    Float.intBitsToFloat(scratch[1]),
+                    Float.intBitsToFloat(scratch[2])
             );
+            rawIntBuffer.put(scratch, 0, targetIntStride);
         }
 
-        growBuffer(expandedData.length * Integer.BYTES + targetStride);
-        rawIntBuffer.position(getBufferSize());
-        rawIntBuffer.put(expandedData);
         vertexCount += vertexTotal;
 
         for (int vertex = 0; vertex + 3 < vertexTotal; vertex += 4) {
@@ -195,27 +200,27 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
         int vertexBase = vertexCount;
         int vertexTotal = vertexData.length / sourceStride;
-        int[] expandedData = new int[vertexTotal * targetStride];
+        int[] scratch = ausm$vertexScratch(targetStride);
+        growBuffer(vertexTotal * vertexFormat.getSize() + vertexFormat.getSize());
+        rawIntBuffer.position(getBufferSize());
         for (int vertex = 0; vertex < vertexTotal; vertex++) {
             int source = vertex * sourceStride;
-            int target = vertex * targetStride;
-            System.arraycopy(vertexData, source, expandedData, target, Math.min(sourceStride, targetStride));
-            ausm$sanitizeAgricraftCropVertex(expandedData, target, sourceStride);
-            ausm$applyBloomMaskVertexData(expandedData, target);
-            ausm$applyEmissiveVertexColor(expandedData, target);
-            ausm$applyEmissiveLightmap(expandedData, target);
-            expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity();
-            expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh();
-            expandedData[target + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
-                    Float.intBitsToFloat(expandedData[target]),
-                    Float.intBitsToFloat(expandedData[target + 1]),
-                    Float.intBitsToFloat(expandedData[target + 2])
+            Arrays.fill(scratch, 0, targetStride, 0);
+            System.arraycopy(vertexData, source, scratch, 0, Math.min(sourceStride, targetStride));
+            ausm$sanitizeAgricraftCropVertex(scratch, 0, sourceStride);
+            ausm$applyBloomMaskVertexData(scratch, 0);
+            ausm$applyEmissiveVertexColor(scratch, 0);
+            ausm$applyEmissiveLightmap(scratch, 0);
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity();
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh();
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
+                    Float.intBitsToFloat(scratch[0]),
+                    Float.intBitsToFloat(scratch[1]),
+                    Float.intBitsToFloat(scratch[2])
             );
+            rawIntBuffer.put(scratch, 0, targetStride);
         }
 
-        growBuffer(expandedData.length * Integer.BYTES + vertexFormat.getSize());
-        rawIntBuffer.position(getBufferSize());
-        rawIntBuffer.put(expandedData);
         vertexCount += vertexTotal;
 
         for (int vertex = 0; vertex + 3 < vertexTotal; vertex += 4) {
@@ -225,6 +230,16 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         ausm$markCurrentContextShaderlessBloomMetadata();
         ausm$resetPipelineVertexCursor();
         ci.cancel();
+    }
+
+    @Unique
+    private static int[] ausm$vertexScratch(int size) {
+        int[] scratch = AUSM$VERTEX_SCRATCH.get();
+        if (scratch.length < size) {
+            scratch = new int[size];
+            AUSM$VERTEX_SCRATCH.set(scratch);
+        }
+        return scratch;
     }
 
     private static int ausm$pipelineBlockVertexStride(int[] vertexData, int targetStride) {
@@ -382,6 +397,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     }
 
     private void ausm$applyVanillaEmissiveAttributes(int[] vertexData, int vertexBase) {
+        if (BlockRenderContext.bloomMaskFallback()) {
+            return;
+        }
         int blockEmission = BlockRenderContext.blockEmission();
         if (vertexData == null || vertexBase < 0 || blockEmission <= 0) {
             return;

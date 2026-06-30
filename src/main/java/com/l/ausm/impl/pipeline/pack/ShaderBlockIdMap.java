@@ -8,6 +8,7 @@ import com.l.ausm.impl.MainMod;
 import net.minecraft.block.Block;
 import net.minecraft.block.properties.IProperty;
 import net.minecraft.block.state.IBlockState;
+import net.minecraft.util.BlockRenderLayer;
 import net.minecraft.util.ResourceLocation;
 
 import java.io.BufferedReader;
@@ -67,9 +68,10 @@ public final class ShaderBlockIdMap {
     public static BlockIdRules load(ShaderPack pack, ShaderPackLayout layout) {
         Map<Block, Integer> blockIds = new LinkedHashMap<>();
         List<StateRule> stateRules = new ArrayList<>();
+        Map<Block, BlockRenderLayer> layerOverrides = new LinkedHashMap<>();
         String blockPropertiesPath = layout.rootPath("block.properties");
         boolean hasBlockProperties = pack.hasResource(blockPropertiesPath);
-        loadFile(pack, blockPropertiesPath, blockIds, stateRules);
+        loadFile(pack, blockPropertiesPath, blockIds, stateRules, layerOverrides);
         if (!hasBlockProperties) {
             addLegacyDefaults(blockIds);
         } else {
@@ -77,7 +79,7 @@ public final class ShaderBlockIdMap {
             addLegacyColorStateRules(blockIds, stateRules);
             addModdedColoredLightCompatibility(blockIds, stateRules);
         }
-        return new BlockIdRules(Map.copyOf(blockIds), List.copyOf(stateRules));
+        return new BlockIdRules(Map.copyOf(blockIds), List.copyOf(stateRules), Map.copyOf(layerOverrides));
     }
 
     private static void addLegacyDefaults(Map<Block, Integer> blockIds) {
@@ -223,7 +225,8 @@ public final class ShaderBlockIdMap {
         }
     }
 
-    private static void loadFile(ShaderPack pack, String path, Map<Block, Integer> blockIds, List<StateRule> stateRules) {
+    private static void loadFile(ShaderPack pack, String path, Map<Block, Integer> blockIds, List<StateRule> stateRules,
+                                 Map<Block, BlockRenderLayer> layerOverrides) {
         if (!pack.hasResource(path)) {
             return;
         }
@@ -245,7 +248,15 @@ public final class ShaderBlockIdMap {
                     }
 
                     if (trimmed.isEmpty() || trimmed.startsWith("#")) {
-                        if (trimmed.startsWith("#if ")) {
+                        if (trimmed.startsWith("#ifdef ")) {
+                            boolean condition = ShaderEnvironmentDefines.baseDefineMap().containsKey(trimmed.substring("#ifdef ".length()).trim());
+                            conditions.push(new ConditionFrame(enabled, condition));
+                            enabled = enabled && condition;
+                        } else if (trimmed.startsWith("#ifndef ")) {
+                            boolean condition = !ShaderEnvironmentDefines.baseDefineMap().containsKey(trimmed.substring("#ifndef ".length()).trim());
+                            conditions.push(new ConditionFrame(enabled, condition));
+                            enabled = enabled && condition;
+                        } else if (trimmed.startsWith("#if ")) {
                             boolean condition = evaluateCondition(trimmed.substring("#if ".length()).trim());
                             conditions.push(new ConditionFrame(enabled, condition));
                             enabled = enabled && condition;
@@ -272,7 +283,7 @@ public final class ShaderBlockIdMap {
                     }
 
                     if (enabled) {
-                        parseBlockLine(trimmed, blockIds, stateRules);
+                        parseBlockPropertiesLine(trimmed, blockIds, stateRules, layerOverrides);
                     }
                 }
             }
@@ -282,17 +293,7 @@ public final class ShaderBlockIdMap {
     }
 
     private static boolean evaluateCondition(String expression) {
-        String normalized = expression.replaceAll("\\s+", "");
-        if (normalized.equals("MC_VERSION>=11300")) {
-            return false;
-        }
-        if (normalized.equals("MC_VERSION>=10800")) {
-            return true;
-        }
-        if (normalized.equals("MC_VERSION<11300")) {
-            return true;
-        }
-        return false;
+        return ShaderExpressionEvaluator.evaluate(expression, ShaderEnvironmentDefines.baseDefineMap());
     }
 
     private static String mergeContinuation(StringBuilder continuedLine, String line) {
@@ -318,13 +319,18 @@ public final class ShaderBlockIdMap {
         return merged;
     }
 
-    private static void parseBlockLine(String line, Map<Block, Integer> blockIds, List<StateRule> stateRules) {
+    private static void parseBlockPropertiesLine(String line, Map<Block, Integer> blockIds, List<StateRule> stateRules,
+                                                 Map<Block, BlockRenderLayer> layerOverrides) {
         int equals = line.indexOf('=');
         if (equals <= 0) {
             return;
         }
 
         String key = line.substring(0, equals).trim();
+        if (key.startsWith("layer.")) {
+            parseLayerLine(key, line.substring(equals + 1), layerOverrides);
+            return;
+        }
         if (!key.startsWith("block.")) {
             return;
         }
@@ -359,6 +365,45 @@ public final class ShaderBlockIdMap {
                 }
             }
         }
+    }
+
+    private static void parseLayerLine(String key, String values, Map<Block, BlockRenderLayer> layerOverrides) {
+        BlockRenderLayer layer = parseLayer(key.substring("layer.".length()));
+        if (layer == null) {
+            MainMod.LOGGER.warn("[ShaderBlockIds] Ignoring unknown block render layer override: {}", key);
+            return;
+        }
+
+        for (String token : values.split("\\s+")) {
+            if (token.startsWith("%")) {
+                MainMod.LOGGER.warn("[ShaderBlockIds] Ignoring tag '{}' in render layer override {}", token, key);
+                continue;
+            }
+            ParsedBlockToken parsed = parseResource(token);
+            if (parsed == null) {
+                continue;
+            }
+            Block block = Block.REGISTRY.getObject(parsed.resource());
+            if (block != null) {
+                layerOverrides.put(block, layer);
+            }
+            for (ResourceLocation alias : legacyAliases(parsed.resource())) {
+                Block aliasBlock = Block.REGISTRY.getObject(alias);
+                if (aliasBlock != null) {
+                    layerOverrides.put(aliasBlock, layer);
+                }
+            }
+        }
+    }
+
+    private static BlockRenderLayer parseLayer(String value) {
+        return switch (value.toLowerCase(java.util.Locale.ROOT).replace("-", "_")) {
+            case "solid" -> BlockRenderLayer.SOLID;
+            case "cutout" -> BlockRenderLayer.CUTOUT;
+            case "cutout_mipped", "cutout_mip", "cutoutmipped" -> BlockRenderLayer.CUTOUT_MIPPED;
+            case "translucent" -> BlockRenderLayer.TRANSLUCENT;
+            default -> null;
+        };
     }
 
     private static List<ResourceLocation> legacyAliases(ResourceLocation resource) {
@@ -451,7 +496,8 @@ public final class ShaderBlockIdMap {
         return value.chars().allMatch(Character::isDigit);
     }
 
-    public record BlockIdRules(Map<Block, Integer> blockIds, List<StateRule> stateRules) {
+    public record BlockIdRules(Map<Block, Integer> blockIds, List<StateRule> stateRules,
+                               Map<Block, BlockRenderLayer> layerOverrides) {
         public boolean isEmpty() {
             return blockIds.isEmpty() && stateRules.isEmpty();
         }
@@ -479,7 +525,7 @@ public final class ShaderBlockIdMap {
                     return property.getName(entry.getValue()).equalsIgnoreCase(propertyValue);
                 }
             }
-            return false;
+            return "false".equalsIgnoreCase(propertyValue) || "0".equals(propertyValue);
         }
     }
 

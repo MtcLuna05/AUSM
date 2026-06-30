@@ -25,6 +25,16 @@ public class LumenizedDisableBloomMixin {
             MainMod.LOGGER.info("[AUSMBloom] Replacing original Lumenized bloom pass while preserving wrapped terrain layers.");
         }
 
+        if (context.isActive()) {
+            if (AusmBloomLayer.shouldUseNativeHook()
+                    && (layer == null || AusmBloomLayer.isBloomLayer(layer))) {
+                cir.setReturnValue(context.renderAusmBloomLayer(renderGlobal, partialTicks, pass, entity));
+            } else {
+                cir.setReturnValue(0);
+            }
+            return;
+        }
+
         if (!AusmBloomLayer.shouldUseNativeHook()) {
             if (renderGlobal == null || layer == null) {
                 cir.setReturnValue(0);

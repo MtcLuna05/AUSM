@@ -4,6 +4,7 @@ import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
+import com.l.ausm.impl.pipeline.compat.BloomMaskColor;
 import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
@@ -30,8 +31,22 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicInteger;
+
 @Mixin(BlockRendererDispatcher.class)
 public class BlockRendererDispatcherMixin {
+    @Unique
+    private static final int AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_INITIAL = 4;
+
+    @Unique
+    private static final int AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_INTERVAL = 128;
+
+    @Unique
+    private static final int AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_LIMIT = 8192;
+
+    @Unique
+    private static final AtomicInteger AUSM_BLOCKCRAFTERY_FALLBACK_PROBES = new AtomicInteger();
+
     @Inject(method = "renderBlock", at = @At("HEAD"), cancellable = true)
     private void ausm$beforeRenderBlock(IBlockState state, BlockPos pos, IBlockAccess blockAccess, BufferBuilder bufferBuilder, CallbackInfoReturnable<Boolean> cir) {
         if (BetterPortalsCompat.shouldSuppressOriginalPortalBlock(state)) {
@@ -49,23 +64,38 @@ public class BlockRendererDispatcherMixin {
                 || pipeline.shouldInheritFramedEmissionInBasePass(state)
                 ? pipeline.blockRenderEmissionWithFramedInheritance(state, blockAccess, pos)
                 : pipeline.blockRenderEmission(state, blockAccess, pos);
+        if (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null) {
+            blockEmission = Math.max(blockEmission, pipeline.framedBloomFallbackEmission(state, blockAccess, pos));
+        }
         blockEmission = Math.max(blockEmission, pipeline.shaderlessFramedBloomExtractionEmission(state, blockAccess, pos));
         BlockRenderContext.setBlockEntityId(blockEntityId);
         BlockRenderContext.setRenderType((short) contextState.getRenderType().ordinal());
         BlockRenderContext.setMetadata(pipeline.blockMetadata(state, blockAccess, pos));
         BlockRenderContext.setLocalBlockPos(pos.getX(), pos.getY(), pos.getZ());
+        BlockRenderContext.setWorldBlockContext(blockAccess, pos);
         BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
         BlockRenderContext.setPackedLightmap(ausm$packedLightmap(contextState, blockAccess, pos));
         BlockRenderContext.setBlockEmission(blockEmission);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, blockAccess, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, blockAccess, pos));
         BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState, blockAccess, pos));
+        if (pipeline.isBlockcrafteryEditableState(state)
+                && AusmBloomLayer.isBloomLayer(MinecraftForgeClient.getRenderLayer())) {
+            IBlockState inheritedBloomState = pipeline.inheritedBloomRenderState(state, blockAccess, pos);
+            if (ausm$isEmissiveBloomFallbackSource(inheritedBloomState)) {
+                float[] uv = ausm$bloomMaskUv();
+                BlockRenderContext.setBloomMaskFallback(true, uv[0], uv[1], BloomMaskColor.colorForState(inheritedBloomState));
+            }
+        }
         if (pipeline.currentProblemProbesEnabled()) {
             pipeline.setBlockRenderDebugContext(state, blockAccess, pos);
         }
         pipeline.recordSyntheticLightCandidate(contextState, blockAccess, pos);
         if (pipeline.currentProblemProbesEnabled()
-                && (pipeline.isCurrentProblemProbeTarget(state) || pipeline.isCurrentProblemProbeTarget(contextState))) {
+                && (pipeline.isCurrentProblemProbeTarget(state)
+                || pipeline.isCurrentProblemProbeTarget(contextState)
+                || blockEmission > 0
+                || blockEntityId != 0)) {
             pipeline.logCurrentProblemProbe("dispatcher-head", state, blockAccess, pos,
                     "context=" + pipeline.diagnosticStateName(contextState)
                             + ", blockEmission=" + blockEmission
@@ -174,10 +204,19 @@ public class BlockRendererDispatcherMixin {
         }
 
         IBlockState inheritedState = pipeline.inheritedBloomRenderState(state, blockAccess, pos);
-        IBlockState fallbackSourceState = ausm$isEmissiveBloomFallbackTarget(inheritedState)
+        int framedEmission = pipeline.framedBloomFallbackEmission(state, blockAccess, pos);
+        ausm$logBlockcrafteryBloomFallbackProbe("candidate", state, inheritedState, null, pos, blockAccess,
+                MinecraftForgeClient.getRenderLayer(), AusmBloomLayer.layer(), start, -1, framedEmission,
+                "buffer=" + ausm$bufferDetails(bufferBuilder));
+        boolean forcedFramedBloom = framedFallbackCandidate
+                && framedEmission > 0;
+        IBlockState fallbackSourceState = ausm$isEmissiveBloomFallbackSource(inheritedState)
                 ? inheritedState
-                : framedFallbackCandidate ? null : state;
-        if (!ausm$isEmissiveBloomFallbackTarget(fallbackSourceState)) {
+                : forcedFramedBloom ? state : framedFallbackCandidate ? null : state;
+        if (!forcedFramedBloom && !ausm$isEmissiveBloomFallbackSource(fallbackSourceState)) {
+            ausm$logBlockcrafteryBloomFallbackProbe("skip-not-emissive", state, inheritedState, fallbackSourceState,
+                    pos, blockAccess, MinecraftForgeClient.getRenderLayer(), AusmBloomLayer.layer(), start,
+                    bufferBuilder.getVertexCount() - start, framedEmission, "forced=" + forcedFramedBloom);
             ausm$logEmissiveDispatcherFallbackSkip("not-emissive-target", state, inheritedState, fallbackSourceState, pos,
                     MinecraftForgeClient.getRenderLayer(), AusmBloomLayer.layer(), start, bufferBuilder, framedFallbackCandidate);
             return false;
@@ -187,17 +226,26 @@ public class BlockRendererDispatcherMixin {
         BlockRenderLayer layer = MinecraftForgeClient.getRenderLayer();
         BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
         if (layer == null || bloomLayer == null) {
+            ausm$logBlockcrafteryBloomFallbackProbe("skip-missing-layer", state, inheritedState, fallbackSourceState,
+                    pos, blockAccess, layer, bloomLayer, start, bufferBuilder.getVertexCount() - start,
+                    framedEmission, "missing=" + (layer == null ? "current" : "bloom"));
             ausm$logEmissiveDispatcherFallbackSkip(layer == null ? "missing-current-layer" : "missing-bloom-layer",
                     state, inheritedState, fallbackSourceState, pos, layer, bloomLayer, start, bufferBuilder,
                     framedFallbackCandidate);
             return false;
         }
         if (framedFallback && layer != bloomLayer) {
+            ausm$logBlockcrafteryBloomFallbackProbe("skip-non-bloom-layer", state, inheritedState, fallbackSourceState,
+                    pos, blockAccess, layer, bloomLayer, start, bufferBuilder.getVertexCount() - start,
+                    framedEmission, "framed=true");
             ausm$logEmissiveDispatcherFallbackSkip("framed-non-bloom-layer", state, inheritedState, fallbackSourceState,
                     pos, layer, bloomLayer, start, bufferBuilder, true);
             return false;
         }
         if (!framedFallback && layer == bloomLayer) {
+            ausm$logBlockcrafteryBloomFallbackProbe("skip-already-bloom-layer", state, inheritedState,
+                    fallbackSourceState, pos, blockAccess, layer, bloomLayer, start,
+                    bufferBuilder.getVertexCount() - start, framedEmission, "framed=false");
             ausm$logEmissiveDispatcherFallbackSkip("nonframed-already-bloom-layer", state, inheritedState,
                     fallbackSourceState, pos, layer, bloomLayer, start, bufferBuilder, false);
             return false;
@@ -205,6 +253,9 @@ public class BlockRendererDispatcherMixin {
 
         int normalDelta = bufferBuilder.getVertexCount() - start;
         if (normalDelta > 0) {
+            ausm$logBlockcrafteryBloomFallbackProbe("skip-normal-geometry", state, inheritedState, fallbackSourceState,
+                    pos, blockAccess, layer, bloomLayer, start, normalDelta, framedEmission,
+                    "fallbackState=" + ausm$stateName(fallbackState));
             ausm$logEmissiveDispatcherFallbackSkip("normal-geometry-present", state, inheritedState, fallbackSourceState,
                     pos, layer, bloomLayer, start, bufferBuilder, framedFallbackCandidate);
             return false;
@@ -218,7 +269,7 @@ public class BlockRendererDispatcherMixin {
             BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.set(Boolean.TRUE);
             if (framedFallback) {
                 float[] uv = ausm$bloomMaskUv();
-                BlockRenderContext.setBloomMaskFallback(true, uv[0], uv[1], ausm$bloomMaskColor(fallbackSourceState));
+                BlockRenderContext.setBloomMaskFallback(true, uv[0], uv[1], BloomMaskColor.colorForState(fallbackSourceState));
             }
             ForgeHooksClient.setRenderLayer(fallbackRenderLayer);
             rendered = Minecraft.getMinecraft().getBlockRendererDispatcher().renderBlock(fallbackState, pos, blockAccess, bufferBuilder);
@@ -229,6 +280,12 @@ public class BlockRendererDispatcherMixin {
         }
 
         int fallbackDelta = bufferBuilder.getVertexCount() - fallbackStart;
+        ausm$logBlockcrafteryBloomFallbackProbe(fallbackDelta > 0 ? "rendered" : "render-empty", state,
+                inheritedState, fallbackSourceState, pos, blockAccess, previousLayer, bloomLayer, fallbackStart,
+                fallbackDelta, framedEmission, "fallbackLayer=" + fallbackRenderLayer
+                        + ", rendered=" + rendered
+                        + ", maskColor=0x" + Integer.toHexString(BloomMaskColor.colorForState(fallbackSourceState))
+                        + ", fallbackState=" + ausm$stateName(fallbackState));
         ausm$logEmissiveDispatcherFallback(state, inheritedState, fallbackSourceState, fallbackState, pos, previousLayer,
                 bloomLayer, fallbackRenderLayer, start, fallbackStart, normalDelta, bufferBuilder, framedFallback,
                 rendered, fallbackDelta);
@@ -390,6 +447,44 @@ public class BlockRendererDispatcherMixin {
     }
 
     @Unique
+    private static void ausm$logBlockcrafteryBloomFallbackProbe(String action, IBlockState state,
+                                                               IBlockState inheritedState,
+                                                               IBlockState fallbackSourceState,
+                                                               BlockPos pos, IBlockAccess blockAccess,
+                                                               BlockRenderLayer layer,
+                                                               BlockRenderLayer bloomLayer,
+                                                               Integer start, int delta,
+                                                               int framedEmission, String detail) {
+        PipelineContext pipeline = PipelineContext.getInstance();
+        if (!pipeline.isBlockcrafteryEditableState(state) || framedEmission <= 0) {
+            return;
+        }
+        int count = AUSM_BLOCKCRAFTERY_FALLBACK_PROBES.incrementAndGet();
+        if (count > AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_LIMIT
+                || (count > AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_INITIAL
+                && count % AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_INTERVAL != 0)) {
+            return;
+        }
+
+        MainMod.LOGGER.info(
+                "[AUSMBlockcrafteryBloomFallbackProbe] call={} action={} pos={} layer={} bloomLayer={} start={} delta={} framedEmission={} state={} inherited={} source={} access={} detail={}",
+                count,
+                action,
+                pos,
+                layer,
+                bloomLayer,
+                start,
+                delta,
+                framedEmission,
+                pipeline.diagnosticStateName(state),
+                pipeline.diagnosticStateName(inheritedState),
+                pipeline.diagnosticStateName(fallbackSourceState),
+                blockAccess != null ? blockAccess.getClass().getName() : "null",
+                detail
+        );
+    }
+
+    @Unique
     private static String ausm$bufferDetails(BufferBuilder bufferBuilder) {
         if (bufferBuilder == null) {
             return "null";
@@ -436,12 +531,20 @@ public class BlockRendererDispatcherMixin {
 
     @Unique
     private static boolean ausm$isEmissiveBloomFallbackTarget(IBlockState state) {
+        return ausm$isEmissiveBloomFallbackSource(state);
+    }
+
+    @Unique
+    private static boolean ausm$isEmissiveBloomFallbackSource(IBlockState state) {
         ResourceLocation name = ausm$registryName(state);
         if (state == null || state.getBlock() == null || name == null || name.getPath() == null) {
             return false;
         }
         if (PipelineContext.getInstance().isBlockcrafteryEditableState(state)) {
             return false;
+        }
+        if (PipelineContext.getInstance().blockIntrinsicEmission(state) > 0) {
+            return true;
         }
         if (PipelineContext.getInstance().stateHasBloomLayerGeometry(state)) {
             return true;

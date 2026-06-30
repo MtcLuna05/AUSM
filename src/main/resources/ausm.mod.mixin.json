@@ -28,6 +28,7 @@
     "compat.BetterPortalsCreateWorldHandlerMixin",
     "compat.BetterPortalsPortalBlockChangeMixin",
     "compat.BetterPortalsPortalRendererMixin",
+    "compat.BetterPortalsServerWorldsManagerMixin",
     "compat.BetweenlandsMessageSyncChunkStorageMixin",
     "compat.BewitchmentSyncExtendedPlayerHandlerMixin",
     "compat.AbyssalCraftPortalLayerMixin",

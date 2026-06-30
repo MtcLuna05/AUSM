@@ -187,6 +187,13 @@ public final class AusmBloomRenderer {
         return true;
     }
 
+    public void setShaderlessForceEmission(float forceEmission) {
+        int program = emissiveExtractProgram;
+        if (program != -1) {
+            setUniform1f(program, "forceEmission", Math.max(0.0F, Math.min(1.0F, forceEmission)));
+        }
+    }
+
     public void clearPendingLayerBloom() {
         layerBloomPending = false;
     }
@@ -194,6 +201,10 @@ public final class AusmBloomRenderer {
     public boolean hasBloomResources() {
         resourceIndex.scanOnce();
         return resourceIndex.hasBloomResources();
+    }
+
+    public boolean hasBloomSprite(String spriteName) {
+        return resourceIndex.hasBloomSprite(spriteName);
     }
 
     public void delete() {
@@ -402,7 +413,7 @@ public final class AusmBloomRenderer {
         GlStateManager.colorMask(true, true, true, true);
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
         GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-        GL11.glPolygonOffset(-1.0F, -1.0F);
+        GL11.glPolygonOffset(-4.0F, -8.0F);
 
         boolean forcedNothiriumBypass = false;
         try {
@@ -646,10 +657,13 @@ public final class AusmBloomRenderer {
 
         OpenGlHelper.glUseProgram(program);
         bindSamplerUniform(program, "terrain", 0);
+        setUniform1f(program, "forceEmission", 0.0F);
         GlStateManager.enableTexture2D();
         GlStateManager.enableDepth();
         GlStateManager.depthMask(false);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(-4.0F, -16.0F);
         GlStateManager.enableAlpha();
         GlStateManager.alphaFunc(GL11.GL_GREATER, 0.003921569F);
         GlStateManager.disableCull();
@@ -753,8 +767,11 @@ public final class AusmBloomRenderer {
         private final boolean depthTest;
         private final boolean alphaTest;
         private final boolean cull;
+        private final boolean polygonOffsetFill;
         private final boolean depthMask;
         private final int depthFunc;
+        private final float polygonOffsetFactor;
+        private final float polygonOffsetUnits;
         private final int blendSrcRgb;
         private final int blendDstRgb;
         private final int blendSrcAlpha;
@@ -782,8 +799,11 @@ public final class AusmBloomRenderer {
             depthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
             alphaTest = GL11.glIsEnabled(GL11.GL_ALPHA_TEST);
             cull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+            polygonOffsetFill = GL11.glIsEnabled(GL11.GL_POLYGON_OFFSET_FILL);
             depthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
             depthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
+            polygonOffsetFactor = GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_FACTOR);
+            polygonOffsetUnits = GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_UNITS);
             blendSrcRgb = GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB);
             blendDstRgb = GL11.glGetInteger(GL14.GL_BLEND_DST_RGB);
             blendSrcAlpha = GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA);
@@ -820,6 +840,12 @@ public final class AusmBloomRenderer {
             GlStateManager.bindTexture(texture);
             GlStateManager.depthMask(depthMask);
             GL11.glDepthFunc(depthFunc);
+            GL11.glPolygonOffset(polygonOffsetFactor, polygonOffsetUnits);
+            if (polygonOffsetFill) {
+                GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
+            } else {
+                GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+            }
             GlStateManager.tryBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
             if (blend) {
                 GlStateManager.enableBlend();
@@ -949,6 +975,7 @@ public final class AusmBloomRenderer {
     private static final String EMISSIVE_EXTRACT_VERTEX_SHADER = """
             #version 120
             attribute vec4 at_midBlock;
+            uniform float forceEmission;
             varying vec2 textureCoords;
             varying vec4 vertexColor;
             varying float vertexEmission;
@@ -958,7 +985,7 @@ public final class AusmBloomRenderer {
                 vertexColor = gl_Color;
                 float metadataEmission = clamp(at_midBlock.w / 15.0, 0.0, 1.0);
                 float lightmapEmission = smoothstep(220.0, 240.0, min(gl_MultiTexCoord1.s, gl_MultiTexCoord1.t));
-                vertexEmission = max(metadataEmission, lightmapEmission);
+                vertexEmission = max(max(metadataEmission, lightmapEmission), forceEmission);
             }
             """;
 

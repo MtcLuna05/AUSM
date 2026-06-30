@@ -63,13 +63,13 @@ final class ShaderPropertiesPreprocessor {
                 while ((line = reader.readLine()) != null) {
                     String trimmed = line.trim();
                     if (trimmed.startsWith("#ifdef ")) {
-                        boolean condition = isDefined(trimmed.substring("#ifdef ".length()).trim(), options);
+                        boolean condition = ShaderEnvironmentDefines.isDefined(trimmed.substring("#ifdef ".length()).trim(), options);
                         conditions.push(new ConditionFrame(enabled, condition, condition));
                         enabled = enabled && condition;
                         continue;
                     }
                     if (trimmed.startsWith("#ifndef ")) {
-                        boolean condition = !isDefined(trimmed.substring("#ifndef ".length()).trim(), options);
+                        boolean condition = !ShaderEnvironmentDefines.isDefined(trimmed.substring("#ifndef ".length()).trim(), options);
                         conditions.push(new ConditionFrame(enabled, condition, condition));
                         enabled = enabled && condition;
                         continue;
@@ -126,198 +126,9 @@ final class ShaderPropertiesPreprocessor {
     }
 
     private static boolean evaluate(String expression, ShaderOptions options) {
-        return new Parser(expression, options).parse();
-    }
-
-    private static boolean isDefined(String symbol, ShaderOptions options) {
-        if (symbol.equals("MC_VERSION")
-                || symbol.equals("IS_IRIS")
-                || symbol.equals("IRIS_VERSION")
-                || symbol.equals("IRIS_FEATURE_CUSTOM_IMAGES")
-                || symbol.equals("IRIS_FEATURE_SSBO")
-                || symbol.equals("IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE")
-                || symbol.equals("IRIS_FEATURE_FADE_VARIABLE")) {
-            return true;
-        }
-        ShaderOption option = options.get(symbol);
-        return option != null && option.asBoolean();
-    }
-
-    private static double numericValue(String symbol, ShaderOptions options) {
-        if (symbol.equals("MC_VERSION")) {
-            return 11202.0;
-        }
-        if (symbol.equals("IRIS_VERSION")) {
-            return 10902.0;
-        }
-        if (symbol.equals("IS_IRIS")
-                || symbol.equals("IRIS_FEATURE_CUSTOM_IMAGES")
-                || symbol.equals("IRIS_FEATURE_SSBO")
-                || symbol.equals("IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE")
-                || symbol.equals("IRIS_FEATURE_FADE_VARIABLE")) {
-            return 1.0;
-        }
-
-        ShaderOption option = options.get(symbol);
-        if (option == null || option.value() == null || option.value().isBlank()) {
-            return isDefined(symbol, options) ? 1.0 : 0.0;
-        }
-
-        try {
-            return Double.parseDouble(option.value());
-        } catch (NumberFormatException e) {
-            return option.asBoolean() ? 1.0 : 0.0;
-        }
+        return ShaderExpressionEvaluator.evaluate(expression, options);
     }
 
     private record ConditionFrame(boolean parentEnabled, boolean conditionEnabled, boolean branchTaken) {
-    }
-
-    private static final class Parser {
-        private final String expression;
-        private final ShaderOptions options;
-        private int index;
-
-        private Parser(String expression, ShaderOptions options) {
-            this.expression = expression;
-            this.options = options;
-        }
-
-        private boolean parse() {
-            boolean value = parseOr();
-            skipWhitespace();
-            return value;
-        }
-
-        private boolean parseOr() {
-            boolean value = parseAnd();
-            while (true) {
-                skipWhitespace();
-                if (!consume("||")) {
-                    return value;
-                }
-                value = value || parseAnd();
-            }
-        }
-
-        private boolean parseAnd() {
-            boolean value = parseUnary();
-            while (true) {
-                skipWhitespace();
-                if (!consume("&&")) {
-                    return value;
-                }
-                value = value && parseUnary();
-            }
-        }
-
-        private boolean parseUnary() {
-            skipWhitespace();
-            if (consume("!")) {
-                return !parseUnary();
-            }
-            if (consume("(")) {
-                boolean value = parseOr();
-                consume(")");
-                return value;
-            }
-            if (consumeWord("defined")) {
-                skipWhitespace();
-                if (consume("(")) {
-                    String symbol = readSymbol();
-                    consume(")");
-                    return isDefined(symbol, options);
-                }
-                return isDefined(readSymbol(), options);
-            }
-            return parseComparison();
-        }
-
-        private boolean parseComparison() {
-            String symbol = readSymbol();
-            if (symbol.isEmpty()) {
-                return false;
-            }
-
-            skipWhitespace();
-            if (consume(">=")) {
-                return numericValue(symbol, options) >= readNumberOrSymbol();
-            }
-            if (consume("<=")) {
-                return numericValue(symbol, options) <= readNumberOrSymbol();
-            }
-            if (consume("==")) {
-                return numericValue(symbol, options) == readNumberOrSymbol();
-            }
-            if (consume("!=")) {
-                return numericValue(symbol, options) != readNumberOrSymbol();
-            }
-            if (consume(">")) {
-                return numericValue(symbol, options) > readNumberOrSymbol();
-            }
-            if (consume("<")) {
-                return numericValue(symbol, options) < readNumberOrSymbol();
-            }
-
-            return switch (symbol.toLowerCase()) {
-                case "true", "on" -> true;
-                case "false", "off" -> false;
-                default -> isDefined(symbol, options);
-            };
-        }
-
-        private double readNumberOrSymbol() {
-            skipWhitespace();
-            String token = readSymbol();
-            if (token.isEmpty()) {
-                return 0.0;
-            }
-            try {
-                return Double.parseDouble(token);
-            } catch (NumberFormatException e) {
-                return numericValue(token, options);
-            }
-        }
-
-        private String readSymbol() {
-            skipWhitespace();
-            int start = index;
-            while (index < expression.length()) {
-                char ch = expression.charAt(index);
-                if (Character.isLetterOrDigit(ch) || ch == '_' || ch == '.' || ch == '-') {
-                    index++;
-                } else {
-                    break;
-                }
-            }
-            return expression.substring(start, index);
-        }
-
-        private boolean consumeWord(String word) {
-            skipWhitespace();
-            int end = index + word.length();
-            if (end <= expression.length() && expression.substring(index, end).equals(word)) {
-                if (end == expression.length() || !Character.isLetterOrDigit(expression.charAt(end))) {
-                    index = end;
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private boolean consume(String token) {
-            skipWhitespace();
-            if (expression.startsWith(token, index)) {
-                index += token.length();
-                return true;
-            }
-            return false;
-        }
-
-        private void skipWhitespace() {
-            while (index < expression.length() && Character.isWhitespace(expression.charAt(index))) {
-                index++;
-            }
-        }
     }
 }

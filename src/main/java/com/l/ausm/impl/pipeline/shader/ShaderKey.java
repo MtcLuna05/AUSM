@@ -31,6 +31,8 @@ public enum ShaderKey {
     TERRAIN_CUTOUT(ProgramId.TERRAIN_CUTOUT, ShaderAlphaTest.ONE_TENTH_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
     TERRAIN_CUTOUT_MIPPED(ProgramId.TERRAIN_CUTOUT_MIPPED, ShaderAlphaTest.ONE_TENTH_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
     TERRAIN_TRANSLUCENT(ProgramId.WATER, ShaderAlphaTest.NON_ZERO_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
+    DH_TERRAIN(ProgramId.DH_TERRAIN, ShaderAlphaTest.ALWAYS, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
+    DH_WATER(ProgramId.DH_WATER, ShaderAlphaTest.NON_ZERO_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
     MOVING_BLOCK(ProgramId.BLOCK, ShaderAlphaTest.ONE_TENTH_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
     ENTITIES_ALPHA(ProgramId.ENTITIES, ShaderAlphaTest.VERTEX_ALPHA, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
     ENTITIES_SOLID(ProgramId.ENTITIES, ShaderAlphaTest.ALWAYS, FogMode.PER_VERTEX, LightingModel.LIGHTMAP),
@@ -141,6 +143,8 @@ public enum ShaderKey {
             case GBUFFERS_WEATHER -> WEATHER;
             case GBUFFERS_WATER -> TERRAIN_TRANSLUCENT;
             case GBUFFERS_HAND_WATER -> HAND_TRANSLUCENT;
+            case DH_TERRAIN -> DH_TERRAIN;
+            case DH_WATER -> DH_WATER;
             default -> null;
         };
     }

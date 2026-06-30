@@ -82,6 +82,9 @@ public class RenderManagerMixin {
             return;
         }
         context.setCurrentEntity(entity);
+        if (context.shouldSeparateEntityDraws()) {
+            context.beginTranslucents();
+        }
         context.beginPhase(WorldRenderingPhase.ENTITIES_TRANSLUCENT);
         if (context.shouldRenderEntityWithVanillaProgram(entity)) {
             context.prepareExternalWorldOverlayRender();

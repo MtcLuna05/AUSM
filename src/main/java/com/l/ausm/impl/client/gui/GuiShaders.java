@@ -160,6 +160,9 @@ public class GuiShaders extends GuiScreen {
             case ID_TOGGLE_ENABLED:
                 boolean enabled = !MainMod.getShaderPackManager().areShadersEnabled();
                 MainMod.getShaderPackManager().setShadersEnabled(enabled);
+                if (this.mc != null && this.mc.renderGlobal != null) {
+                    this.mc.renderGlobal.loadRenderers();
+                }
                 updateEnabledButton();
                 break;
             case ID_SETTINGS:

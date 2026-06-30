@@ -21,6 +21,7 @@ public record ShaderPackDirectives(
         java.util.Map<Integer, ShaderStorageBufferDirective> storageBuffers,
         ShaderFeatureSet features,
         int noiseTextureResolution,
+        ShaderCustomTextureBinding noiseTexture,
         ShaderPipelineCapabilities capabilities,
         Map<ProgramId, ShaderProgramDirectives> programDirectives,
         CustomUniformSet customUniforms
@@ -35,6 +36,7 @@ public record ShaderPackDirectives(
                 storageBuffers,
                 features,
                 noiseTextureResolution,
+                noiseTexture,
                 capabilities,
                 programDirectives,
                 customUniforms
@@ -51,6 +53,7 @@ public record ShaderPackDirectives(
                 storageBuffers,
                 features,
                 noiseTextureResolution,
+                noiseTexture,
                 capabilities,
                 programDirectives,
                 customUniforms

@@ -35,7 +35,8 @@ public final class PipelineProgram {
     private static List<Attachment> defaultDrawBuffers(ProgramStage stage) {
         return switch (stage) {
             case PREPARE, GBUFFERS, DEFERRED, COMPOSITE -> List.of(Attachment.COLOR);
-            case SHADOW, FINAL, NONE -> List.of();
+            case SHADOW -> List.of(Attachment.COLOR);
+            case FINAL, NONE -> List.of();
         };
     }
 

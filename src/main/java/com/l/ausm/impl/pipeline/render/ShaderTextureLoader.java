@@ -10,6 +10,7 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL33;
@@ -29,6 +30,10 @@ public final class ShaderTextureLoader {
     }
 
     public static int loadTexture(ShaderPack pack, String resourcePath) throws IOException {
+        return loadTexture(pack, resourcePath, false, false);
+    }
+
+    public static int loadTexture(ShaderPack pack, String resourcePath, boolean blur, boolean clamp) throws IOException {
         byte[] data;
         try (var stream = pack.getResourceAsStream(resourcePath)) {
             if (stream == null) {
@@ -44,10 +49,7 @@ public final class ShaderTextureLoader {
 
         int textureId = GL11.glGenTextures();
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR_MIPMAP_LINEAR);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
+        applyFiltering(GL11.GL_TEXTURE_2D, blur, clamp);
 
         ByteBuffer pixels = BufferUtils.createByteBuffer(image.getWidth() * image.getHeight() * 4);
         for (int y = 0; y < image.getHeight(); y++) {
@@ -73,8 +75,6 @@ public final class ShaderTextureLoader {
                 pixels
         );
         logGlError("glTexImage2D", resourcePath);
-        GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
-        logGlError("glGenerateMipmap", resourcePath);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
         TextureBinder.restoreDefaultTextureUnit();
         MainMod.LOGGER.debug("[ShaderTextures] Loaded {} as GL texture {}", resourcePath, textureId);
@@ -104,16 +104,7 @@ public final class ShaderTextureLoader {
         int textureId = GL11.glGenTextures();
         GL11.glBindTexture(textureTarget, textureId);
         boolean integerFormat = isIntegerPixelFormat(pixelFormat);
-        int filter = integerFormat ? GL11.GL_NEAREST : GL11.GL_LINEAR;
-        GL11.glTexParameteri(textureTarget, GL11.GL_TEXTURE_MIN_FILTER, filter);
-        GL11.glTexParameteri(textureTarget, GL11.GL_TEXTURE_MAG_FILTER, filter);
-        GL11.glTexParameteri(textureTarget, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
-        if (textureTarget != GL11.GL_TEXTURE_1D) {
-            GL11.glTexParameteri(textureTarget, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
-        }
-        if (textureTarget == GL12.GL_TEXTURE_3D) {
-            GL11.glTexParameteri(textureTarget, GL12.GL_TEXTURE_WRAP_R, GL12.GL_CLAMP_TO_EDGE);
-        }
+        applyFiltering(textureTarget, !integerFormat && directive.blur(), directive.clamp());
 
         ByteBuffer pixels = BufferUtils.createByteBuffer(data.length);
         pixels.put(data);
@@ -169,6 +160,25 @@ public final class ShaderTextureLoader {
         return new RawTexture(textureId, textureTarget);
     }
 
+    private static void applyFiltering(int textureTarget, boolean blur, boolean clamp) {
+        int filter = blur ? GL11.GL_LINEAR : GL11.GL_NEAREST;
+        int wrap = clamp ? GL12.GL_CLAMP_TO_EDGE : GL11.GL_REPEAT;
+        GL11.glTexParameteri(textureTarget, GL11.GL_TEXTURE_MIN_FILTER, filter);
+        GL11.glTexParameteri(textureTarget, GL11.GL_TEXTURE_MAG_FILTER, filter);
+        GL11.glTexParameteri(textureTarget, GL11.GL_TEXTURE_WRAP_S, wrap);
+        if (textureTarget != GL11.GL_TEXTURE_1D) {
+            GL11.glTexParameteri(textureTarget, GL11.GL_TEXTURE_WRAP_T, wrap);
+        }
+        if (textureTarget == GL12.GL_TEXTURE_3D) {
+            GL11.glTexParameteri(textureTarget, GL12.GL_TEXTURE_WRAP_R, wrap);
+        }
+        GL11.glTexParameteri(textureTarget, GL12.GL_TEXTURE_MAX_LEVEL, 0);
+        GL11.glTexParameteri(textureTarget, GL12.GL_TEXTURE_MIN_LOD, 0);
+        GL11.glTexParameteri(textureTarget, GL12.GL_TEXTURE_MAX_LOD, 0);
+        GL11.glTexParameterf(textureTarget, GL14.GL_TEXTURE_LOD_BIAS, 0.0F);
+        ShaderSamplerState.clampTextureAnisotropyIfNeeded(textureTarget);
+    }
+
     public static int createNoiseTexture(int requestedResolution) {
         int resolution = Math.max(1, Math.min(4096, requestedResolution));
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
@@ -180,6 +190,7 @@ public final class ShaderTextureLoader {
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
+        ShaderSamplerState.clampTextureAnisotropyIfNeeded(GL11.GL_TEXTURE_2D);
 
         ByteBuffer pixels = BufferUtils.createByteBuffer(resolution * resolution * 4);
         Random random = new Random(0x1A15115EEDL);

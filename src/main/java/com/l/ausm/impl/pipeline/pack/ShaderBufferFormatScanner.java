@@ -363,59 +363,7 @@ public final class ShaderBufferFormatScanner {
     }
 
     private static boolean evaluateCondition(String expression, Map<String, String> defines) {
-        String normalized = stripLineComment(expression)
-                .replace("(", " ")
-                .replace(")", " ")
-                .trim();
-        if (normalized.isEmpty()) {
-            return false;
-        }
-        for (String orPart : normalized.split("\\|\\|")) {
-            boolean andValue = true;
-            for (String andPart : orPart.split("&&")) {
-                andValue &= evaluateSimpleCondition(andPart.trim(), defines);
-            }
-            if (andValue) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean evaluateSimpleCondition(String expression, Map<String, String> defines) {
-        if (expression.startsWith("defined ")) {
-            return defines.containsKey(expression.substring("defined ".length()).trim());
-        }
-        if (expression.startsWith("!defined ")) {
-            return !defines.containsKey(expression.substring("!defined ".length()).trim());
-        }
-        if (expression.contains("==")) {
-            String[] parts = expression.split("==", 2);
-            return valueOf(parts[0], defines).equals(valueOf(parts[1], defines));
-        }
-        if (expression.contains("!=")) {
-            String[] parts = expression.split("!=", 2);
-            return !valueOf(parts[0], defines).equals(valueOf(parts[1], defines));
-        }
-        if (expression.startsWith("!")) {
-            return !truthy(valueOf(expression.substring(1), defines));
-        }
-        return truthy(valueOf(expression, defines));
-    }
-
-    private static String valueOf(String token, Map<String, String> defines) {
-        String trimmed = token.trim();
-        return defines.getOrDefault(trimmed, trimmed);
-    }
-
-    private static boolean truthy(String value) {
-        if (value == null || value.isBlank()) {
-            return false;
-        }
-        return switch (value.toLowerCase(java.util.Locale.ROOT)) {
-            case "0", "false", "off" -> false;
-            default -> true;
-        };
+        return ShaderExpressionEvaluator.evaluate(stripLineComment(expression), defines);
     }
 
     private static String stripLineComment(String line) {

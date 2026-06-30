@@ -3,6 +3,7 @@ package com.l.ausm.impl.mixin.compat;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
+import com.l.ausm.impl.pipeline.compat.BloomMaskColor;
 import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
 import com.l.ausm.impl.pipeline.compat.NothiriumPipelineCompat;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
@@ -52,7 +53,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private static final AtomicInteger AUSM_FIRE_COMPILE_LOGS = new AtomicInteger();
 
     @Unique
-    private static final int AUSM_EMISSIVE_FALLBACK_LOG_LIMIT = 0;
+    private static final boolean AUSM_DEBUG_PROBES_ENABLED = Boolean.getBoolean("ausm.debugProbes");
+
+    @Unique
+    private static final int AUSM_EMISSIVE_FALLBACK_LOG_LIMIT = AUSM_DEBUG_PROBES_ENABLED ? 96 : 0;
 
     @Unique
     private static final AtomicInteger AUSM_EMISSIVE_FALLBACK_LOGS = new AtomicInteger();
@@ -152,16 +156,21 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             contextState = state;
         }
 
-        BlockRenderContext.setBlockEntityId(pipeline.blockEntityId(state, chunkCache, pos));
+        int blockEntityId = pipeline.blockEntityId(state, chunkCache, pos);
+        BlockRenderContext.setBlockEntityId(blockEntityId);
         BlockRenderContext.setRenderType((short) contextState.getRenderType().ordinal());
         BlockRenderContext.setMetadata(pipeline.blockMetadata(state, chunkCache, pos));
         BlockRenderContext.setLocalBlockPos(pos.getX(), pos.getY(), pos.getZ());
+        BlockRenderContext.setWorldBlockContext(chunkCache, pos);
         BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
         BlockRenderContext.setPackedLightmap(ausm$packedLightmap(contextState, chunkCache, pos));
         int blockEmission = pipeline.shouldInheritFramedEmissionInBasePass(state)
                 || BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null
                 ? pipeline.blockRenderEmissionWithFramedInheritance(state, chunkCache, pos)
                 : pipeline.blockRenderEmission(state, chunkCache, pos);
+        if (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null) {
+            blockEmission = Math.max(blockEmission, pipeline.framedBloomFallbackEmission(state, chunkCache, pos));
+        }
         blockEmission = Math.max(blockEmission, pipeline.shaderlessFramedBloomExtractionEmission(state, chunkCache, pos));
         BlockRenderContext.setBlockEmission(blockEmission);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, chunkCache, pos));
@@ -182,7 +191,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             ausm$framedDiagnosticStart = layerBuffer != null ? layerBuffer.getVertexCount() : -1;
         }
         if (pipeline.currentProblemProbesEnabled()
-                && (pipeline.isCurrentProblemProbeTarget(state) || pipeline.isCurrentProblemProbeTarget(contextState))) {
+                && (pipeline.isCurrentProblemProbeTarget(state)
+                || pipeline.isCurrentProblemProbeTarget(contextState)
+                || blockEmission > 0
+                || blockEntityId != 0)) {
             BufferBuilder layerBuffer = bufferBuilder != null && MinecraftForgeClient.getRenderLayer() != null
                     ? bufferBuilder.getWorldRendererByLayer(MinecraftForgeClient.getRenderLayer())
                     : null;
@@ -321,10 +333,12 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             RegionRenderCacheBuilder regionBuffers
     ) {
         boolean framedState = PipelineContext.getInstance().isFramedBlockDiagnosticTarget(renderState);
-        IBlockState fallbackSourceState = ausm$isEmissiveBloomFallbackTarget(fallbackTarget)
+        boolean forcedFramedBloom = framedState
+                && PipelineContext.getInstance().framedBloomFallbackEmission(renderState, chunkCache, pos) > 0;
+        IBlockState fallbackSourceState = ausm$isEmissiveBloomFallbackSource(fallbackTarget)
                 ? fallbackTarget
-                : framedState ? null : renderState;
-        boolean emissiveTarget = ausm$isEmissiveBloomFallbackTarget(fallbackSourceState);
+                : forcedFramedBloom ? renderState : framedState ? null : renderState;
+        boolean emissiveTarget = forcedFramedBloom || ausm$isEmissiveBloomFallbackSource(fallbackSourceState);
         IBlockState fallbackRenderState = PipelineContext.getInstance()
                 .inheritedBloomGeometryRenderState(renderState, fallbackSourceState);
         try {
@@ -404,7 +418,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.set(Boolean.TRUE);
             if (bloomMaskFallback) {
                 float[] uv = ausm$bloomMaskUv();
-                BlockRenderContext.setBloomMaskFallback(true, uv[0], uv[1], ausm$bloomMaskColor(maskColorState));
+                BlockRenderContext.setBloomMaskFallback(true, uv[0], uv[1], BloomMaskColor.colorForState(maskColorState));
             }
             ForgeHooksClient.setRenderLayer(layer);
             return Minecraft.getMinecraft().getBlockRendererDispatcher().renderBlock(state, pos, chunkCache, buffer);
@@ -498,6 +512,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                                           int normalDelta, boolean rendered, int fallbackDelta,
                                           BufferBuilder buffer, RegionRenderCacheBuilder regionBuffers) {
         if (AUSM_EMISSIVE_FALLBACK_LOG_LIMIT <= 0) {
+            return;
+        }
+        if (PipelineContext.getInstance().isBlockcrafteryEditableState(originalState)
+                && !ausm$isEmissiveBloomFallbackTarget(sourceState)) {
             return;
         }
         int index = AUSM_EMISSIVE_FALLBACK_LOGS.incrementAndGet();
@@ -752,12 +770,20 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
 
     @Unique
     private static boolean ausm$isEmissiveBloomFallbackTarget(IBlockState state) {
+        return ausm$isEmissiveBloomFallbackSource(state);
+    }
+
+    @Unique
+    private static boolean ausm$isEmissiveBloomFallbackSource(IBlockState state) {
         ResourceLocation name = ausm$registryName(state);
         if (state == null || state.getBlock() == null || state.getRenderType() == EnumBlockRenderType.INVISIBLE) {
             return false;
         }
         if (PipelineContext.getInstance().isBlockcrafteryEditableState(state)) {
             return false;
+        }
+        if (PipelineContext.getInstance().blockIntrinsicEmission(state) > 0) {
+            return true;
         }
         if (PipelineContext.getInstance().stateHasBloomLayerGeometry(state)) {
             return true;

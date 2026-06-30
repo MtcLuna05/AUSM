@@ -1,0 +1,91 @@
+package com.l.ausm.impl.pipeline.render;
+
+import net.minecraft.client.Minecraft;
+import org.lwjgl.opengl.EXTTextureFilterAnisotropic;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GLContext;
+
+import java.lang.reflect.Field;
+
+/** Global shaderpack sampler state that has to affect vanilla-owned textures too. */
+public final class ShaderSamplerState {
+    private static boolean breaksAnisotropy;
+    private static Field optifineAnisotropyField;
+    private static boolean optifineAnisotropyFieldResolved;
+
+    private ShaderSamplerState() {
+    }
+
+    public static void setBreaksAnisotropy(boolean breaks) {
+        breaksAnisotropy = breaks;
+    }
+
+    public static int anisotropicFilteringUniform() {
+        if (breaksAnisotropy || !anisotropySupported()) {
+            return 0;
+        }
+        return optifineAnisotropyLevel();
+    }
+
+    public static int textureFilteringModeUniform() {
+        return anisotropicFilteringUniform() > 0 ? 2 : 0;
+    }
+
+    public static void clampTextureAnisotropyIfNeeded(int textureTarget) {
+        if (!breaksAnisotropy || !anisotropySupported()) {
+            return;
+        }
+        GL11.glTexParameterf(
+                textureTarget,
+                EXTTextureFilterAnisotropic.GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                1.0F
+        );
+    }
+
+    private static boolean anisotropySupported() {
+        try {
+            return GLContext.getCapabilities() != null
+                    && GLContext.getCapabilities().GL_EXT_texture_filter_anisotropic;
+        } catch (IllegalStateException ignored) {
+            return false;
+        }
+    }
+
+    private static int optifineAnisotropyLevel() {
+        Minecraft minecraft = Minecraft.getMinecraft();
+        if (minecraft == null || minecraft.gameSettings == null) {
+            return 0;
+        }
+
+        Field field = optifineAnisotropyField();
+        if (field == null) {
+            return 0;
+        }
+
+        try {
+            return Math.max(0, field.getInt(minecraft.gameSettings));
+        } catch (IllegalAccessException | IllegalArgumentException ignored) {
+            return 0;
+        }
+    }
+
+    private static Field optifineAnisotropyField() {
+        Minecraft minecraft = Minecraft.getMinecraft();
+        if (minecraft == null || minecraft.gameSettings == null) {
+            return null;
+        }
+        if (optifineAnisotropyFieldResolved) {
+            return optifineAnisotropyField;
+        }
+
+        optifineAnisotropyFieldResolved = true;
+        try {
+            Field field = minecraft.gameSettings.getClass().getField("ofAfLevel");
+            field.setAccessible(true);
+            optifineAnisotropyField = field;
+        } catch (NoSuchFieldException | SecurityException ignored) {
+            optifineAnisotropyField = null;
+        }
+        return optifineAnisotropyField;
+    }
+}

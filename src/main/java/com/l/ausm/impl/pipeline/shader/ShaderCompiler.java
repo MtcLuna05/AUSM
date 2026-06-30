@@ -13,6 +13,7 @@ import com.l.ausm.impl.pipeline.pack.ShaderTransformPipeline;
 import net.minecraft.client.renderer.OpenGlHelper;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL32;
+import org.lwjgl.opengl.GL40;
 
 import java.io.IOException;
 
@@ -22,7 +23,7 @@ import java.io.IOException;
 public class ShaderCompiler {
     /**
      * Attempts to build a complete ShaderProgram for a given RenderPass.
-     * Searches the ShaderPack for .vsh (vertex), .gsh (geometry), and .fsh (fragment) files.
+     * Searches the ShaderPack for supported shader stages and links them into one program.
      * @return The linked program, or null if no required shaders were found/compiled.
      */
     public static ShaderProgram compilePass(ShaderPack pack, RenderPass pass) {
@@ -57,16 +58,34 @@ public class ShaderCompiler {
         int vertexShader = sources.vertexPath() == null && sources.fragmentPath() != null
                 ? compileInlineShaderTarget(legacyVertexSource(), programName + " legacy vertex", OpenGlHelper.GL_VERTEX_SHADER, bindingPass)
                 : compileShaderTarget(pack, sources.vertexPath(), OpenGlHelper.GL_VERTEX_SHADER, properties, bindingPass);
+        int tessellationControlShader = compileShaderTarget(
+                pack,
+                sources.tessellationControlPath(),
+                GL40.GL_TESS_CONTROL_SHADER,
+                properties,
+                bindingPass
+        );
+        int tessellationEvaluationShader = compileShaderTarget(
+                pack,
+                sources.tessellationEvaluationPath(),
+                GL40.GL_TESS_EVALUATION_SHADER,
+                properties,
+                bindingPass
+        );
         int fragmentShader = compileShaderTarget(pack, sources.fragmentPath(), OpenGlHelper.GL_FRAGMENT_SHADER, properties, bindingPass);
         
         // Geometry shaders use GL32, ensure compatibility
         int geometryShader = compileShaderTarget(pack, sources.geometryPath(), GL32.GL_GEOMETRY_SHADER, properties, bindingPass);
 
         if (failedExistingStage(sources.vertexPath(), vertexShader)
+                || failedExistingStage(sources.tessellationControlPath(), tessellationControlShader)
+                || failedExistingStage(sources.tessellationEvaluationPath(), tessellationEvaluationShader)
                 || failedExistingStage(sources.fragmentPath(), fragmentShader)
                 || failedExistingStage(sources.geometryPath(), geometryShader)) {
             MainMod.LOGGER.error("[ShaderCompiler] Program '{}' disabled because at least one declared stage failed to compile.", programName);
             if (vertexShader != -1) OpenGlHelper.glDeleteShader(vertexShader);
+            if (tessellationControlShader != -1) OpenGlHelper.glDeleteShader(tessellationControlShader);
+            if (tessellationEvaluationShader != -1) OpenGlHelper.glDeleteShader(tessellationEvaluationShader);
             if (fragmentShader != -1) OpenGlHelper.glDeleteShader(fragmentShader);
             if (geometryShader != -1) OpenGlHelper.glDeleteShader(geometryShader);
             return null;
@@ -81,8 +100,12 @@ public class ShaderCompiler {
         ShaderProgram program = new ShaderProgram(programName);
 
         if (vertexShader != -1) program.attachShader(vertexShader);
+        if (tessellationControlShader != -1) program.attachShader(tessellationControlShader);
+        if (tessellationEvaluationShader != -1) program.attachShader(tessellationEvaluationShader);
         if (fragmentShader != -1) program.attachShader(fragmentShader);
         if (geometryShader != -1) program.attachShader(geometryShader);
+        program.setTessellated(tessellationControlShader != -1 || tessellationEvaluationShader != -1);
+        program.setGeometric(geometryShader != -1);
 
         if (!program.link()) {
             program.delete();
@@ -92,6 +115,8 @@ public class ShaderCompiler {
 
         // Cleanup the individual shader objects now that they are linked into the program
         if (vertexShader != -1) OpenGlHelper.glDeleteShader(vertexShader);
+        if (tessellationControlShader != -1) OpenGlHelper.glDeleteShader(tessellationControlShader);
+        if (tessellationEvaluationShader != -1) OpenGlHelper.glDeleteShader(tessellationEvaluationShader);
         if (fragmentShader != -1) OpenGlHelper.glDeleteShader(fragmentShader);
         if (geometryShader != -1) OpenGlHelper.glDeleteShader(geometryShader);
 
@@ -105,6 +130,10 @@ public class ShaderCompiler {
                 pass.programId(),
                 pass.getProgramName(),
                 paths.vertexPath(),
+                null,
+                paths.tessellationControlPath(),
+                null,
+                paths.tessellationEvaluationPath(),
                 null,
                 paths.geometryPath(),
                 null,
@@ -169,6 +198,10 @@ public class ShaderCompiler {
             suffix = "vertex";
         } else if (shaderType == OpenGlHelper.GL_FRAGMENT_SHADER) {
             suffix = "fragment";
+        } else if (shaderType == GL40.GL_TESS_CONTROL_SHADER) {
+            suffix = "tesscontrol";
+        } else if (shaderType == GL40.GL_TESS_EVALUATION_SHADER) {
+            suffix = "tesseval";
         } else if (shaderType == GL32.GL_GEOMETRY_SHADER) {
             suffix = "geometry";
         }

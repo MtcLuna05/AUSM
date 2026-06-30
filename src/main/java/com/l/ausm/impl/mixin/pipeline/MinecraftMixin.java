@@ -66,6 +66,7 @@ public class MinecraftMixin {
         PipelineContext.getInstance().runPendingShaderChunkRefreshes();
         PipelineContext.getInstance().runPendingClientChunkRenderRefreshes();
         PipelineContext.getInstance().runScheduledBloomTerrainRefresh();
+        PipelineContext.getInstance().runRenderDistanceChangeCheck();
         PipelineContext.getInstance().runScheduledWorldTerrainRefresh();
         PipelineContext.getInstance().runScheduledWorldLoadLightRecalculation();
     }
@@ -106,11 +107,13 @@ public class MinecraftMixin {
     @Inject(method = "loadWorld(Lnet/minecraft/client/multiplayer/WorldClient;Ljava/lang/String;)V", at = @At("RETURN"))
     private void ausm$scheduleLightRefreshAfterWorldLoad(WorldClient worldClient, String loadingMessage, CallbackInfo ci) {
         if (worldClient == null) {
-            PipelineContext.getInstance().clearPendingShaderChunkRefreshes();
-            PipelineContext.getInstance().clearPendingClientChunkRenderRefreshes();
-            PipelineContext.getInstance().clearScheduledWorldLoadLightRecalculation();
-            PipelineContext.getInstance().clearScheduledBloomTerrainRefresh();
-            PipelineContext.getInstance().clearScheduledWorldTerrainRefresh();
+            PipelineContext context = PipelineContext.getInstance();
+            context.clearClientParticles("world-unload");
+            context.clearPendingShaderChunkRefreshes();
+            context.clearPendingClientChunkRenderRefreshes();
+            context.clearScheduledWorldLoadLightRecalculation();
+            context.clearScheduledBloomTerrainRefresh();
+            context.clearScheduledWorldTerrainRefresh();
             return;
         }
         PipelineContext context = PipelineContext.getInstance();

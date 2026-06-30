@@ -118,7 +118,11 @@ public final class BetterPortalsCompat {
     }
 
     public static boolean isRenderingRenderPass() {
-        return isInstalled() && renderPassDepth > 0;
+        if (!isInstalled()) {
+            return false;
+        }
+        RenderPassState state = renderPassStack.peek();
+        return state != null && state.nested() && (state.world() != null || state.framebuffer() != null);
     }
 
     public static boolean isPortalEntity(Entity entity) {

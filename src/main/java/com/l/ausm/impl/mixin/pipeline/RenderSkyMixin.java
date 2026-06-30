@@ -10,8 +10,10 @@ import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.BufferBuilder;
+import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.Tessellator;
+import net.minecraft.client.renderer.vertex.VertexBuffer;
 import net.minecraftforge.client.IRenderHandler;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -248,6 +250,36 @@ public class RenderSkyMixin {
     private void onRenderSkyBeforeStars(float partialTicks, int pass, CallbackInfo ci) {
         PipelineContext.getInstance().endPass();
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.STARS);
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;drawArrays(I)V",
+                    ordinal = 1
+            )
+    )
+    private void ausm$drawOrSuppressVanillaStarsVbo(VertexBuffer vertexBuffer, int mode) {
+        if (PipelineContext.getInstance().shouldSuppressVanillaStarsGeometry()) {
+            return;
+        }
+        vertexBuffer.drawArrays(mode);
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;callList(I)V",
+                    ordinal = 1
+            )
+    )
+    private void ausm$drawOrSuppressVanillaStarsList(int list) {
+        if (PipelineContext.getInstance().shouldSuppressVanillaStarsGeometry()) {
+            return;
+        }
+        GlStateManager.callList(list);
     }
 
     @Inject(

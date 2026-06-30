@@ -3,6 +3,7 @@ package com.l.ausm.api.pipeline.shader;
 public enum ProgramGroup {
     SHADOW("shadow"),
     GBUFFERS("gbuffers"),
+    DH("dh"),
     PREPARE("prepare"),
     DEFERRED("deferred"),
     COMPOSITE("composite"),

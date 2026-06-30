@@ -2,7 +2,6 @@ package com.l.ausm.impl.core;
 
 import com.google.common.collect.ImmutableList;
 import net.minecraft.block.state.IBlockState;
-import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.launchwrapper.IClassTransformer;
@@ -403,7 +402,7 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
             tessellatorClass.getMethod("setCurrentFace", EnumFacing.class).invoke(tessellator, side);
             tessellatorClass.getMethod("setTextureFunction", Function.class).invoke(tessellator, textureFunction);
             tessellatorClass.getMethod("setApplyDiffuseLighting", boolean.class).invoke(tessellator, true);
-            tessellatorClass.getMethod("startDrawingQuads", VertexFormat.class).invoke(tessellator, DefaultVertexFormats.ITEM);
+            tessellatorClass.getMethod("startDrawingQuads", VertexFormat.class).invoke(tessellator, format);
 
             Class<?> rendererClass = Class.forName("com.infinityraider.agricraft.renderers.blocks.RenderCrop");
             Constructor<?> constructor = rendererClass.getConstructor(cropBlockClass);

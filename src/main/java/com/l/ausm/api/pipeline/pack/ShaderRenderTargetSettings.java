@@ -22,6 +22,8 @@ public record ShaderRenderTargetSettings(
         Map<Integer, Boolean> shadowColorMipmap,
         boolean shadowHardwareFiltering
 ) {
+    public static final int SHADOW_COLOR_TARGET_COUNT = 8;
+
     public static ShaderRenderTargetSettings empty() {
         return new ShaderRenderTargetSettings(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), false);
     }
@@ -216,7 +218,9 @@ public record ShaderRenderTargetSettings(
         }
 
         public void setAllShadowColorMipmap(boolean mipmap) {
-            shadowColorMipmap.put(0, mipmap);
+            for (int i = 0; i < SHADOW_COLOR_TARGET_COUNT; i++) {
+                shadowColorMipmap.put(i, mipmap);
+            }
         }
 
         public void setShadowHardwareFiltering(boolean enabled) {

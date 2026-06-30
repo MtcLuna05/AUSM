@@ -7,6 +7,8 @@ import com.l.ausm.api.pipeline.pack.*;
 public record ProgramSourceSet(
         ProgramId programId,
         String vertexPath,
+        String tessellationControlPath,
+        String tessellationEvaluationPath,
         String fragmentPath,
         String geometryPath
 ) {

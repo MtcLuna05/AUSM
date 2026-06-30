@@ -61,6 +61,10 @@ public final class ShaderProgramSet {
                     programId.sourceName(),
                     paths.vertexPath(),
                     null,
+                    paths.tessellationControlPath(),
+                    null,
+                    paths.tessellationEvaluationPath(),
+                    null,
                     paths.geometryPath(),
                     null,
                     paths.fragmentPath(),
@@ -113,6 +117,47 @@ public final class ShaderProgramSet {
         return new ShaderComputeDirectives(computeArrays, shadowComputes, finalComputes);
     }
 
+    public boolean hasTessellationSources() {
+        for (ShaderProgramSource source : programs.values()) {
+            if (hasTessellationStage(source)) {
+                return true;
+            }
+        }
+        for (List<ShaderProgramSource> sources : programArrays.values()) {
+            for (ShaderProgramSource source : sources) {
+                if (hasTessellationStage(source)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public boolean hasGeometrySources() {
+        for (ShaderProgramSource source : programs.values()) {
+            if (hasGeometryStage(source)) {
+                return true;
+            }
+        }
+        for (List<ShaderProgramSource> sources : programArrays.values()) {
+            for (ShaderProgramSource source : sources) {
+                if (hasGeometryStage(source)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasTessellationStage(ShaderProgramSource source) {
+        return source != null
+                && (source.tessellationControlPath() != null || source.tessellationEvaluationPath() != null);
+    }
+
+    private static boolean hasGeometryStage(ShaderProgramSource source) {
+        return source != null && source.geometryPath() != null;
+    }
+
     private static List<ShaderProgramSource> loadProgramArray(
             ShaderPack pack,
             ShaderPackLayout layout,
@@ -122,14 +167,19 @@ public final class ShaderProgramSet {
         java.util.ArrayList<ShaderProgramSource> sources = new java.util.ArrayList<>(arrayId.programCount());
         for (int index = 0; index < arrayId.programCount(); index++) {
             String name = arrayId.sourcePrefix() + (index == 0 ? "" : Integer.toString(index));
-            String base = layout.rootPath(name);
-            String vertexPath = existingPath(pack, base + ".vsh");
-            String geometryPath = existingPath(pack, base + ".gsh");
-            String fragmentPath = existingPath(pack, base + ".fsh");
+            String vertexPath = resolveProgramArrayStage(pack, layout, name, ".vsh");
+            String tessellationControlPath = resolveProgramArrayStage(pack, layout, name, ".tcs");
+            String tessellationEvaluationPath = resolveProgramArrayStage(pack, layout, name, ".tes");
+            String geometryPath = resolveProgramArrayStage(pack, layout, name, ".gsh");
+            String fragmentPath = resolveProgramArrayStage(pack, layout, name, ".fsh");
             ShaderProgramSource source = new ShaderProgramSource(
                     null,
                     name,
                     vertexPath,
+                    null,
+                    tessellationControlPath,
+                    null,
+                    tessellationEvaluationPath,
                     null,
                     geometryPath,
                     null,
@@ -142,6 +192,19 @@ public final class ShaderProgramSet {
         return List.copyOf(sources);
     }
 
+    private static String resolveProgramArrayStage(ShaderPack pack, ShaderPackLayout layout, String name, String extension) {
+        int dimensionId = ShaderDimensionContext.currentDimensionId();
+        for (int candidateDimensionId : dimensionFallbackOrder(dimensionId)) {
+            for (String dimensionBase : layout.dimensionSourceBaseAliases(candidateDimensionId, name)) {
+                String dimensionPath = existingPath(pack, dimensionBase + extension);
+                if (dimensionPath != null) {
+                    return dimensionPath;
+                }
+            }
+        }
+        return existingPath(pack, layout.rootPath(name + extension));
+    }
+
     private static List<ComputeProgramSource> loadComputeArray(
             ShaderPack pack,
             ShaderPackLayout layout,
@@ -150,13 +213,33 @@ public final class ShaderProgramSet {
             String prefix
     ) {
         java.util.ArrayList<ComputeProgramSource> sources = new java.util.ArrayList<>();
-        addComputeIfPresent(pack, layout, properties, arrayId, sources, prefix);
+        if (arrayId == null) {
+            addComputeFamily(pack, layout, properties, null, sources, prefix, 0);
+            return List.copyOf(sources);
+        }
+
+        for (int index = 0; index < arrayId.programCount(); index++) {
+            String name = prefix + (index == 0 ? "" : Integer.toString(index));
+            addComputeFamily(pack, layout, properties, arrayId, sources, name, index);
+        }
+        return List.copyOf(sources);
+    }
+
+    private static void addComputeFamily(
+            ShaderPack pack,
+            ShaderPackLayout layout,
+            ShaderProperties properties,
+            ProgramArrayId arrayId,
+            List<ComputeProgramSource> sources,
+            String prefix,
+            int arrayIndex
+    ) {
+        addComputeIfPresent(pack, layout, properties, arrayId, sources, prefix, arrayIndex);
         for (char suffix = 'a'; suffix <= 'z'; suffix++) {
-            if (!addComputeIfPresent(pack, layout, properties, arrayId, sources, prefix + "_" + suffix)) {
+            if (!addComputeIfPresent(pack, layout, properties, arrayId, sources, prefix + "_" + suffix, arrayIndex)) {
                 break;
             }
         }
-        return List.copyOf(sources);
     }
 
     private static boolean addComputeIfPresent(
@@ -165,29 +248,45 @@ public final class ShaderProgramSet {
             ShaderProperties properties,
             ProgramArrayId arrayId,
             List<ComputeProgramSource> sources,
-            String name
+            String name,
+            int arrayIndex
     ) {
         String path = resolveComputePath(pack, layout, name);
         if (path == null) {
             return false;
         }
-        if (properties != null && arrayId != null && !properties.isProgramArrayEnabled(arrayId, name)) {
+        if (properties != null && arrayId != null && !properties.isProgramArrayEnabled(arrayId, arraySourceName(arrayId, arrayIndex))) {
             MainMod.LOGGER.debug(
-                    "[ShaderProgramSet] Loading compute '{}' despite matching disabled fullscreen program directive.",
+                    "[ShaderProgramSet] Skipping disabled compute '{}'.",
                     name
             );
+            return true;
         }
         String source = readKnownExisting(pack, path);
-        sources.add(new ComputeProgramSource(name, path, source, parseWorkGroups(source), parseWorkGroupRelative(source)));
+        sources.add(new ComputeProgramSource(
+                name,
+                arrayIndex,
+                path,
+                source,
+                parseWorkGroups(source),
+                parseWorkGroupRelative(source),
+                properties == null ? null : properties.indirectPointer(name)
+        ));
         return true;
+    }
+
+    private static String arraySourceName(ProgramArrayId arrayId, int index) {
+        return arrayId.sourcePrefix() + (index == 0 ? "" : Integer.toString(index));
     }
 
     private static String resolveComputePath(ShaderPack pack, ShaderPackLayout layout, String name) {
         int dimensionId = ShaderDimensionContext.currentDimensionId();
         for (int candidateDimensionId : dimensionFallbackOrder(dimensionId)) {
-            String dimensionPath = existingPath(pack, layout.rootPath("world" + candidateDimensionId + "/" + name + ".csh"));
-            if (dimensionPath != null) {
-                return dimensionPath;
+            for (String dimensionBase : layout.dimensionSourceBaseAliases(candidateDimensionId, name)) {
+                String dimensionPath = existingPath(pack, dimensionBase + ".csh");
+                if (dimensionPath != null) {
+                    return dimensionPath;
+                }
             }
         }
         String rootPath = existingPath(pack, layout.rootPath(name + ".csh"));

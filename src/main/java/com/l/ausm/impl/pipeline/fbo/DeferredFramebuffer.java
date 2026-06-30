@@ -7,6 +7,7 @@ import com.l.ausm.api.pipeline.pack.*;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.pack.ShaderRenderTargetSettings;
 import com.l.ausm.api.pipeline.pack.ShaderTextureScale;
+import com.l.ausm.impl.pipeline.render.ShaderSamplerState;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
 import org.lwjgl.opengl.*;
@@ -142,6 +143,7 @@ public class DeferredFramebuffer {
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+        ShaderSamplerState.clampTextureAnisotropyIfNeeded(GL11.GL_TEXTURE_2D);
         GL11.glTexImage2D(
                 GL11.GL_TEXTURE_2D,
                 0,
@@ -314,9 +316,16 @@ public class DeferredFramebuffer {
     }
 
     public void blitTo(int targetFramebuffer, int targetWidth, int targetHeight) {
+        blitTo(Attachment.COLOR, targetFramebuffer, targetWidth, targetHeight);
+    }
+
+    public void blitTo(Attachment sourceAttachment, int targetFramebuffer, int targetWidth, int targetHeight) {
+        Attachment attachment = sourceAttachment == null ? Attachment.COLOR : sourceAttachment;
+        int sourceWidth = getAttachmentWidth(attachment);
+        int sourceHeight = getAttachmentHeight(attachment);
         bindFramebuffer(readFboId);
         attachDepthTexture();
-        attachReadTextures(Attachment.COLOR);
+        attachReadTextures(attachment);
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, targetFramebuffer);
 
@@ -327,8 +336,8 @@ public class DeferredFramebuffer {
         GL30.glBlitFramebuffer(
                 0,
                 0,
-                width,
-                height,
+                sourceWidth,
+                sourceHeight,
                 0,
                 0,
                 targetWidth,
@@ -733,7 +742,14 @@ public class DeferredFramebuffer {
     }
 
     public float[] readColorAt(Attachment attachment, int x, int y) {
-        int textureId = getReadTexture(attachment);
+        return readColorAtTexture(getReadTexture(attachment), getAttachmentWidth(attachment), getAttachmentHeight(attachment), x, y);
+    }
+
+    public float[] readWriteColorAt(Attachment attachment, int x, int y) {
+        return readColorAtTexture(getWriteTexture(attachment), getAttachmentWidth(attachment), getAttachmentHeight(attachment), x, y);
+    }
+
+    private float[] readColorAtTexture(int textureId, int attachmentWidth, int attachmentHeight, int x, int y) {
         if (textureId == -1) {
             return new float[]{Float.NaN, Float.NaN, Float.NaN, Float.NaN};
         }
@@ -749,8 +765,8 @@ public class DeferredFramebuffer {
 
         colorReadBuffer.clear();
         GL11.glReadPixels(
-                Math.max(0, Math.min(getAttachmentWidth(attachment) - 1, x)),
-                Math.max(0, Math.min(getAttachmentHeight(attachment) - 1, y)),
+                Math.max(0, Math.min(attachmentWidth - 1, x)),
+                Math.max(0, Math.min(attachmentHeight - 1, y)),
                 1,
                 1,
                 GL11.GL_RGBA,

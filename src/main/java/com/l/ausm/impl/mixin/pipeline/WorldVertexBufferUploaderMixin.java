@@ -4,6 +4,7 @@ import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.OpenGlHelper;
@@ -14,12 +15,22 @@ import org.lwjgl.opengl.GL15;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.nio.ByteBuffer;
 
 @Mixin(WorldVertexBufferUploader.class)
 public class WorldVertexBufferUploaderMixin {
+
+    @ModifyArg(
+            method = "draw",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GlStateManager;glDrawArrays(III)V"),
+            index = 0
+    )
+    private int ausm$tessellatedDrawMode(int drawMode) {
+        return PipelineContext.getInstance().drawModeForActiveProgram(drawMode);
+    }
 
     @Inject(method = "draw", at = @At("HEAD"))
     private void ausm$unbindArrayBufferForClientDraw(BufferBuilder bufferBuilder, CallbackInfo ci) {

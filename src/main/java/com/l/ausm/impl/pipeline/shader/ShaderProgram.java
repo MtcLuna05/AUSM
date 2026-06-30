@@ -26,6 +26,8 @@ public class ShaderProgram {
     private final Map<String, Integer> uniformLocations = new HashMap<>();
     private final Set<String> activeUniformNames = new HashSet<>();
     private boolean activeUniformNamesAvailable;
+    private boolean tessellated;
+    private boolean geometric;
 
     public ShaderProgram(String name) {
         this.name = name;
@@ -36,6 +38,22 @@ public class ShaderProgram {
         OpenGlHelper.glAttachShader(programId, shaderId);
     }
 
+    public void setTessellated(boolean tessellated) {
+        this.tessellated = tessellated;
+    }
+
+    public boolean isTessellated() {
+        return tessellated;
+    }
+
+    public void setGeometric(boolean geometric) {
+        this.geometric = geometric;
+    }
+
+    public boolean isGeometric() {
+        return geometric;
+    }
+
     public boolean link() {
         GL20.glBindAttribLocation(programId, ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE, "mc_Entity");
         GL20.glBindAttribLocation(programId, ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE, "iris_Entity");
@@ -44,6 +62,11 @@ public class ShaderProgram {
         GL20.glBindAttribLocation(programId, ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE, "at_midBlock");
         GL20.glBindAttribLocation(programId, 0, "Position");
         GL20.glBindAttribLocation(programId, 1, "UV0");
+        GL20.glBindAttribLocation(programId, 0, "vPosition");
+        GL20.glBindAttribLocation(programId, 1, "color");
+        GL20.glBindAttribLocation(programId, 1, "vColor");
+        GL20.glBindAttribLocation(programId, 2, "dhMaterialData");
+        GL20.glBindAttribLocation(programId, 2, "irisMaterialData");
         OpenGlHelper.glLinkProgram(programId);
         
         if (OpenGlHelper.glGetProgrami(programId, OpenGlHelper.GL_LINK_STATUS) == 0) {

@@ -258,23 +258,7 @@ public final class ShaderDrawBuffersScanner {
         }
 
         private void seedEnvironmentDefines() {
-            defines.put("MC_VERSION", "11202");
-            defines.put("MC_GL_VERSION", "320");
-            defines.put("MC_GLSL_VERSION", "120");
-            defines.put("MC_RENDER_QUALITY", "1.0");
-            defines.put("MC_SHADOW_QUALITY", "1.0");
-            defines.put("MC_HAND_DEPTH", "1.0");
-            defines.put("IS_IRIS", "1");
-            defines.put("IRIS_VERSION", "10902");
-            defines.put("IRIS_FEATURE_CUSTOM_IMAGES", "1");
-            defines.put("IRIS_FEATURE_SSBO", "1");
-            defines.put("IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE", "1");
-            defines.put("IRIS_FEATURE_FADE_VARIABLE", "1");
-            switch (ShaderDimensionContext.currentDimensionId()) {
-                case -1 -> defines.put("NETHER", "1");
-                case 1 -> defines.put("THE_END", "1");
-                default -> defines.put("OVERWORLD", "1");
-            }
+            defines.putAll(ShaderEnvironmentDefines.baseDefineMap());
         }
 
         private boolean active() {
@@ -296,11 +280,11 @@ public final class ShaderDrawBuffersScanner {
                 return true;
             }
             if (directive.startsWith("#if ")) {
-                pushCondition(new Expression(directive.substring("#if ".length()), defines).parse());
+                pushCondition(ShaderExpressionEvaluator.evaluate(directive.substring("#if ".length()), defines));
                 return true;
             }
             if (directive.startsWith("#elif ")) {
-                replaceCondition(new Expression(directive.substring("#elif ".length()), defines).parse());
+                replaceCondition(ShaderExpressionEvaluator.evaluate(directive.substring("#elif ".length()), defines));
                 return true;
             }
             if (directive.equals("#else")) {
@@ -402,173 +386,4 @@ public final class ShaderDrawBuffersScanner {
         }
     }
 
-    private static final class Expression {
-        private final String input;
-        private final Map<String, String> defines;
-        private int position;
-
-        private Expression(String input, Map<String, String> defines) {
-            this.input = input;
-            this.defines = defines;
-        }
-
-        private boolean parse() {
-            try {
-                boolean value = parseOr();
-                skipWhitespace();
-                return value;
-            } catch (RuntimeException ignored) {
-                return false;
-            }
-        }
-
-        private boolean parseOr() {
-            boolean value = parseAnd();
-            while (true) {
-                skipWhitespace();
-                if (!consume("||")) {
-                    return value;
-                }
-                boolean right = parseAnd();
-                value = value || right;
-            }
-        }
-
-        private boolean parseAnd() {
-            boolean value = parseNot();
-            while (true) {
-                skipWhitespace();
-                if (!consume("&&")) {
-                    return value;
-                }
-                boolean right = parseNot();
-                value = value && right;
-            }
-        }
-
-        private boolean parseNot() {
-            skipWhitespace();
-            if (consume("!")) {
-                return !parseNot();
-            }
-            return parseComparison();
-        }
-
-        private boolean parseComparison() {
-            long left = parseValue();
-            skipWhitespace();
-            if (consume(">=")) {
-                return left >= parseValue();
-            }
-            if (consume("<=")) {
-                return left <= parseValue();
-            }
-            if (consume("==")) {
-                return left == parseValue();
-            }
-            if (consume("!=")) {
-                return left != parseValue();
-            }
-            if (consume(">")) {
-                return left > parseValue();
-            }
-            if (consume("<")) {
-                return left < parseValue();
-            }
-            return left != 0;
-        }
-
-        private long parseValue() {
-            skipWhitespace();
-            if (consume("(")) {
-                boolean value = parseOr();
-                consume(")");
-                return value ? 1 : 0;
-            }
-            if (consume("defined")) {
-                skipWhitespace();
-                String name;
-                if (consume("(")) {
-                    name = readIdentifier();
-                    consume(")");
-                } else {
-                    name = readIdentifier();
-                }
-                return defines.containsKey(name) ? 1 : 0;
-            }
-
-            if (position < input.length() && (Character.isDigit(input.charAt(position)) || input.charAt(position) == '-')) {
-                return readNumber();
-            }
-
-            String name = readIdentifier();
-            if (name.isEmpty()) {
-                return 0;
-            }
-            String value = defines.get(name);
-            if (value == null) {
-                return 0;
-            }
-            return parseNumericDefine(value);
-        }
-
-        private long parseNumericDefine(String value) {
-            String trimmed = value.trim();
-            if (trimmed.isEmpty()) {
-                return 1;
-            }
-            try {
-                return Long.decode(trimmed.split("\\s+", 2)[0]);
-            } catch (NumberFormatException ignored) {
-                return switch (trimmed.toLowerCase()) {
-                    case "true", "on" -> 1;
-                    case "false", "off" -> 0;
-                    default -> defines.containsKey(trimmed) ? parseNumericDefine(defines.get(trimmed)) : 0;
-                };
-            }
-        }
-
-        private long readNumber() {
-            int start = position;
-            if (position < input.length() && input.charAt(position) == '-') {
-                position++;
-            }
-            while (position < input.length() && (Character.isDigit(input.charAt(position)) || input.charAt(position) == 'x' || input.charAt(position) == 'X' || isHex(input.charAt(position)))) {
-                position++;
-            }
-            return Long.decode(input.substring(start, position));
-        }
-
-        private String readIdentifier() {
-            skipWhitespace();
-            int start = position;
-            while (position < input.length()) {
-                char c = input.charAt(position);
-                if (!Character.isLetterOrDigit(c) && c != '_') {
-                    break;
-                }
-                position++;
-            }
-            return input.substring(start, position);
-        }
-
-        private boolean consume(String token) {
-            skipWhitespace();
-            if (!input.startsWith(token, position)) {
-                return false;
-            }
-            position += token.length();
-            return true;
-        }
-
-        private void skipWhitespace() {
-            while (position < input.length() && Character.isWhitespace(input.charAt(position))) {
-                position++;
-            }
-        }
-
-        private boolean isHex(char c) {
-            return c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F';
-        }
-    }
 }
