@@ -6,6 +6,7 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.client.ShaderCompileNotifications;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiIngame;
 import net.minecraft.client.gui.ScaledResolution;
 import org.spongepowered.asm.mixin.Mixin;
@@ -18,8 +19,14 @@ public class GuiIngameMixin {
 
     @Inject(method = "renderGameOverlay(F)V", at = @At("HEAD"), cancellable = true)
     private void ausm$beforeGameOverlay(float partialTicks, CallbackInfo ci) {
+        PipelineContext.getInstance().probeShaderlessSkyGuiState("ingame-overlay-head");
+        if (ausm$isHudHidden()) {
+            PipelineContext.getInstance().probeShaderlessSkyGuiState("ingame-overlay-hidden");
+            return;
+        }
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldDeferIngameHud()) {
+            context.probeShaderlessSkyGuiState("ingame-overlay-deferred");
             ci.cancel();
             return;
         }
@@ -30,8 +37,12 @@ public class GuiIngameMixin {
 
     @Inject(method = "renderGameOverlay(F)V", at = @At("RETURN"))
     private void ausm$afterGameOverlay(float partialTicks, CallbackInfo ci) {
+        PipelineContext.getInstance().probeShaderlessSkyGuiState("ingame-overlay-return");
+        if (ausm$isHudHidden()) {
+            return;
+        }
         PipelineContext.getInstance().finishGuiRendering();
-        ShaderCompileNotifications.renderOverlay(new ScaledResolution(net.minecraft.client.Minecraft.getMinecraft()));
+        ShaderCompileNotifications.renderOverlay(new ScaledResolution(Minecraft.getMinecraft()));
     }
 
     @Inject(
@@ -61,5 +72,13 @@ public class GuiIngameMixin {
         if (!PipelineContext.getInstance().shouldRenderVignette()) {
             ci.cancel();
         }
+    }
+
+    private boolean ausm$isHudHidden() {
+        Minecraft minecraft = Minecraft.getMinecraft();
+        return minecraft != null
+                && minecraft.currentScreen == null
+                && minecraft.gameSettings != null
+                && minecraft.gameSettings.hideGUI;
     }
 }

@@ -16,4 +16,7 @@ public interface EntityRendererAccessor {
 
     @Invoker("updateLightmap")
     void ausm$updateLightmap(float partialTicks);
+
+    @Invoker("setupCameraTransform")
+    void ausm$setupCameraTransform(float partialTicks, int pass);
 }

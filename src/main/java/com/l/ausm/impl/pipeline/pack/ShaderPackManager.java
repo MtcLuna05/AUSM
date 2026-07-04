@@ -562,6 +562,24 @@ public class ShaderPackManager implements ShaderPackController {
         rebuildInactiveVanillaRenderers();
     }
 
+    public void compilePipelineForDimensionSwitch(int dimensionId) {
+        if (dimensionId == Integer.MIN_VALUE || dimensionId == compiledDimensionId) {
+            return;
+        }
+        if (!areShadersEnabled() || isOffPack(selectedPackName)) {
+            return;
+        }
+        if (!isPackAvailable(selectedPackName)) {
+            fallbackToOff("Selected shaderpack '{}' disappeared during dimension switch; disabling shaders.", selectedPackName);
+            return;
+        }
+        if (!ensureSelectedPackLoaded()) {
+            return;
+        }
+
+        switchCompiledPipelineDimension(dimensionId, false);
+    }
+
     public void setShadersEnabled(boolean enabled) {
         if (isOffPack(selectedPackName)) {
             shadersEnabled = false;
@@ -598,6 +616,7 @@ public class ShaderPackManager implements ShaderPackController {
             compiledPackName = OFF_PACK_NAME;
             pendingPipelineReload = currentPack != null && !isInternalPack(currentPack);
             rebuildInactiveVanillaRenderers();
+            PipelineContext.getInstance().recoverShaderlessBloomAfterShaderDisable("shader-toggle-off");
         }
     }
 

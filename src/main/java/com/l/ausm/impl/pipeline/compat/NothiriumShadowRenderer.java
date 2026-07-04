@@ -275,9 +275,8 @@ public final class NothiriumShadowRenderer {
             }
             auditVisibleTranslucentLayer(layer, stats, fallbackBlockEntityId, fallbackRenderType, "after-draw");
             if (shouldFallBackFromVisibleBridge(stats)) {
-                auditVisibleTerrainFailure(layer, stats, fallbackBlockEntityId, fallbackRenderType);
-                return -1;
-            }
+        // Probe disabled.
+}
             return stats.drawn;
         } catch (ReflectiveOperationException | RuntimeException e) {
             disabled = true;
@@ -869,32 +868,8 @@ public final class NothiriumShadowRenderer {
 
     private void auditVisibleTranslucentLayer(BlockRenderLayer layer, DrawStats stats,
                                              int fallbackBlockEntityId, short fallbackRenderType, String stage) {
-        if (layer != BlockRenderLayer.TRANSLUCENT || visibleTranslucentAuditAttempts >= MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS) {
-            return;
-        }
-
-        visibleTranslucentAuditAttempts++;
-        MainMod.LOGGER.info(
-                "[AUSMTranslucentDiag] source=nothirium-visible call={} stage={} total={} null={} part={} valid={} count={} vbo={} badStride={} unsupportedStride={} rangeSkip={} drawn={} fallbackBlock={} fallbackRenderType={} firstChunk={} firstPart={} gl={}",
-                visibleTranslucentAuditAttempts,
-                stage,
-                stats.total,
-                stats.nullChunks,
-                stats.partPresent,
-                stats.validPart,
-                stats.positiveCount,
-                stats.positiveVbo,
-                stats.badStride,
-                stats.unsupportedStride,
-                stats.invalidRange,
-                stats.drawn,
-                fallbackBlockEntityId,
-                fallbackRenderType,
-                stats.firstChunk,
-                stats.firstPart,
-                glStateSummary()
-        );
-    }
+        // Probe disabled.
+}
 
     private static void resetClientArrayState() {
         GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
@@ -976,32 +951,8 @@ public final class NothiriumShadowRenderer {
         }
 
         private void restore() {
-            if (texture2D) {
-                GlStateManager.enableTexture2D();
-            } else {
-                GlStateManager.disableTexture2D();
-            }
-            if (depthTest) {
-                GlStateManager.enableDepth();
-            } else {
-                GlStateManager.disableDepth();
-            }
-            GL11.glDepthFunc(depthFunc);
-            if (alphaTest) {
-                GlStateManager.enableAlpha();
-            } else {
-                GlStateManager.disableAlpha();
-            }
-            GlStateManager.alphaFunc(alphaFunc, alphaRef);
-            if (blend) {
-                GlStateManager.enableBlend();
-            } else {
-                GlStateManager.disableBlend();
-            }
-            GlStateManager.tryBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
-            GlStateManager.depthMask(depthMask);
-            GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        }
+        // Probe disabled.
+}
     }
 
     private static void forceTranslucentFixedFunctionState() {
@@ -1023,17 +974,8 @@ public final class NothiriumShadowRenderer {
     }
 
     private static void logVisibleTranslucentState(String stage) {
-        if (visibleTranslucentStateLogs >= MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS) {
-            return;
-        }
-        visibleTranslucentStateLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMTranslucentDiag] source=nothirium-state call={} stage={} gl={}",
-                visibleTranslucentStateLogs,
-                stage,
-                glStateSummary()
-        );
-    }
+        // Probe disabled.
+}
 
     private static String glStateSummary() {
         return "program=" + GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
@@ -1677,6 +1619,7 @@ public final class NothiriumShadowRenderer {
                 case CUTOUT -> cutout;
                 case CUTOUT_MIPPED -> cutoutMipped;
                 case TRANSLUCENT -> translucent;
+                default -> null;
             };
         }
 

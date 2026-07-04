@@ -89,10 +89,11 @@ public class EntityRendererMixin {
             )
     )
     private void onBeforeGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.probeShaderlessSkyGuiState("gui-screen-draw-before");
         if (ausm$shouldUseVanillaGuiScreen()) {
             return;
         }
-        PipelineContext context = PipelineContext.getInstance();
         if (!context.isActive()) {
             return;
         }
@@ -108,6 +109,7 @@ public class EntityRendererMixin {
             )
     )
     private void onAfterGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
+        PipelineContext.getInstance().probeShaderlessSkyGuiState("gui-screen-draw-after");
         if (ausm$shouldUseVanillaGuiScreen()) {
             return;
         }
@@ -246,13 +248,17 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassBeforeSolidTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.probeShaderlessLightState("before-solid-terrain-enter");
+        if (context.shouldBypassWorldPassRendering()) {
+            context.probeShaderlessLightState("before-solid-terrain-bypass");
             return;
         }
 
-        PipelineContext.getInstance().bindWorldFramebuffer();
-        PipelineContext.getInstance().applyTerrainCulling(WorldRenderingPhase.TERRAIN_SOLID);
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.TERRAIN_SOLID);
+        context.bindWorldFramebuffer();
+        context.applyTerrainCulling(WorldRenderingPhase.TERRAIN_SOLID);
+        context.beginPhase(WorldRenderingPhase.TERRAIN_SOLID);
+        context.probeShaderlessLightState("before-solid-terrain-exit");
     }
 
     @Inject(
@@ -265,12 +271,16 @@ public class EntityRendererMixin {
             )
     )
     private void onRenderWorldPassAfterSolidTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.probeShaderlessLightState("after-solid-terrain-enter");
+        if (context.shouldBypassWorldPassRendering()) {
+            context.probeShaderlessLightState("after-solid-terrain-bypass");
             return;
         }
 
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().restoreTerrainCulling();
+        context.endPass();
+        context.restoreTerrainCulling();
+        context.probeShaderlessLightState("after-solid-terrain-exit");
     }
 
     @Inject(
@@ -652,16 +662,20 @@ public class EntityRendererMixin {
     private void onRenderWorldPassAfterTranslucentTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldBypassWorldPassRendering()) {
-            context.renderShaderlessVisibleBloomLayerFromWorldPass(partialTicks, pass);
-            context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
+            if (context.renderEmissiveBloomExtractionFromWorldPass(partialTicks, pass) <= 0) {
+                context.renderShaderlessVisibleBloomLayerFromWorldPass(partialTicks, pass);
+                context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
+            }
             return;
         }
 
         context.endPass();
         context.restoreTerrainCulling();
         context.restoreWaterRenderState();
-        context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
-        context.renderShaderlessVisibleBloomLayerFromWorldPass(partialTicks, pass);
+        if (context.renderEmissiveBloomExtractionFromWorldPass(partialTicks, pass) <= 0) {
+            context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
+            context.renderShaderlessVisibleBloomLayerFromWorldPass(partialTicks, pass);
+        }
     }
 
     @Inject(

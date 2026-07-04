@@ -44,17 +44,7 @@ public final class AusmBloomResourceIndex {
         scanPackRoot(new File(runDir, "resourcepacks"));
         scanPackRoot(new File(runDir, "mods"));
 
-        MainMod.LOGGER.info(
-                "[AUSMBloom] Resource scan complete: archives={} directories={} glow={} emissive={} bloom={} bloomMeta={} ctmBloomMeta={} declaredLights={}",
-                scannedArchives,
-                scannedDirectories,
-                glowTextures,
-                emissiveTextures,
-                bloomTextures,
-                bloomMetadata,
-                ctmBloomMetadata,
-                declaredLightMetadata
-        );
+        
     }
 
     public boolean hasBloomResources() {

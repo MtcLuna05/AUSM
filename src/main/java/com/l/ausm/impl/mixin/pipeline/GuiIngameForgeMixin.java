@@ -14,8 +14,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class GuiIngameForgeMixin {
     @Inject(method = "renderGameOverlay(F)V", at = @At("HEAD"), cancellable = true)
     private void ausm$beforeForgeGameOverlay(float partialTicks, CallbackInfo ci) {
+        PipelineContext.getInstance().probeShaderlessSkyGuiState("forge-overlay-head");
+        if (ausm$isHudHidden()) {
+            PipelineContext.getInstance().probeShaderlessSkyGuiState("forge-overlay-hidden");
+            return;
+        }
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldDeferIngameHud()) {
+            context.probeShaderlessSkyGuiState("forge-overlay-deferred");
             ci.cancel();
             return;
         }
@@ -26,7 +32,19 @@ public class GuiIngameForgeMixin {
 
     @Inject(method = "renderGameOverlay(F)V", at = @At("RETURN"))
     private void ausm$afterForgeGameOverlay(float partialTicks, CallbackInfo ci) {
+        PipelineContext.getInstance().probeShaderlessSkyGuiState("forge-overlay-return");
+        if (ausm$isHudHidden()) {
+            return;
+        }
         PipelineContext.getInstance().finishGuiRendering();
         ShaderCompileNotifications.renderOverlay(new ScaledResolution(Minecraft.getMinecraft()));
+    }
+
+    private boolean ausm$isHudHidden() {
+        Minecraft minecraft = Minecraft.getMinecraft();
+        return minecraft != null
+                && minecraft.currentScreen == null
+                && minecraft.gameSettings != null
+                && minecraft.gameSettings.hideGUI;
     }
 }

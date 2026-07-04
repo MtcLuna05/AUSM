@@ -61,6 +61,12 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     @Unique
     private static final AtomicInteger AUSM_EMISSIVE_FALLBACK_LOGS = new AtomicInteger();
 
+    @Unique
+    private static final int AUSM_SHADERLESS_COMPILE_LIGHT_PROBE_LIMIT = 160;
+
+    @Unique
+    private static final AtomicInteger AUSM_SHADERLESS_COMPILE_LIGHT_PROBES = new AtomicInteger();
+
     @Shadow(remap = false)
     private IBlockAccess chunkCache;
 
@@ -163,17 +169,22 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         BlockRenderContext.setLocalBlockPos(pos.getX(), pos.getY(), pos.getZ());
         BlockRenderContext.setWorldBlockContext(chunkCache, pos);
         BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
-        BlockRenderContext.setPackedLightmap(ausm$packedLightmap(contextState, chunkCache, pos));
-        int blockEmission = pipeline.shouldInheritFramedEmissionInBasePass(state)
-                || BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null
-                ? pipeline.blockRenderEmissionWithFramedInheritance(state, chunkCache, pos)
-                : pipeline.blockRenderEmission(state, chunkCache, pos);
+        int packedLightmap = ausm$packedLightmap(contextState, chunkCache, pos);
+        BlockRenderContext.setPackedLightmap(packedLightmap);
+        ausm$logShaderlessCompileLightProbe(state, contextState, chunkCache, pos, packedLightmap);
+        int blockEmission = pipeline.shouldUseShaderlessBloomEmission()
+                ? pipeline.blockShaderlessBloomEmission(state, chunkCache, pos)
+                : (pipeline.shouldInheritFramedEmissionInBasePass(state)
+                || BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null)
+                        ? pipeline.blockRenderEmissionWithFramedInheritance(state, chunkCache, pos)
+                        : pipeline.blockRenderEmission(state, chunkCache, pos);
         if (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null) {
             blockEmission = Math.max(blockEmission, pipeline.framedBloomFallbackEmission(state, chunkCache, pos));
         }
         blockEmission = Math.max(blockEmission, pipeline.shaderlessFramedBloomExtractionEmission(state, chunkCache, pos));
         BlockRenderContext.setBlockEmission(blockEmission);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, chunkCache, pos));
+        BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, chunkCache, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, chunkCache, pos));
         BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState, chunkCache, pos));
         if (pipeline.currentProblemProbesEnabled()) {
@@ -228,6 +239,41 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         }
         try {
             return state.getPackedLightmapCoords(blockAccess, pos);
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
+    }
+
+    @Unique
+    private static void ausm$logShaderlessCompileLightProbe(
+            IBlockState originalState,
+            IBlockState contextState,
+            IBlockAccess blockAccess,
+            BlockPos pos,
+            int packedLightmap
+    ) {
+        // Probe disabled.
+}
+
+    @Unique
+    private static int ausm$safeCombinedLight(IBlockAccess blockAccess, BlockPos pos, int lightValue) {
+        if (blockAccess == null || pos == null) {
+            return -1;
+        }
+        try {
+            return blockAccess.getCombinedLight(pos, lightValue);
+        } catch (RuntimeException ignored) {
+            return -1;
+        }
+    }
+
+    @Unique
+    private static int ausm$safeStateLightValue(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (state == null || blockAccess == null || pos == null) {
+            return 0;
+        }
+        try {
+            return state.getLightValue(blockAccess, pos);
         } catch (RuntimeException ignored) {
             return 0;
         }
@@ -371,7 +417,9 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
 
             int start = ausm$emissiveFallbackStart;
             int normalDelta = start >= 0 ? buffer.getVertexCount() - start : 0;
-            BlockRenderLayer renderLayer = framedState
+            boolean textureBloomSource = PipelineContext.getInstance().stateUsesTextureBloomSource(fallbackSourceState);
+            boolean solidBloomMaskFallback = framedState && !textureBloomSource;
+            BlockRenderLayer renderLayer = framedState && !textureBloomSource
                     ? ausm$framedGeometryLayer(fallbackRenderState, fallbackSourceState)
                     : bloomLayer;
             if (normalDelta > 0) {
@@ -389,7 +437,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             }
 
             int fallbackStart = buffer.getVertexCount();
-            boolean rendered = ausm$renderEmissiveFallbackWithLayer(fallbackRenderState, fallbackSourceState, pos, buffer, renderLayer, framedState);
+            boolean rendered = ausm$renderEmissiveFallbackWithLayer(fallbackRenderState, fallbackSourceState, pos, buffer, renderLayer, solidBloomMaskFallback);
             int fallbackDelta = buffer.getVertexCount() - fallbackStart;
             String mode = normalDelta > 0 ? "stacked-bloom-layer" : "fallback-bloom-layer";
             ausm$logEmissiveFallback(mode, renderState, fallbackRenderState, pos,
@@ -403,11 +451,15 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
 
     @Unique
     private static BlockRenderLayer ausm$framedGeometryLayer(IBlockState framedState, IBlockState inheritedState) {
+        BlockRenderLayer inheritedLayer = ausm$bloomFallbackLayer(inheritedState);
+        if (inheritedLayer != null && !AusmBloomLayer.isBloomLayer(inheritedLayer)) {
+            return inheritedLayer;
+        }
         BlockRenderLayer framedLayer = ausm$naturalRenderLayer(framedState);
         if (framedLayer != null && !AusmBloomLayer.isBloomLayer(framedLayer)) {
             return framedLayer;
         }
-        return ausm$bloomFallbackLayer(inheritedState);
+        return BlockRenderLayer.SOLID;
     }
 
     @Unique
@@ -658,35 +710,8 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private void ausm$logFireCompileProbe(IBlockState originalState, IBlockState effectiveState, BlockPos pos,
                                           RegionRenderCacheBuilder regionBuffers, BufferBuilder cutoutBuffer,
                                           boolean originalFire, boolean effectiveFire) {
-        if (AUSM_FIRE_COMPILE_LOG_LIMIT <= 0) {
-            return;
-        }
-        int index = AUSM_FIRE_COMPILE_LOGS.incrementAndGet();
-        if (index > AUSM_FIRE_COMPILE_LOG_LIMIT) {
-            return;
-        }
-
-        MainMod.LOGGER.info(
-                "[AUSMFireProbe] Nothirium compile call={} pos={} original={} effective={} originalFire={} effectiveFire={} cache={} buffers={} cutoutBuffer={} cutoutDrawing={} cutoutStart={} effectiveCanCutout={} effectiveCanSolid={} effectiveCanTranslucent={} effectiveRenderType={} effectiveMaterialFire={} caller={}",
-                index,
-                pos,
-                ausm$stateName(originalState),
-                ausm$stateName(effectiveState),
-                originalFire,
-                effectiveFire,
-                chunkCache != null ? chunkCache.getClass().getName() : "null",
-                regionBuffers != null ? regionBuffers.getClass().getName() : "null",
-                cutoutBuffer != null ? Integer.toHexString(System.identityHashCode(cutoutBuffer)) : "null",
-                cutoutBuffer != null && ((IBufferBuilderExtension) cutoutBuffer).ausm$isDrawing(),
-                cutoutBuffer != null ? cutoutBuffer.getVertexCount() : -1,
-                ausm$canRenderStateInLayer(effectiveState, BlockRenderLayer.CUTOUT),
-                ausm$canRenderStateInLayer(effectiveState, BlockRenderLayer.SOLID),
-                ausm$canRenderStateInLayer(effectiveState, BlockRenderLayer.TRANSLUCENT),
-                effectiveState != null ? effectiveState.getRenderType() : null,
-                effectiveState != null && effectiveState.getMaterial() == Material.FIRE,
-                ausm$externalCaller()
-        );
-    }
+        // Probe disabled.
+}
 
     @Unique
     private static boolean ausm$isBloomOnlyModelBlock(IBlockState state) {
@@ -782,17 +807,14 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (PipelineContext.getInstance().isBlockcrafteryEditableState(state)) {
             return false;
         }
-        if (PipelineContext.getInstance().blockIntrinsicEmission(state) > 0) {
-            return true;
-        }
-        if (PipelineContext.getInstance().stateHasBloomLayerGeometry(state)) {
+        if (PipelineContext.getInstance().stateHasShaderlessBloomSource(state)) {
             return true;
         }
         if (name == null || name.getPath() == null) {
             return false;
         }
         String path = name.getPath().toLowerCase(java.util.Locale.ROOT);
-        return path.contains("luminous") || path.contains("emissive") || path.contains("bloom");
+        return "lumenized".equals(name.getNamespace()) || path.contains("lumenized");
     }
 
     @Unique

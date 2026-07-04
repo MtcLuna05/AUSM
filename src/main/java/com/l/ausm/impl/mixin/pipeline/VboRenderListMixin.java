@@ -99,13 +99,9 @@ public class VboRenderListMixin {
             )
     )
     private VertexBuffer ausm$captureChunkVertexFormat(RenderChunk renderChunk, int layer) {
-        BlockRenderLayer renderLayer = ausm$layerByOrdinal(layer);
-        ausm$currentChunkUsesPipelineVertexFormat = renderChunk instanceof IPipelineRenderChunk pipelineChunk
-                && pipelineChunk.ausm$usesPipelineVertexFormat(renderLayer);
-        PipelineContext.getInstance().applyChunkFade(renderChunk, renderLayer);
-        if (renderLayer == BlockRenderLayer.TRANSLUCENT) {
-            ausm$logTranslucentVboState("chunk-buffer", renderLayer, ausm$currentChunkUsesPipelineVertexFormat);
-        }
+        BlockRenderLayer blockLayer = ausm$layerByOrdinal(layer);
+        ausm$currentChunkUsesPipelineVertexFormat = renderChunk instanceof IPipelineRenderChunk pipelineRenderChunk
+                && pipelineRenderChunk.ausm$usesPipelineVertexFormat(blockLayer);
         return renderChunk.getVertexBufferByLayer(layer);
     }
 
@@ -273,35 +269,8 @@ public class VboRenderListMixin {
 
     @Unique
     private static void ausm$logTranslucentVboState(String stage, BlockRenderLayer layer, boolean pipelineFormat) {
-        if (layer != BlockRenderLayer.TRANSLUCENT || ausm$translucentVboLogs >= AUSM_TRANSLUCENT_VBO_LOG_LIMIT) {
-            return;
-        }
-        ausm$translucentVboLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMTranslucentDiag] source=vanilla-vbo call={} stage={} pipelineFormat={} program={} activeTex={} clientTex={} tex={} blend={} blendFunc={},{},{},{} alpha={} alphaFunc={} alphaRef={} depth={} depthMask={} depthFunc={} colorArray={} texArray={} lightTexArray={}",
-                ausm$translucentVboLogs,
-                stage,
-                pipelineFormat,
-                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
-                GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE),
-                GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE),
-                GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D),
-                GL11.glIsEnabled(GL11.GL_BLEND),
-                GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB),
-                GL11.glGetInteger(GL14.GL_BLEND_DST_RGB),
-                GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA),
-                GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA),
-                GL11.glIsEnabled(GL11.GL_ALPHA_TEST),
-                GL11.glGetInteger(GL11.GL_ALPHA_TEST_FUNC),
-                GL11.glGetFloat(GL11.GL_ALPHA_TEST_REF),
-                GL11.glIsEnabled(GL11.GL_DEPTH_TEST),
-                GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK),
-                GL11.glGetInteger(GL11.GL_DEPTH_FUNC),
-                GL11.glIsEnabled(GL11.GL_COLOR_ARRAY),
-                GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY),
-                ausm$lightmapTexCoordArrayEnabled()
-        );
-    }
+        // Probe disabled.
+}
 
     @Unique
     private static void ausm$forceTranslucentFixedFunctionState() {

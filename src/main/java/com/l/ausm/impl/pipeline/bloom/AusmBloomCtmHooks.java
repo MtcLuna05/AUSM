@@ -15,6 +15,7 @@ import java.util.Collections;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.Map;
 
 public final class AusmBloomCtmHooks {
     private static boolean loggedEnabled;
@@ -24,7 +25,11 @@ public final class AusmBloomCtmHooks {
     private static boolean loggedFailure;
     private static final ThreadLocal<Boolean> mergingBloomQuads = new ThreadLocal<>();
     private static Method canRenderInLayerMethod;
+    private static Method getModelMethod;
+    private static Method modelCanRenderInLayerMethod;
     private static Field layersField;
+    private static Field genQuadsField;
+    private static Field faceQuadsField;
     private static Field lumenizedCtmEnableField;
     private static boolean lumenizedCtmEnableResolved;
 
@@ -43,7 +48,7 @@ public final class AusmBloomCtmHooks {
         boolean enabled = ordinal >= 0 && ordinal < Integer.SIZE && ((mask >>> ordinal) & 1) == 1;
         if (enabled && !loggedEnabled) {
             loggedEnabled = true;
-            MainMod.LOGGER.info("[AUSMBloom] CTM model layer mask exposes BLOOM ordinal {}; enabling BLOOM chunk geometry.", ordinal);
+            
         }
         if (enabled) {
             return true;
@@ -52,7 +57,7 @@ public final class AusmBloomCtmHooks {
         if (model instanceof IBakedModel bakedModel && hasBloomLayerQuads(bakedModel, state)) {
             if (!loggedForcedLayer) {
                 loggedForcedLayer = true;
-                MainMod.LOGGER.info("[AUSMBloom] Enabling CTM BLOOM layer only for models with actual BLOOM quads.");
+                
             }
             return true;
         }
@@ -81,7 +86,7 @@ public final class AusmBloomCtmHooks {
             if (bloomQuads != null && !bloomQuads.isEmpty()) {
                 if (!loggedExposedBloomLayerQuads) {
                     loggedExposedBloomLayerQuads = true;
-                    MainMod.LOGGER.info("[AUSMBloom] Exposed CTM BLOOM quads through the standalone BLOOM layer.");
+                    
                 }
                 return bloomQuads;
             }
@@ -103,7 +108,7 @@ public final class AusmBloomCtmHooks {
             merged.addAll(bloomQuads);
             if (!loggedMergedQuads) {
                 loggedMergedQuads = true;
-                MainMod.LOGGER.info("[AUSMBloom] Merged CTM BLOOM quads into base layer {} for emissive visibility.", layer);
+                
             }
             return merged;
         } catch (RuntimeException | LinkageError error) {
@@ -197,6 +202,36 @@ public final class AusmBloomCtmHooks {
             }
             Object result = method.invoke(model, state, layer);
             return result instanceof Boolean && (Boolean) result;
+        } catch (NoSuchMethodException ignored) {
+            return invokeCtmModelCanRenderInLayer(model, state, layer);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
+            logFailure(error);
+            return invokeCtmModelCanRenderInLayer(model, state, layer);
+        }
+    }
+
+    private static boolean invokeCtmModelCanRenderInLayer(Object bakedModel, IBlockState state, BlockRenderLayer layer) {
+        try {
+            Method getter = getModelMethod;
+            if (getter == null || !getter.getDeclaringClass().isInstance(bakedModel)) {
+                getter = bakedModel.getClass().getMethod("getModel");
+                getter.setAccessible(true);
+                getModelMethod = getter;
+            }
+            Object ctmModel = getter.invoke(bakedModel);
+            if (ctmModel == null) {
+                return false;
+            }
+            Method method = modelCanRenderInLayerMethod;
+            if (method == null || !method.getDeclaringClass().isInstance(ctmModel)) {
+                method = ctmModel.getClass().getMethod("canRenderInLayer", IBlockState.class, BlockRenderLayer.class);
+                method.setAccessible(true);
+                modelCanRenderInLayerMethod = method;
+            }
+            Object result = method.invoke(ctmModel, state, layer);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (NoSuchMethodException ignored) {
+            return false;
         } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
             logFailure(error);
             return false;
@@ -212,10 +247,85 @@ public final class AusmBloomCtmHooks {
                 layersField = field;
             }
             return field.getByte(model) & 0xFF;
+        } catch (NoSuchFieldException ignored) {
+            return ctmLayerMaskFromQuadMaps(model);
         } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
             logFailure(error);
+            return ctmLayerMaskFromQuadMaps(model);
+        }
+    }
+
+    private static int ctmLayerMaskFromQuadMaps(Object model) {
+        int mask = 0;
+        try {
+            Field field = genQuadsField;
+            if (field == null || !field.getDeclaringClass().isInstance(model)) {
+                field = findField(model.getClass(), "genQuads");
+                field.setAccessible(true);
+                genQuadsField = field;
+            }
+            Object genQuads = field.get(model);
+            if (genQuads instanceof Map<?, ?> map) {
+                mask |= layerMask(map.keySet());
+            } else if (genQuads != null) {
+                try {
+                    Method keySet = genQuads.getClass().getMethod("keySet");
+                    Object keys = keySet.invoke(genQuads);
+                    if (keys instanceof Iterable<?> iterable) {
+                        mask |= layerMask(iterable);
+                    }
+                } catch (ReflectiveOperationException ignored) {
+                    // Some Guava multimaps only expose their keys through asMap().
+                    Method asMap = genQuads.getClass().getMethod("asMap");
+                    Object asMapValue = asMap.invoke(genQuads);
+                    if (asMapValue instanceof Map<?, ?> map) {
+                        mask |= layerMask(map.keySet());
+                    }
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
+            logFailure(error);
+        }
+
+        try {
+            Field field = faceQuadsField;
+            if (field == null || !field.getDeclaringClass().isInstance(model)) {
+                field = findField(model.getClass(), "faceQuads");
+                field.setAccessible(true);
+                faceQuadsField = field;
+            }
+            Object faceQuads = field.get(model);
+            if (faceQuads != null) {
+                try {
+                    Method rowKeySet = faceQuads.getClass().getMethod("rowKeySet");
+                    Object keys = rowKeySet.invoke(faceQuads);
+                    if (keys instanceof Iterable<?> iterable) {
+                        mask |= layerMask(iterable);
+                    }
+                } catch (ReflectiveOperationException ignored) {
+                    // Older/newer table implementations are allowed to skip this optimization.
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
+            logFailure(error);
+        }
+        return mask;
+    }
+
+    private static int layerMask(Iterable<?> layers) {
+        int mask = 0;
+        if (layers == null) {
             return 0;
         }
+        for (Object layer : layers) {
+            if (layer instanceof BlockRenderLayer blockRenderLayer) {
+                int ordinal = blockRenderLayer.ordinal();
+                if (ordinal >= 0 && ordinal < Integer.SIZE) {
+                    mask |= 1 << ordinal;
+                }
+            }
+        }
+        return mask;
     }
 
     private static Field findField(Class<?> type, String name) throws NoSuchFieldException {

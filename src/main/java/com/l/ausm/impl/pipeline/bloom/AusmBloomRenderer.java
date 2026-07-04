@@ -33,13 +33,15 @@ import java.util.function.IntSupplier;
 public final class AusmBloomRenderer {
     private static final int HALF_RESOLUTION_DIVISOR = 4;
     private static final int BLUR_ITERATIONS = 1;
-    private static final float BLOOM_STRENGTH = 2.25F;
+    private static final float BLOOM_STRENGTH = 1.45F;
     private static final float BLOOM_DIRECT_DEBUG_STRENGTH = 0.0F;
     private static final float FRAMEBUFFER_BLOOM_STRENGTH = 1.05F;
     private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
     private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = false;
     private static final int BLOOM_RENDER_LOG_LIMIT = 0;
     private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 0;
+    private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_FACTOR = -1.0F;
+    private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_UNITS = -4.0F;
 
     private final AusmBloomResourceIndex resourceIndex = new AusmBloomResourceIndex();
     private final IntBuffer viewportBuffer = BufferUtils.createIntBuffer(16);
@@ -93,16 +95,11 @@ public final class AusmBloomRenderer {
                 layerBloomPending = true;
                 if (bloomRenderLogs < BLOOM_RENDER_LOG_LIMIT) {
                     bloomRenderLogs++;
-                    MainMod.LOGGER.info("[AUSMBloom] BLOOM layer rendered count={} pass={} deferredComposite={} size={}x{}",
-                            rendered,
-                            pass,
-                            deferComposite,
-                            width,
-                            height);
+                    
                 }
                 if (!loggedLayerRenderer) {
                     loggedLayerRenderer = true;
-                    MainMod.LOGGER.info("[AUSMBloom] Rendering CTM/Lumenized BLOOM layer with AUSM-owned framebuffer size={}x{}", width, height);
+                    
                 }
                 if (!deferComposite && minecraftDepthSource != null) {
                     compositePendingLayerBloom(minecraftDepthSource, false);
@@ -114,11 +111,7 @@ public final class AusmBloomRenderer {
 
         if (rendered <= 0 && resourceIndex.hasBloomResources() && zeroBloomRenderLogs < BLOOM_ZERO_RENDER_LOG_LIMIT) {
             zeroBloomRenderLogs++;
-            MainMod.LOGGER.info("[AUSMBloom] BLOOM layer produced no geometry pass={} deferredComposite={} size={}x{}",
-                    pass,
-                    deferComposite,
-                    width,
-                    height);
+            
         }
         return rendered;
     }
@@ -146,26 +139,31 @@ public final class AusmBloomRenderer {
     }
 
     public boolean renderShaderlessEmissiveTerrainBloom(Framebuffer target, IntSupplier geometryRenderer) {
+        return renderEmissiveTerrainBloomCount(target, null, geometryRenderer, false) > 0;
+    }
+
+    public int renderEmissiveTerrainBloomCount(Framebuffer target, DeferredFramebuffer pipelineDepthSource,
+                                               IntSupplier geometryRenderer, boolean allowPipelineActive) {
         if (target == null
                 || geometryRenderer == null
                 || target.framebufferTexture <= 0
-                || PipelineContext.getInstance().isActive()) {
-            return false;
+                || (!allowPipelineActive && PipelineContext.getInstance().isActive())) {
+            return 0;
         }
         if (!ensureTargets(target.framebufferWidth, target.framebufferHeight)) {
-            return false;
+            return 0;
         }
 
         int program = emissiveExtractProgram();
         if (program == -1) {
-            return false;
+            return 0;
         }
 
         int rendered = 0;
         RenderState state = captureState();
         try {
             clearLayerTarget();
-            copyDepth(null, target);
+            copyDepth(pipelineDepthSource, target);
             bindLayerTargetForGeometry();
             prepareShaderlessEmissiveGeometryState(program);
             rendered = geometryRenderer.getAsInt();
@@ -176,7 +174,7 @@ public final class AusmBloomRenderer {
 
         if (rendered <= 0) {
             layerBloomPending = false;
-            return false;
+            return 0;
         }
 
         layerBloomPending = true;
@@ -184,7 +182,7 @@ public final class AusmBloomRenderer {
             loggedShaderlessEmissiveRenderer = true;
             MainMod.LOGGER.info("[AUSMBloom] Rendering shaderless emissive terrain bloom with AUSM vertex emission metadata.");
         }
-        return true;
+        return rendered;
     }
 
     public void setShaderlessForceEmission(float forceEmission) {
@@ -249,20 +247,11 @@ public final class AusmBloomRenderer {
                 composited = true;
                 if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
                     bloomCompositeLogs++;
-                    MainMod.LOGGER.info("[AUSMBloom] Composited BLOOM target={} source={} size={}x{} half={}x{}",
-                            target.framebufferObject,
-                            bloomLayerTarget.framebufferTexture,
-                            width,
-                            height,
-                            halfWidth,
-                            halfHeight);
+                    
                 }
             } else if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
                 bloomCompositeLogs++;
-                MainMod.LOGGER.info("[AUSMBloom] Skipped BLOOM composite because blur chain was unavailable size={}x{} source={}",
-                        width,
-                        height,
-                        bloomLayerTarget.framebufferTexture);
+                
             }
         } finally {
             layerBloomPending = false;
@@ -287,20 +276,11 @@ public final class AusmBloomRenderer {
                 compositeBlurredBloom(target, FRAMEBUFFER_BLOOM_STRENGTH);
                 if (framebufferBloomLogs < BLOOM_RENDER_LOG_LIMIT) {
                     framebufferBloomLogs++;
-                    MainMod.LOGGER.info("[AUSMBloom] Composited framebuffer threshold bloom target={} source={} size={}x{} threshold={} strength={}",
-                            target.framebufferObject,
-                            target.framebufferTexture,
-                            width,
-                            height,
-                            FRAMEBUFFER_BLOOM_THRESHOLD,
-                            FRAMEBUFFER_BLOOM_STRENGTH);
+                    
                 }
             } else if (framebufferBloomLogs < BLOOM_RENDER_LOG_LIMIT) {
                 framebufferBloomLogs++;
-                MainMod.LOGGER.info("[AUSMBloom] Skipped framebuffer threshold bloom because blur chain was unavailable size={}x{} source={}",
-                        width,
-                        height,
-                        target.framebufferTexture);
+                
             }
         } finally {
             state.restore();
@@ -663,7 +643,7 @@ public final class AusmBloomRenderer {
         GlStateManager.depthMask(false);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-        GL11.glPolygonOffset(-4.0F, -16.0F);
+        GL11.glPolygonOffset(SHADERLESS_EMISSIVE_DEPTH_BIAS_FACTOR, SHADERLESS_EMISSIVE_DEPTH_BIAS_UNITS);
         GlStateManager.enableAlpha();
         GlStateManager.alphaFunc(GL11.GL_GREATER, 0.003921569F);
         GlStateManager.disableCull();
@@ -984,8 +964,7 @@ public final class AusmBloomRenderer {
                 textureCoords = gl_MultiTexCoord0.st;
                 vertexColor = gl_Color;
                 float metadataEmission = clamp(at_midBlock.w / 15.0, 0.0, 1.0);
-                float lightmapEmission = smoothstep(220.0, 240.0, min(gl_MultiTexCoord1.s, gl_MultiTexCoord1.t));
-                vertexEmission = max(max(metadataEmission, lightmapEmission), forceEmission);
+                vertexEmission = max(metadataEmission, forceEmission);
             }
             """;
 
@@ -1003,8 +982,8 @@ public final class AusmBloomRenderer {
                 if (albedo.a <= 0.003921569) {
                     discard;
                 }
-                float emissionMask = smoothstep(0.02, 0.35, vertexEmission);
-                vec3 bloom = albedo.rgb * (1.25 + vertexEmission * 5.25) * emissionMask;
+                float emissionMask = smoothstep(0.04, 0.45, vertexEmission);
+                vec3 bloom = albedo.rgb * (0.90 + vertexEmission * 3.60) * emissionMask * 0.75;
                 gl_FragColor = vec4(bloom, albedo.a * emissionMask);
             }
             """;

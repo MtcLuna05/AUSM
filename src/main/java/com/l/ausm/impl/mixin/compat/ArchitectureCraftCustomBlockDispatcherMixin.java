@@ -38,9 +38,7 @@ public abstract class ArchitectureCraftCustomBlockDispatcherMixin {
     @Inject(method = "func_175018_a", at = @At("RETURN"), remap = false)
     private void ausm$logRenderBlockReturn(IBlockState state, BlockPos pos, IBlockAccess blockAccess,
                                            BufferBuilder buffer, CallbackInfoReturnable<Boolean> cir) {
-        ausm$logArchitectureDispatcher("architecture-dispatcher-return", state, blockAccess, pos, buffer, null, null,
-                cir.getReturnValue());
-        BlockRenderContext.clear();
+        // Diagnostic disabled.
     }
 
     @Inject(
@@ -102,46 +100,7 @@ public abstract class ArchitectureCraftCustomBlockDispatcherMixin {
                                                        BlockPos pos, BufferBuilder buffer,
                                                        TextureAtlasSprite overrideTexture, Object customRenderer,
                                                        Boolean result) {
-        PipelineContext pipeline = PipelineContext.getInstance();
-        BlockRenderLayer layer = MinecraftForgeClient.getRenderLayer();
-        int vertexCount = buffer != null ? buffer.getVertexCount() : -1;
-        if (pipeline.framedBlockDiagnosticsEnabled()) {
-            pipeline.logFramedBlockDiagnostic(source, state, blockAccess, pos, layer, vertexCount, vertexCount, result,
-                    "buffer=" + (buffer != null ? Integer.toHexString(System.identityHashCode(buffer)) : "null")
-                            + ", overrideTexture=" + (overrideTexture != null ? overrideTexture.getIconName() : "null")
-                            + ", renderer=" + (customRenderer != null ? customRenderer.getClass().getName() : "null"));
-        }
-
-        if (AUSM_ARCHITECTURE_DISPATCHER_LOG_LIMIT <= 0) {
-            return;
-        }
-        int count = AUSM_ARCHITECTURE_DISPATCHER_LOGS.incrementAndGet();
-        if (count > AUSM_ARCHITECTURE_DISPATCHER_LOG_LIMIT) {
-            return;
-        }
-
-        IBlockState effectiveState = pipeline.effectiveBlockRenderState(state, blockAccess, pos);
-        IBlockState inheritedState = pipeline.inheritedBloomRenderState(state, blockAccess, pos);
-        MainMod.LOGGER.info(
-                "[AUSMArchitectureDiag] call={} source={} pos={} layer={} result={} state={} effective={} inherited={} emission={} inheritedEmission={} blockId={} inheritedBlockId={} buffer={} vertices={} access={} renderer={} overrideTexture={}",
-                count,
-                source,
-                pos,
-                layer,
-                result,
-                ausm$stateName(state),
-                ausm$stateName(effectiveState),
-                ausm$stateName(inheritedState),
-                pipeline.blockRenderEmission(state, blockAccess, pos),
-                pipeline.blockRenderEmissionWithFramedInheritance(state, blockAccess, pos),
-                pipeline.blockEntityId(state, blockAccess, pos),
-                pipeline.blockEntityId(inheritedState, blockAccess, pos),
-                buffer != null ? Integer.toHexString(System.identityHashCode(buffer)) : "null",
-                vertexCount,
-                blockAccess != null ? blockAccess.getClass().getName() : "null",
-                customRenderer != null ? customRenderer.getClass().getName() : "null",
-                overrideTexture != null ? overrideTexture.getIconName() : "null"
-        );
+        // Diagnostic disabled.
     }
 
     @Unique

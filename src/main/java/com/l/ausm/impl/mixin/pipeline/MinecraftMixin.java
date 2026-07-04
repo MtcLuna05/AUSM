@@ -129,6 +129,7 @@ public class MinecraftMixin {
         boolean dimensionSwitch = ausm$isDimensionSwitch(dimensionId);
         if (dimensionSwitch) {
             context.handleWorldDimensionSwitch(ausm$previousWorldDimensionId, dimensionId);
+            MainMod.getShaderPackManager().compilePipelineForDimensionSwitch(dimensionId);
         } else {
             context.scheduleWorldTerrainRefresh();
             context.scheduleBloomTerrainRefresh("world load");

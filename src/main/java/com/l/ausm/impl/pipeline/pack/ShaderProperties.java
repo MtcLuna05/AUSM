@@ -53,7 +53,6 @@ public record ShaderProperties(
         Map<ProgramArrayKey, String> programArrayEnabledExpressions,
         Map<String, ShaderIndirectPointer> indirectPointers
 ) {
-
     public static ShaderProperties load(ShaderPack pack) {
         return load(pack, Map.of());
     }

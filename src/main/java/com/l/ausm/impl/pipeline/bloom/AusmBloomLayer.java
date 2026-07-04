@@ -86,6 +86,14 @@ public final class AusmBloomLayer {
         return isAvailable();
     }
 
+    public static boolean shouldUseShaderlessNativeHook() {
+        if (Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
+            sanitizeNothiriumLayerArrays();
+            return false;
+        }
+        return shouldUseNativeHook();
+    }
+
     public static void ensureRegionBuffer(BufferBuilder[] worldRenderers) {
         if (!shouldUseNativeHook() || worldRenderers == null) {
             return;

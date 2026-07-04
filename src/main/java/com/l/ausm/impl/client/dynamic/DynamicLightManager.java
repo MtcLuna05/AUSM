@@ -4,6 +4,7 @@ import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.Reference;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.ProjectRedHaloRenderer;
+import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
@@ -23,11 +24,15 @@ import net.minecraftforge.fml.relauncher.Side;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Mod.EventBusSubscriber(value = Side.CLIENT, modid = Reference.MODID)
 public final class DynamicLightManager {
     private static final int UPDATE_INTERVAL_TICKS = 2;
     private static final int REBUILD_PADDING = 2;
+    private static final int MAX_SHADERLESS_LIGHT_QUERY_PROBE_LOGS = 96;
 
     private static volatile boolean active;
     private static volatile List<DynamicLightSource> activeSources = List.of();
@@ -35,6 +40,8 @@ public final class DynamicLightManager {
     private static World previousWorld;
     private static int ticks;
     private static int lastLoggedSourceCount = -1;
+    private static final Set<String> shaderlessLightQueryProbeKeys = ConcurrentHashMap.newKeySet();
+    private static final AtomicInteger shaderlessLightQueryProbeCount = new AtomicInteger();
 
     private DynamicLightManager() {
     }
@@ -53,6 +60,26 @@ public final class DynamicLightManager {
 
     public static boolean active() {
         return active;
+    }
+
+    public static int activeSourceCount() {
+        return activeSources.size();
+    }
+
+    public static String firstSourceSummary() {
+        if (activeSources.isEmpty()) {
+            return "none";
+        }
+        DynamicLightSource first = activeSources.get(0);
+        return first.key()
+                + "@"
+                + (int) Math.floor(first.x())
+                + ","
+                + (int) Math.floor(first.y())
+                + ","
+                + (int) Math.floor(first.z())
+                + "/"
+                + first.light();
     }
 
     public static int lightAt(BlockPos pos) {
@@ -76,6 +103,13 @@ public final class DynamicLightManager {
         return brightest;
     }
 
+    public static boolean shouldApplyToBlockRenderLightQuery(BlockPos pos) {
+        return active
+                && pos != null
+                && BlockRenderContext.blockAccess() != null
+                && BlockRenderContext.blockPos() != null;
+    }
+
     public static int applyPackedLight(BlockPos pos, int packedLight) {
         if (!active || pos == null) {
             return packedLight;
@@ -88,6 +122,10 @@ public final class DynamicLightManager {
         }
         return (packedLight & 0xFFFF0000) | (dynamicLight << 4);
     }
+
+    public static void logShaderlessLightQueryProbe(String source, BlockPos pos, int before, int after, boolean applied) {
+        // Probe disabled.
+}
 
     public static void refreshAfterConfigChange() {
         update(Minecraft.getMinecraft(), true);

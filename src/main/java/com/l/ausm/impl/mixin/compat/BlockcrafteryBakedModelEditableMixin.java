@@ -67,7 +67,7 @@ public abstract class BlockcrafteryBakedModelEditableMixin {
         IBlockState rawInheritedSource = pipeline.firstInheritedRenderState(state, blockAccess, pos);
         IBlockState inheritedBloomSource = ausm$inheritedBloomSource(state);
         boolean rawBloomProbeCandidate = ausm$isBloomProbeCandidate(rawInheritedSource)
-                || pipeline.blockIntrinsicEmission(state) > 0;
+                || pipeline.stateHasShaderlessBloomSource(state);
         if (ausm$shouldCreateBloomQuads(state, quads, inheritedBloomSource)) {
             List<BakedQuad> bloomQuads = ausm$createBloomQuadsFromSolidLayer(state, side, rand);
             ausm$logBloomProbe(
@@ -154,7 +154,7 @@ public abstract class BlockcrafteryBakedModelEditableMixin {
         PipelineContext pipeline = PipelineContext.getInstance();
         return state != null
                 && !pipeline.isBlockcrafteryEditableState(state)
-                && (pipeline.blockIntrinsicEmission(state) > 0 || pipeline.stateHasBloomLayerGeometry(state));
+                && pipeline.stateHasShaderlessBloomSource(state);
     }
 
     @Unique
@@ -209,9 +209,10 @@ public abstract class BlockcrafteryBakedModelEditableMixin {
 
             int fallbackColor = BloomMaskColor.colorForState(inheritedState);
             TextureAtlasSprite maskSprite = ausm$bloomMaskSprite();
+            boolean textureBloomSource = PipelineContext.getInstance().stateUsesTextureBloomSource(inheritedState);
             List<BakedQuad> bloomQuads = new ArrayList<>(solidQuads.size() * AUSM_BLOOM_MASK_PASSES);
             for (BakedQuad quad : solidQuads) {
-                BakedQuad bloomQuad = ausm$copyAsBloomMaskQuad(quad, fallbackColor, maskSprite);
+                BakedQuad bloomQuad = ausm$copyAsBloomMaskQuad(quad, fallbackColor, maskSprite, textureBloomSource);
                 if (bloomQuad != null) {
                     for (int pass = 0; pass < AUSM_BLOOM_MASK_PASSES; pass++) {
                         bloomQuads.add(bloomQuad);
@@ -244,14 +245,15 @@ public abstract class BlockcrafteryBakedModelEditableMixin {
                 || pipeline.isBlockcrafteryEditableState(inheritedState)) {
             return null;
         }
-        if (pipeline.blockIntrinsicEmission(inheritedState) > 0) {
+        if (pipeline.stateHasShaderlessBloomSource(inheritedState)) {
             return inheritedState;
         }
-        return pipeline.stateHasBloomLayerGeometry(inheritedState) ? inheritedState : null;
+        return null;
     }
 
     @Unique
-    private static BakedQuad ausm$copyAsBloomMaskQuad(BakedQuad source, int fallbackColor, TextureAtlasSprite maskSprite) {
+    private static BakedQuad ausm$copyAsBloomMaskQuad(BakedQuad source, int fallbackColor, TextureAtlasSprite maskSprite,
+                                                     boolean preserveSourceTextureMask) {
         if (source == null || source.getVertexData() == null) {
             return null;
         }
@@ -265,8 +267,12 @@ public abstract class BlockcrafteryBakedModelEditableMixin {
         int colorOffset = format != null && format.hasColor() ? format.getColorOffset() / Integer.BYTES : 3;
         int uvOffset = format != null && format.hasUvOffset(0) ? format.getUvOffsetById(0) / Integer.BYTES : 4;
         int lightOffset = format != null && format.hasUvOffset(1) ? format.getUvOffsetById(1) / Integer.BYTES : 6;
-        float maskU = maskSprite != null ? (maskSprite.getMinU() + maskSprite.getMaxU()) * 0.5f : 0.5f;
-        float maskV = maskSprite != null ? (maskSprite.getMinV() + maskSprite.getMaxV()) * 0.5f : 0.5f;
+        TextureAtlasSprite outputSprite = preserveSourceTextureMask ? source.getSprite() : maskSprite;
+        if (outputSprite == null || outputSprite.getIconName() == null || outputSprite.getIconName().contains("missingno")) {
+            return null;
+        }
+        float maskU = (outputSprite.getMinU() + outputSprite.getMaxU()) * 0.5f;
+        float maskV = (outputSprite.getMinV() + outputSprite.getMaxV()) * 0.5f;
         int color = fallbackColor != -1 ? fallbackColor : ausm$sourceQuadMaskColor(source);
 
         for (int vertex = 0; vertex < data.length / stride; vertex++) {
@@ -278,15 +284,17 @@ public abstract class BlockcrafteryBakedModelEditableMixin {
                 data[base + colorOffset] = color;
             }
             if (uvOffset >= 0 && base + uvOffset + 1 < data.length) {
-                data[base + uvOffset] = Float.floatToRawIntBits(maskU);
-                data[base + uvOffset + 1] = Float.floatToRawIntBits(maskV);
+                if (!preserveSourceTextureMask) {
+                    data[base + uvOffset] = Float.floatToRawIntBits(maskU);
+                    data[base + uvOffset + 1] = Float.floatToRawIntBits(maskV);
+                }
             }
             if (lightOffset >= 0 && base + lightOffset < data.length) {
                 data[base + lightOffset] = (240 << 16) | 240;
             }
         }
 
-        return new BakedQuad(data, -1, source.getFace(), maskSprite != null ? maskSprite : source.getSprite(),
+        return new BakedQuad(data, -1, source.getFace(), outputSprite,
                 source.shouldApplyDiffuseLighting(), source.getFormat());
     }
 

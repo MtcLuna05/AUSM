@@ -458,7 +458,6 @@ public class GuiShaderOptions extends GuiScreen {
             if (resetProfile != null) {
                 applyProfileValues(properties(), resetProfile);
             } else {
-                properties = MainMod.getShaderPackManager().getShaderProperties(packName, pendingValues);
                 syncProfileWithCurrentValues(properties);
             }
             if (applyButton != null) {
@@ -794,7 +793,6 @@ public class GuiShaderOptions extends GuiScreen {
         } else {
             pendingValues.put(option.name(), value);
         }
-        properties = MainMod.getShaderPackManager().getShaderProperties(packName, pendingValues);
         syncProfileWithCurrentValues(properties);
     }
 
@@ -893,7 +891,7 @@ public class GuiShaderOptions extends GuiScreen {
         properties.options().all().keySet().forEach(pendingValues::remove);
         pendingValues.putAll(properties.profileOverrides(profile));
         pendingValues.put("<profile>", profile);
-        this.properties = MainMod.getShaderPackManager().getShaderProperties(packName, pendingValues);
+        syncProfileWithCurrentValues(properties);
     }
 
     private String resetProfile(ShaderProperties properties) {

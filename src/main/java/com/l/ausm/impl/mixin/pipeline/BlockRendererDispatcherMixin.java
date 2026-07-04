@@ -45,7 +45,13 @@ public class BlockRendererDispatcherMixin {
     private static final int AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_LIMIT = 8192;
 
     @Unique
+    private static final int AUSM_SHADERLESS_DISPATCH_LIGHT_PROBE_LIMIT = 160;
+
+    @Unique
     private static final AtomicInteger AUSM_BLOCKCRAFTERY_FALLBACK_PROBES = new AtomicInteger();
+
+    @Unique
+    private static final AtomicInteger AUSM_SHADERLESS_DISPATCH_LIGHT_PROBES = new AtomicInteger();
 
     @Inject(method = "renderBlock", at = @At("HEAD"), cancellable = true)
     private void ausm$beforeRenderBlock(IBlockState state, BlockPos pos, IBlockAccess blockAccess, BufferBuilder bufferBuilder, CallbackInfoReturnable<Boolean> cir) {
@@ -60,10 +66,12 @@ public class BlockRendererDispatcherMixin {
             contextState = state;
         }
         int blockEntityId = pipeline.blockEntityId(state, blockAccess, pos);
-        int blockEmission = BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null
-                || pipeline.shouldInheritFramedEmissionInBasePass(state)
-                ? pipeline.blockRenderEmissionWithFramedInheritance(state, blockAccess, pos)
-                : pipeline.blockRenderEmission(state, blockAccess, pos);
+        int blockEmission = pipeline.shouldUseShaderlessBloomEmission()
+                ? pipeline.blockShaderlessBloomEmission(state, blockAccess, pos)
+                : (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null
+                || pipeline.shouldInheritFramedEmissionInBasePass(state))
+                        ? pipeline.blockRenderEmissionWithFramedInheritance(state, blockAccess, pos)
+                        : pipeline.blockRenderEmission(state, blockAccess, pos);
         if (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null) {
             blockEmission = Math.max(blockEmission, pipeline.framedBloomFallbackEmission(state, blockAccess, pos));
         }
@@ -74,19 +82,18 @@ public class BlockRendererDispatcherMixin {
         BlockRenderContext.setLocalBlockPos(pos.getX(), pos.getY(), pos.getZ());
         BlockRenderContext.setWorldBlockContext(blockAccess, pos);
         BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
-        BlockRenderContext.setPackedLightmap(ausm$packedLightmap(contextState, blockAccess, pos));
+        int packedLightmap = ausm$packedLightmap(contextState, blockAccess, pos);
+        BlockRenderContext.setPackedLightmap(packedLightmap);
+        ausm$logShaderlessDispatchLightProbe(pipeline, state, contextState, blockAccess, pos, packedLightmap);
         BlockRenderContext.setBlockEmission(blockEmission);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, blockAccess, pos));
+        BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, blockAccess, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, blockAccess, pos));
         BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState, blockAccess, pos));
         if (pipeline.isBlockcrafteryEditableState(state)
                 && AusmBloomLayer.isBloomLayer(MinecraftForgeClient.getRenderLayer())) {
-            IBlockState inheritedBloomState = pipeline.inheritedBloomRenderState(state, blockAccess, pos);
-            if (ausm$isEmissiveBloomFallbackSource(inheritedBloomState)) {
-                float[] uv = ausm$bloomMaskUv();
-                BlockRenderContext.setBloomMaskFallback(true, uv[0], uv[1], BloomMaskColor.colorForState(inheritedBloomState));
-            }
-        }
+        // Probe disabled.
+}
         if (pipeline.currentProblemProbesEnabled()) {
             pipeline.setBlockRenderDebugContext(state, blockAccess, pos);
         }
@@ -135,7 +142,44 @@ public class BlockRendererDispatcherMixin {
             return 0;
         }
         try {
-            return state.getPackedLightmapCoords(blockAccess, pos);
+            int packedLightmap = state.getPackedLightmapCoords(blockAccess, pos);
+            return PipelineContext.getInstance().repairShaderlessVoidWorldPackedLight(blockAccess, pos, packedLightmap);
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
+    }
+
+    @Unique
+    private static void ausm$logShaderlessDispatchLightProbe(
+            PipelineContext pipeline,
+            IBlockState originalState,
+            IBlockState contextState,
+            IBlockAccess blockAccess,
+            BlockPos pos,
+            int packedLightmap
+    ) {
+        // Probe disabled.
+}
+
+    @Unique
+    private static int ausm$safeCombinedLight(IBlockAccess blockAccess, BlockPos pos, int lightValue) {
+        if (blockAccess == null || pos == null) {
+            return -1;
+        }
+        try {
+            return blockAccess.getCombinedLight(pos, lightValue);
+        } catch (RuntimeException ignored) {
+            return -1;
+        }
+    }
+
+    @Unique
+    private static int ausm$safeStateLightValue(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (state == null || blockAccess == null || pos == null) {
+            return 0;
+        }
+        try {
+            return state.getLightValue(blockAccess, pos);
         } catch (RuntimeException ignored) {
             return 0;
         }
@@ -149,28 +193,8 @@ public class BlockRendererDispatcherMixin {
         ausm$logRenderProbe(state, pos, blockAccess, bufferBuilder, cir.getReturnValue());
         Integer framedStart = BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.get();
         if (framedStart != null && bufferBuilder != null) {
-            PipelineContext pipeline = PipelineContext.getInstance();
-            if (pipeline.framedBlockDiagnosticsEnabled()) {
-                pipeline.logFramedBlockDiagnostic(
-                    "dispatcher",
-                    state,
-                    blockAccess,
-                    pos,
-                    MinecraftForgeClient.getRenderLayer(),
-                    framedStart,
-                    bufferBuilder.getVertexCount(),
-                    cir.getReturnValue(),
-                    "fallbackRender=" + String.valueOf(BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get())
-                );
-            }
-            if (pipeline.currentProblemProbesEnabled()) {
-                pipeline.logCurrentProblemProbe("dispatcher-return", state, blockAccess, pos,
-                    "result=" + cir.getReturnValue()
-                            + ", delta=" + (bufferBuilder.getVertexCount() - framedStart)
-                            + ", fallbackRender=" + String.valueOf(BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get())
-                            + ", buffer=" + ausm$bufferDetails(bufferBuilder));
-            }
-        }
+        // Probe disabled.
+}
         BlockRendererDispatcherHooks.PROBE_START_VERTEX.remove();
         BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.remove();
         BlockRenderContext.clear();
@@ -214,13 +238,8 @@ public class BlockRendererDispatcherMixin {
                 ? inheritedState
                 : forcedFramedBloom ? state : framedFallbackCandidate ? null : state;
         if (!forcedFramedBloom && !ausm$isEmissiveBloomFallbackSource(fallbackSourceState)) {
-            ausm$logBlockcrafteryBloomFallbackProbe("skip-not-emissive", state, inheritedState, fallbackSourceState,
-                    pos, blockAccess, MinecraftForgeClient.getRenderLayer(), AusmBloomLayer.layer(), start,
-                    bufferBuilder.getVertexCount() - start, framedEmission, "forced=" + forcedFramedBloom);
-            ausm$logEmissiveDispatcherFallbackSkip("not-emissive-target", state, inheritedState, fallbackSourceState, pos,
-                    MinecraftForgeClient.getRenderLayer(), AusmBloomLayer.layer(), start, bufferBuilder, framedFallbackCandidate);
-            return false;
-        }
+        // Probe disabled.
+}
         IBlockState fallbackState = pipeline.inheritedBloomGeometryRenderState(state, fallbackSourceState);
 
         BlockRenderLayer layer = MinecraftForgeClient.getRenderLayer();
@@ -262,12 +281,16 @@ public class BlockRendererDispatcherMixin {
         }
 
         BlockRenderLayer previousLayer = layer;
-        BlockRenderLayer fallbackRenderLayer = framedFallback ? ausm$framedGeometryLayer(fallbackState, fallbackSourceState) : bloomLayer;
+        boolean textureBloomSource = pipeline.stateUsesTextureBloomSource(fallbackSourceState);
+        boolean solidBloomMaskFallback = framedFallback && !textureBloomSource;
+        BlockRenderLayer fallbackRenderLayer = framedFallback && !textureBloomSource
+                ? ausm$framedGeometryLayer(fallbackState, fallbackSourceState)
+                : bloomLayer;
         int fallbackStart = bufferBuilder.getVertexCount();
         boolean rendered = false;
         try {
             BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.set(Boolean.TRUE);
-            if (framedFallback) {
+            if (solidBloomMaskFallback) {
                 float[] uv = ausm$bloomMaskUv();
                 BlockRenderContext.setBloomMaskFallback(true, uv[0], uv[1], BloomMaskColor.colorForState(fallbackSourceState));
             }
@@ -294,11 +317,15 @@ public class BlockRendererDispatcherMixin {
 
     @Unique
     private static BlockRenderLayer ausm$framedGeometryLayer(IBlockState framedState, IBlockState inheritedState) {
+        BlockRenderLayer inheritedLayer = ausm$bloomFallbackLayer(inheritedState);
+        if (inheritedLayer != null && !AusmBloomLayer.isBloomLayer(inheritedLayer)) {
+            return inheritedLayer;
+        }
         BlockRenderLayer framedLayer = ausm$naturalRenderLayer(framedState);
         if (framedLayer != null && !AusmBloomLayer.isBloomLayer(framedLayer)) {
             return framedLayer;
         }
-        return ausm$bloomFallbackLayer(inheritedState);
+        return BlockRenderLayer.SOLID;
     }
 
     @Unique
@@ -455,34 +482,8 @@ public class BlockRendererDispatcherMixin {
                                                                BlockRenderLayer bloomLayer,
                                                                Integer start, int delta,
                                                                int framedEmission, String detail) {
-        PipelineContext pipeline = PipelineContext.getInstance();
-        if (!pipeline.isBlockcrafteryEditableState(state) || framedEmission <= 0) {
-            return;
-        }
-        int count = AUSM_BLOCKCRAFTERY_FALLBACK_PROBES.incrementAndGet();
-        if (count > AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_LIMIT
-                || (count > AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_INITIAL
-                && count % AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_INTERVAL != 0)) {
-            return;
-        }
-
-        MainMod.LOGGER.info(
-                "[AUSMBlockcrafteryBloomFallbackProbe] call={} action={} pos={} layer={} bloomLayer={} start={} delta={} framedEmission={} state={} inherited={} source={} access={} detail={}",
-                count,
-                action,
-                pos,
-                layer,
-                bloomLayer,
-                start,
-                delta,
-                framedEmission,
-                pipeline.diagnosticStateName(state),
-                pipeline.diagnosticStateName(inheritedState),
-                pipeline.diagnosticStateName(fallbackSourceState),
-                blockAccess != null ? blockAccess.getClass().getName() : "null",
-                detail
-        );
-    }
+        // Probe disabled.
+}
 
     @Unique
     private static String ausm$bufferDetails(BufferBuilder bufferBuilder) {
@@ -543,14 +544,11 @@ public class BlockRendererDispatcherMixin {
         if (PipelineContext.getInstance().isBlockcrafteryEditableState(state)) {
             return false;
         }
-        if (PipelineContext.getInstance().blockIntrinsicEmission(state) > 0) {
-            return true;
-        }
-        if (PipelineContext.getInstance().stateHasBloomLayerGeometry(state)) {
+        if (PipelineContext.getInstance().stateHasShaderlessBloomSource(state)) {
             return true;
         }
         String path = name.getPath().toLowerCase(java.util.Locale.ROOT);
-        return path.contains("luminous") || path.contains("emissive") || path.contains("bloom");
+        return "lumenized".equals(name.getNamespace()) || path.contains("lumenized");
     }
 
     @Unique
@@ -579,122 +577,8 @@ public class BlockRendererDispatcherMixin {
 
     @Unique
     private static void ausm$logRenderProbe(IBlockState state, BlockPos pos, IBlockAccess blockAccess, BufferBuilder bufferBuilder, Boolean result) {
-        Integer start = BlockRendererDispatcherHooks.PROBE_START_VERTEX.get();
-        if (start == null || bufferBuilder == null || !ausm$isRenderProbeTarget(state)) {
-            return;
-        }
-
-        ResourceLocation name = ausm$registryName(state);
-        BlockRenderLayer layer = MinecraftForgeClient.getRenderLayer();
-        String key = ausm$dimensionId(blockAccess) + "|" + String.valueOf(name) + "|" + String.valueOf(layer)
-                + "|" + ausm$accessName(blockAccess);
-        if (!BlockRendererDispatcherHooks.PROBE_LOGGED.add(key)) {
-            return;
-        }
-        int logIndex = BlockRendererDispatcherHooks.PROBE_LOG_COUNT.incrementAndGet();
-        if (logIndex > BlockRendererDispatcherHooks.RENDER_PROBE_LOG_LIMIT) {
-            return;
-        }
-
-        int end = bufferBuilder.getVertexCount();
-        int delta = end - start;
-        VertexFormat format = bufferBuilder.getVertexFormat();
-        int stride = format != null ? format.getSize() : -1;
-        int color = 0;
-        int alpha = -1;
-        int lightU = -1;
-        int lightV = -1;
-        float x = Float.NaN;
-        float y = Float.NaN;
-        float z = Float.NaN;
-        int blockEntity = 0;
-        int renderType = 0;
-        int midBlock = 0;
-        float u = Float.NaN;
-        float v = Float.NaN;
-
-        if (delta > 0 && format != null && stride > 0) {
-            ByteBuffer bytes = bufferBuilder.getByteBuffer();
-            int base = start * stride;
-            if (base >= 0 && base + stride <= bytes.capacity()) {
-                x = bytes.getFloat(base);
-                y = bytes.getFloat(base + 4);
-                z = bytes.getFloat(base + 8);
-                if (format.hasColor()) {
-                    int offset = base + format.getColorOffset();
-                    if (offset >= 0 && offset + 4 <= bytes.capacity()) {
-                        color = bytes.getInt(offset);
-                        alpha = (color >>> 24) & 0xFF;
-                    }
-                }
-                if (format.hasUvOffset(0)) {
-                    int offset = base + format.getUvOffsetById(0);
-                    if (offset >= 0 && offset + 8 <= bytes.capacity()) {
-                        u = bytes.getFloat(offset);
-                        v = bytes.getFloat(offset + 4);
-                    }
-                }
-                if (format.hasUvOffset(1)) {
-                    int offset = base + format.getUvOffsetById(1);
-                    if (offset >= 0 && offset + 4 <= bytes.capacity()) {
-                        lightU = bytes.getShort(offset) & 0xFFFF;
-                        lightV = bytes.getShort(offset + 2) & 0xFFFF;
-                    }
-                }
-                if (ExtendedVertexFormats.isPipelineBlock(format)) {
-                    int entityOffset = base + ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET;
-                    int midBlockOffset = base + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET;
-                    if (entityOffset >= 0 && entityOffset + 8 <= bytes.capacity()) {
-                        blockEntity = bytes.getShort(entityOffset) & 0xFFFF;
-                        renderType = bytes.getShort(entityOffset + 2);
-                    }
-                    if (midBlockOffset >= 0 && midBlockOffset + 4 <= bytes.capacity()) {
-                        midBlock = bytes.getInt(midBlockOffset);
-                    }
-                }
-            }
-        }
-
-        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        MainMod.LOGGER.info(
-                "[AUSMBlockProbe] dispatcher call={} dim={} pos={} state={} class={} access={} layer={} naturalLayer={} canLayer={} canSolid={} canCutoutMipped={} canCutout={} canTranslucent={} canBloom={} opaque={} full={} result={} delta={} format={} pipelineFormat={} stride={} alpha={} color={} uv={}/{} light={}/{} entity={} renderType={} midBlock={} firstVertex={},{},{} materialFire={} caller={}",
-                logIndex,
-                ausm$dimensionId(blockAccess),
-                pos,
-                name,
-                state.getBlock() != null ? state.getBlock().getClass().getName() : "null",
-                ausm$accessName(blockAccess),
-                layer,
-                ausm$naturalRenderLayer(state),
-                ausm$canRenderInLayer(state, layer),
-                ausm$canRenderInLayer(state, BlockRenderLayer.SOLID),
-                ausm$canRenderInLayer(state, BlockRenderLayer.CUTOUT_MIPPED),
-                ausm$canRenderInLayer(state, BlockRenderLayer.CUTOUT),
-                ausm$canRenderInLayer(state, BlockRenderLayer.TRANSLUCENT),
-                bloomLayer != null && ausm$canRenderInLayer(state, bloomLayer),
-                state.isOpaqueCube(),
-                state.isFullCube(),
-                result,
-                delta,
-                format,
-                ExtendedVertexFormats.isPipelineBlock(format),
-                stride,
-                alpha,
-                "0x" + Integer.toHexString(color),
-                u,
-                v,
-                lightU,
-                lightV,
-                blockEntity,
-                renderType,
-                midBlock,
-                x,
-                y,
-                z,
-                state.getMaterial() == Material.FIRE,
-                ausm$externalCaller()
-        );
-    }
+        // Probe disabled.
+}
 
     @Unique
     private static ResourceLocation ausm$registryName(IBlockState state) {

@@ -42,15 +42,24 @@ public class GuiScreenMixin {
         PipelineContext context = PipelineContext.getInstance();
         boolean shaderlessWorldBackground = !context.isActive();
         if (shaderlessWorldBackground) {
+            if (context.isRenderingBetterPortalsRenderPass()) {
+                return false;
+            }
+            context.freshSkyProbe("gui-bg-before-refresh", "screen=" + getClass().getName());
             context.prepareShaderlessGuiScreenRendering();
+            float partialTicks = this.mc.getRenderPartialTicks();
+            ((EntityRendererAccessor) this.mc.entityRenderer).ausm$setupCameraTransform(partialTicks, 2);
+            this.mc.renderGlobal.renderSky(partialTicks, 2);
+            this.mc.entityRenderer.setupOverlayRendering();
+            context.freshSkyProbe("gui-bg-after-refresh", "screen=" + getClass().getName());
+            context.prepareShaderlessGuiScreenRendering();
+            context.freshSkyProbe("gui-bg-suppress-vanilla", "screen=" + getClass().getName());
+            return true;
         } else {
             context.prepareGuiFramebuffer();
         }
         context.prepareFlatGuiBackgroundRenderState();
         Gui.drawRect(0, 0, this.width, this.height, WORLD_GUI_BACKGROUND);
-        if (shaderlessWorldBackground) {
-            context.prepareShaderlessGuiScreenRendering();
-        }
         return true;
     }
 

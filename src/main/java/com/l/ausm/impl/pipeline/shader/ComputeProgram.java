@@ -40,7 +40,14 @@ public final class ComputeProgram {
         }
 
         try {
-            String processed = ShaderPreprocessor.processShaderSource(pack, source.path(), properties.options(), null, GL43.GL_COMPUTE_SHADER);
+            String processed = ShaderPreprocessor.processShaderSource(
+                    pack,
+                    source.path(),
+                    properties.options(),
+                    null,
+                    GL43.GL_COMPUTE_SHADER,
+                    source.name()
+            );
             if (processed == null || processed.isBlank()) {
                 return null;
             }

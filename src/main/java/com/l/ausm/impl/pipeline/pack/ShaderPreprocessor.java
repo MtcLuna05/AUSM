@@ -63,6 +63,17 @@ public class ShaderPreprocessor {
     }
 
     public static String processShaderSource(ShaderPack pack, String resourcePath, ShaderOptions options, RenderPass pass, int shaderType) throws IOException {
+        return processShaderSource(pack, resourcePath, options, pass, shaderType, null);
+    }
+
+    public static String processShaderSource(
+            ShaderPack pack,
+            String resourcePath,
+            ShaderOptions options,
+            RenderPass pass,
+            int shaderType,
+            String programName
+    ) throws IOException {
         List<String> rawLines = new ArrayList<>();
         Set<String> visitedFiles = new HashSet<>();
 
@@ -107,7 +118,7 @@ public class ShaderPreprocessor {
         }
         out.append(getOptiFineEnvironmentDefines(options, glslVersion)).append("\n");
         out.append(getRenderStageDefines()).append("\n");
-        out.append(getProgramDefines(pass)).append("\n");
+        out.append(getProgramDefines(pass, programName)).append("\n");
         out.append(getOptiFineMetadataDefines()).append("\n");
         out.append(finalSource);
 
@@ -132,17 +143,50 @@ public class ShaderPreprocessor {
     }
 
     private static String getProgramDefines(RenderPass pass) {
+        return getProgramDefines(pass, null);
+    }
+
+    private static String getProgramDefines(RenderPass pass, String programName) {
+        StringBuilder defines = new StringBuilder();
         if (pass == null) {
-            return "";
+            appendComputeProgramDefines(defines, programName);
+            return defines.toString();
         }
 
-        StringBuilder defines = new StringBuilder();
         appendProgramDefine(defines, pass);
-
         if (isTerrainAlias(pass)) {
             appendProgramDefine(defines, RenderPass.GBUFFERS_TERRAIN);
         }
+        appendComputeProgramDefines(defines, programName);
         return defines.toString();
+    }
+
+    private static void appendComputeProgramDefines(StringBuilder defines, String programName) {
+        if (programName == null || programName.isBlank()) {
+            return;
+        }
+
+        String normalized = programName.trim()
+                .toUpperCase(Locale.ROOT)
+                .replaceAll("[^A-Z0-9_]", "_");
+        if (normalized.isBlank()) {
+            return;
+        }
+        appendProgramDefine(defines, normalized);
+
+        for (String family : new String[]{"SHADOWCOMP", "COMPOSITE", "DEFERRED", "PREPARE", "BEGIN", "SETUP", "SHADOW", "FINAL"}) {
+            if (normalized.startsWith(family) && !normalized.equals(family)) {
+                appendProgramDefine(defines, family);
+                break;
+            }
+        }
+    }
+
+    private static void appendProgramDefine(StringBuilder defines, String name) {
+        String define = "#define " + name + '\n';
+        if (defines.indexOf(define) < 0) {
+            defines.append(define);
+        }
     }
 
     private static String getRenderStageDefines() {

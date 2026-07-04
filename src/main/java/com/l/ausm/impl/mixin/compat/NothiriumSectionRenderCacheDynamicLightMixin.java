@@ -11,9 +11,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public class NothiriumSectionRenderCacheDynamicLightMixin {
     @Inject(method = "func_175626_b", at = @At("RETURN"), cancellable = true, remap = false)
     private void ausm$applyShaderlessDynamicCombinedLight(BlockPos pos, int lightValue, CallbackInfoReturnable<Integer> cir) {
-        int adjusted = DynamicLightManager.applyPackedLight(pos, cir.getReturnValueI());
-        if (adjusted != cir.getReturnValueI()) {
+        if (!DynamicLightManager.shouldApplyToBlockRenderLightQuery(pos)) {
+            DynamicLightManager.logShaderlessLightQueryProbe("nothirium-combined-skip", pos, cir.getReturnValueI(), cir.getReturnValueI(), false);
+            return;
+        }
+
+        int before = cir.getReturnValueI();
+        int adjusted = DynamicLightManager.applyPackedLight(pos, before);
+        if (adjusted != before) {
             cir.setReturnValue(adjusted);
+            DynamicLightManager.logShaderlessLightQueryProbe("nothirium-combined-apply", pos, before, adjusted, true);
+        } else {
+            DynamicLightManager.logShaderlessLightQueryProbe("nothirium-combined-keep", pos, before, before, false);
         }
     }
 }

@@ -43,10 +43,6 @@ public abstract class ArchitectureCraftRenderTargetWorldMixin {
     private void ausm$logRenderTargetInit(IBlockAccess world, BlockPos blockPos, BufferBuilder buffer,
                                           TextureAtlasSprite overrideTexture, CallbackInfo ci) {
         ausm$setArchitectureTargetContext();
-        ausm$log("architecture-target-init",
-                "buffer=" + (buffer != null ? Integer.toHexString(System.identityHashCode(buffer)) : "null")
-                        + ", overrideTexture=" + (overrideTexture != null ? overrideTexture.getIconName() : "null"));
-        ausm$logTargetDirect("architecture-target-init", null);
     }
 
     @Inject(
@@ -128,35 +124,7 @@ public abstract class ArchitectureCraftRenderTargetWorldMixin {
     }
 
     private void ausm$logTargetDirect(String source, Boolean result) {
-        if (AUSM_ARCHITECTURE_TARGET_LOG_LIMIT <= 0) {
-            return;
-        }
-        if (++ausm$architectureTargetLogs > AUSM_ARCHITECTURE_TARGET_LOG_LIMIT) {
-            return;
-        }
-        PipelineContext pipeline = PipelineContext.getInstance();
-        IBlockState effectiveState = pipeline.effectiveBlockRenderState(blockState, world, blockPos);
-        IBlockState inheritedState = pipeline.inheritedBloomRenderState(blockState, world, blockPos);
-        MainMod.LOGGER.info(
-                "[AUSMArchitectureTargetDiag] call={} source={} pos={} layer={} result={} state={} effective={} inherited={} emission={} inheritedEmission={} blockId={} inheritedBlockId={} contextEmission={} contextAlpha={} vlm={}/{} access={}",
-                ausm$architectureTargetLogs,
-                source,
-                blockPos,
-                MinecraftForgeClient.getRenderLayer(),
-                result,
-                ausm$stateName(blockState),
-                ausm$stateName(effectiveState),
-                ausm$stateName(inheritedState),
-                pipeline.blockRenderEmission(blockState, world, blockPos),
-                pipeline.blockRenderEmissionWithFramedInheritance(blockState, world, blockPos),
-                pipeline.blockEntityId(blockState, world, blockPos),
-                pipeline.blockEntityId(inheritedState, world, blockPos),
-                BlockRenderContext.blockEmission(),
-                BlockRenderContext.blockAlpha(),
-                vlm1,
-                vlm2,
-                world != null ? world.getClass().getName() : "null"
-        );
+        // Diagnostic disabled.
     }
 
     private static String ausm$stateName(IBlockState state) {
@@ -168,20 +136,6 @@ public abstract class ArchitectureCraftRenderTargetWorldMixin {
     }
 
     private void ausm$log(String source, String extra) {
-        PipelineContext pipeline = PipelineContext.getInstance();
-        if (!pipeline.framedBlockDiagnosticsEnabled()) {
-            return;
-        }
-        pipeline.logFramedBlockDiagnostic(
-                source,
-                blockState,
-                world,
-                blockPos,
-                MinecraftForgeClient.getRenderLayer(),
-                -1,
-                -1,
-                null,
-                extra
-        );
+        // Diagnostic disabled.
     }
 }

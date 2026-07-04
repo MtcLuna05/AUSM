@@ -22,7 +22,7 @@ public class LumenizedDisableBloomMixin {
         PipelineContext context = PipelineContext.getInstance();
         if (!logged) {
             logged = true;
-            MainMod.LOGGER.info("[AUSMBloom] Replacing original Lumenized bloom pass while preserving wrapped terrain layers.");
+            
         }
 
         if (context.isActive()) {

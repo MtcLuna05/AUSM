@@ -24,6 +24,7 @@ public final class BlockRenderContext {
     private static final ThreadLocal<Integer> CURRENT_PACKED_LIGHTMAP = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_EMISSION = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Integer> CURRENT_BLOCK_ALPHA = ThreadLocal.withInitial(() -> -1);
+    private static final ThreadLocal<Integer> CURRENT_CUSTOM_LIQUID_TINT = ThreadLocal.withInitial(() -> -1);
     private static final ThreadLocal<Boolean> CURRENT_CRYSTAL_ONLY_EMISSION = ThreadLocal.withInitial(() -> false);
     private static final ThreadLocal<Integer> CURRENT_QUAD_EMISSION_OVERRIDE = new ThreadLocal<>();
     private static final ThreadLocal<Integer> CURRENT_QUAD_BLOCK_ENTITY_ID_OVERRIDE = new ThreadLocal<>();
@@ -153,6 +154,14 @@ public final class BlockRenderContext {
 
     public static int blockAlpha() {
         return CURRENT_BLOCK_ALPHA.get();
+    }
+
+    public static void setCustomLiquidTint(int color) {
+        CURRENT_CUSTOM_LIQUID_TINT.set(color);
+    }
+
+    public static int customLiquidTint() {
+        return CURRENT_CUSTOM_LIQUID_TINT.get();
     }
 
     public static int vanillaLightmapEmission() {
@@ -308,6 +317,7 @@ public final class BlockRenderContext {
         CURRENT_PACKED_LIGHTMAP.remove();
         CURRENT_BLOCK_EMISSION.remove();
         CURRENT_BLOCK_ALPHA.remove();
+        CURRENT_CUSTOM_LIQUID_TINT.remove();
         CURRENT_CRYSTAL_ONLY_EMISSION.remove();
         clearQuadOverrides();
         SEPARATE_AO_ELIGIBLE.remove();

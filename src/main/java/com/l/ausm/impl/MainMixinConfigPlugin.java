@@ -45,6 +45,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".NothiriumChunkRendererGL43Mixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/ChunkRendererGL43.class", true);
         }
+        if (mixinClassName.endsWith(".NothiriumFogUtilMixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/util/FogUtil.class", true);
+        }
         if (mixinClassName.endsWith(".NothiriumMinecraftChunkRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/MinecraftChunkRenderer.class", true);
         }
@@ -76,7 +79,10 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
             return optionalTargetPresent(mixinClassName, "mrtjp/projectred/illumination/ButtonItemRenderer$.class", false);
         }
         if (mixinClassName.endsWith(".AstralSorcerySkyboxMixin")) {
-            return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/sky/RenderAstralSkybox.class", false);
+            return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/sky/RenderAstralSkybox.class", true);
+        }
+        if (mixinClassName.endsWith(".AstralSorceryRenderSkyboxMixin")) {
+            return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/sky/RenderSkybox.class", true);
         }
         if (mixinClassName.endsWith(".AstralSorceryConstellationRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/util/RenderConstellation.class", false);

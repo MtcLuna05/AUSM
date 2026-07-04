@@ -41,7 +41,7 @@ public final class BloomMaskColor {
         return dyeMaskColor(color);
     }
 
-    private static int textureColorForState(IBlockState state) {
+    public static int textureColorForState(IBlockState state) {
         if (state == null) {
             return -1;
         }

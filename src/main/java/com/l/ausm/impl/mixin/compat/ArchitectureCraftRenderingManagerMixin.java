@@ -46,13 +46,8 @@ public abstract class ArchitectureCraftRenderingManagerMixin {
     )
     private void ausm$logArchitectureRenderer(IBlockAccess blockAccess, BlockPos pos, IBlockState state,
                                               CallbackInfoReturnable<Object> cir) {
-        if (!PipelineContext.getInstance().isFramedBlockDiagnosticTarget(state)) {
-            return;
-        }
-        ausm$setBlockContext(state, blockAccess, pos);
-        Object renderer = cir.getReturnValue();
-        ausm$logArchitectureManager("manager-return", state, blockAccess, pos, renderer);
-    }
+        // Diagnostic disabled.
+}
 
     @Unique
     private static void ausm$setBlockContext(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -87,33 +82,7 @@ public abstract class ArchitectureCraftRenderingManagerMixin {
     @Unique
     private static void ausm$logArchitectureManager(String source, IBlockState state, IBlockAccess blockAccess,
                                                    BlockPos pos, Object renderer) {
-        if (AUSM_ARCHITECTURE_MANAGER_LOG_LIMIT <= 0) {
-            return;
-        }
-        int count = AUSM_ARCHITECTURE_MANAGER_LOGS.incrementAndGet();
-        if (count > AUSM_ARCHITECTURE_MANAGER_LOG_LIMIT) {
-            return;
-        }
-
-        PipelineContext pipeline = PipelineContext.getInstance();
-        IBlockState effectiveState = pipeline.effectiveBlockRenderState(state, blockAccess, pos);
-        IBlockState inheritedState = pipeline.inheritedBloomRenderState(state, blockAccess, pos);
-        BlockRenderLayer layer = MinecraftForgeClient.getRenderLayer();
-        MainMod.LOGGER.info(
-                "[AUSMArchitectureManagerDiag] call={} source={} pos={} layer={} state={} effective={} inherited={} emission={} inheritedEmission={} contextEmission={} renderer={} access={}",
-                count,
-                source,
-                pos,
-                layer,
-                ausm$stateName(state),
-                ausm$stateName(effectiveState),
-                ausm$stateName(inheritedState),
-                pipeline.blockRenderEmission(state, blockAccess, pos),
-                pipeline.blockRenderEmissionWithFramedInheritance(state, blockAccess, pos),
-                BlockRenderContext.blockEmission(),
-                renderer != null ? renderer.getClass().getName() : "null",
-                blockAccess != null ? blockAccess.getClass().getName() : "null"
-        );
+        // Diagnostic disabled.
     }
 
     @Unique

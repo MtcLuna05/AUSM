@@ -25,11 +25,12 @@ public class FramebufferMixin {
         if (mc == null || mc.world == null) {
             return;
         }
-        if (!PipelineContext.getInstance().isActive()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.isActive()) {
             return;
         }
 
-        PipelineContext.getInstance().prepareFramebufferPresentation();
+        context.prepareFramebufferPresentation();
         GlStateManager.bindTexture(0);
     }
 }
