@@ -1,0 +1,13 @@
+key.categories.ausm=AUSM光影
+
+key.ausm.config=打开光影设置
+key.ausm.reload=重载光影
+key.ausm.toggle=切换光影
+key.ausm.force_light_recalculation=强制重新计算光照
+key.ausm.toggle_dynamic_lights=切换动态光源
+
+tooltip.ausm.reloadedShader=光影已重载
+tooltip.ausm.toggledShader=光影已切换
+gui.ausm.controls=控制
+tooltip.ausm.controls.esc=Esc：返回
+tooltip.ausm.controls.shift_esc=Shift + Esc：关闭界面
