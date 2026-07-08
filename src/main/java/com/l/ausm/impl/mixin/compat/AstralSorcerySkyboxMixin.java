@@ -17,64 +17,53 @@ public class AstralSorcerySkyboxMixin {
     private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
     private static boolean logged;
 
-    @Inject(
+    @Redirect(
             method = "renderSky",
             at = @At(
                     value = "INVOKE",
                     target = "Lnet/minecraft/client/renderer/GlStateManager;func_179148_o(I)V",
-                    ordinal = 0,
-                    shift = At.Shift.BEFORE
+                    ordinal = 0
             ),
+            require = 0,
             remap = false
     )
-    private void ausm$beginAstralUpperSky(float partialTicks, CallbackInfo ci) {
+    private void ausm$drawOrSuppressAstralUpperSky(int displayList, float partialTicks) {
         PipelineContext context = PipelineContext.getInstance();
         context.setAstralSolarEclipseFactor(ausm$solarEclipseFactor(partialTicks));
         context.beginPhase(WorldRenderingPhase.SKY);
+        try {
+            if (context.shouldSuppressAstralUpperSkyGeometry()) {
+                return;
+            }
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
+                    new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, displayList);
+        } finally {
+            context.endPass();
+        }
     }
 
-    @Inject(
+    @Redirect(
             method = "renderSky",
             at = @At(
                     value = "INVOKE",
                     target = "Lnet/minecraft/client/renderer/GlStateManager;func_179148_o(I)V",
-                    ordinal = 0,
-                    shift = At.Shift.AFTER
-            ),
-            remap = false
-    )
-    private void ausm$endAstralUpperSky(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
-    }
-
-    @Inject(
-            method = "renderSky",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179148_o(I)V",
-                    ordinal = 1,
-                    shift = At.Shift.BEFORE
+                    ordinal = 1
             ),
             require = 0,
             remap = false
     )
-    private void ausm$beginAstralLowerSky(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.SKY_GROUND);
-    }
-
-    @Inject(
-            method = "renderSky",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179148_o(I)V",
-                    ordinal = 1,
-                    shift = At.Shift.AFTER
-            ),
-            require = 0,
-            remap = false
-    )
-    private void ausm$endAstralLowerSky(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
+    private void ausm$drawOrSuppressAstralLowerSky(int displayList) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldSuppressAstralLowerSkyGeometry()) {
+            return;
+        }
+        context.beginPhase(WorldRenderingPhase.SKY_GROUND);
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
+                    new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, displayList);
+        } finally {
+            context.endPass();
+        }
     }
 
     @Inject(method = "renderSun", at = @At("HEAD"), cancellable = true, remap = false)
@@ -153,9 +142,29 @@ public class AstralSorcerySkyboxMixin {
     )
     private float ausm$voidWorldAstralStarBrightness(World world, float partialTicks) {
         if (ausm$isSimpleVoidWorld(world)) {
-            return 1.0f;
+            return ausm$voidWorldAstralStarBrightnessInput(world);
         }
-        return world.getStarBrightness(partialTicks);
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((world), new String[] {"func_72880_h", "getStarBrightness"},
+                new Class<?>[] {float.class}, 0.0F, (partialTicks));
+    }
+
+    @Redirect(
+            method = "renderStars(Lnet/minecraft/world/World;F)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179131_c(FFFF)V"
+            ),
+            require = 0,
+            remap = false
+    )
+    private void ausm$boostVoidWorldAstralStarColor(float red, float green, float blue, float alpha, World world, float partialTicks) {
+        if (ausm$isSimpleVoidWorld(world)) {
+            float visibility = ausm$voidWorldAstralNightVisibility(world);
+            float boosted = Math.min(1.0F, Math.max(red, 0.62F * visibility));
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(boosted, boosted, boosted, alpha);
+            return;
+        }
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(red, green, blue, alpha);
     }
 
     @Redirect(
@@ -180,19 +189,22 @@ public class AstralSorcerySkyboxMixin {
     )
     private static float ausm$voidWorldAstralConstellationBrightness(World world, float partialTicks) {
         if (ausm$isSimpleVoidWorld(world)) {
-            return 1.0f;
+            return ausm$voidWorldAstralConstellationBrightnessInput(world);
         }
-        return world.getStarBrightness(partialTicks);
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((world), new String[] {"func_72880_h", "getStarBrightness"},
+                new Class<?>[] {float.class}, 0.0F, (partialTicks));
     }
 
     @Inject(method = "renderSunsetToBackground", at = @At("HEAD"), remap = false)
     private void ausm$beginAstralSunset(float[] colors, float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.SUNSET);
+        PipelineContext context = PipelineContext.getInstance();
+        context.beginPhase(WorldRenderingPhase.SUNSET);
     }
 
     @Inject(method = "renderSunsetToBackground", at = @At("RETURN"), remap = false)
     private void ausm$endAstralSunset(float[] colors, float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
     }
 
     private static void ausm$logSuppression() {
@@ -204,15 +216,42 @@ public class AstralSorcerySkyboxMixin {
 
     private static boolean ausm$isSimpleVoidWorld(World world) {
         return world != null
-                && world.provider != null
-                && world.provider.getDimension() == SIMPLE_VOID_WORLD_DIMENSION_ID;
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) == SIMPLE_VOID_WORLD_DIMENSION_ID;
     }
 
     private static long ausm$starRenderTime(World world) {
         if (!ausm$isSimpleVoidWorld(world)) {
-            return world != null ? world.getWorldTime() : 0L;
+            Object time = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
+                    world,
+                    new String[] {"func_72820_D", "getWorldTime"},
+                    new Class<?>[0]
+            );
+            return time instanceof Number ? ((Number) time).longValue() : 0L;
         }
         return (long) ausm$astralDayLength() / 2L + 1L;
+    }
+
+    private static float ausm$voidWorldAstralNightVisibility(World world) {
+        return ausm$isSimpleVoidWorld(world) ? 1.0F : ausm$smoothstep(0.08F, 0.35F, ausm$voidWorldAstralNightFactor(world));
+    }
+
+    private static float ausm$voidWorldAstralStarBrightnessInput(World world) {
+        return 0.38F * ausm$voidWorldAstralNightVisibility(world);
+    }
+
+    private static float ausm$voidWorldAstralConstellationBrightnessInput(World world) {
+        return 0.5F * ausm$voidWorldAstralNightVisibility(world);
+    }
+
+    private static float ausm$voidWorldAstralNightFactor(World world) {
+        float timeAngle = (com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L) / 24000.0F;
+        return Math.max((float) Math.sin(timeAngle * -6.2831855F), 0.0F);
+    }
+
+    private static float ausm$smoothstep(float edge0, float edge1, float value) {
+        float t = Math.max(0.0F, Math.min(1.0F, (value - edge0) / (edge1 - edge0)));
+        return t * t * (3.0F - 2.0F * t);
     }
 
     private static int ausm$astralDayLength() {
@@ -226,14 +265,14 @@ public class AstralSorcerySkyboxMixin {
 
     private static float ausm$solarEclipseFactor(float partialTicks) {
         try {
-            Minecraft minecraft = Minecraft.getMinecraft();
-            if (minecraft == null || minecraft.world == null) {
+            Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+            if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) == null) {
                 return 0.0f;
             }
 
             Class<?> handlerClass = Class.forName("hellfirepvp.astralsorcery.common.constellation.distribution.ConstellationSkyHandler");
             Object handler = handlerClass.getMethod("getInstance").invoke(null);
-            Object worldHandler = handlerClass.getMethod("getWorldHandler", World.class).invoke(handler, minecraft.world);
+            Object worldHandler = handlerClass.getMethod("getWorldHandler", World.class).invoke(handler, com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft));
             if (worldHandler == null) {
                 return 0.0f;
             }
@@ -256,5 +295,12 @@ public class AstralSorcerySkyboxMixin {
         } catch (ReflectiveOperationException | LinkageError ignored) {
             return 0.0f;
         }
+    }
+
+    private static String ausm$colors(float[] colors) {
+        if (colors == null || colors.length < 4) {
+            return "null";
+        }
+        return colors[0] + "," + colors[1] + "," + colors[2] + "," + colors[3];
     }
 }

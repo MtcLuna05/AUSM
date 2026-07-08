@@ -1,5 +1,6 @@
 package com.l.ausm.impl.pipeline.render;
 
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
@@ -8,7 +9,6 @@ import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.Tessellator;
-import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import org.lwjgl.opengl.GL11;
 
 /**
@@ -18,28 +18,28 @@ import org.lwjgl.opengl.GL11;
 public class FullscreenQuad {
 
     public static void draw() {
-        OpenGlHelper.glBindBuffer(OpenGlHelper.GL_ARRAY_BUFFER, 0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER, "field_176089_P", "GL_ARRAY_BUFFER"), 0);
 
         PipelineContext context = PipelineContext.getInstance();
-        Tessellator tessellator = Tessellator.getInstance();
-        BufferBuilder buffer = tessellator.getBuffer();
+        Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
+        BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
         if (context.shouldDrawFullscreenAsTriangles()) {
-            buffer.begin(GL11.GL_TRIANGLES, DefaultVertexFormats.POSITION_TEX);
-            buffer.pos(0.0D, 0.0D, 0.0D).tex(0.0D, 0.0D).endVertex();
-            buffer.pos(1.0D, 0.0D, 0.0D).tex(1.0D, 0.0D).endVertex();
-            buffer.pos(1.0D, 1.0D, 0.0D).tex(1.0D, 1.0D).endVertex();
-            buffer.pos(0.0D, 0.0D, 0.0D).tex(0.0D, 0.0D).endVertex();
-            buffer.pos(1.0D, 1.0D, 0.0D).tex(1.0D, 1.0D).endVertex();
-            buffer.pos(0.0D, 1.0D, 0.0D).tex(0.0D, 1.0D).endVertex();
-            tessellator.draw();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_TRIANGLES, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181707_g", "POSITION_TEX"));
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, 1.0D, 0.0D, 0.0D, 1.0D, 0.0D);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, 1.0D, 1.0D, 0.0D, 1.0D, 1.0D);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, 1.0D, 1.0D, 0.0D, 1.0D, 1.0D);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, 0.0D, 1.0D, 0.0D, 0.0D, 1.0D);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
             return;
         }
 
-        buffer.begin(context.drawModeForActiveProgram(GL11.GL_QUADS), DefaultVertexFormats.POSITION_TEX);
-        buffer.pos(0.0D, 0.0D, 0.0D).tex(0.0D, 0.0D).endVertex();
-        buffer.pos(1.0D, 0.0D, 0.0D).tex(1.0D, 0.0D).endVertex();
-        buffer.pos(1.0D, 1.0D, 0.0D).tex(1.0D, 1.0D).endVertex();
-        buffer.pos(0.0D, 1.0D, 0.0D).tex(0.0D, 1.0D).endVertex();
-        tessellator.draw();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, context.drawModeForActiveProgram(GL11.GL_QUADS), com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181707_g", "POSITION_TEX"));
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, 1.0D, 0.0D, 0.0D, 1.0D, 0.0D);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, 1.0D, 1.0D, 0.0D, 1.0D, 1.0D);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, 0.0D, 1.0D, 0.0D, 0.0D, 1.0D);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
     }
 }

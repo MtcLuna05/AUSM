@@ -26,9 +26,10 @@ public final class ShaderBlockLayerOverrides {
     }
 
     public static BlockRenderLayer layerFor(IBlockState state) {
-        if (state == null || state.getBlock() == null) {
+        net.minecraft.block.Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+        if (block == null) {
             return null;
         }
-        return ACTIVE_OVERRIDES.get().get(state.getBlock());
+        return ACTIVE_OVERRIDES.get().get(block);
     }
 }

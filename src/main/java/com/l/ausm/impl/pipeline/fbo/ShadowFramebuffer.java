@@ -65,24 +65,24 @@ public final class ShadowFramebuffer {
     private void create() {
         int previousFramebuffer = GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
         int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-        fboId = OpenGlHelper.glGenFramebuffers();
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+        fboId = com.l.ausm.impl.util.MinecraftReflectionCompat.glGenFramebuffers();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
 
         depthTextureId = allocateDepthTexture(0);
         depthSnapshotTextureId = allocateDepthTexture(1);
         for (int i = 0; i < colorTextureIds.length; i++) {
             colorTextureIds[i] = allocateColorTexture(i);
         }
-        OpenGlHelper.glFramebufferTexture2D(
-                OpenGlHelper.GL_FRAMEBUFFER,
-                OpenGlHelper.GL_DEPTH_ATTACHMENT,
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
                 GL11.GL_TEXTURE_2D,
                 depthTextureId,
                 0
         );
         for (int i = 0; i < colorTextureIds.length; i++) {
-            OpenGlHelper.glFramebufferTexture2D(
-                    OpenGlHelper.GL_FRAMEBUFFER,
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(),
                     GL30.GL_COLOR_ATTACHMENT0 + i,
                     GL11.GL_TEXTURE_2D,
                     colorTextureIds[i],
@@ -93,20 +93,20 @@ public final class ShadowFramebuffer {
         setDrawBuffers(Attachment.COLOR);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
 
-        int status = OpenGlHelper.glCheckFramebufferStatus(OpenGlHelper.GL_FRAMEBUFFER);
-        if (status != OpenGlHelper.GL_FRAMEBUFFER_COMPLETE) {
+        int status = com.l.ausm.impl.util.MinecraftReflectionCompat.glCheckFramebufferStatus(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer());
+        if (status != com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL30.GL_FRAMEBUFFER_COMPLETE, "field_153202_i", "GL_FRAMEBUFFER_COMPLETE")) {
             MainMod.LOGGER.error("ShadowFramebuffer is not complete! Status: {}", status);
         }
 
         clearAll();
         copyDepthToSnapshot();
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, previousFramebuffer);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), previousFramebuffer);
     }
 
     private int allocateDepthTexture(int index) {
         int textureId = GL11.glGenTextures();
-        GlStateManager.bindTexture(textureId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(textureId);
         applyDepthTextureFilters(index);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
@@ -145,7 +145,7 @@ public final class ShadowFramebuffer {
 
     private int allocateColorTexture(int index) {
         int textureId = GL11.glGenTextures();
-        GlStateManager.bindTexture(textureId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(textureId);
         applyColorTextureFilters(index);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
@@ -213,9 +213,11 @@ public final class ShadowFramebuffer {
         SavedFramebufferState previous = saveFramebufferState();
         bindForRendering(clearColors);
         GL11.glColorMask(true, true, true, true);
-        GlStateManager.clearColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179082_a", "clearColor"},
+                new Class<?>[] {float.class, float.class, float.class, float.class},
+                (1.0F), (1.0F), (1.0F), (1.0F));;
         GL11.glDepthMask(true);
-        GlStateManager.clearDepth(1.0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateClearDepth(1.0);
         int clearMask = 0;
         if (hasAnyClearColor(clearColors)) {
             clearMask |= GL11.GL_COLOR_BUFFER_BIT;
@@ -230,21 +232,21 @@ public final class ShadowFramebuffer {
     }
 
     public void bindForRendering() {
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
         GL11.glViewport(0, 0, resolution, resolution);
         setDrawBuffers(0);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
     }
 
     private void bindForRendering(boolean[] writeColors) {
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
         GL11.glViewport(0, 0, resolution, resolution);
         setDrawBuffers(writeColors);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
     }
 
     public void bindForProgramWrite(Attachment... drawTargets) {
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
         GL11.glViewport(0, 0, resolution, resolution);
         setDrawBuffers(drawTargets);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
@@ -308,7 +310,7 @@ public final class ShadowFramebuffer {
     public void copyDepthToSnapshot() {
         SavedFramebufferState previous = saveFramebufferState();
         int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, depthSnapshotTextureId);
         GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, resolution, resolution);
         generateDepthMipmap(0, depthTextureId);
@@ -354,7 +356,7 @@ public final class ShadowFramebuffer {
     public DepthStats readDepthStats(int samplesPerAxis) {
         int samples = Math.max(1, samplesPerAxis);
         SavedFramebufferState previous = saveFramebufferState();
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, fboId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
 
         float center = readDepthAt(resolution / 2, resolution / 2);
         float min = center;
@@ -447,13 +449,15 @@ public final class ShadowFramebuffer {
             float clearAlpha
     ) {
         private void restore() {
-            OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, framebuffer);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), framebuffer);
             GL11.glDrawBuffer(drawBuffer);
             GL11.glReadBuffer(readBuffer);
             GL11.glDepthMask(depthMask);
             GL11.glColorMask(redMask, greenMask, blueMask, alphaMask);
             GL11.glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
-            GlStateManager.clearColor(clearRed, clearGreen, clearBlue, clearAlpha);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179082_a", "clearColor"},
+                new Class<?>[] {float.class, float.class, float.class, float.class},
+                (clearRed), (clearGreen), (clearBlue), (clearAlpha));;
         }
     }
 
@@ -482,7 +486,7 @@ public final class ShadowFramebuffer {
 
     public void delete() {
         if (fboId != -1) {
-            OpenGlHelper.glDeleteFramebuffers(fboId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteFramebuffers(fboId);
             fboId = -1;
         }
         if (depthTextureId != -1) {

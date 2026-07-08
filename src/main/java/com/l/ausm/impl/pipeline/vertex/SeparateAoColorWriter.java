@@ -1,10 +1,12 @@
 package com.l.ausm.impl.pipeline.vertex;
 
+import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 
@@ -24,7 +26,7 @@ public final class SeparateAoColorWriter {
             return;
         }
 
-        VertexFormat vertexFormat = bufferBuilder.getVertexFormat();
+        VertexFormat vertexFormat = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder);
         if (!ExtendedVertexFormats.isPipelineBlock(vertexFormat)
                 || !PipelineContext.getInstance().shouldSeparateAo()
                 || !BlockRenderContext.separateAoEligible()
@@ -38,8 +40,11 @@ public final class SeparateAoColorWriter {
             return;
         }
 
-        ByteBuffer byteBuffer = bufferBuilder.getByteBuffer();
-        int colorOffset = bufferBuilder.getColorIndex(vertexIndex) * 4;
+        ByteBuffer byteBuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferByteBuffer(bufferBuilder);
+        int colorOffset = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((bufferBuilder), new String[] {"func_78909_a", "getColorIndex"}, new Class<?>[] {int.class}, -1, (vertexIndex)) * 4;
+        if (byteBuffer == null) {
+            return;
+        }
         if (colorOffset < 0 || colorOffset + 4 > byteBuffer.capacity()) {
             return;
         }
@@ -65,7 +70,7 @@ public final class SeparateAoColorWriter {
             return;
         }
 
-        VertexFormat vertexFormat = bufferBuilder.getVertexFormat();
+        VertexFormat vertexFormat = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder);
         if (!ExtendedVertexFormats.isPipelineBlock(vertexFormat)
                 || !PipelineContext.getInstance().shouldSeparateAo()
                 || !BlockRenderContext.separateAoEligible()
@@ -74,8 +79,8 @@ public final class SeparateAoColorWriter {
             return;
         }
 
-        int vertexStride = quadData.length % vertexFormat.getIntegerSize() == 0 ? vertexFormat.getIntegerSize() : 7;
-        int colorOffset = vertexFormat.getColorOffset() / 4;
+        int vertexStride = quadData.length % ExtendedVertexFormats.integerSize(vertexFormat) == 0 ? ExtendedVertexFormats.integerSize(vertexFormat) : 7;
+        int colorOffset = ExtendedVertexFormats.colorOffset(vertexFormat) / 4;
         for (int vertex = 0; vertex < 4; vertex++) {
             int colorIndex = vertex * vertexStride + colorOffset;
             if (colorIndex < 0 || colorIndex >= quadData.length) {

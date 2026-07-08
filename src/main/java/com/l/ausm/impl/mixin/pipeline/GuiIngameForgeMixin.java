@@ -14,14 +14,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class GuiIngameForgeMixin {
     @Inject(method = "renderGameOverlay(F)V", at = @At("HEAD"), cancellable = true)
     private void ausm$beforeForgeGameOverlay(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().probeShaderlessSkyGuiState("forge-overlay-head");
+        PipelineContext context = PipelineContext.getInstance();
         if (ausm$isHudHidden()) {
-            PipelineContext.getInstance().probeShaderlessSkyGuiState("forge-overlay-hidden");
             return;
         }
-        PipelineContext context = PipelineContext.getInstance();
         if (context.shouldDeferIngameHud()) {
-            context.probeShaderlessSkyGuiState("forge-overlay-deferred");
             ci.cancel();
             return;
         }
@@ -32,19 +29,19 @@ public class GuiIngameForgeMixin {
 
     @Inject(method = "renderGameOverlay(F)V", at = @At("RETURN"))
     private void ausm$afterForgeGameOverlay(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().probeShaderlessSkyGuiState("forge-overlay-return");
+        PipelineContext context = PipelineContext.getInstance();
         if (ausm$isHudHidden()) {
             return;
         }
-        PipelineContext.getInstance().finishGuiRendering();
-        ShaderCompileNotifications.renderOverlay(new ScaledResolution(Minecraft.getMinecraft()));
+        context.finishGuiRendering();
+        ShaderCompileNotifications.renderOverlay(new ScaledResolution(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
     }
 
     private boolean ausm$isHudHidden() {
-        Minecraft minecraft = Minecraft.getMinecraft();
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         return minecraft != null
-                && minecraft.currentScreen == null
-                && minecraft.gameSettings != null
-                && minecraft.gameSettings.hideGUI;
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft) == null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft));
     }
 }

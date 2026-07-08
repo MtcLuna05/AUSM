@@ -14,6 +14,7 @@ import java.util.List;
 public final class ShaderTransformPipeline {
     private static final List<ShaderTransformStage> STAGES = List.of(
             new FragmentOutputTransformStage(),
+            new AusmOfficialSkyDomeTransformStage(),
             new LegacySamplerAliasTransformStage(),
             new GbuffersBuiltinTransformStage(),
             new FadeVariableTransformStage(),
@@ -26,6 +27,7 @@ public final class ShaderTransformPipeline {
             new CustomImageSamplerDeclarationTransformStage(),
             new GuardedBlocklightColorTableTransformStage(),
             new CompatibilityTextureFunctionTransformStage(),
+            new PlayerRayTracerQuadTexCoordTransformStage(),
             new MidTexCoordAliasTransformStage()
     );
 

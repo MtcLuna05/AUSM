@@ -228,10 +228,10 @@ public final class NothiriumBypass {
     }
 
     private static boolean hasVanillaViewFrustum() {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         return mc != null
-                && mc.renderGlobal instanceof RenderGlobalAccessor
-                && ((RenderGlobalAccessor) mc.renderGlobal).ausm$viewFrustum() != null;
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor
+                && ((RenderGlobalAccessor) com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc)).ausm$viewFrustum() != null;
     }
 
     private static boolean shouldUseVanillaForShaderlessBetterPortalsBlockUpdates() {

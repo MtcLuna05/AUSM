@@ -11,7 +11,6 @@ import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.renderer.entity.Render;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityList;
 import net.minecraft.util.ResourceLocation;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -118,8 +117,8 @@ public class RenderManagerMixin {
     }
 
     private static void ausm$logBetweenlandsRender(String stage, PipelineContext context, Entity entity, boolean vanillaProgram) {
-        ResourceLocation key = entity != null ? EntityList.getKey(entity) : null;
-        if (key == null || !"thebetweenlands".equals(key.getNamespace()) || ausm$betweenlandsRenderLogCount++ >= AUSM_MAX_BETWEENLANDS_RENDER_LOGS) {
+        ResourceLocation key = entity != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity) : null;
+        if (key == null || !"thebetweenlands".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(key)) || ausm$betweenlandsRenderLogCount++ >= AUSM_MAX_BETWEENLANDS_RENDER_LOGS) {
             return;
         }
         MainMod.LOGGER.info(
@@ -131,9 +130,9 @@ public class RenderManagerMixin {
                 vanillaProgram,
                 key,
                 entity.getClass().getName(),
-                Math.round(entity.posX * 10.0D) / 10.0D,
-                Math.round(entity.posY * 10.0D) / 10.0D,
-                Math.round(entity.posZ * 10.0D) / 10.0D
+                Math.round(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity) * 10.0D) / 10.0D,
+                Math.round(com.l.ausm.impl.util.MinecraftReflectionCompat.posY(entity) * 10.0D) / 10.0D,
+                Math.round(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity) * 10.0D) / 10.0D
         );
     }
 }

@@ -35,7 +35,7 @@ public class CustomMainMenuGuiCustomMixin {
             remap = false
     )
     private void ausm$syncRawColorWithGlStateManager(float red, float green, float blue) {
-        GlStateManager.color(red, green, blue, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(red, green, blue, 1.0F);
         GL11.glColor4f(red, green, blue, 1.0F);
     }
 

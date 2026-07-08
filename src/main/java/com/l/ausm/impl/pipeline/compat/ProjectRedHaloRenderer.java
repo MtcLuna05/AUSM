@@ -1,14 +1,15 @@
 package com.l.ausm.impl.pipeline.compat;
 
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.Tessellator;
-import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.client.Minecraft;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.item.Item;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL20;
@@ -22,8 +23,8 @@ public final class ProjectRedHaloRenderer {
     private static final boolean ITEM_AUDIT_LOGGING = Boolean.getBoolean("ausm.projectred.audit");
 
     private static final int[] HALO_TEXTURE_UNITS = {
-            OpenGlHelper.defaultTexUnit,
-            OpenGlHelper.lightmapTexUnit,
+            com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit(),
+            com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit(),
             GL13.GL_TEXTURE2
     };
 
@@ -71,7 +72,7 @@ public final class ProjectRedHaloRenderer {
         savedBlendSrc = GL11.glGetInteger(GL11.GL_BLEND_SRC);
         savedBlendDst = GL11.glGetInteger(GL11.GL_BLEND_DST);
 
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         for (int i = 0; i < HALO_TEXTURE_UNITS.length; i++) {
             GL13.glActiveTexture(HALO_TEXTURE_UNITS[i]);
             savedTexture2D[i] = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
@@ -81,12 +82,13 @@ public final class ProjectRedHaloRenderer {
         }
         GL13.glActiveTexture(savedActiveTexture);
 
-        GlStateManager.enableBlend();
-        GlStateManager.blendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE);
-        GlStateManager.disableTexture2D();
-        GlStateManager.disableLighting();
-        GlStateManager.disableCull();
-        GlStateManager.depthMask(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179112_b", "blendFunc"},
+                new Class<?>[] {int.class, int.class}, (GL11.GL_SRC_ALPHA), (GL11.GL_ONE));;
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
     }
 
     public static void renderImmediateHalo(Object cuboid, int color, Object transformation) {
@@ -100,11 +102,11 @@ public final class ProjectRedHaloRenderer {
         int blue = (rgba >>> 8) & 255;
         int alpha = HALO_ALPHA;
 
-        Tessellator tessellator = Tessellator.getInstance();
-        BufferBuilder buffer = tessellator.getBuffer();
-        buffer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_COLOR);
+        Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
+        BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181706_f", "POSITION_COLOR"));
         emitCuboid(buffer, cuboid, transformation, red, green, blue, alpha, 0.03D, activeHaloScale());
-        tessellator.draw();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
     }
 
     public static void renderImmediateLampItem(int color) {
@@ -115,31 +117,32 @@ public final class ProjectRedHaloRenderer {
 
         beginImmediateHalo();
         try {
-            Tessellator tessellator = Tessellator.getInstance();
-            BufferBuilder buffer = tessellator.getBuffer();
-            buffer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_COLOR);
+            Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
+            BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181706_f", "POSITION_COLOR"));
             emitBox(buffer, -0.03D, -0.03D, -0.03D, 1.03D, 1.03D, 1.03D,
                     red, green, blue, HALO_ALPHA, activeHaloScale());
-            tessellator.draw();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
         } finally {
             endImmediateHalo();
         }
     }
 
     public static boolean renderSolidProjectRedIlluminationItem(ItemStack stack) {
-        if (stack == null || stack.isEmpty() || stack.getItem() == null) {
+        if (!hasItem(stack)) {
             return false;
         }
 
-        ResourceLocation name = stack.getItem().getRegistryName();
+        ResourceLocation name = itemName(stack);
         if (!isProjectRedIlluminationItem(stack, name)) {
             return false;
         }
 
-        int color = Math.floorMod(stack.getMetadata(), 16);
+        int metadata = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack);
+        int color = Math.floorMod(metadata, 16);
         if (solidItemLogCount++ < 12) {
             com.l.ausm.impl.MainMod.LOGGER.info("[ProjectRedHalo] Replaced item render with solid geometry: item={} meta={} color={}",
-                    name, stack.getMetadata(), color);
+                    name, metadata, color);
         }
         renderImmediateLampItem(color);
         return true;
@@ -149,25 +152,25 @@ public final class ProjectRedHaloRenderer {
         if (!ITEM_AUDIT_LOGGING) {
             return;
         }
-        if (minecraft == null || minecraft.player == null) {
+        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft) == null) {
             return;
         }
 
-        EntityPlayer player = minecraft.player;
-        lastHeldAuditMain = auditHeldItem(player.getHeldItemMainhand(), "held_main", lastHeldAuditMain);
-        lastHeldAuditOffhand = auditHeldItem(player.getHeldItemOffhand(), "held_offhand", lastHeldAuditOffhand);
+        EntityPlayer player = com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft);
+        lastHeldAuditMain = auditHeldItem(com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemMainhand(player), "held_main", lastHeldAuditMain);
+        lastHeldAuditOffhand = auditHeldItem(com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemOffhand(player), "held_offhand", lastHeldAuditOffhand);
     }
 
     public static void auditRenderItem(ItemStack stack, String source, Object detail) {
         if (!ITEM_AUDIT_LOGGING) {
             return;
         }
-        if (stack == null || stack.isEmpty() || stack.getItem() == null) {
+        if (!hasItem(stack)) {
             return;
         }
 
-        ResourceLocation name = stack.getItem().getRegistryName();
-        String itemClass = stack.getItem().getClass().getName();
+        ResourceLocation name = itemName(stack);
+        String itemClass = itemClassName(stack);
         boolean candidate = isAuditCandidate(name, itemClass);
         if (!candidate && itemAuditLogCount >= 4) {
             return;
@@ -182,15 +185,15 @@ public final class ProjectRedHaloRenderer {
             return previousKey;
         }
 
-        if (stack == null || stack.isEmpty() || stack.getItem() == null) {
+        if (!hasItem(stack)) {
             if (!previousKey.isEmpty() && itemAuditLogCount++ < 32) {
                 com.l.ausm.impl.MainMod.LOGGER.info("[ProjectRedHaloAudit] source={} item=empty", source);
             }
             return key;
         }
 
-        ResourceLocation name = stack.getItem().getRegistryName();
-        String itemClass = stack.getItem().getClass().getName();
+        ResourceLocation name = itemName(stack);
+        String itemClass = itemClassName(stack);
         logItemAudit(source, stack, name, itemClass, "held-change", isProjectRedIlluminationItem(stack, name));
         return key;
     }
@@ -208,8 +211,8 @@ public final class ProjectRedHaloRenderer {
                 "[ProjectRedHaloAudit] source={} item={} meta={} count={} class={} display='{}' matched={} detail={}",
                 source,
                 name,
-                stack.getMetadata(),
-                stack.getCount(),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((stack), new String[] {"func_190916_E", "getCount"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0),
                 itemClass,
                 safeDisplayName(stack),
                 matched,
@@ -218,23 +221,23 @@ public final class ProjectRedHaloRenderer {
     }
 
     private static boolean isAuditCandidate(ResourceLocation name, String itemClass) {
-        if (name != null && name.getNamespace() != null && name.getNamespace().contains("projectred")) {
+        if (name != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).contains("projectred")) {
             return true;
         }
         return itemClass != null && itemClass.toLowerCase(java.util.Locale.ROOT).contains("projectred");
     }
 
     private static String itemAuditKey(ItemStack stack) {
-        if (stack == null || stack.isEmpty() || stack.getItem() == null) {
+        if (!hasItem(stack)) {
             return "";
         }
-        ResourceLocation name = stack.getItem().getRegistryName();
-        return String.valueOf(name) + ':' + stack.getMetadata() + ':' + stack.getCount();
+        ResourceLocation name = itemName(stack);
+        return String.valueOf(name) + ':' + com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack) + ':' + com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((stack), new String[] {"func_190916_E", "getCount"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0);
     }
 
     private static String safeDisplayName(ItemStack stack) {
         try {
-            return stack.getDisplayName();
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.call((stack), String.class, "", new String[] {"func_82833_r", "getDisplayName"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
         } catch (RuntimeException e) {
             return "<error>";
         }
@@ -259,12 +262,10 @@ public final class ProjectRedHaloRenderer {
     }
 
     public static void renderSolidProjectRedRendererItem(ItemStack stack, String source) {
-        int metadata = stack != null && !stack.isEmpty() ? stack.getMetadata() : 0;
+        int metadata = !com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack) ? com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack) : 0;
         int color = Math.floorMod(metadata, 16);
         if (solidItemLogCount++ < 24) {
-            ResourceLocation name = stack != null && !stack.isEmpty() && stack.getItem() != null
-                    ? stack.getItem().getRegistryName()
-                    : null;
+            ResourceLocation name = itemName(stack);
             com.l.ausm.impl.MainMod.LOGGER.info("[ProjectRedHalo] Replaced {} item render with solid geometry: item={} meta={} color={}",
                     source, name, metadata, color);
         }
@@ -272,19 +273,19 @@ public final class ProjectRedHaloRenderer {
     }
 
     private static boolean isProjectRedIlluminationItem(ItemStack stack, ResourceLocation name) {
-        if (name != null && "projectred-illumination".equals(name.getNamespace()) && isProjectRedLightItem(name.getPath())) {
+        if (name != null && "projectred-illumination".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)) && isProjectRedLightItem(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name))) {
             return true;
         }
 
-        String itemClass = stack.getItem().getClass().getName();
+        String itemClass = itemClassName(stack);
         if ("mrtjp.projectred.illumination.ItemBlockLamp".equals(itemClass)
                 || "mrtjp.projectred.illumination.ItemBaseLight".equals(itemClass)) {
             return true;
         }
 
-        if (name != null && "projectred-illumination".equals(name.getNamespace()) && skippedItemLogCount++ < 12) {
+        if (name != null && "projectred-illumination".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)) && skippedItemLogCount++ < 12) {
             com.l.ausm.impl.MainMod.LOGGER.info("[ProjectRedHalo] Saw unhandled ProjectRed illumination item: item={} meta={} class={}",
-                    name, stack.getMetadata(), itemClass);
+                    name, com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack), itemClass);
         }
         return false;
     }
@@ -309,7 +310,17 @@ public final class ProjectRedHaloRenderer {
     }
 
     private static ResourceLocation itemName(ItemStack stack) {
-        return stack != null && !stack.isEmpty() && stack.getItem() != null ? stack.getItem().getRegistryName() : null;
+        Item item = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack);
+        return item != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.call((item), net.minecraft.util.ResourceLocation.class, null, new String[] {"getRegistryName"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS) : null;
+    }
+
+    private static String itemClassName(ItemStack stack) {
+        Item item = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack);
+        return item != null ? item.getClass().getName() : "";
+    }
+
+    private static boolean hasItem(ItemStack stack) {
+        return !com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack) && com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack) != null;
     }
 
     public static void endImmediateHalo() {
@@ -320,22 +331,23 @@ public final class ProjectRedHaloRenderer {
             return;
         }
 
-        GlStateManager.depthMask(savedDepthMask);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(savedDepthMask);
         if (savedCull) {
-            GlStateManager.enableCull();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
         } else {
-            GlStateManager.disableCull();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
         }
         if (savedLighting) {
-            GlStateManager.enableLighting();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179145_e", "enableLighting"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
         } else {
-            GlStateManager.disableLighting();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
         }
-        GlStateManager.blendFunc(savedBlendSrc, savedBlendDst);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179112_b", "blendFunc"},
+                new Class<?>[] {int.class, int.class}, (savedBlendSrc), (savedBlendDst));;
         if (savedBlend) {
-            GlStateManager.enableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
         } else {
-            GlStateManager.disableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         }
 
         for (int i = 0; i < HALO_TEXTURE_UNITS.length; i++) {
@@ -348,7 +360,7 @@ public final class ProjectRedHaloRenderer {
             }
         }
         GL13.glActiveTexture(savedActiveTexture);
-        OpenGlHelper.glUseProgram(savedProgram);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(savedProgram);
         activeScale = 1.0D;
     }
 
@@ -468,9 +480,9 @@ public final class ProjectRedHaloRenderer {
             double transformedX = field(vertex, "x").getDouble(vertex);
             double transformedY = field(vertex, "y").getDouble(vertex);
             double transformedZ = field(vertex, "z").getDouble(vertex);
-            buffer.pos(transformedX, transformedY, transformedZ).color(red, green, blue, alpha).endVertex();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, transformedX, transformedY, transformedZ, red, green, blue, alpha);
         } catch (ReflectiveOperationException ignored) {
-            buffer.pos(x, y, z).color(red, green, blue, alpha).endVertex();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, x, y, z, red, green, blue, alpha);
         }
     }
 

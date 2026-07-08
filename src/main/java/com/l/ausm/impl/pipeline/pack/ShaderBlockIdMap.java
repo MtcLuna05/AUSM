@@ -5,6 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.properties.IProperty;
 import net.minecraft.block.state.IBlockState;
@@ -112,7 +113,7 @@ public final class ShaderBlockIdMap {
 
     private static void addLegacyBlockId(Map<Block, Integer> blockIds, int id, String... names) {
         for (String name : names) {
-            Block block = Block.REGISTRY.getObject(new ResourceLocation("minecraft", name));
+            Block block = registryBlock(new ResourceLocation("minecraft", name));
             if (block != null) {
                 blockIds.putIfAbsent(block, id);
             }
@@ -120,7 +121,7 @@ public final class ShaderBlockIdMap {
     }
 
     private static void addPackCompatibilityAliases(Map<Block, Integer> blockIds) {
-        Block portal = Block.REGISTRY.getObject(new ResourceLocation("minecraft", "portal"));
+        Block portal = registryBlock(new ResourceLocation("minecraft", "portal"));
         if (portal == null || blockIds.containsKey(portal) || !blockIds.containsValue(10090)) {
             return;
         }
@@ -183,21 +184,21 @@ public final class ShaderBlockIdMap {
     }
 
     private static Block findBlock(String namespace, String path) {
-        Block block = Block.REGISTRY.getObject(new ResourceLocation(namespace, path));
+        Block block = registryBlock(new ResourceLocation(namespace, path));
         if (block != null) {
             return block;
         }
 
-        for (ResourceLocation key : Block.REGISTRY.getKeys()) {
-            if (namespace.equalsIgnoreCase(key.getNamespace()) && path.equalsIgnoreCase(key.getPath())) {
-                return Block.REGISTRY.getObject(key);
+        for (ResourceLocation key : com.l.ausm.impl.util.MinecraftReflectionCompat.registryKeys(com.l.ausm.impl.util.MinecraftReflectionCompat.field(Block.class, Object.class, null, "field_149771_c", "REGISTRY"))) {
+            if (namespace.equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(key)) && path.equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(key))) {
+                return registryBlock(key);
             }
         }
         return null;
     }
 
     private static void addLegacyDyeColorRules(Map<Block, Integer> blockIds, List<StateRule> stateRules, String blockName, int baseId) {
-        Block block = Block.REGISTRY.getObject(new ResourceLocation("minecraft", blockName));
+        Block block = registryBlock(new ResourceLocation("minecraft", blockName));
         if (block == null) {
             return;
         }
@@ -349,7 +350,7 @@ public final class ShaderBlockIdMap {
                 continue;
             }
 
-            Block block = Block.REGISTRY.getObject(parsed.resource());
+            Block block = registryBlock(parsed.resource());
             if (block != null) {
                 if (parsed.hasStatePredicate()) {
                     stateRules.add(new StateRule(block, parsed.propertyName(), parsed.propertyValue(), id));
@@ -359,7 +360,7 @@ public final class ShaderBlockIdMap {
             }
 
             for (ResourceLocation alias : legacyAliases(parsed.resource())) {
-                Block aliasBlock = Block.REGISTRY.getObject(alias);
+                Block aliasBlock = registryBlock(alias);
                 if (aliasBlock != null) {
                     blockIds.put(aliasBlock, id);
                 }
@@ -383,12 +384,12 @@ public final class ShaderBlockIdMap {
             if (parsed == null) {
                 continue;
             }
-            Block block = Block.REGISTRY.getObject(parsed.resource());
+            Block block = registryBlock(parsed.resource());
             if (block != null) {
                 layerOverrides.put(block, layer);
             }
             for (ResourceLocation alias : legacyAliases(parsed.resource())) {
-                Block aliasBlock = Block.REGISTRY.getObject(alias);
+                Block aliasBlock = registryBlock(alias);
                 if (aliasBlock != null) {
                     layerOverrides.put(aliasBlock, layer);
                 }
@@ -407,11 +408,11 @@ public final class ShaderBlockIdMap {
     }
 
     private static List<ResourceLocation> legacyAliases(ResourceLocation resource) {
-        if (!"minecraft".equals(resource.getNamespace())) {
+        if (!"minecraft".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(resource))) {
             return List.of();
         }
 
-        return switch (resource.getPath()) {
+        return switch (com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(resource)) {
             case "grass", "short_grass", "tall_grass", "fern", "large_fern" -> minecraft("tallgrass", "double_plant");
             case "dead_bush" -> minecraft("deadbush");
             case "cobweb" -> minecraft("web");
@@ -447,6 +448,11 @@ public final class ShaderBlockIdMap {
         return java.util.Arrays.stream(paths)
                 .map(path -> new ResourceLocation("minecraft", path))
                 .toList();
+    }
+
+    private static Block registryBlock(ResourceLocation resource) {
+        Object value = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((com.l.ausm.impl.util.MinecraftReflectionCompat.field(Block.class, Object.class, null, "field_149771_c", "REGISTRY")), new String[] {"func_82594_a", "getObject", "getValue"}, new Class<?>[] {net.minecraft.util.ResourceLocation.class}, (resource));
+        return value instanceof Block ? (Block) value : null;
     }
 
     private static ParsedBlockToken parseResource(String token) {
@@ -508,21 +514,22 @@ public final class ShaderBlockIdMap {
                     return rule.id();
                 }
             }
-            return blockIds.getOrDefault(state.getBlock(), 0);
+            return blockIds.getOrDefault(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state), 0);
         }
     }
 
     public record StateRule(Block block, String propertyName, String propertyValue, int id) {
         @SuppressWarnings({"rawtypes", "unchecked"})
         public boolean matches(IBlockState state) {
-            if (state == null || state.getBlock() != block) {
+            if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != block) {
                 return false;
             }
 
-            for (Map.Entry<IProperty<?>, Comparable<?>> entry : state.getProperties().entrySet()) {
+            for (Map.Entry<IProperty<?>, Comparable<?>> entry : com.l.ausm.impl.util.MinecraftReflectionCompat.stateProperties(state).entrySet()) {
                 IProperty property = entry.getKey();
-                if (property.getName().equals(propertyName)) {
-                    return property.getName(entry.getValue()).equalsIgnoreCase(propertyValue);
+                if (property != null && propertyName.equals(com.l.ausm.impl.util.MinecraftReflectionCompat.propertyName(property))) {
+                    String valueName = com.l.ausm.impl.util.MinecraftReflectionCompat.propertyValueName(property, entry.getValue());
+                    return valueName != null && valueName.equalsIgnoreCase(propertyValue);
                 }
             }
             return "false".equalsIgnoreCase(propertyValue) || "0".equals(propertyValue);

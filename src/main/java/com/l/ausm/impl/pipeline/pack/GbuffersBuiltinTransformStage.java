@@ -23,6 +23,9 @@ public final class GbuffersBuiltinTransformStage implements ShaderTransformStage
     private static final Pattern VA_NORMAL_DECLARATION =
             Pattern.compile("(?m)^\\s*(?:in|attribute)\\s+vec3\\s+vaNormal\\s*;");
     private static final Pattern VERSION_OR_EXTENSION = Pattern.compile("(?m)^(\\s*(?:#version\\b.*|#extension\\b.*)\\R)");
+    private static final Pattern ADVANCED_TANGENT_GUARD = Pattern.compile(
+            "(#if\\s+(?=[^\\r\\n]*\\bdefined\\s+GENERATED_NORMALS\\b)(?=[^\\r\\n]*\\bdefined\\s+CUSTOM_PBR\\b)(?![^\\r\\n]*\\bdefined\\s+POM\\b)[^\\r\\n]*)"
+    );
 
     @Override
     public String apply(String source, ShaderTransformParameters parameters) {
@@ -41,7 +44,16 @@ public final class GbuffersBuiltinTransformStage implements ShaderTransformStage
         transformed = defineIfUndeclared(transformed, "modelViewMatrix", MODEL_VIEW_MATRIX_DECLARATION, "#define modelViewMatrix gl_ModelViewMatrix\n");
         transformed = defineIfUndeclared(transformed, "vaPosition", VA_POSITION_DECLARATION, "#define vaPosition gl_Vertex.xyz\n");
         transformed = defineIfUndeclared(transformed, "vaNormal", VA_NORMAL_DECLARATION, "#define vaNormal gl_Normal\n");
+        transformed = ensurePomTangentGuard(transformed);
         return transformed;
+    }
+
+    private static String ensurePomTangentGuard(String source) {
+        if (!source.contains("#ifdef POM") || !source.contains("at_tangent")) {
+            return source;
+        }
+        return ADVANCED_TANGENT_GUARD.matcher(source)
+                .replaceAll("$1 || defined POM");
     }
 
     private static String replaceAndInject(String source, Pattern pattern, String replacement, String uniformDeclaration) {

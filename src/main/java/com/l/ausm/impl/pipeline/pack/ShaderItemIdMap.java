@@ -5,6 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.ResourceLocation;
@@ -83,21 +84,21 @@ public final class ShaderItemIdMap {
     }
 
     private static void addDyeMetadataAliases(Map<ItemMetadataKey, Integer> metadataIds, String namespace, String path, int firstMetadata, int lastMetadata) {
-        Item item = Item.REGISTRY.getObject(new ResourceLocation(namespace, path));
+        Item item = registryItem(new ResourceLocation(namespace, path));
         if (item == null) {
             return;
         }
 
-        int itemId = Item.getIdFromItem(item);
+        int itemId = com.l.ausm.impl.util.MinecraftReflectionCompat.itemId(item);
         for (int metadata = firstMetadata; metadata <= lastMetadata; metadata++) {
             metadataIds.putIfAbsent(new ItemMetadataKey(itemId, metadata), compatItemIdForDye(metadata));
         }
     }
 
     private static void addItemAlias(Map<Integer, Integer> itemIds, String namespace, String path, int aliasId) {
-        Item item = Item.REGISTRY.getObject(new ResourceLocation(namespace, path));
+        Item item = registryItem(new ResourceLocation(namespace, path));
         if (item != null) {
-            itemIds.putIfAbsent(Item.getIdFromItem(item), aliasId);
+            itemIds.putIfAbsent(com.l.ausm.impl.util.MinecraftReflectionCompat.itemId(item), aliasId);
         }
     }
 
@@ -165,7 +166,7 @@ public final class ShaderItemIdMap {
         for (String token : values.split("\\s+")) {
             ParsedItemToken parsed = parseItem(token);
             if (parsed != null) {
-                int itemId = Item.getIdFromItem(parsed.item());
+                int itemId = com.l.ausm.impl.util.MinecraftReflectionCompat.itemId(parsed.item());
                 if (parsed.hasMetadata()) {
                     metadataIds.put(new ItemMetadataKey(itemId, parsed.metadata()), aliasId);
                 } else {
@@ -187,8 +188,13 @@ public final class ShaderItemIdMap {
         }
 
         ResourceLocation resource = parsed.resource();
-        Item item = Item.REGISTRY.getObject(resource);
+        Item item = registryItem(resource);
         return item != null ? new ParsedItemToken(item, parsed.metadata()) : null;
+    }
+
+    private static Item registryItem(ResourceLocation resource) {
+        Object value = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((com.l.ausm.impl.util.MinecraftReflectionCompat.field(Item.class, Object.class, null, "field_150901_e", "REGISTRY")), new String[] {"func_82594_a", "getObject", "getValue"}, new Class<?>[] {net.minecraft.util.ResourceLocation.class}, (resource));
+        return value instanceof Item ? (Item) value : null;
     }
 
     private static ParsedResource parseResource(String token) {
@@ -245,12 +251,12 @@ public final class ShaderItemIdMap {
 
     public record ItemIdRules(Map<Integer, Integer> itemIds, Map<ItemMetadataKey, Integer> metadataIds) {
         public int idFor(ItemStack stack) {
-            if (stack == null || stack.isEmpty()) {
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack)) {
                 return -1;
             }
 
-            int itemId = Item.getIdFromItem(stack.getItem());
-            Integer metadataId = metadataIds.get(new ItemMetadataKey(itemId, stack.getMetadata()));
+            int itemId = com.l.ausm.impl.util.MinecraftReflectionCompat.itemId(com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack));
+            Integer metadataId = metadataIds.get(new ItemMetadataKey(itemId, com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack)));
             if (metadataId != null) {
                 return metadataId;
             }
@@ -258,12 +264,12 @@ public final class ShaderItemIdMap {
         }
 
         public Integer explicitIdFor(ItemStack stack) {
-            if (stack == null || stack.isEmpty()) {
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack)) {
                 return null;
             }
 
-            int itemId = Item.getIdFromItem(stack.getItem());
-            Integer metadataId = metadataIds.get(new ItemMetadataKey(itemId, stack.getMetadata()));
+            int itemId = com.l.ausm.impl.util.MinecraftReflectionCompat.itemId(com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack));
+            Integer metadataId = metadataIds.get(new ItemMetadataKey(itemId, com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack)));
             if (metadataId != null) {
                 return metadataId;
             }

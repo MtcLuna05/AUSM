@@ -1,5 +1,6 @@
 package com.l.ausm.impl.mixin.pipeline;
 
+import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
@@ -10,7 +11,9 @@ import net.minecraft.world.IWorldEventListener;
 import net.minecraft.world.World;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.List;
 
@@ -75,5 +78,27 @@ public class WorldDynamicLightMixin {
             return AUSM_NOOP_WORLD_EVENT_LISTENER;
         }
         return listeners.get(index);
+    }
+
+    @Inject(method = "notifyBlockUpdate", at = @At("HEAD"))
+    private void ausm$invalidateShaderlessBloomMetadataOnBlockUpdate(BlockPos pos, IBlockState oldState,
+                                                                     IBlockState newState, int flags,
+                                                                     CallbackInfo ci) {
+        PipelineContext.getInstance().handleShaderlessBloomBlockUpdate((World) (Object) this, pos, oldState, newState, flags);
+    }
+
+    @Inject(method = "markBlockRangeForRenderUpdate(IIIIII)V", at = @At("HEAD"), require = 0)
+    private void ausm$invalidateShaderlessBloomMetadataOnRenderUpdate(int minX, int minY, int minZ,
+                                                                      int maxX, int maxY, int maxZ,
+                                                                      CallbackInfo ci) {
+        PipelineContext.getInstance().handleShaderlessBloomRenderUpdateRange(
+                (World) (Object) this,
+                minX,
+                minY,
+                minZ,
+                maxX,
+                maxY,
+                maxZ
+        );
     }
 }

@@ -35,22 +35,22 @@ public class GuiContainerMixin {
             return;
         }
 
-        OpenGlHelper.glUseProgram(0);
-        OpenGlHelper.setActiveTexture(OpenGlHelper.defaultTexUnit);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        GlStateManager.disableLighting();
-        GlStateManager.disableFog();
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179106_n", "disableFog"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 }

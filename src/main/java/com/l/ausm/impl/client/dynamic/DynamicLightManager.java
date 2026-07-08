@@ -5,6 +5,7 @@ import com.l.ausm.impl.Reference;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.ProjectRedHaloRenderer;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
@@ -24,25 +25,17 @@ import net.minecraftforge.fml.relauncher.Side;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @Mod.EventBusSubscriber(value = Side.CLIENT, modid = Reference.MODID)
 public final class DynamicLightManager {
     private static final int UPDATE_INTERVAL_TICKS = 2;
     private static final int REBUILD_PADDING = 2;
-    private static final int MAX_SHADERLESS_LIGHT_QUERY_PROBE_LOGS = 96;
-
     private static volatile boolean active;
     private static volatile List<DynamicLightSource> activeSources = List.of();
     private static Map<String, DynamicLightSource> previousSources = Map.of();
     private static World previousWorld;
     private static int ticks;
     private static int lastLoggedSourceCount = -1;
-    private static final Set<String> shaderlessLightQueryProbeKeys = ConcurrentHashMap.newKeySet();
-    private static final AtomicInteger shaderlessLightQueryProbeCount = new AtomicInteger();
-
     private DynamicLightManager() {
     }
 
@@ -51,11 +44,11 @@ public final class DynamicLightManager {
         if (event.phase != TickEvent.Phase.END) {
             return;
         }
-        ProjectRedHaloRenderer.auditHeldItems(Minecraft.getMinecraft());
+        ProjectRedHaloRenderer.auditHeldItems(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
         if (++ticks % UPDATE_INTERVAL_TICKS != 0) {
             return;
         }
-        update(Minecraft.getMinecraft());
+        update(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
     }
 
     public static boolean active() {
@@ -88,9 +81,9 @@ public final class DynamicLightManager {
         }
 
         int brightest = 0;
-        double blockX = pos.getX() + 0.5D;
-        double blockY = pos.getY() + 0.5D;
-        double blockZ = pos.getZ() + 0.5D;
+        double blockX = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + 0.5D;
+        double blockY = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + 0.5D;
+        double blockZ = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + 0.5D;
         for (DynamicLightSource source : activeSources) {
             int light = source.lightAt(blockX, blockY, blockZ);
             if (light > brightest) {
@@ -123,16 +116,12 @@ public final class DynamicLightManager {
         return (packedLight & 0xFFFF0000) | (dynamicLight << 4);
     }
 
-    public static void logShaderlessLightQueryProbe(String source, BlockPos pos, int before, int after, boolean applied) {
-        // Probe disabled.
-}
-
     public static void refreshAfterConfigChange() {
-        update(Minecraft.getMinecraft(), true);
+        update(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft(), true);
     }
 
     public static int stackLight(ItemStack stack) {
-        if (stack == null || stack.isEmpty()) {
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack)) {
             return 0;
         }
 
@@ -153,21 +142,23 @@ public final class DynamicLightManager {
     }
 
     private static int rawBlockItemLight(ItemStack stack) {
-        Item item = stack.getItem();
+        Item item = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack);
         if (!(item instanceof ItemBlock itemBlock)) {
             return 0;
         }
 
-        Block block = itemBlock.getBlock();
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.call((itemBlock), net.minecraft.block.Block.class, null, new String[] {"func_179223_d", "getBlock"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
         if (block == null) {
             return 0;
         }
 
         try {
-            IBlockState state = block.getStateFromMeta(stack.getMetadata());
-            return clampLight(block.getLightValue(state));
+            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.blockStateFromMeta(block, com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack));
+            return clampLight(com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((block), new String[] {"getLightValue", "func_149750_m"},
+                new Class<?>[] {net.minecraft.block.state.IBlockState.class}, 0, (state)));
         } catch (RuntimeException ignored) {
-            return clampLight(block.getLightValue(block.getDefaultState()));
+            return clampLight(com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((block), new String[] {"getLightValue", "func_149750_m"},
+                new Class<?>[] {net.minecraft.block.state.IBlockState.class}, 0, (com.l.ausm.impl.util.MinecraftReflectionCompat.blockDefaultState(block))));
         }
     }
 
@@ -176,7 +167,7 @@ public final class DynamicLightManager {
     }
 
     private static void update(Minecraft minecraft, boolean forceRebuild) {
-        World world = minecraft != null ? minecraft.world : null;
+        World world = minecraft != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) : null;
         if (world != previousWorld) {
             activeSources = List.of();
             previousSources = Map.of();
@@ -197,7 +188,7 @@ public final class DynamicLightManager {
     }
 
     private static boolean shouldRun(Minecraft minecraft) {
-        if (minecraft == null || minecraft.world == null) {
+        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) == null) {
             return false;
         }
         DynamicLightConfig config = MainMod.getDynamicLightConfig();
@@ -212,21 +203,27 @@ public final class DynamicLightManager {
 
     private static Map<String, DynamicLightSource> collectSources(Minecraft minecraft) {
         Map<String, DynamicLightSource> sources = new LinkedHashMap<>();
-        if (minecraft.player != null && !minecraft.player.isDead) {
-            addHeldSource(sources, minecraft.player, "main", minecraft.player.getHeldItemMainhand());
-            addHeldSource(sources, minecraft.player, "off", minecraft.player.getHeldItemOffhand());
+        EntityLivingBase player = com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft);
+        if (player != null && !com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((player), false, "field_70128_L", "isDead")) {
+            addHeldSource(sources, player, "main", com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemMainhand(player));
+            addHeldSource(sources, player, "off", com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemOffhand(player));
         }
-        for (Entity entity : minecraft.world.loadedEntityList) {
-            if (entity == null || entity.isDead) {
+        for (Entity entity : com.l.ausm.impl.util.MinecraftReflectionCompat.loadedEntityList(com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft))) {
+            if (entity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((entity), false, "field_70128_L", "isDead")) {
                 continue;
             }
             if (entity instanceof EntityLivingBase living) {
-                addHeldSource(sources, living, "main", living.getHeldItemMainhand());
-                addHeldSource(sources, living, "off", living.getHeldItemOffhand());
+                addHeldSource(sources, living, "main", com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemMainhand(living));
+                addHeldSource(sources, living, "off", com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemOffhand(living));
             } else if (entity instanceof EntityItem itemEntity) {
-                int light = stackLight(itemEntity.getItem());
+                int light = stackLight(com.l.ausm.impl.util.MinecraftReflectionCompat.call((itemEntity), net.minecraft.item.ItemStack.class, null, new String[] {"func_92059_d", "getItem"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS));
                 if (light > 0) {
-                    addSource(sources, entity.getEntityId() + ":item", entity.posX, entity.posY + 0.25D, entity.posZ, light);
+                    addSource(sources,
+                            com.l.ausm.impl.util.MinecraftReflectionCompat.entityId(entity) + ":item",
+                            com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity),
+                            com.l.ausm.impl.util.MinecraftReflectionCompat.posY(entity) + 0.25D,
+                            com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity),
+                            light);
                 }
             }
         }
@@ -260,7 +257,12 @@ public final class DynamicLightManager {
         if (light <= 0) {
             return;
         }
-        addSource(sources, entity.getEntityId() + ":" + slot, entity.posX, entity.posY + entity.getEyeHeight(), entity.posZ, light);
+        addSource(sources,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.entityId(entity) + ":" + slot,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posY(entity) + com.l.ausm.impl.util.MinecraftReflectionCompat.eyeHeight(entity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity),
+                light);
     }
 
     private static void addSource(Map<String, DynamicLightSource> sources, String key, double x, double y, double z, int light) {
@@ -270,7 +272,7 @@ public final class DynamicLightManager {
     private static void clear(Minecraft minecraft, boolean forceRebuild) {
         Map<String, DynamicLightSource> previous = previousSources;
         if (active || !previousSources.isEmpty() || forceRebuild) {
-            World world = minecraft != null ? minecraft.world : previousWorld;
+            World world = minecraft != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) : previousWorld;
             active = false;
             activeSources = List.of();
             previousSources = Map.of();
@@ -316,13 +318,13 @@ public final class DynamicLightManager {
     private static void markSource(World world, DynamicLightSource source) {
         int radius = source.light() + REBUILD_PADDING;
         BlockPos center = source.blockPos();
-        world.markBlockRangeForRenderUpdate(
-                center.getX() - radius,
-                Math.max(0, center.getY() - radius),
-                center.getZ() - radius,
-                center.getX() + radius,
-                Math.min(255, center.getY() + radius),
-                center.getZ() + radius
+        com.l.ausm.impl.util.MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(world,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) - radius,
+                Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(center) - radius),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) - radius,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) + radius,
+                Math.min(255, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(center) + radius),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) + radius
         );
     }
 

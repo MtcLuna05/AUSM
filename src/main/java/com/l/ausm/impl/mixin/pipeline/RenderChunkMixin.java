@@ -26,8 +26,8 @@ import java.util.Arrays;
 
 @Mixin(RenderChunk.class)
 public class RenderChunkMixin implements IPipelineRenderChunk {
-    @Shadow
-    private World world;
+    @Shadow(remap = false)
+    private World field_178588_d;
 
     @Unique
     private boolean ausm$pipelineVertexFormat;
@@ -44,9 +44,9 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
     @Unique
     private static boolean ausm$loggedNullWorldRepair;
 
-    @Inject(method = "rebuildWorldView", at = @At("HEAD"))
+    @Inject(method = "func_189563_q", at = @At("HEAD"))
     private void ausm$repairNullWorldBeforeRebuild(CallbackInfo ci) {
-        if (world != null) {
+        if (field_178588_d != null) {
             return;
         }
 
@@ -55,7 +55,7 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
             return;
         }
 
-        world = fallback;
+        field_178588_d = fallback;
         if (!ausm$loggedNullWorldRepair) {
             ausm$loggedNullWorldRepair = true;
             MainMod.LOGGER.warn("[BetterPortalsCompat] Repaired null RenderChunk world before chunk rebuild: world={}", ausm$dimensionId(fallback));
@@ -77,8 +77,8 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
     }
 
     @ModifyArg(
-            method = "preRenderBlocks",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/BufferBuilder;begin(ILnet/minecraft/client/renderer/vertex/VertexFormat;)V"),
+            method = "func_178573_a",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/BufferBuilder;func_181668_a(ILnet/minecraft/client/renderer/vertex/VertexFormat;)V"),
             index = 1
     )
     private VertexFormat ausm$usePipelineBlockFormat(VertexFormat original) {
@@ -89,7 +89,7 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
         return pipelineFormat ? ExtendedVertexFormats.PIPELINE_BLOCK : original;
     }
 
-    @Inject(method = "postRenderBlocks", at = @At("HEAD"))
+    @Inject(method = "func_178584_a", at = @At("HEAD"))
     private void ausm$recordLayerVertexFormat(BlockRenderLayer layer, float x, float y, float z,
                                               BufferBuilder bufferBuilder, CompiledChunk compiledChunk, CallbackInfo ci) {
         int index = ausm$layerIndex(layer);
@@ -98,8 +98,8 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
             boolean hasBloomMetadata = bufferBuilder instanceof com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension extension
                     && extension.ausm$hasShaderlessBloomMetadata();
             ausm$shaderlessBloomMetadataByLayer()[index] = hasBloomMetadata;
-            PipelineContext.getInstance().recordShaderlessBloomMetadata(
-                    ((RenderChunk) (Object) this).getPosition(),
+            PipelineContext.getInstance().recordShaderlessBloomLayerSummary(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkPosition((RenderChunk) (Object) this),
                     layer,
                     hasBloomMetadata
             );
@@ -154,6 +154,6 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
 
     @Unique
     private static int ausm$dimensionId(World world) {
-        return world != null && world.provider != null ? world.provider.getDimension() : Integer.MIN_VALUE;
+        return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) : Integer.MIN_VALUE;
     }
 }

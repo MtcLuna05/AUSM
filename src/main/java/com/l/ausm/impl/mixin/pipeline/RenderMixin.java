@@ -10,17 +10,17 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 
 @Mixin(Render.class)
 public class RenderMixin {
-    @Shadow
-    private void renderShadow(Entity entity, double x, double y, double z, float shadowAlpha, float partialTicks) {
+    @Shadow(remap = false)
+    private void func_76975_c(Entity entity, double x, double y, double z, float shadowAlpha, float partialTicks) {
     }
 
     @Redirect(
-            method = "doRenderShadowAndFire",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/entity/Render;renderShadow(Lnet/minecraft/entity/Entity;DDDFF)V")
+            method = "func_76979_b",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/entity/Render;func_76975_c(Lnet/minecraft/entity/Entity;DDDFF)V")
     )
     private void ausm$suppressVanillaEntityShadow(Render<?> renderer, Entity entity, double x, double y, double z, float shadowAlpha, float partialTicks) {
         if (!PipelineContext.getInstance().shouldDisableVanillaEntityShadows()) {
-            renderShadow(entity, x, y, z, shadowAlpha, partialTicks);
+            func_76975_c(entity, x, y, z, shadowAlpha, partialTicks);
         }
     }
 }

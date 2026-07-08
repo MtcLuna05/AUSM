@@ -14,14 +14,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(targets = "net.minecraft.server.integrated.IntegratedServer$3")
 public class IntegratedServerShutdownTaskMixin {
-    @Shadow
+    @Shadow(remap = false)
     @Final
     private IntegratedServer this$0;
 
     @Inject(method = "run", at = @At("HEAD"), cancellable = true)
     private void ausm$logoutAllWhenClientPlayerMissing(CallbackInfo ci) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.player != null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) != null) {
             return;
         }
 

@@ -1,8 +1,10 @@
 package com.l.ausm.impl.pipeline.compat;
 
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.properties.IProperty;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.BlockRendererDispatcher;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.block.model.IBakedModel;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -46,26 +48,28 @@ public final class BloomMaskColor {
             return -1;
         }
         try {
-            Minecraft mc = Minecraft.getMinecraft();
-            if (mc == null || mc.getBlockRendererDispatcher() == null) {
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+            BlockRendererDispatcher dispatcher = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRendererDispatcher(mc);
+            if (dispatcher == null) {
                 return -1;
             }
-            IBakedModel model = mc.getBlockRendererDispatcher().getModelForState(state);
+            IBakedModel model = com.l.ausm.impl.util.MinecraftReflectionCompat.call((dispatcher), net.minecraft.client.renderer.block.model.IBakedModel.class, null, new String[] {"func_184389_a", "getModelForState"},
+                new Class<?>[] {net.minecraft.block.state.IBlockState.class}, (state));
             if (model == null) {
                 return -1;
             }
 
-            int particleColor = spriteAverageMaskColor(model.getParticleTexture());
+            int particleColor = spriteAverageMaskColor(com.l.ausm.impl.util.MinecraftReflectionCompat.call((model), net.minecraft.client.renderer.texture.TextureAtlasSprite.class, null, new String[] {"func_177554_e", "getParticleTexture"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS));
             if (particleColor != -1) {
                 return particleColor;
             }
 
-            int quadColor = averageQuadSpriteColor(model.getQuads(state, null, 0L));
+            int quadColor = averageQuadSpriteColor(com.l.ausm.impl.util.MinecraftReflectionCompat.bakedModelQuads(model, state, null, 0L));
             if (quadColor != -1) {
                 return quadColor;
             }
             for (EnumFacing facing : EnumFacing.values()) {
-                quadColor = averageQuadSpriteColor(model.getQuads(state, facing, 0L));
+                quadColor = averageQuadSpriteColor(com.l.ausm.impl.util.MinecraftReflectionCompat.bakedModelQuads(model, state, facing, 0L));
                 if (quadColor != -1) {
                     return quadColor;
                 }
@@ -84,7 +88,7 @@ public final class BloomMaskColor {
         long blue = 0L;
         int count = 0;
         for (BakedQuad quad : quads) {
-            int color = quad != null ? spriteAverageMaskColor(quad.getSprite()) : -1;
+            int color = quad != null ? spriteAverageMaskColor(com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadSprite(quad)) : -1;
             if (color == -1) {
                 continue;
             }
@@ -101,15 +105,16 @@ public final class BloomMaskColor {
     }
 
     private static int spriteAverageMaskColor(TextureAtlasSprite sprite) {
-        if (sprite == null || sprite.getIconName() == null || sprite.getIconName().contains("missingno")) {
+        if (sprite == null || com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite).contains("missingno")) {
             return -1;
         }
-        return SPRITE_COLORS.computeIfAbsent(sprite.getIconName(), ignored -> averageSprite(sprite));
+        return SPRITE_COLORS.computeIfAbsent(com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite), ignored -> averageSpriteMaskColor(sprite));
     }
 
-    private static int averageSprite(TextureAtlasSprite sprite) {
+    public static int averageSpriteMaskColor(TextureAtlasSprite sprite) {
         try {
-            int[][] frames = sprite.getFrameTextureData(0);
+            int[][] frames = com.l.ausm.impl.util.MinecraftReflectionCompat.call((sprite), int[][].class, null, new String[] {"func_147965_a", "getFrameTextureData"},
+                new Class<?>[] {int.class}, (0));
             if (frames == null || frames.length == 0 || frames[0] == null) {
                 return -1;
             }
@@ -138,9 +143,9 @@ public final class BloomMaskColor {
 
     private static String statePropertyValue(IBlockState state, String propertyName) {
         try {
-            for (IProperty<?> property : state.getPropertyKeys()) {
-                if (property != null && propertyName.equalsIgnoreCase(property.getName())) {
-                    Object value = state.getValue(property);
+            for (IProperty<?> property : com.l.ausm.impl.util.MinecraftReflectionCompat.stateProperties(state).keySet()) {
+                if (property != null && propertyName.equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.propertyName(property))) {
+                    Object value = com.l.ausm.impl.util.MinecraftReflectionCompat.statePropertyValue(state, property);
                     return value != null ? value.toString().toLowerCase(java.util.Locale.ROOT) : null;
                 }
             }

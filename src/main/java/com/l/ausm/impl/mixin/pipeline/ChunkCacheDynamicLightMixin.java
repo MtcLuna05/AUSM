@@ -18,7 +18,6 @@ public class ChunkCacheDynamicLightMixin {
             return;
         }
         if (!DynamicLightManager.shouldApplyToBlockRenderLightQuery(pos)) {
-            DynamicLightManager.logShaderlessLightQueryProbe("chunk-getLightFor-skip", pos, cir.getReturnValueI(), cir.getReturnValueI(), false);
             return;
         }
 
@@ -26,9 +25,6 @@ public class ChunkCacheDynamicLightMixin {
         int dynamicLight = DynamicLightManager.lightAt(pos);
         if (dynamicLight > before) {
             cir.setReturnValue(dynamicLight);
-            DynamicLightManager.logShaderlessLightQueryProbe("chunk-getLightFor-apply", pos, before, dynamicLight, true);
-        } else {
-            DynamicLightManager.logShaderlessLightQueryProbe("chunk-getLightFor-keep", pos, before, before, false);
         }
     }
 
@@ -38,7 +34,6 @@ public class ChunkCacheDynamicLightMixin {
             return;
         }
         if (!DynamicLightManager.shouldApplyToBlockRenderLightQuery(pos)) {
-            DynamicLightManager.logShaderlessLightQueryProbe("chunk-getLightForExt-skip", pos, cir.getReturnValueI(), cir.getReturnValueI(), false);
             return;
         }
 
@@ -46,9 +41,6 @@ public class ChunkCacheDynamicLightMixin {
         int dynamicLight = DynamicLightManager.lightAt(pos);
         if (dynamicLight > before) {
             cir.setReturnValue(dynamicLight);
-            DynamicLightManager.logShaderlessLightQueryProbe("chunk-getLightForExt-apply", pos, before, dynamicLight, true);
-        } else {
-            DynamicLightManager.logShaderlessLightQueryProbe("chunk-getLightForExt-keep", pos, before, before, false);
         }
     }
 
@@ -60,7 +52,6 @@ public class ChunkCacheDynamicLightMixin {
             cir.setReturnValue(repaired);
         }
         if (!DynamicLightManager.shouldApplyToBlockRenderLightQuery(pos)) {
-            DynamicLightManager.logShaderlessLightQueryProbe("chunk-combined-skip", pos, cir.getReturnValueI(), cir.getReturnValueI(), false);
             return;
         }
 
@@ -68,9 +59,6 @@ public class ChunkCacheDynamicLightMixin {
         int adjusted = DynamicLightManager.applyPackedLight(pos, before);
         if (adjusted != before) {
             cir.setReturnValue(adjusted);
-            DynamicLightManager.logShaderlessLightQueryProbe("chunk-combined-apply", pos, before, adjusted, true);
-        } else {
-            DynamicLightManager.logShaderlessLightQueryProbe("chunk-combined-keep", pos, before, before, false);
         }
     }
 }

@@ -8,6 +8,9 @@ import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.matrix.MatrixState;
+import com.l.ausm.impl.pipeline.render.FixedFunctionGlState;
+import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiIngame;
@@ -21,8 +24,13 @@ import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.client.renderer.culling.ICamera;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.BlockRenderLayer;
+import net.minecraft.util.math.RayTraceResult;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GLContext;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -35,62 +43,64 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(EntityRenderer.class)
 public class EntityRendererMixin {
+    private static boolean ausm$loggedSelectionBoxStateRepair;
+    private static boolean ausm$loggedEntityStateRepair;
 
-    @Shadow
-    protected void renderRainSnow(float partialTicks) {
+    @Shadow(remap = false)
+    protected void func_78474_d(float partialTicks) {
     }
 
-    @Shadow
-    protected void renderHand(float partialTicks, int pass) {
+    @Shadow(remap = false)
+    protected void func_78476_b(float partialTicks, int pass) {
     }
 
-    @Inject(method = "updateCameraAndRender(FJ)V", at = @At("HEAD"))
+    @Inject(method = "func_181560_a(FJ)V", at = @At("HEAD"))
     private void onUpdateCameraAndRenderHead(float partialTicks, long nanoTime, CallbackInfo ci) {
         ausm$prepareNoWorldCustomMainMenu();
         PipelineContext.getInstance().beginClientRenderFrame(nanoTime);
     }
 
     @Redirect(
-            method = "updateCameraAndRender(FJ)V",
+            method = "func_181560_a(FJ)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/gui/GuiIngame;renderGameOverlay(F)V"
+                    target = "Lnet/minecraft/client/gui/GuiIngame;func_175180_a(F)V"
             )
     )
     private void ausm$renderGameOverlayIfPlayerReady(GuiIngame guiIngame, float partialTicks) {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        if (minecraft == null || minecraft.player == null) {
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft) == null) {
             return;
         }
 
-        guiIngame.renderGameOverlay(partialTicks);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.renderGameOverlay(guiIngame, partialTicks);
     }
 
     @Inject(
-            method = "updateCameraAndRender(FJ)V",
+            method = "func_181560_a(FJ)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/EntityRenderer;renderWorld(FJ)V",
+                    target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78471_a(FJ)V",
                     shift = At.Shift.AFTER
             )
     )
     private void onAfterWorldBeforeUi(float partialTicks, long nanoTime, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.captureShaderlessWorldFramebufferForUi();
         context.renderShaderlessBloomBeforeGui();
         context.prepareShaderlessUiRenderingBoundary();
     }
 
     @Inject(
-            method = "updateCameraAndRender(FJ)V",
+            method = "func_181560_a(FJ)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/gui/GuiScreen;drawScreen(IIF)V",
+                    target = "Lnet/minecraft/client/gui/GuiScreen;func_73863_a(IIF)V",
                     shift = At.Shift.BEFORE
             )
     )
     private void onBeforeGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        context.probeShaderlessSkyGuiState("gui-screen-draw-before");
         if (ausm$shouldUseVanillaGuiScreen()) {
             return;
         }
@@ -101,64 +111,64 @@ public class EntityRendererMixin {
     }
 
     @Inject(
-            method = "updateCameraAndRender(FJ)V",
+            method = "func_181560_a(FJ)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/gui/GuiScreen;drawScreen(IIF)V",
+                    target = "Lnet/minecraft/client/gui/GuiScreen;func_73863_a(IIF)V",
                     shift = At.Shift.AFTER
             )
     )
     private void onAfterGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
-        PipelineContext.getInstance().probeShaderlessSkyGuiState("gui-screen-draw-after");
+        PipelineContext context = PipelineContext.getInstance();
         if (ausm$shouldUseVanillaGuiScreen()) {
             return;
         }
-        PipelineContext.getInstance().finishGuiRendering();
+        context.finishGuiRendering();
     }
 
     private boolean ausm$shouldUseVanillaGuiScreen() {
-        Minecraft minecraft = Minecraft.getMinecraft();
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         return minecraft == null
-                || minecraft.world == null
-                || minecraft.currentScreen instanceof GuiContainer;
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft) instanceof GuiContainer;
     }
 
     private void ausm$prepareNoWorldCustomMainMenu() {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        if (minecraft == null || minecraft.world != null || !ausm$isCustomMainMenu(minecraft)) {
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) != null || !ausm$isCustomMainMenu(minecraft)) {
             return;
         }
 
-        if (minecraft.getFramebuffer() != null) {
-            minecraft.getFramebuffer().bindFramebuffer(false);
-            GlStateManager.viewport(0, 0, minecraft.displayWidth, minecraft.displayHeight);
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(minecraft) != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(minecraft), false);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(minecraft), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(minecraft));
         }
-        OpenGlHelper.glUseProgram(0);
-        GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
-        GlStateManager.bindTexture(0);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.depthMask(true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     private boolean ausm$isCustomMainMenu(Minecraft minecraft) {
-        return minecraft.currentScreen != null
-                && "lumien.custommainmenu.gui.GuiCustom".equals(minecraft.currentScreen.getClass().getName());
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft) != null
+                && "lumien.custommainmenu.gui.GuiCustom".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft).getClass().getName());
     }
 
-    @Inject(method = "renderWorldPass", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "func_175068_a", at = @At("HEAD"), cancellable = true)
     private void onRenderWorldPassHead(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        if (minecraft == null || minecraft.world == null || minecraft.getRenderViewEntity() == null) {
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(minecraft) == null) {
             ci.cancel();
             return;
         }
@@ -169,28 +179,29 @@ public class EntityRendererMixin {
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/EntityRenderer;setupCameraTransform(FI)V",
+                    target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78479_a(FI)V",
                     shift = At.Shift.AFTER
             )
     )
     private void onRenderWorldPassAfterCameraTransform(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
         MatrixState.captureGbufferMatrices();
-        PipelineContext.getInstance().renderPreparePass();
-        PipelineContext.getInstance().bindWorldFramebuffer();
+        context.renderPreparePass();
+        context.bindWorldFramebuffer();
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;setupTerrain(Lnet/minecraft/entity/Entity;DLnet/minecraft/client/renderer/culling/ICamera;IZ)V",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174970_a(Lnet/minecraft/entity/Entity;DLnet/minecraft/client/renderer/culling/ICamera;IZ)V",
                     shift = At.Shift.BEFORE
             )
     )
@@ -209,10 +220,10 @@ public class EntityRendererMixin {
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;setupTerrain(Lnet/minecraft/entity/Entity;DLnet/minecraft/client/renderer/culling/ICamera;IZ)V",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174970_a(Lnet/minecraft/entity/Entity;DLnet/minecraft/client/renderer/culling/ICamera;IZ)V",
                     shift = At.Shift.AFTER
             )
     )
@@ -228,174 +239,175 @@ public class EntityRendererMixin {
     }
 
     @Redirect(
-            method = "renderWorldPass",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;renderEntities(Lnet/minecraft/entity/Entity;Lnet/minecraft/client/renderer/culling/ICamera;F)V")
+            method = "func_175068_a",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;func_180446_a(Lnet/minecraft/entity/Entity;Lnet/minecraft/client/renderer/culling/ICamera;F)V")
     )
     private void ausm$renderEntitiesIfGbufferRenderingEnabled(RenderGlobal renderGlobal, Entity renderViewEntity, ICamera camera, float partialTicks) {
         PipelineContext context = PipelineContext.getInstance();
         if (!context.shouldSkipAllMainGbufferRendering()) {
-            renderGlobal.renderEntities(renderViewEntity, camera, partialTicks);
+            ausm$repairEntityClientArrayState();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.renderEntities(renderGlobal, renderViewEntity, camera, partialTicks);
         }
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
                     ordinal = 0,
                     shift = At.Shift.BEFORE
             )
     )
     private void onRenderWorldPassBeforeSolidTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        context.probeShaderlessLightState("before-solid-terrain-enter");
         if (context.shouldBypassWorldPassRendering()) {
-            context.probeShaderlessLightState("before-solid-terrain-bypass");
             return;
         }
 
         context.bindWorldFramebuffer();
         context.applyTerrainCulling(WorldRenderingPhase.TERRAIN_SOLID);
         context.beginPhase(WorldRenderingPhase.TERRAIN_SOLID);
-        context.probeShaderlessLightState("before-solid-terrain-exit");
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
                     ordinal = 0,
                     shift = At.Shift.AFTER
             )
     )
     private void onRenderWorldPassAfterSolidTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        context.probeShaderlessLightState("after-solid-terrain-enter");
         if (context.shouldBypassWorldPassRendering()) {
-            context.probeShaderlessLightState("after-solid-terrain-bypass");
             return;
         }
 
         context.endPass();
         context.restoreTerrainCulling();
-        context.probeShaderlessLightState("after-solid-terrain-exit");
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
                     ordinal = 1,
                     shift = At.Shift.BEFORE
             )
     )
     private void onRenderWorldPassBeforeCutoutMippedTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        PipelineContext.getInstance().applyTerrainCulling(WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED);
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED);
+        context.applyTerrainCulling(WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED);
+        context.beginPhase(WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED);
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
                     ordinal = 1,
                     shift = At.Shift.AFTER
             )
     )
     private void onRenderWorldPassAfterCutoutMippedTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().restoreTerrainCulling();
+        context.endPass();
+        context.restoreTerrainCulling();
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
                     ordinal = 2,
                     shift = At.Shift.BEFORE
             )
     )
     private void onRenderWorldPassBeforeCutoutTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        PipelineContext.getInstance().applyTerrainCulling(WorldRenderingPhase.TERRAIN_CUTOUT);
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.TERRAIN_CUTOUT);
+        context.applyTerrainCulling(WorldRenderingPhase.TERRAIN_CUTOUT);
+        context.beginPhase(WorldRenderingPhase.TERRAIN_CUTOUT);
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
                     ordinal = 2,
                     shift = At.Shift.AFTER
             )
     )
     private void onRenderWorldPassAfterCutoutTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().restoreTerrainCulling();
-        PipelineContext.getInstance().snapshotOpaqueTerrainDepth();
-        if (PipelineContext.getInstance().shouldRenderShadowMapAfterOpaqueTerrain()) {
-            PipelineContext.getInstance().renderShadowMap(partialTicks);
+        context.endPass();
+        context.restoreTerrainCulling();
+        context.snapshotOpaqueTerrainDepth();
+        if (context.shouldRenderShadowMapAfterOpaqueTerrain()) {
+            context.renderShadowMap(partialTicks);
         }
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;renderEntities(Lnet/minecraft/entity/Entity;Lnet/minecraft/client/renderer/culling/ICamera;F)V",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_180446_a(Lnet/minecraft/entity/Entity;Lnet/minecraft/client/renderer/culling/ICamera;F)V",
                     shift = At.Shift.BEFORE
             )
     )
     private void onRenderWorldPassBeforeEntities(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.ENTITIES);
+        context.beginPhase(WorldRenderingPhase.ENTITIES);
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;renderEntities(Lnet/minecraft/entity/Entity;Lnet/minecraft/client/renderer/culling/ICamera;F)V",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_180446_a(Lnet/minecraft/entity/Entity;Lnet/minecraft/client/renderer/culling/ICamera;F)V",
                     shift = At.Shift.AFTER
             )
     )
     private void onRenderWorldPassAfterEntities(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        PipelineContext.getInstance().endPass();
+        context.endPass();
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/particle/ParticleManager;renderLitParticles(Lnet/minecraft/entity/Entity;F)V",
+                    target = "Lnet/minecraft/client/particle/ParticleManager;func_78872_b(Lnet/minecraft/entity/Entity;F)V",
                     shift = At.Shift.BEFORE
             )
     )
@@ -421,10 +433,10 @@ public class EntityRendererMixin {
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/particle/ParticleManager;renderLitParticles(Lnet/minecraft/entity/Entity;F)V",
+                    target = "Lnet/minecraft/client/particle/ParticleManager;func_78872_b(Lnet/minecraft/entity/Entity;F)V",
                     shift = At.Shift.AFTER
             )
     )
@@ -438,10 +450,10 @@ public class EntityRendererMixin {
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/particle/ParticleManager;renderParticles(Lnet/minecraft/entity/Entity;F)V",
+                    target = "Lnet/minecraft/client/particle/ParticleManager;func_78874_a(Lnet/minecraft/entity/Entity;F)V",
                     shift = At.Shift.BEFORE
             )
     )
@@ -466,10 +478,10 @@ public class EntityRendererMixin {
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/particle/ParticleManager;renderParticles(Lnet/minecraft/entity/Entity;F)V",
+                    target = "Lnet/minecraft/client/particle/ParticleManager;func_78874_a(Lnet/minecraft/entity/Entity;F)V",
                     shift = At.Shift.AFTER
             )
     )
@@ -483,137 +495,169 @@ public class EntityRendererMixin {
     }
 
     @Redirect(
-            method = "renderWorldPass",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/particle/ParticleManager;renderLitParticles(Lnet/minecraft/entity/Entity;F)V")
+            method = "func_175068_a",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/particle/ParticleManager;func_78872_b(Lnet/minecraft/entity/Entity;F)V")
     )
     private void ausm$renderLitParticlesIfGbufferRenderingEnabled(ParticleManager particleManager, Entity entity, float partialTicks) {
         if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
-            particleManager.renderLitParticles(entity, partialTicks);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.renderLitParticles(particleManager, entity, partialTicks);
         }
     }
 
     @Redirect(
-            method = "renderWorldPass",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/particle/ParticleManager;renderParticles(Lnet/minecraft/entity/Entity;F)V")
+            method = "func_175068_a",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/particle/ParticleManager;func_78874_a(Lnet/minecraft/entity/Entity;F)V")
     )
     private void ausm$renderParticlesIfGbufferRenderingEnabled(ParticleManager particleManager, Entity entity, float partialTicks) {
         if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
-            particleManager.renderParticles(entity, partialTicks);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.renderParticles(particleManager, entity, partialTicks);
         }
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;drawBlockDamageTexture(Lnet/minecraft/client/renderer/Tessellator;Lnet/minecraft/client/renderer/BufferBuilder;Lnet/minecraft/entity/Entity;F)V",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174981_a(Lnet/minecraft/client/renderer/Tessellator;Lnet/minecraft/client/renderer/BufferBuilder;Lnet/minecraft/entity/Entity;F)V",
                     shift = At.Shift.BEFORE
             )
     )
     private void onRenderWorldPassBeforeBlockDamage(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.DESTROY);
+        context.beginPhase(WorldRenderingPhase.DESTROY);
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;drawBlockDamageTexture(Lnet/minecraft/client/renderer/Tessellator;Lnet/minecraft/client/renderer/BufferBuilder;Lnet/minecraft/entity/Entity;F)V",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174981_a(Lnet/minecraft/client/renderer/Tessellator;Lnet/minecraft/client/renderer/BufferBuilder;Lnet/minecraft/entity/Entity;F)V",
                     shift = At.Shift.AFTER
             )
     )
     private void onRenderWorldPassAfterBlockDamage(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        PipelineContext.getInstance().endPass();
+        context.endPass();
     }
 
     @Redirect(
-            method = "renderWorldPass",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;drawBlockDamageTexture(Lnet/minecraft/client/renderer/Tessellator;Lnet/minecraft/client/renderer/BufferBuilder;Lnet/minecraft/entity/Entity;F)V")
+            method = "func_175068_a",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174981_a(Lnet/minecraft/client/renderer/Tessellator;Lnet/minecraft/client/renderer/BufferBuilder;Lnet/minecraft/entity/Entity;F)V")
     )
     private void ausm$drawBlockDamageIfGbufferRenderingEnabled(RenderGlobal renderGlobal, Tessellator tessellator, BufferBuilder bufferBuilder, Entity entity, float partialTicks) {
         if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
-            renderGlobal.drawBlockDamageTexture(tessellator, bufferBuilder, entity, partialTicks);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.drawBlockDamageTexture(renderGlobal, tessellator, bufferBuilder, entity, partialTicks);
         }
     }
 
+    @Redirect(
+            method = "func_175068_a",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;func_72731_b(Lnet/minecraft/entity/player/EntityPlayer;Lnet/minecraft/util/math/RayTraceResult;IF)V")
+    )
+    private void ausm$drawSelectionBoxWithRepairedGlState(RenderGlobal renderGlobal, EntityPlayer player, RayTraceResult target, int execute, float partialTicks) {
+        ausm$repairSelectionBoxClientArrayState();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.drawSelectionBox(renderGlobal, player, target, execute, partialTicks);
+    }
+
+    private static void ausm$repairSelectionBoxClientArrayState() {
+        if (!ausm$loggedSelectionBoxStateRepair) {
+            ausm$loggedSelectionBoxStateRepair = true;
+            MainMod.LOGGER.warn("[AUSMSelectionBox] Repairing fixed-function client-array state before vanilla selection-box draw.");
+        }
+
+        FixedFunctionGlState.resetClientArrayState(true);
+    }
+
+    private static void ausm$repairEntityClientArrayState() {
+        if (!ausm$loggedEntityStateRepair) {
+            ausm$loggedEntityStateRepair = true;
+            MainMod.LOGGER.warn("[AUSMEntityRender] Repairing client-array/VAO state before vanilla entity rendering.");
+        }
+
+        FixedFunctionGlState.resetClientArrayState(false);
+    }
+
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/EntityRenderer;renderRainSnow(F)V",
+                    target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78474_d(F)V",
                     shift = At.Shift.BEFORE
             )
     )
     private void onRenderWorldPassBeforeWeather(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
-        if (!PipelineContext.getInstance().shouldRenderWeather()) {
+        if (!context.shouldRenderWeather()) {
             return;
         }
 
-        PipelineContext.getInstance().beginTranslucents();
-        PipelineContext.getInstance().applyWeatherRenderState();
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.RAIN_SNOW);
+        context.beginTranslucents();
+        context.applyWeatherRenderState();
+        context.beginPhase(WorldRenderingPhase.RAIN_SNOW);
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/EntityRenderer;renderRainSnow(F)V",
+                    target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78474_d(F)V",
                     shift = At.Shift.AFTER
             )
     )
     private void onRenderWorldPassAfterWeather(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
-        if (!PipelineContext.getInstance().shouldRenderWeather()) {
+        if (!context.shouldRenderWeather()) {
             return;
         }
 
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().restoreWeatherRenderState();
+        context.endPass();
+        context.restoreWeatherRenderState();
     }
 
     @Redirect(
-            method = "renderWorldPass",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/EntityRenderer;renderRainSnow(F)V")
+            method = "func_175068_a",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78474_d(F)V")
     )
     private void ausm$renderWeatherIfEnabled(EntityRenderer renderer, float partialTicks) {
         if (PipelineContext.getInstance().shouldRenderWeather()) {
-            renderRainSnow(partialTicks);
+            func_78474_d(partialTicks);
         }
     }
 
     @Redirect(
-            method = "renderWorldPass",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/EntityRenderer;renderHand(FI)V")
+            method = "func_175068_a",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78476_b(FI)V")
     )
     private void ausm$renderHandIfGbufferRenderingEnabled(EntityRenderer renderer, float partialTicks, int pass) {
         if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
-            renderHand(partialTicks, pass);
+            PipelineContext.getInstance().prepareVanillaHandRenderState();
+            func_78476_b(partialTicks, pass);
         }
     }
 
     @Redirect(
-            method = "renderWorldPass",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;updateChunks(J)V")
+            method = "func_175068_a",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174967_a(J)V")
     )
     private void ausm$skipBetterPortalsNestedChunkUpdates(RenderGlobal renderGlobal, long finishTimeNano) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.prepareRenderGlobalChunkUpdates(renderGlobal)) {
             try {
-                renderGlobal.updateChunks(finishTimeNano);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.updateChunks(renderGlobal, finishTimeNano);
             } catch (NullPointerException e) {
                 if (!context.handleBetterPortalsChunkUpdateFailure(renderGlobal, e)) {
                     throw e;
@@ -623,38 +667,39 @@ public class EntityRendererMixin {
     }
 
     @Redirect(
-            method = "renderWorldPass",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I")
+            method = "func_175068_a",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I")
     )
     private int ausm$renderWorldBlockLayer(RenderGlobal renderGlobal, BlockRenderLayer layer, double partialTicks, int pass, Entity viewEntity) {
         return PipelineContext.getInstance().renderWorldBlockLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
                     ordinal = 3,
                     shift = At.Shift.BEFORE
             )
     )
     private void onRenderWorldPassBeforeTranslucentTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
             return;
         }
 
-        PipelineContext.getInstance().beginTranslucents();
-        PipelineContext.getInstance().applyWaterRenderState();
-        PipelineContext.getInstance().applyTerrainCulling(WorldRenderingPhase.TERRAIN_TRANSLUCENT);
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.TERRAIN_TRANSLUCENT);
+        context.beginTranslucents();
+        context.applyWaterRenderState();
+        context.applyTerrainCulling(WorldRenderingPhase.TERRAIN_TRANSLUCENT);
+        context.beginPhase(WorldRenderingPhase.TERRAIN_TRANSLUCENT);
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
                     ordinal = 3,
                     shift = At.Shift.AFTER
             )
@@ -679,43 +724,51 @@ public class EntityRendererMixin {
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/EntityRenderer;renderHand(FI)V",
+                    target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78476_b(FI)V",
                     shift = At.Shift.BEFORE
             )
     )
     private void onRenderWorldPassBeforeHand(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
+            return;
+        }
+        if (!context.isActive()) {
+            context.prepareVanillaHandRenderState();
             return;
         }
 
-        PipelineContext.getInstance().beginHand();
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.HAND_SOLID);
+        context.beginHand();
+        context.beginPhase(WorldRenderingPhase.HAND_SOLID);
     }
 
     @Inject(
-            method = "renderWorldPass",
+            method = "func_175068_a",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/EntityRenderer;renderHand(FI)V",
+                    target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78476_b(FI)V",
                     shift = At.Shift.AFTER
             )
     )
     private void onRenderWorldPassAfterHand(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        if (PipelineContext.getInstance().shouldBypassWorldPassRendering()) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldBypassWorldPassRendering()) {
+            return;
+        }
+        if (!context.isActive()) {
             return;
         }
 
-        PipelineContext context = PipelineContext.getInstance();
         context.finishHand();
-        context.probeHandGbufferAfterRender();
         context.endPass();
     }
 
-    @Inject(method = "renderWorldPass", at = @At("RETURN"))
+    @Inject(method = "func_175068_a", at = @At("RETURN"))
     private void onRenderWorldPassReturn(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        PipelineContext.getInstance().finishWorldPassRendering();
+        PipelineContext context = PipelineContext.getInstance();
+        context.finishWorldPassRendering();
     }
 }

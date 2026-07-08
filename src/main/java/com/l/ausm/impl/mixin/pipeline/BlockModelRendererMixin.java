@@ -3,6 +3,7 @@ package com.l.ausm.impl.mixin.pipeline;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.AppliedEnergisticsFacadeQuadMetadata;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.BlockModelRenderer;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -35,7 +36,8 @@ public class BlockModelRendererMixin {
             greenMultiplier = brightenAoMultiplier(greenMultiplier, emissiveWeight);
             blueMultiplier = brightenAoMultiplier(blueMultiplier, emissiveWeight);
         }
-        bufferBuilder.putColorMultiplier(redMultiplier, greenMultiplier, blueMultiplier, vertexIndex);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((bufferBuilder), new String[] {"func_178978_a", "putColorMultiplier"},
+                new Class<?>[] {float.class, float.class, float.class, int.class}, (redMultiplier), (greenMultiplier), (blueMultiplier), (vertexIndex));;
         if (vertexIndex == 1) {
             ausm$currentQuadMetadata.remove();
             BlockRenderContext.clearQuadOverrides();
@@ -58,12 +60,12 @@ public class BlockModelRendererMixin {
                         metadata.emission()
                 );
             }
-            return quad.getVertexData();
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadVertexData(quad);
         }
         BlockRenderContext.clearQuadOverrides();
-        TextureAtlasSprite sprite = quad != null ? quad.getSprite() : null;
-        BlockRenderContext.setQuadSprite(sprite != null ? sprite.getIconName() : null);
-        return quad.getVertexData();
+        TextureAtlasSprite sprite = quad != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadSprite(quad) : null;
+        BlockRenderContext.setQuadSprite(sprite != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite) : null);
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadVertexData(quad);
     }
 
     @Redirect(
@@ -71,7 +73,7 @@ public class BlockModelRendererMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/BufferBuilder;addVertexData([I)V")
     )
     private void ausm$addVertexDataWithQuadEmissionClear(BufferBuilder bufferBuilder, int[] vertexData) {
-        bufferBuilder.addVertexData(vertexData);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((bufferBuilder), new String[] {"func_178981_a", "addVertexData"}, new Class<?>[] {int[].class}, (vertexData));;
     }
 
     @Redirect(
@@ -80,7 +82,7 @@ public class BlockModelRendererMixin {
     )
     private int ausm$useAe2CableBusTintFallback(BlockColors blockColors, IBlockState state, IBlockAccess blockAccess,
                                                 BlockPos pos, int tintIndex) {
-        int color = blockColors.colorMultiplier(state, blockAccess, pos, tintIndex);
+        int color = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((blockColors), new String[] {"func_186724_a", "colorMultiplier"}, new Class<?>[] {net.minecraft.block.state.IBlockState.class, net.minecraft.world.IBlockAccess.class, net.minecraft.util.math.BlockPos.class, int.class}, 0xFFFFFF, (state), (blockAccess), (pos), (tintIndex));
         AppliedEnergisticsFacadeQuadMetadata.Metadata metadata = ausm$currentQuadMetadata.get();
         int ae2Color = metadata != null ? metadata.tintColor(tintIndex) : -1;
         if (ae2Color >= 0) {

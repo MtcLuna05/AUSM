@@ -5,7 +5,9 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.WorldVertexBufferUploader;
@@ -34,18 +36,7 @@ public class WorldVertexBufferUploaderMixin {
 
     @Inject(method = "draw", at = @At("HEAD"))
     private void ausm$unbindArrayBufferForClientDraw(BufferBuilder bufferBuilder, CallbackInfo ci) {
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-        GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
-        GL11.glDisableClientState(GL11.GL_COLOR_ARRAY);
-        GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
-        GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
-        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
-        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
-        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
+        FixedFunctionGlState.resetClientArrayState(false);
     }
 
     @Inject(
@@ -53,7 +44,7 @@ public class WorldVertexBufferUploaderMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GlStateManager;glDrawArrays(III)V", shift = At.Shift.BEFORE)
     )
     private void ausm$enablePipelineAttributes(BufferBuilder bufferBuilder, CallbackInfo ci) {
-        VertexFormat format = bufferBuilder.getVertexFormat();
+        VertexFormat format = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder);
         if (ExtendedVertexFormats.isPipelineEntity(format)) {
             ausm$enablePipelineEntityAttributes(bufferBuilder, format);
             return;
@@ -62,10 +53,13 @@ public class WorldVertexBufferUploaderMixin {
             return;
         }
 
-        ByteBuffer byteBuffer = bufferBuilder.getByteBuffer();
+        ByteBuffer byteBuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferByteBuffer(bufferBuilder);
+        if (byteBuffer == null) {
+            return;
+        }
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET);
         GL11.glEnableClientState(GL11.GL_NORMAL_ARRAY);
-        GL11.glNormalPointer(GL11.GL_BYTE, format.getSize(), byteBuffer);
+        GL11.glNormalPointer(GL11.GL_BYTE, ExtendedVertexFormats.size(format), byteBuffer);
 
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET);
         ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
@@ -74,7 +68,7 @@ public class WorldVertexBufferUploaderMixin {
                 2,
                 GL11.GL_FLOAT,
                 false,
-                format.getSize(),
+                ExtendedVertexFormats.size(format),
                 byteBuffer
         );
 
@@ -85,7 +79,7 @@ public class WorldVertexBufferUploaderMixin {
                 4,
                 GL11.GL_BYTE,
                 true,
-                format.getSize(),
+                ExtendedVertexFormats.size(format),
                 byteBuffer
         );
 
@@ -96,7 +90,7 @@ public class WorldVertexBufferUploaderMixin {
                 4,
                 GL11.GL_SHORT,
                 false,
-                format.getSize(),
+                ExtendedVertexFormats.size(format),
                 byteBuffer
         );
 
@@ -107,7 +101,7 @@ public class WorldVertexBufferUploaderMixin {
                 4,
                 GL11.GL_BYTE,
                 false,
-                format.getSize(),
+                ExtendedVertexFormats.size(format),
                 byteBuffer
         );
     }
@@ -117,7 +111,7 @@ public class WorldVertexBufferUploaderMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GlStateManager;glDrawArrays(III)V", shift = At.Shift.AFTER)
     )
     private void ausm$disablePipelineAttributes(BufferBuilder bufferBuilder, CallbackInfo ci) {
-        if (ExtendedVertexFormats.isPipelineBlock(bufferBuilder.getVertexFormat()) || ExtendedVertexFormats.isPipelineEntity(bufferBuilder.getVertexFormat())) {
+        if (ExtendedVertexFormats.isPipelineBlock(com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder)) || ExtendedVertexFormats.isPipelineEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder))) {
             GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
@@ -127,10 +121,13 @@ public class WorldVertexBufferUploaderMixin {
     }
 
     private void ausm$enablePipelineEntityAttributes(BufferBuilder bufferBuilder, VertexFormat format) {
-        ByteBuffer byteBuffer = bufferBuilder.getByteBuffer();
+        ByteBuffer byteBuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferByteBuffer(bufferBuilder);
+        if (byteBuffer == null) {
+            return;
+        }
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_ENTITY_NORMAL_OFFSET);
         GL11.glEnableClientState(GL11.GL_NORMAL_ARRAY);
-        GL11.glNormalPointer(GL11.GL_BYTE, format.getSize(), byteBuffer);
+        GL11.glNormalPointer(GL11.GL_BYTE, ExtendedVertexFormats.size(format), byteBuffer);
 
         byteBuffer.position(ExtendedVertexFormats.PIPELINE_ENTITY_MC_ENTITY_OFFSET);
         ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
@@ -139,7 +136,7 @@ public class WorldVertexBufferUploaderMixin {
                 4,
                 GL11.GL_SHORT,
                 false,
-                format.getSize(),
+                ExtendedVertexFormats.size(format),
                 byteBuffer
         );
 
@@ -150,7 +147,7 @@ public class WorldVertexBufferUploaderMixin {
                 2,
                 GL11.GL_FLOAT,
                 false,
-                format.getSize(),
+                ExtendedVertexFormats.size(format),
                 byteBuffer
         );
 
@@ -161,7 +158,7 @@ public class WorldVertexBufferUploaderMixin {
                 4,
                 GL11.GL_BYTE,
                 true,
-                format.getSize(),
+                ExtendedVertexFormats.size(format),
                 byteBuffer
         );
     }

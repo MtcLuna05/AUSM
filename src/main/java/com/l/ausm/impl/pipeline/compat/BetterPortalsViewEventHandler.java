@@ -17,8 +17,8 @@ public final class BetterPortalsViewEventHandler {
     public static void onForgeEvent(Event event) {
         if (BetterPortalsCompat.handleRenderPassEvent(event)) {
             WorldClient parentWorld = BetterPortalsCompat.consumePendingParentRenderWorld();
-            if (parentWorld != null && parentWorld.provider != null) {
-                MainMod.getShaderPackManager().restoreAfterBetterPortalsNestedRender(parentWorld.provider.getDimension());
+            if (parentWorld != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(parentWorld) != null) {
+                MainMod.getShaderPackManager().restoreAfterBetterPortalsNestedRender(com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(parentWorld)));
             }
         }
     }

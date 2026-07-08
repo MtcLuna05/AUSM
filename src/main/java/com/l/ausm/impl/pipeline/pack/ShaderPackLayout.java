@@ -74,11 +74,13 @@ public final class ShaderPackLayout {
     }
 
     public List<String> programBaseAliases(ProgramId programId) {
-        List<String> aliases = new ArrayList<>(2);
+        LinkedHashSet<String> aliases = new LinkedHashSet<>();
         aliases.add(programBase(programId));
+        aliases.add(shaderRoot + "program/" + programId.sourceName());
         String compactName = compactIndexedName(programId);
         if (compactName != null) {
             aliases.add(shaderRoot + compactName);
+            aliases.add(shaderRoot + "program/" + compactName);
         }
         return List.copyOf(aliases);
     }

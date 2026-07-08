@@ -22,11 +22,11 @@ public record ShaderTransformParameters(
     }
 
     public boolean fragmentShader() {
-        return shaderType == OpenGlHelper.GL_FRAGMENT_SHADER;
+        return shaderType == com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL20.GL_FRAGMENT_SHADER, "field_153210_r", "GL_FRAGMENT_SHADER");
     }
 
     public boolean vertexShader() {
-        return shaderType == OpenGlHelper.GL_VERTEX_SHADER;
+        return shaderType == com.l.ausm.impl.util.MinecraftReflectionCompat.glVertexShader();
     }
 
     public boolean compatibilityProfile() {

@@ -52,8 +52,8 @@ public final class ShaderSamplerState {
     }
 
     private static int optifineAnisotropyLevel() {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        if (minecraft == null || minecraft.gameSettings == null) {
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft) == null) {
             return 0;
         }
 
@@ -63,15 +63,15 @@ public final class ShaderSamplerState {
         }
 
         try {
-            return Math.max(0, field.getInt(minecraft.gameSettings));
+            return Math.max(0, field.getInt(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft)));
         } catch (IllegalAccessException | IllegalArgumentException ignored) {
             return 0;
         }
     }
 
     private static Field optifineAnisotropyField() {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        if (minecraft == null || minecraft.gameSettings == null) {
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft) == null) {
             return null;
         }
         if (optifineAnisotropyFieldResolved) {
@@ -80,10 +80,17 @@ public final class ShaderSamplerState {
 
         optifineAnisotropyFieldResolved = true;
         try {
-            Field field = minecraft.gameSettings.getClass().getField("ofAfLevel");
+            Field field = com.l.ausm.impl.util.MinecraftReflectionCompat.findField(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft).getClass(),
+                    "ofAfLevel"
+            );
+            if (field == null) {
+                optifineAnisotropyField = null;
+                return null;
+            }
             field.setAccessible(true);
             optifineAnisotropyField = field;
-        } catch (NoSuchFieldException | SecurityException ignored) {
+        } catch (SecurityException ignored) {
             optifineAnisotropyField = null;
         }
         return optifineAnisotropyField;

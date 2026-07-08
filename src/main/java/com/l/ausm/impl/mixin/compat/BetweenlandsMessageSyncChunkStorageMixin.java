@@ -19,7 +19,7 @@ public class BetweenlandsMessageSyncChunkStorageMixin {
     private static final String WORLD_STORAGE_CLASS = "thebetweenlands.common.world.storage.WorldStorageImpl";
     private static boolean warningLogged;
 
-    @Shadow
+    @Shadow(remap = false)
     private ChunkPos pos;
 
     @Inject(method = "handle", at = @At("HEAD"), cancellable = true, remap = false)
@@ -29,7 +29,7 @@ public class BetweenlandsMessageSyncChunkStorageMixin {
             return;
         }
 
-        WorldClient world = Minecraft.getMinecraft() != null ? Minecraft.getMinecraft().world : null;
+        WorldClient world = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) : null;
         if (world == null) {
             ci.cancel();
             return;
@@ -37,14 +37,15 @@ public class BetweenlandsMessageSyncChunkStorageMixin {
 
         Chunk chunk;
         try {
-            chunk = world.getChunk(pos.x, pos.z);
+            chunk = com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.world.chunk.Chunk.class, null, new String[] {"func_72964_e", "getChunk"},
+                new Class<?>[] {int.class, int.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((pos), 0, "field_77276_a", "x")), (com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((pos), 0, "field_77275_b", "z")));
         } catch (RuntimeException e) {
             logSkippedPacket("chunk lookup failed", e);
             ci.cancel();
             return;
         }
 
-        if (chunk == null || chunk.isEmpty()) {
+        if (chunk == null || com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((chunk), new String[] {"func_76621_g", "isEmpty"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
             ci.cancel();
             return;
         }

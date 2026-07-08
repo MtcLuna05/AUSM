@@ -19,14 +19,11 @@ public class GuiIngameMixin {
 
     @Inject(method = "renderGameOverlay(F)V", at = @At("HEAD"), cancellable = true)
     private void ausm$beforeGameOverlay(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().probeShaderlessSkyGuiState("ingame-overlay-head");
         if (ausm$isHudHidden()) {
-            PipelineContext.getInstance().probeShaderlessSkyGuiState("ingame-overlay-hidden");
             return;
         }
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldDeferIngameHud()) {
-            context.probeShaderlessSkyGuiState("ingame-overlay-deferred");
             ci.cancel();
             return;
         }
@@ -37,12 +34,11 @@ public class GuiIngameMixin {
 
     @Inject(method = "renderGameOverlay(F)V", at = @At("RETURN"))
     private void ausm$afterGameOverlay(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().probeShaderlessSkyGuiState("ingame-overlay-return");
         if (ausm$isHudHidden()) {
             return;
         }
         PipelineContext.getInstance().finishGuiRendering();
-        ShaderCompileNotifications.renderOverlay(new ScaledResolution(Minecraft.getMinecraft()));
+        ShaderCompileNotifications.renderOverlay(new ScaledResolution(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
     }
 
     @Inject(
@@ -75,10 +71,10 @@ public class GuiIngameMixin {
     }
 
     private boolean ausm$isHudHidden() {
-        Minecraft minecraft = Minecraft.getMinecraft();
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         return minecraft != null
-                && minecraft.currentScreen == null
-                && minecraft.gameSettings != null
-                && minecraft.gameSettings.hideGUI;
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft) == null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft));
     }
 }

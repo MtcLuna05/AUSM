@@ -85,7 +85,7 @@ public final class BlockRenderContext {
             CURRENT_BLOCK_ACCESS.remove();
         }
         if (pos != null) {
-            CURRENT_BLOCK_POS.set(pos.toImmutable());
+            CURRENT_BLOCK_POS.set(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos));
         } else {
             CURRENT_BLOCK_POS.remove();
         }

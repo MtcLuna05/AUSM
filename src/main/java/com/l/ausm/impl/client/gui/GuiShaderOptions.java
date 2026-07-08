@@ -3,6 +3,7 @@ package com.l.ausm.impl.client.gui;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.pack.ShaderOption;
 import com.l.ausm.api.pipeline.pack.ShaderOptions;
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
 import com.l.ausm.api.pipeline.pack.ShaderScreen;
 import com.l.ausm.api.pipeline.pack.ShaderScreenEntry;
@@ -33,6 +34,7 @@ public class GuiShaderOptions extends GuiScreen {
     private static final int ID_PREVIOUS_PAGE = 203;
     private static final int ID_NEXT_PAGE = 204;
     private static final int ID_PREVIEW = 205;
+    private static final String DEBUG_VOID_OPTION = "AUSM_CUSTOM_VOID_WORLD";
 
     private static final int CATEGORY_BASE_ID = 1000;
     private static final int OPTION_BASE_ID = 3000;
@@ -195,10 +197,21 @@ public class GuiShaderOptions extends GuiScreen {
         if (type == ShaderScreenEntry.Type.OPTION) {
             ShaderOption option = options.get(entry.name());
             if (option == null) {
+                logVoidOption("create-missing", null, "screen=" + selectedScreen + ", entry=" + entry.name() + ", id=" + id);
                 GuiButton missing = new GuiFlatButton(id, x, y, width, 20, entry.name());
                 missing.enabled = false;
                 return missing;
             }
+            logVoidOption("create", option, "screen=" + selectedScreen
+                    + ", entry=" + entry.name()
+                    + ", id=" + id
+                    + ", valueFor=" + valueFor(option)
+                    + ", pending=" + pendingValues.get(option.name())
+                    + ", saved=" + savedValues.get(option.name())
+                    + ", slider=" + option.slider()
+                    + ", toggle=" + option.toggle()
+                    + ", rendersAsToggle=" + rendersAsToggle(option)
+                    + ", choices=" + option.choices());
             if (option.slider() && option.choices().size() > 1) {
                 return new GuiShaderOptionSlider(id, x, y, width, 20, option, valueFor(option));
             }
@@ -353,8 +366,8 @@ public class GuiShaderOptions extends GuiScreen {
             return;
         }
 
-        int mouseX = Mouse.getEventX() * this.width / this.mc.displayWidth;
-        int mouseY = this.height - Mouse.getEventY() * this.height / this.mc.displayHeight - 1;
+        int mouseX = Mouse.getEventX() * this.width / com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(this.mc);
+        int mouseY = this.height - Mouse.getEventY() * this.height / com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(this.mc) - 1;
         int direction = wheel > 0 ? -1 : 1;
         if (activeDropdown != null) {
             if (activeDropdown.isMouseOver(mouseX, mouseY)) {
@@ -384,7 +397,7 @@ public class GuiShaderOptions extends GuiScreen {
     protected void keyTyped(char typedChar, int keyCode) throws IOException {
         if (keyCode == Keyboard.KEY_ESCAPE) {
             if (GuiControlHints.isShiftDown()) {
-                this.mc.displayGuiScreen(null);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, null);
                 return;
             }
             if (previewHidden) {
@@ -405,7 +418,7 @@ public class GuiShaderOptions extends GuiScreen {
             if (navigateBack()) {
                 return;
             }
-            this.mc.displayGuiScreen(parent);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, parent);
             return;
         }
 
@@ -439,10 +452,13 @@ public class GuiShaderOptions extends GuiScreen {
         }
 
         if (button.id == ID_DONE) {
-            this.mc.displayGuiScreen(parent);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, parent);
             return;
         }
         if (button.id == ID_APPLY) {
+            logVoidOption("apply", properties().options().get(DEBUG_VOID_OPTION), "pending=" + pendingValues.get(DEBUG_VOID_OPTION)
+                    + ", saved=" + savedValues.get(DEBUG_VOID_OPTION)
+                    + ", dirty=" + isDirty());
             MainMod.getShaderPackManager().setShaderOptions(packName, pendingValues);
             savedValues.clear();
             savedValues.putAll(pendingValues);
@@ -622,8 +638,18 @@ public class GuiShaderOptions extends GuiScreen {
 
         ShaderOption option = properties.options().get(entry.name());
         if (option == null) {
+            logVoidOption("click-missing", null, "screen=" + selectedScreen + ", entry=" + entry.name() + ", id=" + button.id);
             return;
         }
+        logVoidOption("click", option, "screen=" + selectedScreen
+                + ", button=" + button.getClass().getSimpleName()
+                + ", current=" + valueFor(option)
+                + ", pending=" + pendingValues.get(option.name())
+                + ", next=" + option.withValue(valueFor(option)).nextValue()
+                + ", choices=" + option.choices()
+                + ", slider=" + option.slider()
+                + ", toggle=" + option.toggle()
+                + ", rendersAsToggle=" + rendersAsToggle(option));
 
         if (button instanceof GuiShaderOptionSlider) {
             GuiShaderOptionSlider slider = (GuiShaderOptionSlider) button;
@@ -788,12 +814,21 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     private void setPendingOptionValue(ShaderOption option, String value) {
+        String previous = valueFor(option);
         if (option.defaultValue().equals(value)) {
             pendingValues.remove(option.name());
         } else {
             pendingValues.put(option.name(), value);
         }
+        logVoidOption("set-pending", option, "previous=" + previous
+                + ", requested=" + value
+                + ", stored=" + pendingValues.get(option.name())
+                + ", default=" + option.defaultValue()
+                + ", dirty=" + isDirty());
         syncProfileWithCurrentValues(properties);
+    }
+
+    private void logVoidOption(String stage, ShaderOption option, String detail) {
     }
 
     private String shiftedChoice(ShaderOption option, String current, int direction) {
@@ -812,7 +847,13 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     private String valueFor(ShaderOption option) {
-        return pendingValues.getOrDefault(option.name(), option.value());
+        if (pendingValues.containsKey(option.name())) {
+            return pendingValues.get(option.name());
+        }
+        // ShaderOption.value() belongs to the last loaded properties snapshot. If the
+        // pending override was removed because the user selected the default value,
+        // the live GUI state is the default, not the stale snapshot value.
+        return option.defaultValue();
     }
 
     private String optionLabel(ShaderOption option) {
@@ -1264,40 +1305,51 @@ public class GuiShaderOptions extends GuiScreen {
 
     @Override
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
-        lastMouseX = mouseX;
-        lastMouseY = mouseY;
-        hoveredCommentTitle = List.of();
-        hoveredCommentBody = List.of();
-        if (previewHidden) {
-            super.drawScreen(mouseX, mouseY, partialTicks);
-            return;
+        PipelineContext context = PipelineContext.getInstance();
+        boolean managedGuiRender = context.isActive();
+        if (managedGuiRender) {
+            context.beginGuiRendering();
         }
+        try {
+            lastMouseX = mouseX;
+            lastMouseY = mouseY;
+            hoveredCommentTitle = List.of();
+            hoveredCommentBody = List.of();
+            if (previewHidden) {
+                super.drawScreen(mouseX, mouseY, partialTicks);
+                return;
+            }
 
-        drawRect(0, 0, this.width, this.height, 0x330B1016);
-        drawRect(8, 34, sidebarWidth + 8, this.height - 34, 0x66101418);
-        drawRect(optionPanelLeft() - 4, 34, this.width - 8, this.height - 34, 0x66101418);
-        this.drawCenteredString(this.fontRenderer, "Shader Options - " + displayPackName(), this.width / 2, 16, 0xFFFFFF);
-        String pageText = (page + 1) + " / " + (maxPage() + 1);
-        this.drawCenteredString(this.fontRenderer, pageText, this.width / 2, this.height - 22, 0xA0A0A0);
-        if (searchField != null) {
-            searchField.drawTextBox();
-            if (!searchField.isFocused() && searchField.getText().isEmpty()) {
-                fontRenderer.drawString("Search options", searchField.x + 4, searchField.y + 5, 0xFF6F7E8D);
+            drawRect(0, 0, this.width, this.height, 0x330B1016);
+            drawRect(8, 34, sidebarWidth + 8, this.height - 34, 0x66101418);
+            drawRect(optionPanelLeft() - 4, 34, this.width - 8, this.height - 34, 0x66101418);
+            this.drawCenteredString(this.fontRenderer, "Shader Options - " + displayPackName(), this.width / 2, 16, 0xFFFFFF);
+            String pageText = (page + 1) + " / " + (maxPage() + 1);
+            this.drawCenteredString(this.fontRenderer, pageText, this.width / 2, this.height - 22, 0xA0A0A0);
+            if (searchField != null) {
+                searchField.drawTextBox();
+                if (!searchField.isFocused() && searchField.getText().isEmpty()) {
+                    fontRenderer.drawString("Search options", searchField.x + 4, searchField.y + 5, 0xFF6F7E8D);
+                }
+            }
+            drawSidebarScrollbar();
+            boolean dropdownOpen = activeDropdown != null || activeProfileDropdown != null;
+            super.drawScreen(dropdownOpen ? -1 : mouseX, dropdownOpen ? -1 : mouseY, partialTicks);
+            drawFocusedButtonOutline();
+            if (activeDropdown != null) {
+                activeDropdown.drawDropdown(mouseX, mouseY);
+            }
+            if (activeProfileDropdown != null) {
+                activeProfileDropdown.drawDropdown(mouseX, mouseY);
+            }
+            drawShaderTooltip(mouseX, mouseY);
+            drawBottomCommentPanel();
+            drawEscapeHintTooltip(mouseX, mouseY);
+        } finally {
+            if (managedGuiRender) {
+                context.finishGuiRendering();
             }
         }
-        drawSidebarScrollbar();
-        boolean dropdownOpen = activeDropdown != null || activeProfileDropdown != null;
-        super.drawScreen(dropdownOpen ? -1 : mouseX, dropdownOpen ? -1 : mouseY, partialTicks);
-        drawFocusedButtonOutline();
-        if (activeDropdown != null) {
-            activeDropdown.drawDropdown(mouseX, mouseY);
-        }
-        if (activeProfileDropdown != null) {
-            activeProfileDropdown.drawDropdown(mouseX, mouseY);
-        }
-        drawShaderTooltip(mouseX, mouseY);
-        drawBottomCommentPanel();
-        drawEscapeHintTooltip(mouseX, mouseY);
     }
 
     private void drawSidebarScrollbar() {
@@ -1712,8 +1764,8 @@ public class GuiShaderOptions extends GuiScreen {
             String rightText = showSlider ? "" : optionValue(option.name(), selectedValue);
             int textColor = enabled ? 0xFFFFFF : 0x707070;
             if (!showSlider) {
-                mc.fontRenderer.drawString(leftText, x + 7, y + 5, textColor);
-                mc.fontRenderer.drawString(rightText, x + width - 7 - mc.fontRenderer.getStringWidth(rightText), y + 5, textColor);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(leftText, x + 7, y + 5, textColor);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(rightText, x + width - 7 - com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).getStringWidth(rightText), y + 5, textColor);
             }
 
             if (showSlider) {
@@ -1731,9 +1783,9 @@ public class GuiShaderOptions extends GuiScreen {
                 drawRect(thumbX + 1, trackTop + 3, thumbX + thumbWidth - 1, trackTop + trackHeight - 3, 0xFF7CB7FF);
 
                 String valueText = optionValue(option.name(), selectedValue);
-                mc.fontRenderer.drawString(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(
                         valueText,
-                        x + width / 2 - mc.fontRenderer.getStringWidth(valueText) / 2,
+                        x + width / 2 - com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).getStringWidth(valueText) / 2,
                         y + 6,
                         textColor
                 );
@@ -1959,8 +2011,8 @@ public class GuiShaderOptions extends GuiScreen {
             drawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
             drawRect(x + width - 18, y + 1, x + width - 17, y + height - 1, 0xFF0A0F15);
 
-            mc.fontRenderer.drawString(displayString, x + 7, y + 6, enabled ? 0xFFFFFF : 0x707070);
-            mc.fontRenderer.drawString(open ? "^" : "v", x + width - 12, y + 6, 0xC8CED6);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(displayString, x + 7, y + 6, enabled ? 0xFFFFFF : 0x707070);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(open ? "^" : "v", x + width - 12, y + 6, 0xC8CED6);
         }
 
         private void updateDisplay(String value) {
@@ -2071,8 +2123,8 @@ public class GuiShaderOptions extends GuiScreen {
             drawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
             drawRect(x + width - 18, y + 1, x + width - 17, y + height - 1, 0xFF0A0F15);
 
-            mc.fontRenderer.drawString(profileLabel(), x + 7, y + 6, enabled ? 0xFFFFFF : 0x707070);
-            mc.fontRenderer.drawString(open ? "^" : "v", x + width - 12, y + 6, 0xC8CED6);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(profileLabel(), x + 7, y + 6, enabled ? 0xFFFFFF : 0x707070);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(open ? "^" : "v", x + width - 12, y + 6, 0xC8CED6);
         }
 
         private boolean isMouseOver(int mouseX, int mouseY) {

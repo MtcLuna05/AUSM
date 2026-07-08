@@ -3,11 +3,11 @@ package com.l.ausm.impl.mixin.compat;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.mixin.pipeline.RenderManagerAccessor;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import meldexun.renderlib.renderer.entity.EntityRenderList;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.culling.ICamera;
 import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityList;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.client.renderer.entity.Render;
 import net.minecraft.client.renderer.entity.RenderEntity;
@@ -52,21 +52,21 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
     private static boolean ausm$rendererCacheReflectionFailed;
     private static boolean ausm$forgeRendererFactoryReflectionFailed;
 
-    @Shadow
+    @Shadow(remap = false)
     protected int renderedEntities;
 
-    @Shadow
+    @Shadow(remap = false)
     protected int occludedEntities;
 
-    @Shadow
+    @Shadow(remap = false)
     protected int totalEntities;
 
-    @Shadow
+    @Shadow(remap = false)
     private boolean shouldRender(Entity entity, ICamera camera, double partialTicks, double cameraX, double cameraY, double cameraZ) {
         throw new AssertionError();
     }
 
-    @Shadow
+    @Shadow(remap = false)
     protected abstract <T extends Entity> boolean isOcclusionCulled(T entity);
 
     @Inject(method = "setup", at = @At("HEAD"))
@@ -147,8 +147,8 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
 
     @Inject(method = "renderEntities(FLmeldexun/renderlib/renderer/entity/EntityRenderList;)V", at = @At("RETURN"))
     private void ausm$renderBetweenlandsFallback(float partialTicks, EntityRenderList renderList, CallbackInfo ci) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.getRenderManager() == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderManager(mc) == null) {
             return;
         }
         List<Entity> queuedEntities = renderList.getEntities();
@@ -164,7 +164,7 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
         String firstRendererNull = null;
         String firstSkippedPass = null;
         String sampleCandidates = null;
-        for (Entity entity : mc.world.loadedEntityList) {
+        for (Entity entity : com.l.ausm.impl.util.MinecraftReflectionCompat.loadedEntityList(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc))) {
             if (!ausm$isBetweenlandsEntity(entity)) {
                 continue;
             }
@@ -173,7 +173,7 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
                 skippedQueued++;
                 continue;
             }
-            if (!entity.shouldRenderInPass(pass)) {
+            if (!com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, pass)) {
                 skippedPass++;
                 if (firstSkippedPass == null) {
                     firstSkippedPass = ausm$describe(entity);
@@ -185,7 +185,7 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
                 firstCandidate = ausm$describe(entity);
             }
             sampleCandidates = ausm$appendSample(sampleCandidates, ausm$describe(entity), 5);
-            Render<Entity> renderer = ausm$registryRenderer(mc.getRenderManager(), entity);
+            Render<Entity> renderer = ausm$registryRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.renderManager(mc), entity);
             if (renderer == null) {
                 rendererNull++;
                 if (firstRendererNull == null) {
@@ -202,11 +202,13 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
                 }
             }
             try {
-                RenderManagerAccessor renderManagerAccessor = (RenderManagerAccessor) mc.getRenderManager();
-                double x = entity.lastTickPosX + (entity.posX - entity.lastTickPosX) * partialTicks - renderManagerAccessor.ausm$renderPosX();
-                double y = entity.lastTickPosY + (entity.posY - entity.lastTickPosY) * partialTicks - renderManagerAccessor.ausm$renderPosY();
-                double z = entity.lastTickPosZ + (entity.posZ - entity.lastTickPosZ) * partialTicks - renderManagerAccessor.ausm$renderPosZ();
-                renderer.doRender(entity, x, y, z, entity.prevRotationYaw + (entity.rotationYaw - entity.prevRotationYaw) * partialTicks, partialTicks);
+                RenderManagerAccessor renderManagerAccessor = (RenderManagerAccessor) com.l.ausm.impl.util.MinecraftReflectionCompat.renderManager(mc);
+                double x = com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(entity) + (com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity) - com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(entity)) * partialTicks - renderManagerAccessor.ausm$renderPosX();
+                double y = com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(entity) + (com.l.ausm.impl.util.MinecraftReflectionCompat.posY(entity) - com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(entity)) * partialTicks - renderManagerAccessor.ausm$renderPosY();
+                double z = com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(entity) + (com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity) - com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(entity)) * partialTicks - renderManagerAccessor.ausm$renderPosZ();
+                float yaw = com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationYaw(entity)
+                        + (com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(entity) - com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationYaw(entity)) * partialTicks;
+                renderer.doRender(entity, x, y, z, yaw, partialTicks);
                 rendered++;
                 if (firstRendered == null) {
                     firstRendered = ausm$describe(entity) + " renderer=" + renderer.getClass().getName();
@@ -218,7 +220,7 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
                     }
                     context.clearCurrentEntity();
                 }
-                GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
             }
         }
         if (loadedBetweenlands > 0 && ausm$manualRenderLogCount++ < AUSM_MAX_MANUAL_RENDER_LOGS) {
@@ -256,8 +258,8 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
     }
 
     private static boolean ausm$isBetweenlandsEntity(Entity entity) {
-        ResourceLocation key = entity != null ? EntityList.getKey(entity) : null;
-        return key != null && "thebetweenlands".equals(key.getNamespace());
+        ResourceLocation key = com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity);
+        return key != null && "thebetweenlands".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(key));
     }
 
     private static boolean ausm$canForceBetweenlandsIntoRenderList(Entity entity) {
@@ -271,13 +273,13 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
         if (entity instanceof ILoadable && !((ILoadable) entity).isChunkLoaded()) {
             return false;
         }
-        if (!entity.shouldRenderInPass(0) && !entity.shouldRenderInPass(1)) {
+        if (!com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, 0) && !com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, 1)) {
             return false;
         }
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         return mc == null
-                || mc.gameSettings.thirdPersonView != 0
-                || entity != mc.getRenderViewEntity()
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.thirdPersonView(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)) != 0
+                || entity != com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc)
                 || !(entity instanceof EntityLivingBase)
                 || ((EntityLivingBase) entity).isPlayerSleeping();
     }
@@ -293,13 +295,13 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
         if (entity instanceof ILoadable && !((ILoadable) entity).isChunkLoaded()) {
             return "chunk-unloaded";
         }
-        if (!entity.shouldRenderInPass(0) && !entity.shouldRenderInPass(1)) {
+        if (!com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, 0) && !com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, 1)) {
             return "no-render-pass";
         }
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc != null
-                && mc.gameSettings.thirdPersonView == 0
-                && entity == mc.getRenderViewEntity()
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.thirdPersonView(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)) == 0
+                && entity == com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc)
                 && entity instanceof EntityLivingBase
                 && !((EntityLivingBase) entity).isPlayerSleeping()) {
             return "first-person-view-entity";
@@ -308,18 +310,18 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
     }
 
     private static String ausm$describe(Entity entity) {
-        ResourceLocation key = entity != null ? EntityList.getKey(entity) : null;
+        ResourceLocation key = com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity);
         String id = key != null ? key.toString() : "unregistered";
         String cls = entity != null ? entity.getClass().getName() : "null";
         if (entity == null) {
             return id + "/" + cls;
         }
         return id + "/" + cls + " @ "
-                + Math.round(entity.posX * 10.0D) / 10.0D + ","
-                + Math.round(entity.posY * 10.0D) / 10.0D + ","
-                + Math.round(entity.posZ * 10.0D) / 10.0D
-                + " pass0=" + entity.shouldRenderInPass(0)
-                + " pass1=" + entity.shouldRenderInPass(1);
+                + Math.round(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity) * 10.0D) / 10.0D + ","
+                + Math.round(com.l.ausm.impl.util.MinecraftReflectionCompat.posY(entity) * 10.0D) / 10.0D + ","
+                + Math.round(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity) * 10.0D) / 10.0D
+                + " pass0=" + com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, 0)
+                + " pass1=" + com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, 1);
     }
 
     private static void ausm$ensureBetweenlandsRendererCache(Entity entity) {
@@ -356,13 +358,13 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
 
     @SuppressWarnings("unchecked")
     private static Render<Entity> ausm$vanillaRenderer(Entity entity) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.getRenderManager() == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderManager(mc) == null) {
             return null;
         }
-        Render<?> renderer = mc.getRenderManager().getEntityRenderObject(entity);
+        Render<?> renderer = com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderObject(com.l.ausm.impl.util.MinecraftReflectionCompat.renderManager(mc), entity);
         if (renderer == null || renderer.getClass() == RenderEntity.class) {
-            renderer = ausm$registryRenderer(mc.getRenderManager(), entity);
+            renderer = ausm$registryRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.renderManager(mc), entity);
         }
         if (renderer == null || renderer.getClass() == RenderEntity.class) {
             return null;

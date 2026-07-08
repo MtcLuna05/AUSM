@@ -2,11 +2,14 @@ package com.l.ausm.impl.pipeline.compat;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.texture.TextureMap;
+import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraftforge.fml.common.Loader;
 import org.lwjgl.opengl.GL11;
@@ -728,16 +731,18 @@ public final class NothiriumShadowRenderer {
         GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
         GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
 
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        GlStateManager.glVertexPointer(3, GL11.GL_FLOAT, stride, POSITION_OFFSET);
-        GlStateManager.glColorPointer(4, GL11.GL_UNSIGNED_BYTE, stride, COLOR_OFFSET);
-        GlStateManager.glTexCoordPointer(2, GL11.GL_FLOAT, stride, TEX_COORD_OFFSET);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_187420_d", "glVertexPointer"},
+                new Class<?>[] {int.class, int.class, int.class, int.class}, (3), (GL11.GL_FLOAT), (stride), (POSITION_OFFSET));;
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_187406_e", "glColorPointer"},
+                new Class<?>[] {int.class, int.class, int.class, int.class}, (4), (GL11.GL_UNSIGNED_BYTE), (stride), (COLOR_OFFSET));;
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateGlTexCoordPointer(2, GL11.GL_FLOAT, stride, TEX_COORD_OFFSET);
 
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        GlStateManager.glTexCoordPointer(2, GL11.GL_SHORT, stride, LIGHT_COORD_OFFSET);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateGlTexCoordPointer(2, GL11.GL_SHORT, stride, LIGHT_COORD_OFFSET);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
 
         if (isPipelineBlockStride(stride)) {
             setupPipelineAttributes(stride);
@@ -762,7 +767,7 @@ public final class NothiriumShadowRenderer {
     private static boolean isPipelineBlockStride(int stride) {
         ensurePipelineBlockFormat();
         return ExtendedVertexFormats.PIPELINE_BLOCK != null
-                && stride == ExtendedVertexFormats.PIPELINE_BLOCK.getSize();
+                && stride == ExtendedVertexFormats.size(ExtendedVertexFormats.PIPELINE_BLOCK);
     }
 
     private static void ensurePipelineBlockFormat() {
@@ -875,9 +880,9 @@ public final class NothiriumShadowRenderer {
         GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
         GL11.glDisableClientState(GL11.GL_COLOR_ARRAY);
         GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
         GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
     }
 
@@ -922,29 +927,8 @@ public final class NothiriumShadowRenderer {
             }
 
             LayerGlState previous = new LayerGlState();
-            Minecraft mc = Minecraft.getMinecraft();
-            if (mc != null && mc.entityRenderer != null) {
-                mc.entityRenderer.enableLightmap();
-            }
-            OpenGlHelper.setActiveTexture(OpenGlHelper.defaultTexUnit);
-            GlStateManager.enableTexture2D();
-            if (mc != null && mc.getTextureManager() != null) {
-                mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
-            }
-            OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
-            GlStateManager.enableDepth();
-            GL11.glDepthFunc(GL11.GL_LEQUAL);
-            GlStateManager.enableAlpha();
-            GlStateManager.alphaFunc(GL11.GL_GREATER, 0.003921569F);
-            GlStateManager.enableBlend();
-            GlStateManager.tryBlendFuncSeparate(
-                    GL11.GL_SRC_ALPHA,
-                    GL11.GL_ONE_MINUS_SRC_ALPHA,
-                    GL11.GL_ONE,
-                    GL11.GL_ZERO
-            );
-            GlStateManager.depthMask(false);
-            GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+            FixedFunctionGlState.prepareTranslucentBlockLayer(mc);
             forceTranslucentFixedFunctionState();
             logVisibleTranslucentState("prepare");
             return previous;
@@ -956,21 +940,7 @@ public final class NothiriumShadowRenderer {
     }
 
     private static void forceTranslucentFixedFunctionState() {
-        GL13.glActiveTexture(OpenGlHelper.defaultTexUnit);
-        GL11.glEnable(GL11.GL_TEXTURE_2D);
-        GL13.glClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GL11.glEnable(GL11.GL_DEPTH_TEST);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glEnable(GL11.GL_ALPHA_TEST);
-        GL11.glAlphaFunc(GL11.GL_GREATER, 0.003921569F);
-        GL11.glEnable(GL11.GL_BLEND);
-        GL14.glBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE_MINUS_SRC_ALPHA,
-                GL11.GL_ONE,
-                GL11.GL_ZERO
-        );
-        GL11.glDepthMask(false);
+        FixedFunctionGlState.forceTranslucentBlockLayer();
     }
 
     private static void logVisibleTranslucentState(String stage) {
@@ -978,21 +948,7 @@ public final class NothiriumShadowRenderer {
 }
 
     private static String glStateSummary() {
-        return "program=" + GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
-                + ",activeTex=" + GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE)
-                + ",clientTex=" + GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE)
-                + ",tex=" + GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D)
-                + ",blend=" + GL11.glIsEnabled(GL11.GL_BLEND)
-                + ",blendFunc=" + GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB)
-                + "/" + GL11.glGetInteger(GL14.GL_BLEND_DST_RGB)
-                + "/" + GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA)
-                + "/" + GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA)
-                + ",alpha=" + GL11.glIsEnabled(GL11.GL_ALPHA_TEST)
-                + ",alphaFunc=" + GL11.glGetInteger(GL11.GL_ALPHA_TEST_FUNC)
-                + ",alphaRef=" + GL11.glGetFloat(GL11.GL_ALPHA_TEST_REF)
-                + ",depth=" + GL11.glIsEnabled(GL11.GL_DEPTH_TEST)
-                + ",depthMask=" + GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
-                + ",depthFunc=" + GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
+        return FixedFunctionGlState.summary();
     }
 
     private void auditCompileStats(CompileStats stats) {

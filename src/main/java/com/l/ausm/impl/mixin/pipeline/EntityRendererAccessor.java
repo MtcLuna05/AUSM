@@ -8,15 +8,15 @@ import org.spongepowered.asm.mixin.gen.Invoker;
 
 @Mixin(EntityRenderer.class)
 public interface EntityRendererAccessor {
-    @Accessor("lightmapTexture")
+    @Accessor(value = "field_78513_d", remap = false)
     DynamicTexture ausm$getLightmapTexture();
 
-    @Accessor("lightmapUpdateNeeded")
+    @Accessor(value = "field_78536_aa", remap = false)
     void ausm$setLightmapUpdateNeeded(boolean needed);
 
-    @Invoker("updateLightmap")
+    @Invoker(value = "func_78472_g", remap = false)
     void ausm$updateLightmap(float partialTicks);
 
-    @Invoker("setupCameraTransform")
+    @Invoker(value = "func_78479_a", remap = false)
     void ausm$setupCameraTransform(float partialTicks, int pass);
 }

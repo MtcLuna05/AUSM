@@ -32,8 +32,8 @@ public class MinecraftMixin {
     @Inject(method = "resize(II)V", at = @At("RETURN"))
     private void onResize(int width, int height, CallbackInfo ci) {
         Minecraft mc = (Minecraft) (Object) this;
-        if (!mc.isCallingFromMinecraftThread()) {
-            mc.addScheduledTask(() -> ausm$resizePipeline(width, height));
+        if (!com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((mc), new String[] {"func_152345_ab", "isCallingFromMinecraftThread"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> ausm$resizePipeline(width, height));
             return;
         }
         ausm$resizePipeline(width, height);
@@ -52,7 +52,7 @@ public class MinecraftMixin {
     )
     private void ausm$beforeFramebufferPresentation(CallbackInfo ci) {
         Minecraft mc = (Minecraft) (Object) this;
-        if (mc.world == null) {
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
         PipelineContext.getInstance().prepareFramebufferPresentation();
@@ -74,7 +74,7 @@ public class MinecraftMixin {
     @Inject(method = "refreshResources", at = @At("RETURN"))
     private void ausm$recoverAfterResourcePackReload(CallbackInfo ci) {
         Minecraft mc = (Minecraft) (Object) this;
-        mc.addScheduledTask(() -> PipelineContext.getInstance().handleResourcePackReload());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> PipelineContext.getInstance().handleResourcePackReload());
     }
 
     @Inject(
@@ -84,14 +84,16 @@ public class MinecraftMixin {
     private void ausm$afterFramebufferPresentation(CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         Minecraft mc = (Minecraft) (Object) this;
-        if (mc.world == null) {
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
         if (context.shouldDirectPresentFramebuffer()) {
-            context.presentFramebufferDirectly(mc.getFramebuffer(), mc.displayWidth, mc.displayHeight);
-            if (mc.currentScreen == null) {
+            context.presentFramebufferDirectly(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null) {
                 context.beginDeferredIngameHud();
-                mc.ingameGUI.renderGameOverlay(mc.getRenderPartialTicks());
+                com.l.ausm.impl.util.MinecraftReflectionCompat.renderGameOverlay(
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.client.gui.GuiIngame.class, null, "field_71456_v", "ingameGUI"),
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
                 context.endDeferredIngameHud();
             }
         }
@@ -99,7 +101,7 @@ public class MinecraftMixin {
 
     @Inject(method = "loadWorld(Lnet/minecraft/client/multiplayer/WorldClient;Ljava/lang/String;)V", at = @At("HEAD"))
     private void ausm$captureWorldBeforeLoad(WorldClient worldClient, String loadingMessage, CallbackInfo ci) {
-        WorldClient currentWorld = ((Minecraft) (Object) this).world;
+        WorldClient currentWorld = com.l.ausm.impl.util.MinecraftReflectionCompat.world((Minecraft) (Object) this);
         ausm$hadWorldBeforeLoad = currentWorld != null;
         ausm$previousWorldDimensionId = ausm$dimensionId(currentWorld);
     }
@@ -121,7 +123,7 @@ public class MinecraftMixin {
         context.clearPendingClientChunkRenderRefreshes();
         if (MainMod.getShaderPackManager() == null) {
             context.scheduleWorldTerrainRefresh();
-            context.scheduleBloomTerrainRefresh("world load");
+            context.rebuildShaderlessBloomTerrain("world load");
             return;
         }
 
@@ -132,7 +134,7 @@ public class MinecraftMixin {
             MainMod.getShaderPackManager().compilePipelineForDimensionSwitch(dimensionId);
         } else {
             context.scheduleWorldTerrainRefresh();
-            context.scheduleBloomTerrainRefresh("world load");
+            context.rebuildShaderlessBloomTerrain("world load");
             MainMod.getShaderPackManager().preparePipelineForWorldLoad(dimensionId);
             context.scheduleWorldLoadLightRecalculation();
         }
@@ -148,8 +150,8 @@ public class MinecraftMixin {
 
     @Unique
     private int ausm$dimensionId(WorldClient worldClient) {
-        return worldClient != null && worldClient.provider != null
-                ? worldClient.provider.getDimension()
+        return worldClient != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(worldClient) != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(worldClient))
                 : Integer.MIN_VALUE;
     }
 }

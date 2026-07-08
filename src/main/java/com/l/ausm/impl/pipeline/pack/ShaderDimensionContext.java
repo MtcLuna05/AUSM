@@ -16,11 +16,13 @@ public final class ShaderDimensionContext {
             return override;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.world.provider == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        net.minecraft.client.multiplayer.WorldClient world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        net.minecraft.world.WorldProvider provider = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
+        if (provider == null) {
             return 0;
         }
-        return mc.world.provider.getDimension();
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider);
     }
 
     public static <T> T withDimension(int dimensionId, Supplier<T> action) {

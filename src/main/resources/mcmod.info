@@ -1,7 +1,7 @@
 [{
 	"modid": "ausm",
 	"name": "Actually Usable Shader Mod",
-	"version": "1.0.4",
+	"version": "1.0.5",
 	"mcversion": "1.12.2",
 	"description": "A modern implementation of the Shader pipeline ported to Minecraft 1.12.2",
 	"authorList": ["MtcLuna05"],

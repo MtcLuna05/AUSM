@@ -15,11 +15,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.GL40;
 import org.lwjgl.opengl.GL43;
@@ -30,6 +33,10 @@ public class ShaderPreprocessor {
     private static final Pattern CONDITION_DIRECTIVE_PATTERN = Pattern.compile("^(\\s*#(?:if|elif)\\s+)(.*)$");
     private static final Pattern INFIX_IN_PATTERN = Pattern.compile("([A-Za-z_][A-Za-z0-9_\\.]*|[-+]?\\d+(?:\\.\\d+)?)\\s+in\\s*\\(([^()]*)\\)");
     private static final Pattern FUNCTION_IN_PATTERN = Pattern.compile("\\bin\\s*\\(([^()]*)\\)");
+    private static final Pattern GLSL_130_FEATURE_PATTERN = Pattern.compile("\\b(?:[iu]sampler(?:1D|2D|3D|Cube|1DArray|2DArray|CubeArray|Buffer|2DRect)|sampler(?:1D|2D)Array|samplerCubeArray|texelFetch|textureSize|isnan|isinf)\\b");
+    private static final Pattern FUNCTION_DECLARATION_PATTERN = Pattern.compile("^\\s*(?:[A-Za-z_][A-Za-z0-9_]*\\s+)*(?:void|float|int|uint|bool|[biu]?vec[234]|mat[234])\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(");
+    private static final Pattern VOXEL_FEATURE_IFDEF_PATTERN = Pattern.compile("^(\\s*)#ifdef\\s+(PORTAL_EDGE_EFFECT|CONNECTED_GLASS_EFFECT)\\s*(?://.*)?$");
+    private static final Pattern VOXEL_FEATURE_DEFINED_IF_PATTERN = Pattern.compile("^(\\s*)#if\\s+defined\\s*\\(?\\s*(PORTAL_EDGE_EFFECT|CONNECTED_GLASS_EFFECT)\\s*\\)?\\s*(?://.*)?$");
     private static final String DISTANT_LIGHT_BOKEH_FUNCTION = "DoDistantLightBokehMaterial";
     private static final String DISTANT_LIGHT_BOKEH_FALLBACK = """
             #ifndef AUSM_DISTANT_LIGHT_BOKEH_FALLBACK
@@ -43,6 +50,35 @@ public class ShaderPreprocessor {
                 float dlbMix = clamp(0.005 * (lViewPos - 60.0), 0.0, 1.0);
                 emission = mix(emission, distantEmission, dlbMix);
             }
+            #endif
+            """;
+    private static final String DISTANT_HORIZONS_VERTEX_COMPAT = """
+            #ifndef AUSM_DISTANT_HORIZONS_VERTEX_COMPAT
+            #define AUSM_DISTANT_HORIZONS_VERTEX_COMPAT
+            attribute int dhMaterialId;
+            #endif
+            """;
+    private static final String DISTANT_HORIZONS_FRAGMENT_COMPAT = """
+            #ifndef AUSM_DISTANT_HORIZONS_FRAGMENT_COMPAT
+            #define AUSM_DISTANT_HORIZONS_FRAGMENT_COMPAT
+            #ifndef DH_BLOCK_LEAVES
+            #define DH_BLOCK_LEAVES 1
+            #endif
+            #ifndef DH_BLOCK_GRASS
+            #define DH_BLOCK_GRASS 2
+            #endif
+            #ifndef DH_BLOCK_WATER
+            #define DH_BLOCK_WATER 3
+            #endif
+            #ifndef DH_BLOCK_ILLUMINATED
+            #define DH_BLOCK_ILLUMINATED 4
+            #endif
+            #ifndef DH_BLOCK_LAVA
+            #define DH_BLOCK_LAVA 5
+            #endif
+            #ifndef DH_BLOCK_SNOW
+            #define DH_BLOCK_SNOW 6
+            #endif
             #endif
             """;
 
@@ -63,7 +99,7 @@ public class ShaderPreprocessor {
     }
 
     public static String processShaderSource(ShaderPack pack, String resourcePath, ShaderOptions options, RenderPass pass, int shaderType) throws IOException {
-        return processShaderSource(pack, resourcePath, options, pass, shaderType, null);
+        return processShaderSource(pack, resourcePath, options, pass, shaderType, null, null);
     }
 
     public static String processShaderSource(
@@ -73,6 +109,18 @@ public class ShaderPreprocessor {
             RenderPass pass,
             int shaderType,
             String programName
+    ) throws IOException {
+        return processShaderSource(pack, resourcePath, options, pass, shaderType, programName, null);
+    }
+
+    public static String processShaderSource(
+            ShaderPack pack,
+            String resourcePath,
+            ShaderOptions options,
+            RenderPass pass,
+            int shaderType,
+            String programName,
+            ShaderPackDirectives directives
     ) throws IOException {
         List<String> rawLines = new ArrayList<>();
         Set<String> visitedFiles = new HashSet<>();
@@ -92,11 +140,12 @@ public class ShaderPreprocessor {
                 extensionLines.add(line.trim());
             }
         }
-        if (parseGlslVersion(versionLine) < 130 && rawLines.stream().anyMatch(line -> line.contains("gl_VertexID"))) {
+        if (parseGlslVersion(versionLine) < 130 && requiresGlsl130(rawLines)) {
             versionLine = "#version 130";
         }
         versionLine = ensureStageMinimumVersion(versionLine, shaderType);
         int glslVersion = parseGlslVersion(versionLine);
+        ShaderOptions sourceOptions = removeFunctionCollidingOptions(options, rawLines);
 
         StringBuilder finalSource = new StringBuilder();
         for (String line : rawLines) {
@@ -105,7 +154,8 @@ public class ShaderPreprocessor {
                 continue;
             }
 
-            String processed = applyOptionOverride(line, options);
+            String processed = applyOptionOverride(line, sourceOptions);
+            processed = guardVoxelDependentFeatures(processed);
             processed = normalizeUnsupportedPreprocessor(processed);
             finalSource.append(normalizeLegacyGlsl(processed, glslVersion)).append("\n");
         }
@@ -116,14 +166,93 @@ public class ShaderPreprocessor {
         for (String extensionLine : extensionLines) {
             out.append(extensionLine).append("\n");
         }
-        out.append(getOptiFineEnvironmentDefines(options, glslVersion)).append("\n");
+        out.append(getOptiFineEnvironmentDefines(sourceOptions, glslVersion, directives)).append("\n");
         out.append(getRenderStageDefines()).append("\n");
         out.append(getProgramDefines(pass, programName)).append("\n");
         out.append(getOptiFineMetadataDefines()).append("\n");
         out.append(finalSource);
 
-        String source = addMissingDistantLightBokehFallback(out.toString());
+        String source = addMissingDistantHorizonsCompat(out.toString(), pass, shaderType);
+        source = addMissingDistantLightBokehFallback(source);
         return ShaderTransformPipeline.transform(source, shaderType, pass);
+    }
+
+    private static ShaderOptions removeFunctionCollidingOptions(ShaderOptions options, List<String> rawLines) {
+        if (options == null || options.all().isEmpty()) {
+            return options;
+        }
+
+        Set<String> functionNames = new HashSet<>();
+        for (String line : rawLines) {
+            Matcher matcher = FUNCTION_DECLARATION_PATTERN.matcher(stripLineComment(line));
+            if (matcher.find()) {
+                functionNames.add(matcher.group(1));
+            }
+        }
+        if (functionNames.isEmpty()) {
+            return options;
+        }
+
+        Map<String, ShaderOption> filtered = new LinkedHashMap<>();
+        boolean removed = false;
+        for (ShaderOption option : options.all().values()) {
+            if (functionNames.contains(option.name())) {
+                removed = true;
+                continue;
+            }
+            filtered.put(option.name(), option);
+        }
+        return removed ? new ShaderOptions(filtered) : options;
+    }
+
+    private static String stripLineComment(String line) {
+        int comment = line.indexOf("//");
+        return comment >= 0 ? line.substring(0, comment) : line;
+    }
+
+    private static String guardVoxelDependentFeatures(String line) {
+        Matcher ifdef = VOXEL_FEATURE_IFDEF_PATTERN.matcher(line);
+        if (ifdef.matches()) {
+            String feature = ifdef.group(2);
+            return ifdef.group(1) + "#if defined(" + feature + ") && defined(COLORED_LIGHTING_INTERNAL) && COLORED_LIGHTING_INTERNAL > 0";
+        }
+
+        Matcher definedIf = VOXEL_FEATURE_DEFINED_IF_PATTERN.matcher(line);
+        if (definedIf.matches()) {
+            String feature = definedIf.group(2);
+            return definedIf.group(1) + "#if defined(" + feature + ") && defined(COLORED_LIGHTING_INTERNAL) && COLORED_LIGHTING_INTERNAL > 0";
+        }
+        return line;
+    }
+
+    private static String addMissingDistantHorizonsCompat(String source, RenderPass pass, int shaderType) {
+        if (pass != RenderPass.DH_TERRAIN && pass != RenderPass.DH_WATER) {
+            return source;
+        }
+
+        String result = source;
+        if (result.contains("dhMaterialId")
+                && shaderType == GL20.GL_VERTEX_SHADER
+                && !declaresSymbolInStage(result, "dhMaterialId", "VERTEX_SHADER")) {
+            result = insertBeforeStageProgram(result, DISTANT_HORIZONS_VERTEX_COMPAT, "VERTEX_SHADER");
+        }
+        if (result.contains("DH_BLOCK_")
+                && shaderType == GL20.GL_FRAGMENT_SHADER) {
+            result = insertBeforeProgram(result, DISTANT_HORIZONS_FRAGMENT_COMPAT);
+        }
+        return result;
+    }
+
+    private static boolean declaresSymbolInStage(String source, String symbol, String stageDefine) {
+        Pattern declaration = Pattern.compile(
+                "\\b(?:attribute|in|uniform|varying|flat\\s+in|const)\\s+\\w+\\s+" + Pattern.quote(symbol) + "\\b"
+        );
+        int stageStart = findPrimaryStageStart(source, stageDefine);
+        if (stageStart < 0) {
+            return declaration.matcher(source).find();
+        }
+
+        return declaration.matcher(source.substring(stageStart)).find();
     }
 
     private static String addMissingDistantLightBokehFallback(String source) {
@@ -132,14 +261,57 @@ public class ShaderPreprocessor {
             return source;
         }
 
+        return insertBeforeProgram(source, DISTANT_LIGHT_BOKEH_FALLBACK);
+    }
+
+    private static String insertBeforeProgram(String source, String fallback) {
         int insert = source.indexOf("//Program//");
         if (insert < 0) {
             insert = source.indexOf("void main");
         }
         if (insert < 0) {
-            return source + "\n" + DISTANT_LIGHT_BOKEH_FALLBACK;
+            return source + "\n" + fallback;
         }
-        return source.substring(0, insert) + DISTANT_LIGHT_BOKEH_FALLBACK + "\n" + source.substring(insert);
+        return source.substring(0, insert) + fallback + "\n" + source.substring(insert);
+    }
+
+    private static String insertBeforeStageProgram(String source, String fallback, String stageDefine) {
+        int stageStart = findPrimaryStageStart(source, stageDefine);
+        if (stageStart < 0) {
+            return insertBeforeProgram(source, fallback);
+        }
+
+        int program = source.indexOf("//Program//", stageStart);
+        int main = source.indexOf("void main", stageStart);
+        int insert;
+        if (program >= 0 && (main < 0 || program < main)) {
+            insert = program;
+        } else {
+            insert = main;
+        }
+        if (insert < 0) {
+            return source.substring(0, stageStart) + fallback + "\n" + source.substring(stageStart);
+        }
+        return source.substring(0, insert) + fallback + "\n" + source.substring(insert);
+    }
+
+    private static int findPrimaryStageStart(String source, String stageDefine) {
+        String marker = switch (stageDefine) {
+            case "VERTEX_SHADER" -> "//////////Vertex Shader";
+            case "FRAGMENT_SHADER" -> "//////////Fragment Shader";
+            default -> null;
+        };
+        if (marker != null) {
+            int markerStart = source.lastIndexOf(marker);
+            if (markerStart < 0) {
+                return source.lastIndexOf("#ifdef " + stageDefine);
+            }
+            int stageStart = source.indexOf("#ifdef " + stageDefine, markerStart);
+            if (stageStart >= 0) {
+                return stageStart;
+            }
+        }
+        return source.lastIndexOf("#ifdef " + stageDefine);
     }
 
     private static String getProgramDefines(RenderPass pass) {
@@ -154,6 +326,7 @@ public class ShaderPreprocessor {
         }
 
         appendProgramDefine(defines, pass);
+        appendDistantHorizonsPassDefines(defines, pass);
         if (isTerrainAlias(pass)) {
             appendProgramDefine(defines, RenderPass.GBUFFERS_TERRAIN);
         }
@@ -189,6 +362,13 @@ public class ShaderPreprocessor {
         }
     }
 
+    private static void appendDistantHorizonsPassDefines(StringBuilder defines, RenderPass pass) {
+        if ((pass == RenderPass.DH_TERRAIN || pass == RenderPass.DH_WATER)
+                && !ShaderEnvironmentDefines.distantHorizonsInstalled()) {
+            appendProgramDefine(defines, "DISTANT_HORIZONS 1");
+        }
+    }
+
     private static String getRenderStageDefines() {
         StringBuilder defines = new StringBuilder();
         for (WorldRenderingPhase phase : WorldRenderingPhase.values()) {
@@ -215,6 +395,17 @@ public class ShaderPreprocessor {
                 defines.append("#define ")
                         .append(optiFineAlias)
                         .append('\n');
+            }
+            appendParentGbufferAliases(defines, programDefine);
+        }
+    }
+
+    private static void appendParentGbufferAliases(StringBuilder defines, String programDefine) {
+        switch (programDefine) {
+            case "GBUFFERS_BLOCK_TRANSLUCENT" -> appendProgramDefine(defines, "GBUFFERS_BLOCK");
+            case "GBUFFERS_ENTITIES_TRANSLUCENT", "GBUFFERS_ENTITIES_GLOWING", "GBUFFERS_LIGHTNING" ->
+                    appendProgramDefine(defines, "GBUFFERS_ENTITIES");
+            default -> {
             }
         }
     }
@@ -267,7 +458,7 @@ public class ShaderPreprocessor {
             }
 
             ShaderOption option = options.get(name);
-            if (option == null || !option.changed()) {
+            if (option == null) {
                 return line;
             }
 
@@ -280,7 +471,7 @@ public class ShaderPreprocessor {
         }
 
         ShaderOption option = options.get(matcher.group(2));
-        if (option == null || !option.changed()) {
+        if (option == null) {
             return line;
         }
 
@@ -291,7 +482,8 @@ public class ShaderPreprocessor {
         if (name == null) {
             return false;
         }
-        if (name.equals("OVERWORLD") || name.equals("NETHER") || name.equals("THE_END")) {
+        if (name.equals("OVERWORLD") || name.equals("NETHER") || name.equals("THE_END")
+                || name.equals("DISTANT_HORIZON")) {
             return true;
         }
         if (name.startsWith("MC_RENDER_STAGE_")) {
@@ -317,6 +509,15 @@ public class ShaderPreprocessor {
         } catch (NumberFormatException ignored) {
             return 120;
         }
+    }
+
+    private static boolean requiresGlsl130(List<String> rawLines) {
+        for (String line : rawLines) {
+            if (line.contains("gl_VertexID") || GLSL_130_FEATURE_PATTERN.matcher(line).find()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String ensureStageMinimumVersion(String versionLine, int shaderType) {
@@ -480,8 +681,8 @@ public class ShaderPreprocessor {
     /**
      * Generates standard OptiFine hidden variables expected by advanced packs.
      */
-    private static String getOptiFineEnvironmentDefines(ShaderOptions options, int glslVersion) {
-        return ShaderEnvironmentDefines.shaderSourceDefines(options, glslVersion);
+    private static String getOptiFineEnvironmentDefines(ShaderOptions options, int glslVersion, ShaderPackDirectives directives) {
+        return ShaderEnvironmentDefines.shaderSourceDefines(options, glslVersion, directives);
     }
 
     static String extractIncludePath(String includeLine, String currentFile) {

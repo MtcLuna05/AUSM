@@ -18,8 +18,8 @@ public class GpomBetterPortalsClientWorldCleanupMixin {
 
     @Inject(method = "cleanup", at = @At("HEAD"), cancellable = true, remap = false)
     private static void ausm$scheduleCleanupOnClientThread(String reason, CallbackInfo ci) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.isCallingFromMinecraftThread()) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((mc), new String[] {"func_152345_ab", "isCallingFromMinecraftThread"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
             PipelineContext.getInstance().clearClientParticles("gpom-better-portals-cleanup:" + reason);
             return;
         }
@@ -31,7 +31,7 @@ public class GpomBetterPortalsClientWorldCleanupMixin {
         }
 
         if (AUSM_CLEANUP_SCHEDULED.compareAndSet(false, true)) {
-            mc.addScheduledTask(() -> ausm$invokeCleanup(reason));
+            com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> ausm$invokeCleanup(reason));
             MainMod.LOGGER.info("[BetterPortalsCompat] Scheduled GPOM BetterPortals cleanup on client thread: {}", reason);
         }
     }

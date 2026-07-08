@@ -12,7 +12,6 @@ public class NothiriumSectionRenderCacheDynamicLightMixin {
     @Inject(method = "func_175626_b", at = @At("RETURN"), cancellable = true, remap = false)
     private void ausm$applyShaderlessDynamicCombinedLight(BlockPos pos, int lightValue, CallbackInfoReturnable<Integer> cir) {
         if (!DynamicLightManager.shouldApplyToBlockRenderLightQuery(pos)) {
-            DynamicLightManager.logShaderlessLightQueryProbe("nothirium-combined-skip", pos, cir.getReturnValueI(), cir.getReturnValueI(), false);
             return;
         }
 
@@ -20,9 +19,6 @@ public class NothiriumSectionRenderCacheDynamicLightMixin {
         int adjusted = DynamicLightManager.applyPackedLight(pos, before);
         if (adjusted != before) {
             cir.setReturnValue(adjusted);
-            DynamicLightManager.logShaderlessLightQueryProbe("nothirium-combined-apply", pos, before, adjusted, true);
-        } else {
-            DynamicLightManager.logShaderlessLightQueryProbe("nothirium-combined-keep", pos, before, before, false);
         }
     }
 }

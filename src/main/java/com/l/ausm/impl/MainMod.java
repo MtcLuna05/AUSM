@@ -9,6 +9,7 @@ import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.proxy.IProxy;
 import com.l.ausm.impl.util.NoOpLogger;
 import net.minecraft.client.Minecraft;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.SidedProxy;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
@@ -51,13 +52,16 @@ public class MainMod {
         // Initialize custom vertex formats for the shaders
         ExtendedVertexFormats.initialize();
 
-        dynamicLightConfig = new DynamicLightConfig(Minecraft.getMinecraft().gameDir.toPath());
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        java.nio.file.Path gameDir = com.l.ausm.impl.util.MinecraftReflectionCompat.gameDir(minecraft).toPath();
+
+        dynamicLightConfig = new DynamicLightConfig(gameDir);
         dynamicLightConfig.load();
 
-        clientSettingsConfig = new ClientSettingsConfig(Minecraft.getMinecraft().gameDir.toPath());
+        clientSettingsConfig = new ClientSettingsConfig(gameDir);
         clientSettingsConfig.load();
 
-        shaderPackManager = new ShaderPackManager(Minecraft.getMinecraft().gameDir.toPath());
+        shaderPackManager = new ShaderPackManager(gameDir);
 
         shaderPackManager.loadSavedConfiguration();
 

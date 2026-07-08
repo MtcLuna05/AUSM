@@ -18,7 +18,7 @@ public class WirelessRedstoneClientPacketHandlerMixin {
     )
     private void ausm$ignorePacketWithoutPlayer(@Coerce Object packet, Minecraft mc, INetHandlerPlayClient handler,
                                                 CallbackInfo ci) {
-        if (mc == null || mc.world == null || mc.player == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             ci.cancel();
         }
     }

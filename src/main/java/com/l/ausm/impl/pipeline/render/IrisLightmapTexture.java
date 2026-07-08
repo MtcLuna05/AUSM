@@ -17,20 +17,20 @@ public final class IrisLightmapTexture {
     private static final float CURVE_BLEND = 0.70F;
 
     private final DynamicTexture texture = new DynamicTexture(SIZE, SIZE);
-    private final int[] pixels = texture.getTextureData();
+    private final int[] pixels = com.l.ausm.impl.util.MinecraftReflectionCompat.dynamicTextureData(texture);
 
     public int updateFrom(DynamicTexture vanillaLightmap) {
         if (vanillaLightmap == null) {
             return -1;
         }
 
-        int[] source = vanillaLightmap.getTextureData();
+        int[] source = com.l.ausm.impl.util.MinecraftReflectionCompat.dynamicTextureData(vanillaLightmap);
         int count = Math.min(source.length, pixels.length);
         for (int i = 0; i < count; i++) {
             pixels[i] = adaptPixel(source[i]);
         }
-        texture.updateDynamicTexture();
-        return texture.getGlTextureId();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((texture), new String[] {"func_110564_a", "updateDynamicTexture"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.glTextureId(texture);
     }
 
     private static int adaptPixel(int argb) {

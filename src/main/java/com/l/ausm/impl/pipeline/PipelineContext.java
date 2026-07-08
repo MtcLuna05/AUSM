@@ -1,5 +1,6 @@
 package com.l.ausm.impl.pipeline;
 
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
@@ -22,7 +23,6 @@ import com.l.ausm.impl.pipeline.fbo.PingPongManager;
 import com.l.ausm.impl.pipeline.fbo.ShadowFramebuffer;
 import com.l.ausm.impl.pipeline.matrix.MatrixState;
 import com.l.ausm.impl.mixin.pipeline.EntityRendererAccessor;
-import com.l.ausm.impl.mixin.pipeline.RenderChunkAccessor;
 import com.l.ausm.impl.mixin.pipeline.RenderGlobalAccessor;
 import com.l.ausm.impl.mixin.pipeline.ViewFrustumAccessor;
 import com.l.ausm.api.pipeline.pack.ShaderAlphaTest;
@@ -47,6 +47,7 @@ import com.l.ausm.api.pipeline.pack.ShaderTextureDirectives;
 import com.l.ausm.api.pipeline.pack.ShaderViewportScale;
 import com.l.ausm.impl.pipeline.render.FullscreenQuad;
 import com.l.ausm.impl.pipeline.render.IrisLightmapTexture;
+import com.l.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.l.ausm.impl.pipeline.render.ShaderSamplerState;
 import com.l.ausm.impl.pipeline.render.ShaderTextureLoader;
 import com.l.ausm.impl.pipeline.render.TextureBinder;
@@ -72,19 +73,20 @@ import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.block.Block;
-import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.AbstractClientPlayer;
 import net.minecraft.client.multiplayer.ChunkProviderClient;
 import net.minecraft.client.multiplayer.WorldClient;
+import net.minecraft.client.renderer.BlockRendererDispatcher;
 import net.minecraft.client.renderer.GlStateManager;
+import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.ChunkRenderContainer;
 import net.minecraft.client.renderer.RenderList;
 import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.RenderHelper;
-import net.minecraft.client.renderer.ActiveRenderInfo;
+import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.client.renderer.VboRenderList;
 import net.minecraft.client.renderer.ViewFrustum;
 import net.minecraft.client.renderer.chunk.ChunkRenderDispatcher;
@@ -99,16 +101,17 @@ import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.ITextureObject;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.renderer.texture.TextureMap;
+import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
+import net.minecraft.client.renderer.vertex.VertexBuffer;
 import net.minecraft.client.resources.IResource;
 import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityList;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.boss.EntityDragon;
 import net.minecraft.entity.effect.EntityLightningBolt;
 import net.minecraft.init.Blocks;
-import net.minecraft.init.MobEffects;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.potion.PotionEffect;
 import net.minecraft.util.BlockRenderLayer;
@@ -123,13 +126,14 @@ import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.EnumSkyBlock;
-import net.minecraft.world.GameType;
 import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.World;
+import net.minecraft.world.WorldProvider;
 import net.minecraft.world.WorldType;
 import net.minecraft.world.biome.Biome;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
+import net.minecraftforge.client.IRenderHandler;
 import net.minecraftforge.client.MinecraftForgeClient;
 import net.minecraftforge.common.property.IExtendedBlockState;
 import net.minecraftforge.common.property.IUnlistedProperty;
@@ -231,6 +235,20 @@ public class PipelineContext {
     private static final int BIOME_SOUL_SAND_VALLEY_ID = 100_004;
     private static final int BIOME_PALE_GARDEN_ID = 100_005;
     private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
+    private static final ResourceLocation BOTANIA_VOID_SKYBOX_TEXTURE = new ResourceLocation("botania", "textures/misc/skybox.png");
+    private static final ResourceLocation BOTANIA_VOID_RAINBOW_TEXTURE = new ResourceLocation("botania", "textures/misc/rainbow.png");
+    private static final ResourceLocation[] BOTANIA_VOID_PLANET_TEXTURES = new ResourceLocation[] {
+            new ResourceLocation("botania", "textures/misc/planet0.png"),
+            new ResourceLocation("botania", "textures/misc/planet1.png"),
+            new ResourceLocation("botania", "textures/misc/planet2.png"),
+            new ResourceLocation("botania", "textures/misc/planet3.png"),
+            new ResourceLocation("botania", "textures/misc/planet4.png"),
+            new ResourceLocation("botania", "textures/misc/planet5.png")
+    };
+    private static final int SPARSE_SHADOW_MIN_TERRAIN_DRAWS = 96;
+    private static final int SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES = 4;
+    private static final int SPARSE_SHADOW_STABLE_FRAMES = 2;
+    private static final float SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION = 0.003F;
     private static final int FORCE_LIGHT_RECALC_MIN_RADIUS = 16;
     private static final int FORCE_LIGHT_RECALC_MAX_RADIUS = 32;
     private static final int WORLD_LOAD_FORCE_LIGHT_RECALC_ATTEMPTS = 2;
@@ -241,6 +259,7 @@ public class PipelineContext {
     private static final int WORLD_LOAD_TERRAIN_REFRESH_REPEAT_DELAY_FRAMES = 6;
     private static final double CLIENT_TELEPORT_TERRAIN_REFRESH_DISTANCE_SQ = 64.0 * 64.0;
     private static final int PARTICLE_DIMENSION_RECOVERY_FRAMES = 80;
+    private static final String ASTRAL_SKYBOX_CLASS = "hellfirepvp.astralsorcery.client.sky.RenderSkybox";
     private static final int MAX_PENDING_SHADER_CHUNK_REFRESHES = 2048;
     private static final int MAX_PENDING_CLIENT_CHUNK_RENDER_REFRESHES = 1024;
     private static final int MAX_CLIENT_CHUNK_RENDER_REFRESHES_PER_FRAME = 8;
@@ -250,6 +269,8 @@ public class PipelineContext {
     private static final int CLIENT_CHUNK_RENDER_REFRESH_ATTEMPTS = 8;
     private static final int CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES = 1;
     private static final int CLIENT_CHUNK_RENDER_REFRESH_REPEAT_DELAY_FRAMES = 1;
+    private static final int MAX_SHADERLESS_BLOOM_LOCAL_CHUNK_REFRESHES_PER_UPDATE = 16;
+    private static final String CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM = "shaderless-bloom";
     private static final int BETTER_PORTALS_VANILLA_RENDER_DISTANCE_CAP = 4;
     private static final int MAX_CHUNK_FADE_STATES = 8192;
     private static final int CHUNK_FADE_STALE_FRAMES = 600;
@@ -258,17 +279,17 @@ public class PipelineContext {
     private static final int MAX_SHADER_CHUNK_REFRESHES_PER_FRAME = 8;
     private static final int COMPILED_PIPELINE_CACHE_LIMIT = 4;
     private static final int MAX_BETTER_PORTALS_PIPELINE_LOGS = 0;
-    private static final int MAX_SHADERLESS_BLOOM_HOOK_LOGS = 128;
-    private static final int MAX_VISIBLE_BLOOM_DIAG_LOGS = 128;
-    private static final int MAX_WORLD_LAYER_DIAG_LOGS = 32;
+    private static final int MAX_SHADERLESS_BLOOM_HOOK_LOGS = 0;
+    private static final int MAX_VISIBLE_BLOOM_DIAG_LOGS = 0;
+    private static final int MAX_WORLD_LAYER_DIAG_LOGS = 0;
     private static final int MAX_EXTERNAL_OVERLAY_LOGS = 0;
     private static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 8;
     private static final int MAX_TERRAIN_HISTORY_CLEAR_LOGS = 8;
     private static final int MAX_RENDER_GLOBAL_LOAD_RENDERER_LOGS = 0;
-    private static final int MAX_DISTANT_HORIZONS_DIAGNOSTIC_LOGS = 320;
-    private static final int MAX_TERRAIN_COLOR_PROBE_LOGS = 10;
-    private static final int MAX_FINAL_COLOR_PROBE_LOGS = 10;
-    private static final int MAX_DH_PASS_COLOR_PROBE_LOGS = 96;
+    private static final int MAX_DISTANT_HORIZONS_DIAGNOSTIC_LOGS = 0;
+    private static final int MAX_TERRAIN_COLOR_PROBE_LOGS = 0;
+    private static final int MAX_FINAL_COLOR_PROBE_LOGS = 0;
+    private static final int MAX_DH_PASS_COLOR_PROBE_LOGS = 0;
     private static final String DISTANT_HORIZONS_FALLBACK_VERTEX_SHADER = """
             #version 150 core
 
@@ -350,12 +371,12 @@ public class PipelineContext {
     private static final int MAX_CAMERA_FRUSTUM_SYNC_LOGS = 0;
     private static final int MAX_CLIENT_CHUNK_RENDER_REFRESH_LOGS = 0;
     private static final int MAX_DECORATED_LIGHT_AUDIT_LOGS = 0;
-    private static final boolean DEBUG_PROBES_ENABLED = Boolean.getBoolean("ausm.debugProbes");
-    private static final int MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS = DEBUG_PROBES_ENABLED ? 96 : 0;
+    private static final boolean DEBUG_PROBES_ENABLED = false;
+    private static final int MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS = 0;
-    private static final int MAX_CURRENT_PROBLEM_PROBE_LOGS = DEBUG_PROBES_ENABLED ? 128 : 0;
-    private static final int MAX_ACTIVE_LIGHT_OR_ID_PROBE_LOGS = DEBUG_PROBES_ENABLED ? 256 : 0;
+    private static final int MAX_CURRENT_PROBLEM_PROBE_LOGS = 0;
+    private static final int MAX_ACTIVE_LIGHT_OR_ID_PROBE_LOGS = 0;
     private static final int MAX_INACTIVE_SKY_PIPELINE_PROBE_LOGS = 0;
     private static final int MAX_ACTIVE_SKY_PIPELINE_PROBE_LOGS = 0;
     private static final int MAX_HAND_ITEM_DRAW_STATE_LOGS = 0;
@@ -363,18 +384,37 @@ public class PipelineContext {
     private static final int MAX_HAND_PASS_BIND_LOGS = 2;
     private static final int SHADERLESS_BLOOM_GEOMETRY_EMISSION = 15;
     private static final int SHADERLESS_LIGHT_EMITTING_BLOOM_GEOMETRY_EMISSION = 5;
-    private static final int MAX_SHADERLESS_LIGHT_STATE_PROBE_LOGS = 96;
-    private static final int MAX_SHADERLESS_SKY_GUI_WORLD_PROBE_LOGS = 48;
-    private static final int MAX_SHADERLESS_SKY_GUI_SCREEN_PROBE_LOGS = 1024;
-    private static final int MAX_ASTRAL_VOID_SKY_PROBE_LOGS = 768;
+    private static final int MAX_SHADERLESS_LIGHT_STATE_PROBE_LOGS = 0;
+    private static final int MAX_SKY_DOME_WORLD_PROBE_LOGS = 0;
+    private static final int MAX_SKY_DOME_GUI_PROBE_LOGS = 0;
+    private static final int MAX_SKY_DOME_PAUSE_PROBE_LOGS = 0;
+    private static final int MAX_WORLD_PASS_SKY_DOME_WORLD_PROBE_LOGS = 0;
+    private static final int MAX_WORLD_PASS_SKY_DOME_GUI_PROBE_LOGS = 0;
+    private static final int MAX_WORLD_PASS_SKY_DOME_PAUSE_PROBE_LOGS = 0;
+    private static final int MAX_SHADERLESS_SOLID_TERRAIN_SKY_WORLD_PROBE_LOGS = 0;
+    private static final int MAX_SHADERLESS_SOLID_TERRAIN_SKY_GUI_PROBE_LOGS = 0;
+    private static final int MAX_SHADERLESS_SOLID_TERRAIN_SKY_PAUSE_PROBE_LOGS = 0;
+    private static final int MAX_SHADERLESS_SKY_RGB_FILL_WORLD_LOGS = 16;
+    private static final int MAX_SHADERLESS_SKY_RGB_FILL_GUI_LOGS = 64;
+    private static final int MAX_SHADERLESS_SKY_RGB_FILL_PAUSE_LOGS = 32;
+    private static final int MAX_SHADERLESS_LOWER_SKY_MESH_WORLD_LOGS = 16;
+    private static final int MAX_SHADERLESS_LOWER_SKY_MESH_GUI_LOGS = 64;
+    private static final int MAX_SHADERLESS_LOWER_SKY_MESH_PAUSE_LOGS = 32;
+    private static final int MAX_VOID_WORLD_SKY_RENDERER_CHAIN_WORLD_LOGS = 32;
+    private static final int MAX_VOID_WORLD_SKY_RENDERER_CHAIN_GUI_LOGS = 64;
+    private static final int MAX_VOID_WORLD_SKY_RENDERER_CHAIN_PAUSE_LOGS = 32;
+    private static final int MAX_BLOCKCRAFTERY_TRANSPARENCY_PROBES = 0;
+    private static final int MAX_SHADERLESS_SKY_GUI_WORLD_PROBE_LOGS = 0;
+    private static final int MAX_SHADERLESS_SKY_GUI_SCREEN_PROBE_LOGS = 0;
+    private static final int MAX_ASTRAL_VOID_SKY_PROBE_LOGS = 0;
     private static final int MAX_SHADERLESS_ASTRAL_SKY_COLOR_LOGS = 96;
-    private static final int MAX_FRESH_SKY_PROBE_LOGS = 512;
-    private static final int MAX_FRESH_SKY_GUI_PROBE_LOGS = 1024;
-    private static final int MAX_NOTHIRIUM_FOG_PROBE_LOGS = 96;
-    private static final int MAX_NOTHIRIUM_RENDER_PROBE_LOGS = 96;
+    private static final int MAX_FRESH_SKY_PROBE_LOGS = 0;
+    private static final int MAX_FRESH_SKY_GUI_PROBE_LOGS = 0;
+    private static final int MAX_NOTHIRIUM_FOG_PROBE_LOGS = 0;
+    private static final int MAX_NOTHIRIUM_RENDER_PROBE_LOGS = 0;
     private static final int MAX_NOTHIRIUM_FOG_GUARD_LOGS = 96;
     private static final int MAX_SHADERLESS_VOID_LIGHT_REPAIR_LOGS = 128;
-    private static final int MAX_SHADERLESS_VOID_SKY_PIXEL_PROBE_LOGS = 96;
+    private static final int MAX_SHADERLESS_VOID_SKY_PIXEL_PROBE_LOGS = 0;
     private static final int MAX_SHADERLESS_VOID_SKY_REPAIR_LOGS = 192;
     private static final int MAX_SHADERLESS_VOID_VANILLA_LOWER_SKY_LOGS = 192;
     private static final int MAX_SHADERLESS_WORLD_FRAMEBUFFER_HANDOFF_LOGS = 192;
@@ -389,6 +429,8 @@ public class PipelineContext {
     private static final int MAX_HARDWARE_CAPABILITY_LOGS = 4;
     private static final int MAX_HARDWARE_TERRAIN_FALLBACK_LOGS = 12;
     private static final int HARDWARE_TERRAIN_FALLBACK_ZERO_FRAMES = 5;
+    private static final int HARDWARE_TERRAIN_FALLBACK_SPARSE_FRAMES = 2;
+    private static final int HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS = 64;
     private static final int HARDWARE_TERRAIN_FALLBACK_REFRESH_COOLDOWN_FRAMES = 12;
     private static final boolean ENABLE_CHUNK_FADE = false;
     private static final boolean ENABLE_SYNCHRONOUS_CENTER_DEPTH_READBACK = false;
@@ -460,6 +502,8 @@ public class PipelineContext {
     private final Map<WorldClient, Map<Long, Long>> recentlyCompletedClientChunkRenderRefreshes = new IdentityHashMap<>();
     private final ConcurrentMap<String, Boolean> bloomResourceGeometryStateCache = new ConcurrentHashMap<>();
     private final Set<String> bloomResourceGeometryScansInProgress = ConcurrentHashMap.newKeySet();
+    private final Set<String> blockcrafteryTransparencyProbeKeys = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger blockcrafteryTransparencyProbeCount = new AtomicInteger();
     private int pendingWorldLoadLightRecalculationAttempts = 0;
     private int pendingWorldLoadLightRecalculationDelay = 0;
     private int pendingWorldLoadLightRecalculationDimension = Integer.MIN_VALUE;
@@ -636,6 +680,7 @@ public class PipelineContext {
     private int hardwareCapabilityLogs = 0;
     private int hardwareTerrainFallbackLogs = 0;
     private int zeroOpaqueTerrainFrames = 0;
+    private int sparseOpaqueTerrainFrames = 0;
     private boolean hardwareSafeVanillaTerrain = false;
     private String hardwareSafeVanillaTerrainReason = "";
     private boolean zeroOpaqueTerrainRecoveryRequested = false;
@@ -661,6 +706,9 @@ public class PipelineContext {
     private boolean renderingDeferredIngameHud = false;
     private boolean renderingGui = false;
     private boolean shadowMapPopulated = false;
+    private boolean shadowMapUsable = false;
+    private boolean shadowMapSparseForSampling = false;
+    private int shadowMapCoverageStableFrames = 0;
     private World pendingBetterPortalsPortalBlockWorld;
     private BlockPos pendingBetterPortalsPortalBlockPos;
     private IBlockState pendingBetterPortalsPortalBlockOldState;
@@ -689,6 +737,8 @@ public class PipelineContext {
     private boolean betterPortalsChunkUpdateWarningLogged = false;
     private boolean shadowHealthLogged = false;
     private int shadowHealthLogAttempts = 0;
+    private int shadowMapInvalidLogs = 0;
+    private int shadowMapSuppressedLogs = 0;
     private int guiRenderDepth = 0;
     private int guiEntityPreviewStateDepth = 0;
     private int handItemDrawStateLogs = 0;
@@ -701,6 +751,19 @@ public class PipelineContext {
     private int shaderlessAstralSkyColorLogs = 0;
     private int freshSkyProbeLogs = 0;
     private int freshSkyGuiProbeLogs = 0;
+    private int shaderedVoidSkyProbeLogs = 0;
+    private int shaderedVoidSkyTargetProbeLogs = 0;
+    private int shaderedVoidSkyAttachmentProbeLogs = 0;
+    private int skyDomeProbeLogs = 0;
+    private int skyDomeGuiProbeLogs = 0;
+    private int skyDomePauseProbeLogs = 0;
+    private int worldPassSkyDomeProbeLogs = 0;
+    private int worldPassSkyDomeGuiProbeLogs = 0;
+    private int worldPassSkyDomePauseProbeLogs = 0;
+    private int shaderlessSolidTerrainSkyProbeLogs = 0;
+    private int shaderlessSolidTerrainSkyGuiProbeLogs = 0;
+    private int shaderlessSolidTerrainSkyPauseProbeLogs = 0;
+    private int voidSkyStageProbeLogs = 0;
     private int nothiriumFogProbeLogs = 0;
     private int nothiriumRenderProbeLogs = 0;
     private int nothiriumFogGuardLogs = 0;
@@ -711,11 +774,20 @@ public class PipelineContext {
     private int shaderlessVoidSkyRepairLogs = 0;
     private int shaderlessVoidVanillaLowerSkyLogs = 0;
     private int shaderlessWorldFramebufferHandoffLogs = 0;
+    private int shaderlessSkyRgbFillLogs = 0;
+    private int shaderlessSkyRgbFillGuiLogs = 0;
+    private int shaderlessSkyRgbFillPauseLogs = 0;
+    private int shaderlessLowerSkyMeshLogs = 0;
+    private int shaderlessLowerSkyMeshGuiLogs = 0;
+    private int shaderlessLowerSkyMeshPauseLogs = 0;
+    private int voidWorldSkyRendererChainLogs = 0;
+    private int voidWorldSkyRendererChainGuiLogs = 0;
+    private int voidWorldSkyRendererChainPauseLogs = 0;
     private int shaderlessWorldFramebufferForUi = 0;
     private int shaderlessWorldFramebufferWidth = 0;
     private int shaderlessWorldFramebufferHeight = 0;
     private long shaderlessWorldFramebufferFrame = Long.MIN_VALUE;
-    private Vec3d lastShaderlessAstralVoidSkyColor = new Vec3d(0.718D, 0.824D, 1.0D);
+    private Vec3d lastShaderlessAstralVoidSkyColor = null;
     private boolean shaderlessTerrainLightmapCoordsSaved = false;
     private float shaderlessTerrainPreviousLightmapX = 0.0F;
     private float shaderlessTerrainPreviousLightmapY = 0.0F;
@@ -725,9 +797,11 @@ public class PipelineContext {
     private int pendingBloomTerrainRefreshAttempts = 0;
     private int pendingBloomTerrainRefreshDelay = 0;
     private String pendingBloomTerrainRefreshReason = "";
+    private boolean runningBloomTerrainRefresh = false;
     private int bloomZeroGeometryFrames = 0;
     private int bloomZeroGeometryRefreshCooldown = 0;
     private long clientRenderFrameNanos = Long.MIN_VALUE;
+    private boolean shaderlessCustomSkyBackingThisFrame = false;
     private int currentWorldPass = 0;
     private float currentWorldPartialTicks = 0.0F;
     private boolean bloomLayerRenderedThisWorldPass = false;
@@ -868,15 +942,12 @@ public class PipelineContext {
     }
 
     private void registerBaseUniforms() {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
 
         // --- 1. Global / Engine Uniforms ---
         uniformRegistry.registerInt("worldTime", () -> {
             World world = renderWorld(mc);
-            if (world != null) {
-                return (int) (world.getWorldTime() % 24000L);
-            }
-            return 0;
+            return world != null ? (int) (com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L) : 0;
         });
 
         uniformRegistry.registerFloat("viewWidth", () -> (float) worldTargetWidth(mc));
@@ -885,10 +956,10 @@ public class PipelineContext {
         uniformRegistry.registerFloat("pixelSizeY", () -> 1.0f / worldTargetHeight(mc));
         uniformRegistry.registerFloat("aspectRatio", () -> (float) worldTargetWidth(mc) / (float) worldTargetHeight(mc));
         uniformRegistry.registerFloat("aspectRatioInverse", () -> (float) worldTargetHeight(mc) / (float) worldTargetWidth(mc));
-        uniformRegistry.registerFloat("screenBrightness", () -> mc.gameSettings.gammaSetting);
-        uniformRegistry.registerInt("hideGUI", () -> mc.gameSettings.hideGUI ? 1 : 0);
-        uniformRegistry.registerInt("isRightHanded", () -> mc.gameSettings.mainHand == EnumHandSide.RIGHT ? 1 : 0);
-        uniformRegistry.registerInt("firstPersonCamera", () -> mc.gameSettings.thirdPersonView == 0 ? 1 : 0);
+        uniformRegistry.registerFloat("screenBrightness", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.fieldFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)), 0.0F, "field_74333_Y", "gammaSetting"));
+        uniformRegistry.registerInt("hideGUI", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)) ? 1 : 0);
+        uniformRegistry.registerInt("isRightHanded", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.field((com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)), net.minecraft.util.EnumHandSide.class, net.minecraft.util.EnumHandSide.RIGHT, "field_186715_A", "mainHand") == EnumHandSide.RIGHT ? 1 : 0);
+        uniformRegistry.registerInt("firstPersonCamera", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.thirdPersonView(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)) == 0 ? 1 : 0);
         uniformRegistry.registerInt("currentColorSpace", () -> 0);
         uniformRegistry.registerFloat("near", () -> 0.05f);
         uniformRegistry.registerFloat("far", () -> shaderFarPlaneDistance(mc));
@@ -901,7 +972,7 @@ public class PipelineContext {
         uniformRegistry.registerInt("fogMode", () -> effectiveFogMode(mc));
         uniformRegistry.registerInt("fogShape", () -> 1);
         uniformRegistry.registerFloat("rainStrength", () -> rainStrength(mc));
-        uniformRegistry.registerFloat("thunderStrength", () -> renderWorld(mc) != null ? renderWorld(mc).getThunderStrength(mc.getRenderPartialTicks()) : 0.0f);
+        uniformRegistry.registerFloat("thunderStrength", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldThunderStrength(renderWorld(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) : 0.0f);
         uniformRegistry.registerFloat("wetness", () -> wetnessSmooth);
         uniformRegistry.registerInt("biome", () -> currentBiomeExpressionId(mc));
         uniformRegistry.registerInt("biome_category", () -> currentBiomeCategory(mc));
@@ -924,21 +995,21 @@ public class PipelineContext {
             float value = clamp01(blindness(mc) * 2.0f - 1.0f);
             return value * value;
         });
-        uniformRegistry.registerInt("is_sneaking", () -> mc.player != null && mc.player.isSneaking() ? 1 : 0);
-        uniformRegistry.registerInt("is_sprinting", () -> mc.player != null && mc.player.isSprinting() ? 1 : 0);
-        uniformRegistry.registerInt("is_hurt", () -> mc.player != null && mc.player.hurtTime > 0 ? 1 : 0);
-        uniformRegistry.registerInt("is_invisible", () -> mc.player != null && mc.player.isInvisible() ? 1 : 0);
-        uniformRegistry.registerInt("is_burning", () -> mc.player != null && mc.player.isBurning() ? 1 : 0);
-        uniformRegistry.registerInt("is_on_ground", () -> mc.player != null && mc.player.onGround ? 1 : 0);
-        uniformRegistry.registerInt("isRiding", () -> mc.player != null && mc.player.isRiding() ? 1 : 0);
-        uniformRegistry.registerInt("isElytraFlying", () -> mc.player != null && mc.player.isElytraFlying() ? 1 : 0);
-        uniformRegistry.registerInt("feetInWater", () -> mc.player != null && mc.player.isInWater() ? 1 : 0);
+        uniformRegistry.registerInt("is_sneaking", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70093_af", "isSneaking"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
+        uniformRegistry.registerInt("is_sprinting", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70051_ag", "isSprinting"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
+        uniformRegistry.registerInt("is_hurt", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), 0, "field_70737_aN", "hurtTime") > 0 ? 1 : 0);
+        uniformRegistry.registerInt("is_invisible", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_82150_aj", "isInvisible"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
+        uniformRegistry.registerInt("is_burning", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70027_ad", "isBurning"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
+        uniformRegistry.registerInt("is_on_ground", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), false, "field_70122_E", "onGround") ? 1 : 0);
+        uniformRegistry.registerInt("isRiding", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_184218_aH", "isRiding"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
+        uniformRegistry.registerInt("isElytraFlying", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_184613_cA", "isElytraFlying"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
+        uniformRegistry.registerInt("feetInWater", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70090_H", "isInWater"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
         uniformRegistry.registerInt("inSwimmingAnimation", () -> 0);
         uniformRegistry.registerInt("vehicleInWater", () -> vehicleInWater(mc) ? 1 : 0);
         uniformRegistry.registerInt("vehicleId", () -> vehicleId(mc));
-        uniformRegistry.registerFloat("sneakSmooth", () -> mc.player != null && mc.player.isSneaking() ? 1.0f : 0.0f);
-        uniformRegistry.registerFloat("burningSmooth", () -> mc.player != null && mc.player.isBurning() ? 1.0f : 0.0f);
-        uniformRegistry.registerFloat("touchmybody", () -> mc.player != null && mc.player.hurtTime > 0 ? 1.0f : 0.0f);
+        uniformRegistry.registerFloat("sneakSmooth", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70093_af", "isSneaking"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1.0f : 0.0f);
+        uniformRegistry.registerFloat("burningSmooth", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70027_ad", "isBurning"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1.0f : 0.0f);
+        uniformRegistry.registerFloat("touchmybody", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), 0, "field_70737_aN", "hurtTime") > 0 ? 1.0f : 0.0f);
         uniformRegistry.registerFloat("effectStrength", () -> 0.0f);
         uniformRegistry.registerFloat("playerMood", () -> 0.0f);
         uniformRegistry.registerFloat("constantMood", () -> 0.0f);
@@ -947,17 +1018,20 @@ public class PipelineContext {
         uniformRegistry.registerFloat("centerDepth", () -> centerDepth);
         uniformRegistry.registerFloat("centerDepthSmooth", () -> centerDepthSmooth);
         uniformRegistry.registerInt("iris_centerDepthSmooth", () -> TextureBinder.CENTER_DEPTH_SMOOTH_TEXTURE_UNIT);
-        uniformRegistry.registerInt("moonPhase", () -> renderWorld(mc) != null ? renderWorld(mc).getMoonPhase() : 0);
+        uniformRegistry.registerInt("moonPhase", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((renderWorld(mc)), new String[] {"func_72853_d", "getMoonPhase"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0) : 0);
         uniformRegistry.registerInt("frameCounter", () -> (int) (pipelineFrameId % 720720L));
         uniformRegistry.registerInt("frameMod", () -> (int) (pipelineFrameId & 15L));
         uniformRegistry.registerFloat("framemod2", () -> (float) (pipelineFrameId & 1L));
         uniformRegistry.registerVec2("taaOffset", () -> taaOffset(mc));
-        uniformRegistry.registerInt("worldDay", () -> renderWorld(mc) != null ? (int) (renderWorld(mc).getWorldTime() / 24000L) : 0);
-        uniformRegistry.registerInt("isSpectator", () -> mc.player != null && mc.player.isSpectator() ? 1 : 0);
-        uniformRegistry.registerInt("seaLevel", () -> renderWorld(mc) != null ? renderWorld(mc).getSeaLevel() : 63);
+        uniformRegistry.registerInt("worldDay", () -> {
+            World world = renderWorld(mc);
+            return world != null ? (int) (com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) / 24000L) : 0;
+        });
+        uniformRegistry.registerInt("isSpectator", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) ? 1 : 0);
+        uniformRegistry.registerInt("seaLevel", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((renderWorld(mc)), new String[] {"func_181545_F", "getSeaLevel"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 63) : 63);
         uniformRegistry.registerInt("bedrockLevel", () -> 0);
-        uniformRegistry.registerInt("heightLimit", () -> renderWorld(mc) != null ? renderWorld(mc).getHeight() : 256);
-        uniformRegistry.registerInt("logicalHeightLimit", () -> renderWorld(mc) != null ? renderWorld(mc).getActualHeight() : 256);
+        uniformRegistry.registerInt("heightLimit", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((renderWorld(mc)), new String[] {"func_72800_K", "getHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 256) : 256);
+        uniformRegistry.registerInt("logicalHeightLimit", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(renderWorld(mc), new String[] {"func_72940_L", "getActualHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(renderWorld(mc), new String[] {"func_72800_K", "getHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 256)) : 256);
         uniformRegistry.registerFloat("cloudHeight", () -> cloudHeight(mc));
         uniformRegistry.registerInt("hasCeiling", () -> isNetherRenderWorld(mc) ? 1 : 0);
         uniformRegistry.registerInt("hasSkylight", () -> hasSkylight(mc) ? 1 : 0);
@@ -973,6 +1047,7 @@ public class PipelineContext {
         uniformRegistry.registerVec3("ausmAstralTierColor", () -> currentAstralTierColor.clone());
         uniformRegistry.registerFloat("ausmAstralSolarEclipse", () -> currentAstralSolarEclipseFactor);
         uniformRegistry.registerVec4("ausmVoidSkyParams", () -> new float[]{1.0f, 1.0f, 1.0f, 1.0f});
+        uniformRegistry.registerInt("ausmSimpleVoidWorld", () -> isSimpleVoidWorld(renderWorld(mc)) ? 1 : 0);
         uniformRegistry.registerFloat("dayMoment", () -> dayMoment(mc));
         uniformRegistry.registerFloat("timeAngle", () -> dayMoment(mc));
         uniformRegistry.registerFloat("timeBrightness", () -> Math.max((float) Math.sin(dayMoment(mc) * Math.PI * 2.0), 0.0f));
@@ -995,11 +1070,11 @@ public class PipelineContext {
         uniformRegistry.registerFloat("iris_currentAlphaTest", () -> currentAlphaTestReference);
         uniformRegistry.registerVec4("entityColor", () -> currentEntityColor);
         uniformRegistry.registerInt("heldItemId", () -> heldItemId(heldMainStack(mc)));
-        uniformRegistry.registerInt("heldItemId2", () -> heldItemId(mc.player != null ? mc.player.getHeldItemOffhand() : ItemStack.EMPTY));
+        uniformRegistry.registerInt("heldItemId2", () -> heldItemId(heldOffhandStack(mc)));
         uniformRegistry.registerInt("heldBlockLightValue", () -> heldBlockLightValue(heldMainStack(mc)));
-        uniformRegistry.registerInt("heldBlockLightValue2", () -> heldBlockLightValue(mc.player != null ? mc.player.getHeldItemOffhand() : ItemStack.EMPTY));
+        uniformRegistry.registerInt("heldBlockLightValue2", () -> heldBlockLightValue(heldOffhandStack(mc)));
         uniformRegistry.registerVec3("heldBlockLightColor", () -> heldBlockLightColor(heldMainStack(mc)));
-        uniformRegistry.registerVec3("heldBlockLightColor2", () -> heldBlockLightColor(mc.player != null ? mc.player.getHeldItemOffhand() : ItemStack.EMPTY));
+        uniformRegistry.registerVec3("heldBlockLightColor2", () -> heldBlockLightColor(heldOffhandStack(mc)));
         uniformRegistry.registerInt("currentSelectedBlockId", () -> currentSelectedBlockId(mc));
         uniformRegistry.registerVec3("currentSelectedBlockPos", () -> currentSelectedBlockPos(mc, cameraPositionUnshifted));
         uniformRegistry.registerInt("isEyeInWater", () -> eyeFluidState(mc));
@@ -1046,7 +1121,7 @@ public class PipelineContext {
         uniformRegistry.registerMatrix4("dhModelViewProjection", () -> dhModelViewProjectionBuffer);
         uniformRegistry.registerVec3("dhModelOffset", () -> dhModelOffset);
         uniformRegistry.registerInt("dhMaterialId", () -> 0);
-        uniformRegistry.registerInt("dhRenderDistance", () -> mc != null && mc.gameSettings != null ? mc.gameSettings.renderDistanceChunks * 16 : 0);
+        uniformRegistry.registerInt("dhRenderDistance", () -> mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc) * 16 : 0);
         uniformRegistry.registerFloat("fovYInverse", PipelineContext::fovYInverse);
         uniformRegistry.registerMatrix4("textureMatrix", MatrixState::identity);
         uniformRegistry.registerMatrix4("iris_TextureMat", MatrixState::identity);
@@ -1166,7 +1241,7 @@ public class PipelineContext {
         uniformRegistry.registerVec3("eyePosition", () -> cameraPosition.clone());
         uniformRegistry.registerVec3("relativeEyePosition", () -> new float[]{0.0f, 0.0f, 0.0f});
         uniformRegistry.registerVec3("playerLookVector", () -> playerLookVector(mc));
-        uniformRegistry.registerVec3("playerBodyVector", () -> bodyVector(mc != null ? mc.getRenderViewEntity() : null));
+        uniformRegistry.registerVec3("playerBodyVector", () -> bodyVector(mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) : null));
         uniformRegistry.registerVec3("vehicleLookVector", () -> vehicleLookVector(mc));
         uniformRegistry.registerVec3("relativeVehiclePosition", () -> relativeVehiclePosition(mc));
         uniformRegistry.registerVec4("lightningBoltPosition", () -> lightningBoltPosition(mc));
@@ -1204,7 +1279,7 @@ public class PipelineContext {
                 if (useEndFlashShadowLight(world)) {
                     return endFlashPosition.clone();
                 }
-                float celestialAngle = world.getCelestialAngle(mc.getRenderPartialTicks());
+                float celestialAngle = com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
                 float sunAngle = celestialAngle < 0.75F ? celestialAngle + 0.25F : celestialAngle - 0.75F;
                 return legacyShadowLightVector(mc, sunAngle > 0.5F);
             }
@@ -1234,7 +1309,7 @@ public class PipelineContext {
     }
 
     private Framebuffer currentWorldFramebufferTarget(Minecraft mc) {
-        return externalWorldFramebufferTarget != null ? externalWorldFramebufferTarget : mc != null ? mc.getFramebuffer() : null;
+        return externalWorldFramebufferTarget != null ? externalWorldFramebufferTarget : mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) : null;
     }
 
     private static World renderWorld(Minecraft mc) {
@@ -1242,7 +1317,7 @@ public class PipelineContext {
         if (renderPassWorld != null) {
             return renderPassWorld;
         }
-        return mc != null ? mc.world : null;
+        return mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
     }
 
     private static int[] currentDate() {
@@ -1275,25 +1350,25 @@ public class PipelineContext {
 
     private int worldTargetWidth(Minecraft mc) {
         Framebuffer target = externalWorldFramebufferTarget;
-        return target != null ? Math.max(1, target.framebufferWidth) : Math.max(1, mc.displayWidth);
+        return target != null ? Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target)) : Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc));
     }
 
     private int worldTargetHeight(Minecraft mc) {
         Framebuffer target = externalWorldFramebufferTarget;
-        return target != null ? Math.max(1, target.framebufferHeight) : Math.max(1, mc.displayHeight);
+        return target != null ? Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target)) : Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
     }
 
     private int framebufferWidth(Framebuffer target, Minecraft mc) {
-        return target != null ? Math.max(1, target.framebufferWidth) : Math.max(1, mc.displayWidth);
+        return target != null ? Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target)) : Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc));
     }
 
     private int framebufferHeight(Framebuffer target, Minecraft mc) {
-        return target != null ? Math.max(1, target.framebufferHeight) : Math.max(1, mc.displayHeight);
+        return target != null ? Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target)) : Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
     }
 
     private int[] attachmentSize(Attachment attachment) {
         if (!pingPongManager.isInitialized()) {
-            Minecraft mc = Minecraft.getMinecraft();
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
             return new int[]{worldTargetWidth(mc), worldTargetHeight(mc)};
         }
         return new int[]{
@@ -1304,7 +1379,7 @@ public class PipelineContext {
 
     private int[] framebufferSize() {
         if (!pingPongManager.isInitialized()) {
-            Minecraft mc = Minecraft.getMinecraft();
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
             return new int[]{worldTargetWidth(mc), worldTargetHeight(mc)};
         }
         return new int[]{Math.max(1, pingPongManager.width()), Math.max(1, pingPongManager.height())};
@@ -1320,14 +1395,15 @@ public class PipelineContext {
     }
 
     private static int[] eyeBrightness(Minecraft mc) {
-        Entity viewEntity = mc.getRenderViewEntity();
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         World world = renderWorld(mc);
         if (world == null || viewEntity == null) {
             return new int[]{0, 0};
         }
 
-        BlockPos pos = new BlockPos(viewEntity.posX, viewEntity.posY + viewEntity.getEyeHeight(), viewEntity.posZ);
-        int combinedLight = world.getCombinedLight(pos, 0);
+        BlockPos pos = new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity) + com.l.ausm.impl.util.MinecraftReflectionCompat.eyeHeight(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity));
+        int combinedLight = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((world), new String[] {"func_175626_b", "getCombinedLight"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class, int.class}, 0, (pos), (0));
         int block = combinedLight >> 4 & 0xF;
         int sky = combinedLight >> 20 & 0xF;
         if (eyeFluidState(mc) == 1) {
@@ -1337,10 +1413,11 @@ public class PipelineContext {
     }
 
     private static float[] skyColor(Minecraft mc) {
-        Entity viewEntity = mc == null ? null : mc.getRenderViewEntity();
+        Entity viewEntity = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         World world = renderWorld(mc);
         if (mc != null && world != null && viewEntity != null) {
-            return vec3(world.getSkyColor(viewEntity, mc.getRenderPartialTicks()));
+            return vec3(com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_72833_a", "getSkyColor"},
+                new Class<?>[] {net.minecraft.entity.Entity.class, float.class}, (viewEntity), (com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc))));
         }
         return new float[]{0.5f, 0.7f, 1.0f};
     }
@@ -1405,7 +1482,8 @@ public class PipelineContext {
     private float[] overworldFogColor(Minecraft mc) {
         World world = renderWorld(mc);
         if (world != null) {
-            return vec3(world.getFogColor(mc != null ? mc.getRenderPartialTicks() : 0.0f));
+            return vec3(com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_72948_g", "getFogColor", "func_72824_f"},
+                new Class<?>[] {float.class}, (mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc) : 0.0f)));
         }
         return skyColor(mc);
     }
@@ -1413,7 +1491,8 @@ public class PipelineContext {
     private float[] netherFogColor(Minecraft mc) {
         World world = renderWorld(mc);
         if (world != null) {
-            return dampenNetherFogColor(vec3(world.getFogColor(mc != null ? mc.getRenderPartialTicks() : 0.0f)));
+            return dampenNetherFogColor(vec3(com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_72948_g", "getFogColor", "func_72824_f"},
+                new Class<?>[] {float.class}, (mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc) : 0.0f))));
         }
         return dampenNetherFogColor(PORTAL_NETHER_FOG_COLOR);
     }
@@ -1457,20 +1536,25 @@ public class PipelineContext {
 
     private static float cloudHeight(Minecraft mc) {
         World world = renderWorld(mc);
-        if (world == null || world.provider == null) {
+        if (world == null || com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) == null) {
             return 128.0f;
         }
-        return world.provider.getCloudHeight();
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)), new String[] {"func_76571_f", "getCloudHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 128.0F);
     }
 
     private static boolean hasSkylight(Minecraft mc) {
         World world = renderWorld(mc);
-        return world != null && world.provider != null && world.provider.hasSkyLight();
+        return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.providerHasSkyLight(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world));
     }
 
     private static float cloudTime(Minecraft mc) {
         World world = renderWorld(mc);
-        return world != null ? (float) (world.getTotalWorldTime() + (mc != null ? mc.getRenderPartialTicks() : 0.0f)) : 0.0f;
+        Object time = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
+                world,
+                new String[] {"func_82737_E", "getTotalWorldTime"},
+                new Class<?>[0]
+        );
+        return time instanceof Number ? (float) (((Number) time).longValue() + (mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc) : 0.0f)) : 0.0f;
     }
 
     private boolean isEyeInCave(Minecraft mc) {
@@ -1479,7 +1563,7 @@ public class PipelineContext {
             return false;
         }
         BlockPos pos = currentCameraBlockPos();
-        return world.getLightFor(EnumSkyBlock.SKY, pos) <= 1 && pos.getY() < world.getSeaLevel();
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.SKY, pos) <= 1 && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) < com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((world), new String[] {"func_181545_F", "getSeaLevel"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 63);
     }
 
     private float portalFogFar(Minecraft mc) {
@@ -1491,7 +1575,7 @@ public class PipelineContext {
     }
 
     private static float shaderRenderDistance(Minecraft mc) {
-        return Math.max(16.0f, mc != null ? mc.gameSettings.renderDistanceChunks * 16.0f : 16.0f);
+        return Math.max(16.0f, mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc) * 16.0f : 16.0f);
     }
 
     private static int currentGlFogMode() {
@@ -1509,7 +1593,8 @@ public class PipelineContext {
             return -1;
         }
         int irisId = irisBiomeId(biome);
-        return irisId >= 0 ? irisId : Biome.getIdForBiome(biome);
+        return irisId >= 0 ? irisId : com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(net.minecraft.world.biome.Biome.class, new String[] {"func_185362_a", "getIdForBiome"},
+                new Class<?>[] {net.minecraft.world.biome.Biome.class}, -1, (biome));
     }
 
     private int currentBiomePrecipitation(Minecraft mc) {
@@ -1519,25 +1604,33 @@ public class PipelineContext {
         }
 
         BlockPos pos = currentCameraBlockPos();
-        if (biome.getEnableSnow() || biome.isSnowyBiome() || (biome.canRain() && biome.getTemperature(pos) < 0.15f)) {
+        boolean canRain = com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((biome), new String[] {"func_76738_d", "canRain"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((biome), new String[] {"func_76746_c", "getEnableSnow"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((biome), new String[] {"func_150559_j", "isSnowyBiome"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)
+                || (canRain && com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((biome), new String[] {"func_180626_a", "getTemperature"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, 0.0F, (pos)) < 0.15f)) {
             return 2;
         }
-        return biome.canRain() ? 1 : 0;
+        return canRain ? 1 : 0;
     }
 
     private int currentBiomeCategory(Minecraft mc) {
         Biome biome = currentCameraBiome(mc);
-        return biome != null ? biome.getTempCategory().ordinal() : -1;
+        Object category = biome != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(biome, new String[] {"func_150561_m", "getTempCategory"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS)
+                : null;
+        return category instanceof Enum<?> ? ((Enum<?>) category).ordinal() : -1;
     }
 
     private float currentBiomeRainfall(Minecraft mc) {
         Biome biome = currentCameraBiome(mc);
-        return biome != null ? biome.getRainfall() : 0.0f;
+        return biome != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((biome), new String[] {"func_76727_i", "getRainfall"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0.0F) : 0.0f;
     }
 
     private float currentBiomeTemperature(Minecraft mc) {
         Biome biome = currentCameraBiome(mc);
-        return biome != null ? biome.getTemperature(currentCameraBlockPos()) : 0.0f;
+        return biome != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((biome), new String[] {"func_180626_a", "getTemperature"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, 0.0F, (currentCameraBlockPos())) : 0.0f;
     }
 
     private Biome currentCameraBiome(Minecraft mc) {
@@ -1545,7 +1638,8 @@ public class PipelineContext {
         if (mc == null || world == null) {
             return null;
         }
-        return world.getBiome(currentCameraBlockPos());
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.world.biome.Biome.class, null, new String[] {"func_180494_b", "getBiome"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, (currentCameraBlockPos()));
     }
 
     private BlockPos currentCameraBlockPos() {
@@ -1553,11 +1647,11 @@ public class PipelineContext {
     }
 
     private static int irisBiomeId(Biome biome) {
-        ResourceLocation name = biome.getRegistryName();
+        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.call((biome), net.minecraft.util.ResourceLocation.class, null, new String[] {"getRegistryName"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
         if (name == null) {
             return -1;
         }
-        String path = name.getPath().toLowerCase(java.util.Locale.ROOT);
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).toLowerCase(java.util.Locale.ROOT);
         if ("hell".equals(path) || "nether".equals(path) || "nether_wastes".equals(path)) {
             return BIOME_NETHER_WASTES_ID;
         }
@@ -1580,41 +1674,41 @@ public class PipelineContext {
     }
 
     private static int underwaterSurfaceSkyLight(World world, BlockPos eyePos, int fallbackSky) {
-        int maxY = Math.min(world.getHeight(), 255);
+        int maxY = Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((world), new String[] {"func_72800_K", "getHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 256), 255);
         int sky = fallbackSky;
         BlockPos.MutableBlockPos probe = new BlockPos.MutableBlockPos(eyePos);
-        for (int y = eyePos.getY(); y <= maxY; y++) {
-            probe.setPos(eyePos.getX(), y, eyePos.getZ());
-            IBlockState state = world.getBlockState(probe);
-            if (state.getMaterial() != Material.WATER) {
-                return Math.max(sky, world.getLightFor(EnumSkyBlock.SKY, probe));
+        for (int y = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(eyePos); y <= maxY; y++) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.mutableBlockPosSet(probe, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(eyePos), y, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(eyePos));
+            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, probe);
+            if (!com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsWater(state)) {
+                return Math.max(sky, com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.SKY, probe));
             }
-            sky = Math.max(sky, world.getLightFor(EnumSkyBlock.SKY, probe));
+            sky = Math.max(sky, com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.SKY, probe));
         }
         return sky;
     }
 
     private static float blindness(Minecraft mc) {
-        Entity viewEntity = mc.getRenderViewEntity();
-        if (viewEntity instanceof EntityLivingBase living && living.isPotionActive(MobEffects.BLINDNESS)) {
-            PotionEffect effect = living.getActivePotionEffect(MobEffects.BLINDNESS);
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
+        if (viewEntity instanceof EntityLivingBase living && com.l.ausm.impl.util.MinecraftReflectionCompat.livingPotionActive(living, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.init.MobEffects.class, net.minecraft.potion.Potion.class, null, "field_76440_q", "BLINDNESS"))) {
+            PotionEffect effect = com.l.ausm.impl.util.MinecraftReflectionCompat.livingActivePotionEffect(living, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.init.MobEffects.class, net.minecraft.potion.Potion.class, null, "field_76440_q", "BLINDNESS"));
             if (effect == null) {
                 return 1.0f;
             }
-            return Math.max(0.0f, Math.min(1.0f, effect.getDuration() / 20.0f));
+            return Math.max(0.0f, Math.min(1.0f, com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((effect), new String[] {"func_76459_b", "getDuration"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0) / 20.0f));
         }
         return 0.0f;
     }
 
     private static float nightVision(Minecraft mc) {
-        Entity viewEntity = mc.getRenderViewEntity();
-        if (viewEntity instanceof EntityLivingBase living && living.isPotionActive(MobEffects.NIGHT_VISION)) {
-            PotionEffect effect = living.getActivePotionEffect(MobEffects.NIGHT_VISION);
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
+        if (viewEntity instanceof EntityLivingBase living && com.l.ausm.impl.util.MinecraftReflectionCompat.livingPotionActive(living, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.init.MobEffects.class, net.minecraft.potion.Potion.class, null, "field_76439_r", "NIGHT_VISION"))) {
+            PotionEffect effect = com.l.ausm.impl.util.MinecraftReflectionCompat.livingActivePotionEffect(living, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.init.MobEffects.class, net.minecraft.potion.Potion.class, null, "field_76439_r", "NIGHT_VISION"));
             if (effect == null) {
                 return 1.0f;
             }
-            int duration = effect.getDuration();
-            return duration > 200 ? 1.0f : 0.7f + (float) Math.sin((duration - mc.getRenderPartialTicks()) * (float) Math.PI * 0.2f) * 0.3f;
+            int duration = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((effect), new String[] {"func_76459_b", "getDuration"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0);
+            return duration > 200 ? 1.0f : 0.7f + (float) Math.sin((duration - com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) * (float) Math.PI * 0.2f) * 0.3f;
         }
         return 0.0f;
     }
@@ -1642,7 +1736,7 @@ public class PipelineContext {
 
     private void updateSmoothedWetness(Minecraft mc) {
         World world = renderWorld(mc);
-        float current = world != null ? world.getRainStrength(mc.getRenderPartialTicks()) : 0.0f;
+        float current = world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) : 0.0f;
         if (!wetnessSmoothInitialized) {
             wetnessSmooth = current;
             wetnessSmoothInitialized = true;
@@ -1655,7 +1749,7 @@ public class PipelineContext {
 
     private float rainStrength(Minecraft mc) {
         World world = renderWorld(mc);
-        return world != null ? world.getRainStrength(mc.getRenderPartialTicks()) : 0.0f;
+        return world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) : 0.0f;
     }
 
     private void updateSmoothedFrameTime() {
@@ -1751,7 +1845,7 @@ public class PipelineContext {
         if (world == null || pos == null) {
             return 0;
         }
-        return blockEntityId(world.getBlockState(pos), world, pos);
+        return blockEntityId(com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos), world, pos);
     }
 
     private static float[] currentSelectedBlockPos(Minecraft mc, double[] cameraPosition) {
@@ -1760,52 +1854,54 @@ public class PipelineContext {
             return new float[]{-256.0f, -256.0f, -256.0f};
         }
         return new float[]{
-                (float) (pos.getX() + 0.5 - cameraPosition[0]),
-                (float) (pos.getY() + 0.5 - cameraPosition[1]),
-                (float) (pos.getZ() + 0.5 - cameraPosition[2])
+                (float) (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + 0.5 - cameraPosition[0]),
+                (float) (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + 0.5 - cameraPosition[1]),
+                (float) (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + 0.5 - cameraPosition[2])
         };
     }
 
     private static BlockPos currentSelectedBlockPosition(Minecraft mc) {
-        RayTraceResult hit = mc.objectMouseOver;
-        if (hit == null || hit.typeOfHit != RayTraceResult.Type.BLOCK) {
+        RayTraceResult hit = com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.util.math.RayTraceResult.class, null, "field_71476_x", "objectMouseOver");
+        if (hit == null || com.l.ausm.impl.util.MinecraftReflectionCompat.field((hit), net.minecraft.util.math.RayTraceResult.Type.class, null, "field_72313_a", "typeOfHit") != RayTraceResult.Type.BLOCK) {
             return null;
         }
-        return hit.getBlockPos();
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.rayTraceBlockPos(hit);
     }
 
     private static boolean playerSurvivalStatsVisible(Minecraft mc) {
-        if (mc == null || mc.player == null || mc.playerController == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.client.multiplayer.PlayerControllerMP.class, null, "field_71442_b", "playerController") == null) {
             return false;
         }
-        GameType gameType = mc.playerController.getCurrentGameType();
-        return gameType != null && gameType.isSurvivalOrAdventure();
+        net.minecraft.world.GameType gameType = com.l.ausm.impl.util.MinecraftReflectionCompat.call((com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.client.multiplayer.PlayerControllerMP.class, null, "field_71442_b", "playerController")), net.minecraft.world.GameType.class, null, new String[] {"func_178889_l", "getCurrentGameType"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+        int id = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(gameType, new String[] {"func_77148_a", "getID"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
+        return id == 0 || id == 2;
     }
 
     private float currentPlayerHealth(Minecraft mc) {
         if (!playerSurvivalStatsVisible(mc)) {
             return -1.0f;
         }
-        float maxHealth = Math.max(0.001f, mc.player.getMaxHealth());
-        return clamp01(mc.player.getHealth() / maxHealth);
+        float maxHealth = Math.max(0.001f, com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_110138_aP", "getMaxHealth"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0.0F));
+        return clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_110143_aJ", "getHealth"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0.0F) / maxHealth);
     }
 
     private float maxPlayerHealth(Minecraft mc) {
-        return playerSurvivalStatsVisible(mc) ? mc.player.getMaxHealth() : -1.0f;
+        return playerSurvivalStatsVisible(mc) ? com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_110138_aP", "getMaxHealth"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0.0F) : -1.0f;
     }
 
     private float currentPlayerHunger(Minecraft mc) {
         if (!playerSurvivalStatsVisible(mc)) {
             return -1.0f;
         }
-        return clamp01(mc.player.getFoodStats().getFoodLevel() / 20.0f);
+        Object foodStats = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc), new String[] {"func_71024_bL", "getFoodStats"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+        return clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(foodStats, new String[] {"func_75116_a", "getFoodLevel"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0) / 20.0f);
     }
 
     private float currentPlayerAir(Minecraft mc) {
         if (!playerSurvivalStatsVisible(mc)) {
             return -1.0f;
         }
-        return clamp01(mc.player.getAir() / 300.0f);
+        return clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70086_ai", "getAir"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0) / 300.0f);
     }
 
     private float maxPlayerAir(Minecraft mc) {
@@ -1816,15 +1912,15 @@ public class PipelineContext {
         if (!playerSurvivalStatsVisible(mc)) {
             return -1.0f;
         }
-        return clamp01(mc.player.getTotalArmorValue() / 50.0f);
+        return clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70658_aO", "getTotalArmorValue"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0) / 50.0f);
     }
 
     private static float[] playerLookVector(Minecraft mc) {
-        Entity viewEntity = mc.getRenderViewEntity();
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         if (viewEntity == null) {
             return new float[]{0.0f, 0.0f, 1.0f};
         }
-        Vec3d look = viewEntity.getLook(mc.getRenderPartialTicks());
+        Vec3d look = com.l.ausm.impl.util.MinecraftReflectionCompat.look(viewEntity, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
         return vec3(look);
     }
 
@@ -1866,7 +1962,11 @@ public class PipelineContext {
     }
 
     private static float[] vec3(Vec3d vec) {
-        return new float[]{(float) vec.x, (float) vec.y, (float) vec.z};
+        return new float[]{
+                (float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(vec),
+                (float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(vec),
+                (float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(vec)
+        };
     }
 
     private float[] viewSpaceLightVector(Minecraft mc, boolean moon) {
@@ -1883,7 +1983,7 @@ public class PipelineContext {
         if (world == null) {
             return new float[]{0.0f, moon ? -100.0f : 100.0f, 0.0f};
         }
-        float skyAngle = world.getCelestialAngle(mc.getRenderPartialTicks()) * (float) (Math.PI * 2.0);
+        float skyAngle = com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) * (float) (Math.PI * 2.0);
         if (moon) {
             skyAngle += (float) Math.PI;
         }
@@ -1910,7 +2010,7 @@ public class PipelineContext {
         if (world == null) {
             return 0.0f;
         }
-        float angle = world.getCelestialAngle(mc.getRenderPartialTicks()) + 0.25f;
+        float angle = com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) + 0.25f;
         if (angle >= 1.0f) {
             angle -= 1.0f;
         }
@@ -1939,12 +2039,13 @@ public class PipelineContext {
         if (world == null) {
             return 0.25f;
         }
-        return (float) ((world.getWorldTime() % 24000L) / 24000.0);
+        return world != null ? (float) ((com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L) / 24000.0) : 0.25f;
     }
 
     private float adjustedDayTime(Minecraft mc) {
         World world = renderWorld(mc);
-        return Math.abs(((((world != null ? world.getWorldTime() % 24000L : 0L) / 1000.0f) + 6.0f) % 24.0f) - 12.0f);
+        long worldTime = world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L : 0L;
+        return Math.abs(((((worldTime) / 1000.0f) + 6.0f) % 24.0f) - 12.0f);
     }
 
     private float dayHelper(Minecraft mc) {
@@ -1970,7 +2071,7 @@ public class PipelineContext {
         if (world == null) {
             return 1.0f;
         }
-        float worldTime = world.getWorldTime() % 24000L;
+        float worldTime = com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L;
         float day = worldTime < 12485.0f || worldTime >= 23515.0f ? 1.0f : 0.0f;
         float dusk = worldTime >= 12485.0f && worldTime < 13085.0f
                 ? 1.0f - ((worldTime - 12485.0f) * 0.0016666667f)
@@ -2049,12 +2150,12 @@ public class PipelineContext {
             return;
         }
 
-        releaseMouseForShaderLoad(Minecraft.getMinecraft());
+        releaseMouseForShaderLoad(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
         boolean usingCachedPrograms = cachedPrograms != null;
         boolean restoredCachedPrograms = false;
         ShaderLoadingScreen.begin(pack.getName(), usingCachedPrograms ? 9 : 12, loadingBackgroundMode);
         try {
-            Minecraft mc = Minecraft.getMinecraft();
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
             ShaderLoadingScreen.step("Loading shader properties");
             ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
             logHardwareCapabilities("properties:" + pack.getName(), properties.packDirectives());
@@ -2102,7 +2203,7 @@ public class PipelineContext {
             shadowHealthLogged = false;
             shadowHealthLogAttempts = 0;
             ShaderLoadingScreen.step("Preparing framebuffers");
-            pingPongManager.initialize(mc.displayWidth, mc.displayHeight, packDirectives.renderTargets());
+            pingPongManager.initialize(com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), packDirectives.renderTargets());
             initializeBlankShadowFramebuffer(pack, properties);
             MainMod.LOGGER.debug(
                     "[Pipeline] Shadow config: framebuffer={} distance={} voxelDistance={} renderMul={} interval={} sunPathRotation={} hardwareFiltering={} tex0Nearest={} tex1Nearest={} polygonOffset={} factor={} units={}",
@@ -2129,10 +2230,10 @@ public class PipelineContext {
             }
             ShaderLoadingScreen.step("Preparing shader resources");
             shaderImages = ShaderImageSet.load(packDirectives.images());
-            shaderImages.resize(mc.displayWidth, mc.displayHeight);
+            shaderImages.resize(com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
             clearColoredLightImages();
             shaderStorageBuffers = ShaderStorageBufferSet.load(pack, packDirectives.storageBuffers());
-            shaderStorageBuffers.resize(mc.displayWidth, mc.displayHeight);
+            shaderStorageBuffers.resize(com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
             if (shaderStorageBuffers.active()) {
                 markShaderStorageBuffersBound();
             }
@@ -2158,12 +2259,15 @@ public class PipelineContext {
                 for (RenderPass pass : RenderPass.values()) {
                     PipelineProgram pipelineProgram = new PipelineProgram(pass, programSet.source(pass.programId()).directives());
                     applyFallbackDefaultDrawBuffers(pipelineProgram);
-                    boolean enabled = properties.isProgramEnabled(pass);
+                    ShaderProgramSource source = programSet.source(pass.programId());
+                    boolean hasOfficialFinalSource = pass == RenderPass.FINAL
+                            && (source.fragmentPath() != null || source.fragmentSource() != null);
+                    boolean enabled = properties.isProgramEnabled(pass) || hasOfficialFinalSource;
                     pipelineProgram.setEnabled(enabled);
 
                     if (enabled) {
                         ShaderLoadingScreen.step("Compiling " + pass.getProgramName());
-                        ShaderProgram program = ShaderCompiler.compilePass(pack, pass, properties, programSet.source(pass.programId()));
+                        ShaderProgram program = ShaderCompiler.compilePass(pack, pass, properties, source, packDirectives);
                         if (program != null) {
                             pipelineProgram.setShaderProgram(program);
                             loadingMap.put(pipelineProgram.shaderKey(), program);
@@ -2189,6 +2293,7 @@ public class PipelineContext {
                     .flatMap(List::stream)
                     .filter(FullscreenArrayProgram::hasProgram)
                     .count();
+            clearHardwareSafeVanillaTerrainAfterSuccessfulProgramLoad("initialize:" + pack.getName());
             MainMod.LOGGER.info(
                     "[Pipeline] Initialization complete. Pipeline Active: {}, Loaded Programs: {} (+{} indexed fullscreen)",
                     isPipelineActive,
@@ -2215,8 +2320,8 @@ public class PipelineContext {
     }
 
     private void releaseMouseForShaderLoad(Minecraft mc) {
-        if (mc != null && mc.inGameHasFocus) {
-            mc.setIngameNotInFocus();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((mc), false, "field_71415_G", "inGameHasFocus")) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((mc), new String[] {"func_71364_i", "setIngameNotInFocus"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
         }
         try {
             if (org.lwjgl.input.Mouse.isCreated()) {
@@ -2270,6 +2375,7 @@ public class PipelineContext {
             isPipelineActive = true;
             activeSkyPipelineProbeLogs = 0;
             resetChunkFadeState(true);
+            clearHardwareSafeVanillaTerrainAfterSuccessfulProgramLoad("activate-cache:" + pack.getName());
             MainMod.LOGGER.debug("[Pipeline] Activated cached compiled shader programs: {}", cacheKey);
             return true;
         } catch (RuntimeException e) {
@@ -2438,6 +2544,9 @@ public class PipelineContext {
         resolution = Math.max(16, Math.min(8192, resolution));
         shadowFramebuffer = new ShadowFramebuffer(resolution, packDirectives.renderTargets());
         shadowMapPopulated = false;
+        shadowMapUsable = false;
+        shadowMapSparseForSampling = false;
+        shadowMapCoverageStableFrames = 0;
         resetShadowRenderCache();
         MainMod.LOGGER.debug(
                 "[Pipeline] Blank shadow textures initialized: {}x{} (shadowMapResolution={} option={} changedOption={} activeConst={} profile={} distanceSlider={} qualitySlider={})",
@@ -2921,14 +3030,15 @@ public class PipelineContext {
                     pack,
                     properties,
                     arrayId,
-                    packDirectives.computeDirectives().computeArrays().getOrDefault(arrayId, List.of())
+                    packDirectives.computeDirectives().computeArrays().getOrDefault(arrayId, List.of()),
+                    packDirectives
             );
             if (!compiled.isEmpty()) {
                 computeProgramArrays.put(arrayId, compiled);
             }
         }
-        shadowComputePrograms = compileComputeList(pack, properties, null, packDirectives.computeDirectives().shadowComputes());
-        finalComputePrograms = compileComputeList(pack, properties, null, packDirectives.computeDirectives().finalComputes());
+        shadowComputePrograms = compileComputeList(pack, properties, null, packDirectives.computeDirectives().shadowComputes(), packDirectives);
+        finalComputePrograms = compileComputeList(pack, properties, null, packDirectives.computeDirectives().finalComputes(), packDirectives);
     }
 
     private void compileFullscreenArrayPrograms(ShaderPack pack, ShaderProperties properties) {
@@ -2975,7 +3085,7 @@ public class PipelineContext {
             );
             applyFallbackDefaultDrawBuffers(arrayProgram);
             ShaderLoadingScreen.step("Compiling " + source.name());
-            ShaderProgram shaderProgram = ShaderCompiler.compileSource(pack, properties, source, bindingPass);
+            ShaderProgram shaderProgram = ShaderCompiler.compileSource(pack, properties, source, bindingPass, packDirectives);
             if (shaderProgram != null) {
                 arrayProgram.setShaderProgram(shaderProgram);
                 compiled.add(arrayProgram);
@@ -3034,7 +3144,8 @@ public class PipelineContext {
             ShaderPack pack,
             ShaderProperties properties,
             ProgramArrayId arrayId,
-            List<ComputeProgramSource> sources
+            List<ComputeProgramSource> sources,
+            ShaderPackDirectives directives
     ) {
         if (sources.isEmpty()) {
             return List.of();
@@ -3046,7 +3157,7 @@ public class PipelineContext {
                 continue;
             }
             ShaderLoadingScreen.step("Compiling " + source.name());
-            ComputeProgram program = ComputeProgram.compile(pack, properties, source);
+            ComputeProgram program = ComputeProgram.compile(pack, properties, source, directives);
             if (program != null) {
                 compiled.add(program);
             }
@@ -3110,10 +3221,48 @@ public class PipelineContext {
 
     private void resetHardwareCompatibilityState() {
         zeroOpaqueTerrainFrames = 0;
+        sparseOpaqueTerrainFrames = 0;
         zeroOpaqueTerrainRecoveryRequested = false;
         pipelineTerrainFormatSupported = detectPipelineTerrainFormatSupport();
         hardwareSafeVanillaTerrain = !pipelineTerrainFormatSupported;
         hardwareSafeVanillaTerrainReason = hardwareSafeVanillaTerrain ? "missing-pipeline-terrain-format" : "";
+    }
+
+    private void clearHardwareSafeVanillaTerrainAfterSuccessfulProgramLoad(String stage) {
+        if (!isPipelineActive || !pipelineTerrainFormatSupported() || !hasUsableShaderTerrainProgram()) {
+            return;
+        }
+        boolean changed = hardwareSafeVanillaTerrain
+                || !hardwareSafeVanillaTerrainReason.isEmpty()
+                || hardwareSafeVanillaTerrainRefreshCooldown > 0
+                || zeroOpaqueTerrainFrames != 0
+                || sparseOpaqueTerrainFrames != 0
+                || zeroOpaqueTerrainRecoveryRequested;
+        hardwareSafeVanillaTerrain = false;
+        hardwareSafeVanillaTerrainReason = "";
+        hardwareSafeVanillaTerrainRefreshCooldown = 0;
+        zeroOpaqueTerrainFrames = 0;
+        sparseOpaqueTerrainFrames = 0;
+        zeroOpaqueTerrainRecoveryRequested = false;
+        if (changed) {
+            NothiriumBypass.markAllChanged();
+            scheduleWorldTerrainRefresh(true, true, 0);
+            MainMod.LOGGER.info("[Pipeline] Cleared hardware safe vanilla terrain fallback after loading shader terrain programs: {}", stage);
+        }
+    }
+
+    private boolean hasUsableShaderTerrainProgram() {
+        return hasUsableShaderProgram(RenderPass.GBUFFERS_TERRAIN_SOLID)
+                || hasUsableShaderProgram(RenderPass.GBUFFERS_TERRAIN_CUTOUT)
+                || hasUsableShaderProgram(RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP)
+                || hasUsableShaderProgram(RenderPass.GBUFFERS_TERRAIN)
+                || hasUsableShaderProgram(RenderPass.GBUFFERS_TEXTURED_LIT)
+                || hasUsableShaderProgram(RenderPass.GBUFFERS_TEXTURED);
+    }
+
+    private boolean hasUsableShaderProgram(RenderPass pass) {
+        PipelineProgram program = programs.get(pass);
+        return program != null && program.effectiveProgram(programs) != null;
     }
 
     private boolean detectPipelineTerrainFormatSupport() {
@@ -3168,7 +3317,7 @@ public class PipelineContext {
                 caps.GL_ARB_shader_storage_buffer_object,
                 caps.GL_ARB_draw_buffers_blend,
                 caps.GL_ARB_tessellation_shader,
-                OpenGlHelper.isFramebufferEnabled(),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.isFramebufferEnabled(),
                 maxVertexAttribs,
                 maxDrawBuffers,
                 maxColorAttachments,
@@ -3270,7 +3419,7 @@ public class PipelineContext {
     }
 
     private void logWaterLikeMaterialProbe(IBlockState state, IBlockAccess blockAccess, BlockPos pos, int id, String source) {
-        if (!DEBUG_PROBES_ENABLED || state == null || state.getMaterial() != Material.WATER) {
+        if (!DEBUG_PROBES_ENABLED || state == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsWater(state)) {
             return;
         }
 
@@ -3292,7 +3441,7 @@ public class PipelineContext {
     }
 
     private static int waterLikeFluidFallbackId(IBlockState state) {
-        if (state == null || state.getMaterial() != Material.WATER) {
+        if (state == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsWater(state)) {
             return 0;
         }
 
@@ -3301,8 +3450,8 @@ public class PipelineContext {
             return 0;
         }
 
-        String namespace = name.getNamespace();
-        String path = name.getPath();
+        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name);
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
         if ("minecraft".equals(namespace)) {
             return ("water".equals(path) || "flowing_water".equals(path)) ? 32000 : 0;
         }
@@ -3352,7 +3501,7 @@ public class PipelineContext {
         IBlockState inheritedState = firstInheritedRenderState(state, blockAccess, pos);
         if (inheritedState != null
                 && inheritedState != state
-                && inheritedState.getBlock() != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(inheritedState) != null
                 && !isBlockcrafteryEditableBlock(inheritedState)) {
             return inheritedState;
         }
@@ -3360,12 +3509,122 @@ public class PipelineContext {
             inheritedState = firstInheritedRenderState(state, null, null);
             if (inheritedState != null
                     && inheritedState != state
-                    && inheritedState.getBlock() != null
+                    && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(inheritedState) != null
                     && !isBlockcrafteryEditableBlock(inheritedState)) {
                 return inheritedState;
             }
         }
         return null;
+    }
+
+    public boolean shouldProbeBlockcrafteryTransparency(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (!isBlockcrafteryEditableBlock(state)) {
+            return false;
+        }
+        IBlockState decoratedState = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
+        return decoratedState != null && isBlockcrafteryTransparencyProbeDecoratedState(decoratedState);
+    }
+
+    public void logBlockcrafteryTransparencyProbe(String source, IBlockState state, IBlockAccess blockAccess,
+                                                  BlockPos pos, BlockRenderLayer layer, Integer startVertex,
+                                                  Integer endVertex, Boolean result, String detail) {
+        if (!shouldProbeBlockcrafteryTransparency(state, blockAccess, pos)) {
+            return;
+        }
+        IBlockState decoratedState = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
+        int dimension = safeDimensionId(blockAccess instanceof World world ? world : null);
+        int start = startVertex != null ? startVertex : -1;
+        int end = endVertex != null ? endVertex : -1;
+        int delta = start >= 0 && end >= 0 ? end - start : -1;
+        String key = source
+                + "|" + dimension
+                + "|" + formatBlockPos(pos)
+                + "|" + stateName(state)
+                + "|" + stateName(decoratedState)
+                + "|" + String.valueOf(layer)
+                + "|" + String.valueOf(result)
+                + "|" + start
+                + "|" + end
+                + "|" + String.valueOf(detail);
+        if (!blockcrafteryTransparencyProbeKeys.add(key)) {
+            return;
+        }
+        int count = blockcrafteryTransparencyProbeCount.incrementAndGet();
+        if (count > MAX_BLOCKCRAFTERY_TRANSPARENCY_PROBES) {
+            return;
+        }
+        MainMod.LOGGER.info(
+                "[AUSMBlockcrafteryTransparencyProbe] call={} source={} pipelineActive={} shaderless={} phase={} dim={} pos={} layer={} result={} start={} end={} delta={} state={} decorated={} decoratedInfo={} detail={}",
+                count,
+                source,
+                isPipelineActive,
+                !isPipelineActive,
+                getPhase(),
+                dimension,
+                formatBlockPos(pos),
+                layer,
+                result,
+                start,
+                end,
+                delta,
+                stateName(state),
+                stateName(decoratedState),
+                blockcrafteryTransparencyStateInfo(decoratedState, blockAccess, pos, layer),
+                detail
+        );
+    }
+
+    private boolean isBlockcrafteryTransparencyProbeDecoratedState(IBlockState state) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null || isBlockcrafteryEditableBlock(state)) {
+            return false;
+        }
+        ResourceLocation name = registryName(state);
+        String namespace = name != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).toLowerCase(Locale.ROOT)
+                : "";
+        String path = name != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name) != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).toLowerCase(Locale.ROOT)
+                : "";
+        String blockClass = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state).getClass().getName().toLowerCase(Locale.ROOT);
+        BlockRenderLayer naturalLayer = safeRenderLayer(state);
+        boolean transparentLayer = naturalLayer == BlockRenderLayer.TRANSLUCENT
+                || naturalLayer == BlockRenderLayer.CUTOUT
+                || naturalLayer == BlockRenderLayer.CUTOUT_MIPPED
+                || canRenderInLayer(state, BlockRenderLayer.TRANSLUCENT)
+                || canRenderInLayer(state, BlockRenderLayer.CUTOUT)
+                || canRenderInLayer(state, BlockRenderLayer.CUTOUT_MIPPED);
+        boolean transparentIdentity = namespace.contains("enderio")
+                || path.contains("glass")
+                || path.contains("clear")
+                || path.contains("fused")
+                || path.contains("quartz")
+                || path.contains("transparent")
+                || path.contains("translucent")
+                || blockClass.contains("glass")
+                || blockClass.contains("transparent")
+                || blockClass.contains("translucent");
+        return transparentLayer || transparentIdentity;
+    }
+
+    private String blockcrafteryTransparencyStateInfo(IBlockState state, IBlockAccess blockAccess, BlockPos pos,
+                                                      BlockRenderLayer currentLayer) {
+        if (state == null) {
+            return "null";
+        }
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+        return "{renderType=" + safeRenderType(state)
+                + ", naturalLayer=" + safeRenderLayer(state)
+                + ", canCurrent=" + canRenderInLayer(state, currentLayer)
+                + ", canSolid=" + canRenderInLayer(state, BlockRenderLayer.SOLID)
+                + ", canCutoutMipped=" + canRenderInLayer(state, BlockRenderLayer.CUTOUT_MIPPED)
+                + ", canCutout=" + canRenderInLayer(state, BlockRenderLayer.CUTOUT)
+                + ", canTranslucent=" + canRenderInLayer(state, BlockRenderLayer.TRANSLUCENT)
+                + ", opaque=" + safeOpaqueCube(state)
+                + ", full=" + safeFullCube(state)
+                + ", material=" + (com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(state) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(state) : "null")
+                + ", light=" + safeLightValue(state, blockAccess, pos)
+                + ", class=" + (block != null ? block.getClass().getName() : "null")
+                + "}";
     }
 
     public IBlockState inheritedBloomRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -3422,7 +3681,7 @@ public class PipelineContext {
     }
 
     public boolean stateHasBloomLayerGeometry(IBlockState state) {
-        if (state == null || state.getBlock() == null || isBlockcrafteryEditableBlock(state)) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null || isBlockcrafteryEditableBlock(state)) {
             return false;
         }
         if (isExplicitBloomState(state)) {
@@ -3510,7 +3769,7 @@ public class PipelineContext {
     }
 
     public boolean shouldUseShaderlessBloomEmission() {
-        return !isPipelineActive && !AusmBloomLayer.shouldUseShaderlessNativeHook();
+        return shaderlessBloomExtractionActive || (!isPipelineActive && !AusmBloomLayer.shouldUseShaderlessNativeHook());
     }
 
     public int blockShaderlessBloomEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -3533,27 +3792,18 @@ public class PipelineContext {
     }
 
     public boolean stateUsesTextureBloomSource(IBlockState state) {
-        if (state == null || state.getBlock() == null || isBlockcrafteryEditableBlock(state)) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null || isBlockcrafteryEditableBlock(state)) {
             return false;
         }
         return stateHasBloomResourceGeometry(state) || isLumenizedBloomState(state);
     }
 
     private int explicitShaderlessBloomEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        int blockcrafteryEmission = blockcrafteryLightEmission(state);
-        if (blockcrafteryEmission > 0) {
-            return blockcrafteryEmission;
-        }
         if (isBlockcrafteryEditableBlock(state)) {
             return 0;
         }
-        int luminousEmission = randomThingsLuminousEmission(state);
-        if (luminousEmission > 0) {
-            return luminousEmission;
-        }
-        int astralEmission = astralCrystalEmission(state);
-        if (astralEmission > 0) {
-            return astralEmission;
+        if (isRandomThingsLuminousBlock(state)) {
+            return SHADERLESS_BLOOM_GEOMETRY_EMISSION;
         }
         if (stateHasBloomLayerGeometry(state) || stateHasBloomResourceGeometry(state) || isLumenizedBloomState(state)) {
             return shaderlessBloomGeometryEmission(state, blockAccess, pos);
@@ -3562,6 +3812,9 @@ public class PipelineContext {
     }
 
     private int shaderlessBloomGeometryEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (isRandomThingsLuminousBlock(state)) {
+            return SHADERLESS_BLOOM_GEOMETRY_EMISSION;
+        }
         if (blockRenderEmissionForState(state, blockAccess, pos) > 0) {
             return SHADERLESS_LIGHT_EMITTING_BLOOM_GEOMETRY_EMISSION;
         }
@@ -3590,7 +3843,7 @@ public class PipelineContext {
             return blockcrafteryEmission;
         }
         IBlockState inheritedState = inheritedBloomRenderState(state, blockAccess, pos);
-        if (inheritedState == null || inheritedState == state || inheritedState.getBlock() == null) {
+        if (inheritedState == null || inheritedState == state || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(inheritedState) == null) {
             return 0;
         }
         int inheritedEmission = blockShaderlessBloomEmission(inheritedState, blockAccess, pos);
@@ -3609,7 +3862,7 @@ public class PipelineContext {
             return blockcrafteryEmission;
         }
         IBlockState inheritedState = inheritedBloomRenderState(state, blockAccess, pos);
-        if (inheritedState == null || inheritedState == state || inheritedState.getBlock() == null) {
+        if (inheritedState == null || inheritedState == state || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(inheritedState) == null) {
             return 0;
         }
         int inheritedEmission = blockShaderlessBloomEmission(inheritedState, blockAccess, pos);
@@ -3624,10 +3877,14 @@ public class PipelineContext {
     }
 
     public int blockRenderAlpha(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
+        if (shaderlessBloomExtractionActive
+                && (isRandomThingsTranslucentLuminousBlock(state) || isRandomThingsTranslucentLuminousBlock(effectiveState))) {
+            return RANDOM_THINGS_TRANSLUCENT_LUMINOUS_ALPHA;
+        }
         if (!CURRENT_PROBLEM_PROBES_ENABLED) {
             return -1;
         }
-        IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
         if (isCurrentProblemProbeTarget(state) || isCurrentProblemProbeTarget(effectiveState)) {
             logCurrentProblemProbe("alpha-query", state, blockAccess, pos,
                     "effective=" + stateName(effectiveState)
@@ -3638,7 +3895,7 @@ public class PipelineContext {
                             + ", effectiveFull=" + safeFullCube(effectiveState)
                             + ", originalLayer=" + safeRenderLayer(state)
                             + ", effectiveLayer=" + safeRenderLayer(effectiveState)
-                            + ", layer=" + MinecraftForgeClient.getRenderLayer());
+                            + ", layer=" + com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
         }
         return -1;
     }
@@ -3727,7 +3984,7 @@ public class PipelineContext {
         String key = source
                 + "|" + safeDimensionId(blockAccess instanceof World world ? world : null)
                 + "|" + formatBlockPos(pos)
-                + "|" + String.valueOf(MinecraftForgeClient.getRenderLayer())
+                + "|" + String.valueOf(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer())
                 + "|" + stateName(state)
                 + "|" + stateName(effectiveState)
                 + "|" + stateName(inheritedState)
@@ -3751,11 +4008,11 @@ public class PipelineContext {
                 activeLightOrId,
                 safeDimensionId(blockAccess instanceof World world ? world : null),
                 formatBlockPos(pos),
-                MinecraftForgeClient.getRenderLayer(),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
                 AusmBloomLayer.layer(),
-                framedDiagnosticState("state", state, blockAccess, pos, MinecraftForgeClient.getRenderLayer(), AusmBloomLayer.layer()),
-                framedDiagnosticState("effective", effectiveState, blockAccess, pos, MinecraftForgeClient.getRenderLayer(), AusmBloomLayer.layer()),
-                framedDiagnosticState("inherited", inheritedState, blockAccess, pos, MinecraftForgeClient.getRenderLayer(), AusmBloomLayer.layer()),
+                framedDiagnosticState("state", state, blockAccess, pos, com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer()),
+                framedDiagnosticState("effective", effectiveState, blockAccess, pos, com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer()),
+                framedDiagnosticState("inherited", inheritedState, blockAccess, pos, com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer()),
                 blockRenderEmission(state, blockAccess, pos),
                 blockRenderEmissionWithFramedInheritance(state, blockAccess, pos),
                 -1,
@@ -3788,7 +4045,7 @@ public class PipelineContext {
                 + "|" + kind
                 + "|" + BlockRenderContext.debugState()
                 + "|" + BlockRenderContext.debugEffectiveState()
-                + "|" + String.valueOf(MinecraftForgeClient.getRenderLayer())
+                + "|" + String.valueOf(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer())
                 + "|" + String.valueOf(detail);
         if (!currentProblemProbeKeys.add(key)) {
             return;
@@ -3810,7 +4067,7 @@ public class PipelineContext {
                 source,
                 kind,
                 activeLightOrId,
-                MinecraftForgeClient.getRenderLayer(),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
                 BlockRenderContext.debugState(),
                 BlockRenderContext.debugEffectiveState(),
                 BlockRenderContext.blockEmission(),
@@ -3827,13 +4084,13 @@ public class PipelineContext {
     }
 
     private String shaderlessWorldLightSummary(Minecraft mc) {
-        if (mc == null || mc.world == null || mc.player == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             return "none";
         }
-        BlockPos feet = new BlockPos(mc.player);
-        BlockPos eye = new BlockPos(mc.player.posX, mc.player.posY + mc.player.getEyeHeight(), mc.player.posZ);
-        return "feet{" + shaderlessWorldLightAt(mc.world, feet) + "}"
-                + ",eye{" + shaderlessWorldLightAt(mc.world, eye) + "}";
+        BlockPos feet = new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc));
+        BlockPos eye = new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) + com.l.ausm.impl.util.MinecraftReflectionCompat.eyeHeight(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)));
+        return "feet{" + shaderlessWorldLightAt(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), feet) + "}"
+                + ",eye{" + shaderlessWorldLightAt(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), eye) + "}";
     }
 
     private String shaderlessWorldLightAt(World world, BlockPos pos) {
@@ -3841,11 +4098,13 @@ public class PipelineContext {
             return "none";
         }
         try {
-            boolean loaded = world.isBlockLoaded(pos);
-            int combined = loaded ? world.getCombinedLight(pos, 0) : -1;
-            int sky = loaded ? world.getLightFor(EnumSkyBlock.SKY, pos) : -1;
-            int block = loaded ? world.getLightFor(EnumSkyBlock.BLOCK, pos) : -1;
-            boolean canSeeSky = loaded && world.canSeeSky(pos);
+            boolean loaded = com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos);
+            int combined = loaded ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((world), new String[] {"func_175626_b", "getCombinedLight"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class, int.class}, 0, (pos), (0)) : -1;
+            int sky = loaded ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.SKY, pos) : -1;
+            int block = loaded ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.BLOCK, pos) : -1;
+            boolean canSeeSky = loaded && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((world), new String[] {"func_175678_i", "canSeeSky"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, false, (pos));
             int dynamic = DynamicLightManager.lightAt(pos);
             return "pos=" + pos
                     + ",loaded=" + loaded
@@ -3860,7 +4119,7 @@ public class PipelineContext {
     }
 
     public void probeShaderlessSkyGuiState(String stage) {
-        // Old sky GUI probe intentionally disabled; use AUSMFreshSkyProbe instead.
+        // Probe disabled.
     }
 
     public void freshSkyProbe(String stage, String detail) {
@@ -3868,12 +4127,12 @@ public class PipelineContext {
     }
 
     private String freshSkySamples(Minecraft mc) {
-        if (mc == null || mc.displayWidth <= 0 || mc.displayHeight <= 0) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) <= 0) {
             return "none";
         }
         try {
-            int width = mc.displayWidth;
-            int height = mc.displayHeight;
+            int width = com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc);
+            int height = com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc);
             return "center=" + readFramebufferPixel(width / 2, height / 2)
                     + ";upper=" + readFramebufferPixel(width / 2, Math.max(0, height * 3 / 4))
                     + ";lower=" + readFramebufferPixel(width / 2, Math.max(0, height / 4));
@@ -3882,30 +4141,550 @@ public class PipelineContext {
         }
     }
 
+    private boolean shouldLogShaderedVoidSkyProbe() {
+        return false;
+    }
+
+    public void logVoidSkyStageProbe(String stage, String detail) {
+        // Probe disabled.
+    }
+
+    private void logShaderedVoidSkyTargetProbe(String stage, Framebuffer target) {
+        // Probe disabled.
+    }
+
+    private void logShaderedVoidSkyAttachmentProbe(String stage, String detail) {
+        // Probe disabled.
+    }
+
+    public void probeShaderedPresentationState(String stage) {
+        // Probe disabled.
+    }
+
+    private void logSkyDomeProbe(String stage, String detail, Framebuffer target) {
+        // Probe disabled.
+    }
+
+    private void logWorldPassSkyDomeProbe(String stage) {
+        // Probe disabled.
+    }
+
+    private boolean claimSkyDomeProbeBudget(Minecraft mc) {
+        String tier = skyProbeBudgetTier(mc);
+        if ("pause".equals(tier)) {
+            return skyDomePauseProbeLogs++ < MAX_SKY_DOME_PAUSE_PROBE_LOGS;
+        }
+        if ("gui".equals(tier)) {
+            return skyDomeGuiProbeLogs++ < MAX_SKY_DOME_GUI_PROBE_LOGS;
+        }
+        return skyDomeProbeLogs++ < MAX_SKY_DOME_WORLD_PROBE_LOGS;
+    }
+
+    private boolean claimWorldPassSkyDomeProbeBudget(Minecraft mc) {
+        String tier = skyProbeBudgetTier(mc);
+        if ("pause".equals(tier)) {
+            return worldPassSkyDomePauseProbeLogs++ < MAX_WORLD_PASS_SKY_DOME_PAUSE_PROBE_LOGS;
+        }
+        if ("gui".equals(tier)) {
+            return worldPassSkyDomeGuiProbeLogs++ < MAX_WORLD_PASS_SKY_DOME_GUI_PROBE_LOGS;
+        }
+        return worldPassSkyDomeProbeLogs++ < MAX_WORLD_PASS_SKY_DOME_WORLD_PROBE_LOGS;
+    }
+
+    private boolean claimShaderlessSolidTerrainSkyProbeBudget(Minecraft mc) {
+        String tier = skyProbeBudgetTier(mc);
+        if ("pause".equals(tier)) {
+            return shaderlessSolidTerrainSkyPauseProbeLogs++ < MAX_SHADERLESS_SOLID_TERRAIN_SKY_PAUSE_PROBE_LOGS;
+        }
+        if ("gui".equals(tier)) {
+            return shaderlessSolidTerrainSkyGuiProbeLogs++ < MAX_SHADERLESS_SOLID_TERRAIN_SKY_GUI_PROBE_LOGS;
+        }
+        return shaderlessSolidTerrainSkyProbeLogs++ < MAX_SHADERLESS_SOLID_TERRAIN_SKY_WORLD_PROBE_LOGS;
+    }
+
+    private String skyProbeBudgetTier(Minecraft mc) {
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc)) {
+            return "pause";
+        }
+        if (isGuiSkyProbeState(mc)) {
+            return "gui";
+        }
+        return "world";
+    }
+
+    private boolean isGuiSkyProbeState(Minecraft mc) {
+        return renderingGuiScreen()
+                || mc != null
+                && (com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)));
+    }
+
+    private void logShaderlessSolidTerrainSkyProbe(String stage) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (isPipelineActive
+                || mc == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) == null
+                || isIgnoredShaderlessSkyProbeScreen(mc)
+                || !isOverworldShaderEnvironment(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc))
+                || !claimShaderlessSolidTerrainSkyProbeBudget(mc)) {
+            return;
+        }
+
+        String budget = skyProbeBudgetTier(mc);
+        int drawFramebuffer = currentDrawFramebufferBinding();
+        int readFramebuffer = currentReadFramebufferBinding();
+        int drawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        int readBufferId = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        MainMod.LOGGER.info("[AUSMShaderlessSolidTerrainSkyProbe] stage={} budget={} active={} shaderless={} worldFrame={} pass={} phase={} gui={} screen={} hideGUI={} paused={} world={} sky={} camera={} rays={} gl={} mcTarget={} mcColor={} mcDepth={} drawFbo={} drawBuf={} drawColor={} drawDepth={} readFbo={} readBuf={} readColor={} readDepth={} terrainCounts=solid:{},cutoutMipped:{},cutout:{},translucent:{}",
+                stage,
+                budget,
+                isPipelineActive,
+                !isPipelineActive,
+                worldFrameActive,
+                activePass,
+                getPhase(),
+                renderingGuiScreen(),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc).getClass().getName() : "none",
+                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc),
+                skyProbeWorldSummary(),
+                skyDomeSceneSummary(mc),
+                skyDomeCameraSummary(mc),
+                shaderlessSolidTerrainSampleRays(mc),
+                skyDomeGlStateSummary(),
+                describeFramebufferTargetDetailed(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
+                framebufferSamples(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
+                framebufferDepthSamples(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
+                drawFramebuffer,
+                drawBuffer,
+                framebufferIdColorSamples(drawFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), normalizedReadBuffer(drawFramebuffer, drawBuffer)),
+                framebufferIdDepthSamples(drawFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), normalizedReadBuffer(drawFramebuffer, drawBuffer)),
+                readFramebuffer,
+                readBufferId,
+                framebufferIdColorSamples(readFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), normalizedReadBuffer(readFramebuffer, readBufferId)),
+                framebufferIdDepthSamples(readFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), normalizedReadBuffer(readFramebuffer, readBufferId)),
+                shaderlessTerrainSolidCount,
+                shaderlessTerrainCutoutMippedCount,
+                shaderlessTerrainCutoutCount,
+                shaderlessTerrainTranslucentCount);
+    }
+
+    private String shaderlessSolidTerrainSampleRays(Minecraft mc) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) <= 0) {
+            return "none";
+        }
+        Entity view = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
+        if (view == null) {
+            return "view=null";
+        }
+
+        int height = com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc);
+        int x = Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) / 2);
+        String[] names = {"bottomSky", "lower", "center", "upper", "topDome"};
+        int[] ys = {
+                Math.max(0, Math.min(height - 1, height / 16)),
+                Math.max(0, Math.min(height - 1, height * 3 / 16)),
+                Math.max(0, Math.min(height - 1, height / 2)),
+                Math.max(0, Math.min(height - 1, height * 13 / 16)),
+                Math.max(0, Math.min(height - 1, height * 15 / 16))
+        };
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < names.length; i++) {
+            if (builder.length() > 0) {
+                builder.append(';');
+            }
+            builder.append(names[i])
+                    .append('=')
+                    .append(x)
+                    .append(',')
+                    .append(ys[i])
+                    .append(',')
+                    .append(shaderlessSolidTerrainRayHit(mc, view, ys[i], height));
+        }
+        return builder.toString();
+    }
+
+    private String shaderlessSolidTerrainRayHit(Minecraft mc, Entity view, int y, int height) {
+        try {
+            float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
+            double eyeX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(view), partialTicks);
+            double eyeY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(view), partialTicks) + com.l.ausm.impl.util.MinecraftReflectionCompat.eyeHeight(view);
+            double eyeZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(view), partialTicks);
+            Vec3d start = new Vec3d(eyeX, eyeY, eyeZ);
+            Vec3d direction = shaderlessProbeScreenRayDirection(mc, view, y, height);
+            Vec3d end = com.l.ausm.impl.util.MinecraftReflectionCompat.vecAdd(start, com.l.ausm.impl.util.MinecraftReflectionCompat.vecScale(direction, 512.0D));
+            RayTraceResult hit = com.l.ausm.impl.util.MinecraftReflectionCompat.call((com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)), net.minecraft.util.math.RayTraceResult.class, null, new String[] {"func_147447_a", "rayTraceBlocks"},
+                new Class<?>[] {net.minecraft.util.math.Vec3d.class, net.minecraft.util.math.Vec3d.class, boolean.class, boolean.class, boolean.class},
+                (start), (end), (false), (true), (false));
+            if (hit == null || com.l.ausm.impl.util.MinecraftReflectionCompat.field((hit), net.minecraft.util.math.RayTraceResult.Type.class, null, "field_72313_a", "typeOfHit") != RayTraceResult.Type.BLOCK || com.l.ausm.impl.util.MinecraftReflectionCompat.rayTraceBlockPos(hit) == null) {
+                return "dir=" + formatVec3d(direction) + ",hit=miss";
+            }
+            BlockPos pos = com.l.ausm.impl.util.MinecraftReflectionCompat.rayTraceBlockPos(hit);
+            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), pos);
+            return "dir=" + formatVec3d(direction)
+                    + ",hit=" + formatBlockPos(pos)
+                    + ",side=" + com.l.ausm.impl.util.MinecraftReflectionCompat.field((hit), net.minecraft.util.EnumFacing.class, null, "field_178784_b", "sideHit")
+                    + ",block=" + registryName(state)
+                    + ",state=" + stateName(state)
+                    + ",dist=" + com.l.ausm.impl.util.MinecraftReflectionCompat.vecDistance(start, com.l.ausm.impl.util.MinecraftReflectionCompat.field((hit), net.minecraft.util.math.Vec3d.class, null, "field_72307_f", "hitVec"));
+        } catch (RuntimeException | LinkageError e) {
+            return "error=" + e.getClass().getSimpleName();
+        }
+    }
+
+    private Vec3d shaderlessProbeScreenRayDirection(Minecraft mc, Entity view, int y, int height) {
+        double ndcY = height <= 1 ? 0.0D : (y / (double) (height - 1)) * 2.0D - 1.0D;
+        double fov = com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.fieldFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)), 70.0F, "field_74334_X", "fovSetting") : 70.0D;
+        double verticalOffset = Math.toDegrees(Math.atan(ndcY * Math.tan(Math.toRadians(fov) * 0.5D)));
+        double pitch = com.l.ausm.impl.util.MinecraftReflectionCompat.rotationPitch(view) - verticalOffset;
+        double yaw = com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(view);
+        double yawRadians = Math.toRadians(yaw);
+        double pitchRadians = Math.toRadians(pitch);
+        double cosPitch = Math.cos(pitchRadians);
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.vecNormalize(new Vec3d(
+                -Math.sin(yawRadians) * cosPitch,
+                -Math.sin(pitchRadians),
+                Math.cos(yawRadians) * cosPitch));
+    }
+
+    private int normalizedReadBuffer(int framebuffer, int buffer) {
+        if (buffer == GL11.GL_NONE && framebuffer == 0) {
+            return GL11.GL_BACK;
+        }
+        return buffer;
+    }
+
+    private String skyDomeSceneSummary(Minecraft mc) {
+        World world = renderWorld(mc);
+        Entity view = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) : null;
+        if (world == null) {
+            return "world=null";
+        }
+        float partialTicks = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc) : 0.0F;
+        String skyColor = "none";
+        try {
+            Vec3d color = view != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_72833_a", "getSkyColor"},
+                new Class<?>[] {net.minecraft.entity.Entity.class, float.class}, (view), (partialTicks)) : null;
+            skyColor = color != null ? formatVec3d(color) : "null";
+        } catch (RuntimeException | LinkageError e) {
+            skyColor = "error=" + e.getClass().getSimpleName();
+        }
+        double horizon = Double.NaN;
+        float cloudHeight = Float.NaN;
+        try {
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null) {
+                horizon = com.l.ausm.impl.util.MinecraftReflectionCompat.callDouble((com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)), new String[] {"func_76567_e", "getHorizon"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 63.0D);
+                cloudHeight = com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)), new String[] {"func_76571_f", "getCloudHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 128.0F);
+            }
+        } catch (RuntimeException | LinkageError ignored) {
+            horizon = Double.NaN;
+        }
+        return "skyColor=" + skyColor
+                + ",celestialPartial=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks)
+                + ",celestial0=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, 0.0F)
+                + ",sunBrightness=" + com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((world), new String[] {"func_72971_b", "getSunBrightness"},
+                new Class<?>[] {float.class}, 0.0F, (partialTicks))
+                + ",starBrightness=" + com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((world), new String[] {"func_72880_h", "getStarBrightness"},
+                new Class<?>[] {float.class}, 0.0F, (partialTicks))
+                + ",rain=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, partialTicks)
+                + ",thunder=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldThunderStrength(world, partialTicks)
+                + ",day=" + dayHelper(mc)
+                + ",night=" + nightHelper(mc)
+                + ",dawnDusk=" + ((1.0F - dayHelper(mc)) - nightHelper(mc))
+                + ",horizon=" + horizon
+                + ",cloudHeight=" + cloudHeight;
+    }
+
+    private String skyDomeCameraSummary(Minecraft mc) {
+        Entity view = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) : null;
+        if (view == null) {
+            return "view=null";
+        }
+        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
+        Vec3d look = com.l.ausm.impl.util.MinecraftReflectionCompat.look(view, partialTicks);
+        double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(view), partialTicks);
+        double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(view), partialTicks);
+        double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(view), partialTicks);
+        return "pos=" + x + "/" + y + "/" + z
+                + ",eye=" + (y + com.l.ausm.impl.util.MinecraftReflectionCompat.eyeHeight(view))
+                + ",yaw=" + com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(view)
+                + ",pitch=" + com.l.ausm.impl.util.MinecraftReflectionCompat.rotationPitch(view)
+                + ",prevYaw=" + com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationYaw(view)
+                + ",prevPitch=" + com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationPitch(view)
+                + ",look=" + formatVec3d(look)
+                + ",verticalDelta=" + cameraVerticalDelta()
+                + ",horizontalDelta=" + cameraHorizontalVelocityMagnitude();
+    }
+
+    private static String formatVec3d(Vec3d value) {
+        if (value == null) {
+            return "null";
+        }
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(value) + "/" + com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(value) + "/" + com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(value);
+    }
+
+    private String skyDomeGlStateSummary() {
+        FloatBuffer clearColor = BufferUtils.createFloatBuffer(4);
+        IntBuffer viewport = BufferUtils.createIntBuffer(4);
+        ByteBuffer colorMask = BufferUtils.createByteBuffer(4);
+        GL11.glGetFloat(GL11.GL_COLOR_CLEAR_VALUE, clearColor);
+        GL11.glGetInteger(GL11.GL_VIEWPORT, viewport);
+        GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, colorMask);
+        return skyProbeGlStateSummary()
+                + ",program=" + GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
+                + ",viewport=" + viewport.get(0) + "/" + viewport.get(1) + "/" + viewport.get(2) + "/" + viewport.get(3)
+                + ",clear=" + clearColor.get(0) + "/" + clearColor.get(1) + "/" + clearColor.get(2) + "/" + clearColor.get(3)
+                + ",drawBuffer=" + GL11.glGetInteger(GL11.GL_DRAW_BUFFER)
+                + ",readBuffer=" + GL11.glGetInteger(GL11.GL_READ_BUFFER)
+                + ",depthTest=" + GL11.glIsEnabled(GL11.GL_DEPTH_TEST)
+                + ",depthMask=" + GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
+                + ",blend=" + GL11.glIsEnabled(GL11.GL_BLEND)
+                + ",alpha=" + GL11.glIsEnabled(GL11.GL_ALPHA_TEST)
+                + ",fog=" + GL11.glIsEnabled(GL11.GL_FOG)
+                + ",cull=" + GL11.glIsEnabled(GL11.GL_CULL_FACE)
+                + ",colorMask=" + (colorMask.get(0) != 0) + "/" + (colorMask.get(1) != 0) + "/" + (colorMask.get(2) != 0) + "/" + (colorMask.get(3) != 0);
+    }
+
+    private String framebufferSamples(Framebuffer framebuffer) {
+        if (framebuffer == null || com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer) <= 0) {
+            return "none";
+        }
+
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer));
+            GL11.glReadBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            int width = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer);
+            int height = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer);
+            return "center=" + readFramebufferPixel(width / 2, height / 2)
+                    + ";upper=" + readFramebufferPixel(width / 2, Math.max(0, height * 3 / 4))
+                    + ";lower=" + readFramebufferPixel(width / 2, Math.max(0, height / 4));
+        } catch (RuntimeException | LinkageError e) {
+            return "error=" + e.getClass().getSimpleName();
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
+        }
+    }
+
+    private String currentDrawFramebufferColorSamples(Minecraft mc) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) <= 0) {
+            return "none";
+        }
+        int drawFramebuffer = currentDrawFramebufferBinding();
+        int drawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        if (drawFramebuffer == 0 && drawBuffer == GL11.GL_NONE) {
+            drawBuffer = GL11.GL_BACK;
+        }
+        return framebufferIdColorSamples(drawFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), drawBuffer);
+    }
+
+    private String framebufferIdColorSamples(int framebuffer, int width, int height, int readBuffer) {
+        if (width <= 0 || height <= 0 || readBuffer == GL11.GL_NONE) {
+            return "invalid";
+        }
+
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebuffer);
+            GL11.glReadBuffer(readBuffer);
+            return sampleBoundReadFramebuffer(width, height, false);
+        } catch (RuntimeException | LinkageError e) {
+            return "error=" + e.getClass().getSimpleName();
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
+        }
+    }
+
+    private String framebufferDepthSamples(Framebuffer framebuffer) {
+        if (framebuffer == null || com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer) <= 0) {
+            return "none";
+        }
+        return framebufferIdDepthSamples(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+    }
+
+    private String currentFramebufferDepthSamples(Minecraft mc) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) <= 0) {
+            return "none";
+        }
+        int readFramebuffer = currentReadFramebufferBinding();
+        int readBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        if (readFramebuffer == 0 && readBuffer == GL11.GL_NONE) {
+            readBuffer = GL11.GL_BACK;
+        }
+        return framebufferIdDepthSamples(readFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), readBuffer);
+    }
+
+    private String deferredFramebufferColorSamples(DeferredFramebuffer framebuffer, Attachment attachment) {
+        if (framebuffer == null || !framebuffer.isUsable()) {
+            return "none";
+        }
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        try {
+            int texture = framebuffer.getReadTexture(attachment);
+            if (texture <= 0) {
+                return "no-texture";
+            }
+            int probeFbo = GL30.glGenFramebuffers();
+            try {
+                GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, probeFbo);
+                GL30.glFramebufferTexture2D(
+                        GL30.GL_READ_FRAMEBUFFER,
+                        GL30.GL_COLOR_ATTACHMENT0,
+                        GL11.GL_TEXTURE_2D,
+                        texture,
+                        0
+                );
+                GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+                return sampleBoundReadFramebuffer(
+                        Math.max(1, framebuffer.getAttachmentWidth(attachment)),
+                        Math.max(1, framebuffer.getAttachmentHeight(attachment)),
+                        false);
+            } finally {
+                GL30.glDeleteFramebuffers(probeFbo);
+            }
+        } catch (RuntimeException | LinkageError e) {
+            return "error=" + e.getClass().getSimpleName();
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(previousTexture);
+        }
+    }
+
+    private String deferredFramebufferAttachmentSamples(DeferredFramebuffer framebuffer) {
+        if (framebuffer == null || !framebuffer.isUsable()) {
+            return "none";
+        }
+        StringBuilder summary = new StringBuilder();
+        for (Attachment attachment : Attachment.values()) {
+            if (summary.length() > 0) {
+                summary.append('|');
+            }
+            summary.append(attachment.name())
+                    .append('=')
+                    .append(deferredFramebufferColorSamples(framebuffer, attachment));
+        }
+        return summary.toString();
+    }
+
+    private String shaderedVoidSkyProgramSummary() {
+        PipelineProgram finalProgram = programs.get(RenderPass.FINAL);
+        return "compositeFixed=" + fullscreenProgramsSummary(ProgramArrayId.COMPOSITE)
+                + ", compositeIndexed=" + fullscreenArrayProgramsSummary(ProgramArrayId.COMPOSITE)
+                + ", final=" + describePipelineProgram(finalProgram)
+                + ", finalDrawBuffers=" + (finalProgram != null ? finalProgram.drawBuffers() : "none")
+                + ", finalComputes=" + finalComputePrograms.size();
+    }
+
+    private String fullscreenProgramsSummary(ProgramArrayId arrayId) {
+        FullscreenProgramArray array = fullscreenProgramArrays.get(arrayId);
+        if (array == null || array.fixedPasses().isEmpty()) {
+            return "none";
+        }
+        StringBuilder summary = new StringBuilder();
+        for (RenderPass pass : array.fixedPasses()) {
+            PipelineProgram program = programs.get(pass);
+            if (program == null || !program.hasOwnProgram()) {
+                continue;
+            }
+            if (summary.length() > 0) {
+                summary.append(',');
+            }
+            summary.append(pass).append(program.drawBuffers());
+        }
+        return summary.length() == 0 ? "none" : summary.toString();
+    }
+
+    private String fullscreenArrayProgramsSummary(ProgramArrayId arrayId) {
+        List<FullscreenArrayProgram> arrayPrograms = fullscreenArrayPrograms.getOrDefault(arrayId, List.of());
+        if (arrayPrograms.isEmpty()) {
+            return "none";
+        }
+        StringBuilder summary = new StringBuilder();
+        for (FullscreenArrayProgram program : arrayPrograms) {
+            if (program == null || !program.hasProgram()) {
+                continue;
+            }
+            if (summary.length() > 0) {
+                summary.append(',');
+            }
+            summary.append(program.name()).append(program.drawBuffers());
+        }
+        return summary.length() == 0 ? "none" : summary.toString();
+    }
+
+    private String framebufferIdDepthSamples(int framebuffer, int width, int height, int readBuffer) {
+        if (width <= 0 || height <= 0) {
+            return "invalid-size";
+        }
+
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebuffer);
+            if (readBuffer != GL11.GL_NONE) {
+                GL11.glReadBuffer(readBuffer);
+            }
+            return sampleBoundReadFramebuffer(width, height, true);
+        } catch (RuntimeException | LinkageError e) {
+            return "error=" + e.getClass().getSimpleName();
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
+        }
+    }
+
+    private String sampleBoundReadFramebuffer(int width, int height, boolean includeDepth) {
+        int x = Math.max(0, width / 2);
+        int bottomSkyY = Math.max(0, Math.min(height - 1, height / 16));
+        int lowerY = Math.max(0, Math.min(height - 1, height * 3 / 16));
+        int centerY = Math.max(0, Math.min(height - 1, height / 2));
+        int upperY = Math.max(0, Math.min(height - 1, height * 13 / 16));
+        int topDomeY = Math.max(0, Math.min(height - 1, height * 15 / 16));
+        return "bottomSky=" + readFramebufferPixelSummary(x, bottomSkyY, includeDepth)
+                + ";lower=" + readFramebufferPixelSummary(x, lowerY, includeDepth)
+                + ";center=" + readFramebufferPixelSummary(x, centerY, includeDepth)
+                + ";upper=" + readFramebufferPixelSummary(x, upperY, includeDepth)
+                + ";topDome=" + readFramebufferPixelSummary(x, topDomeY, includeDepth);
+    }
+
     private String readFramebufferPixel(int x, int y) {
         ByteBuffer pixel = BufferUtils.createByteBuffer(4);
         GL11.glReadPixels(x, y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
         return (pixel.get(0) & 0xFF) + "/" + (pixel.get(1) & 0xFF) + "/" + (pixel.get(2) & 0xFF) + "/" + (pixel.get(3) & 0xFF);
     }
 
-    private boolean isIgnoredShaderlessSkyProbeScreen(Minecraft mc) {
-        if (mc == null || mc.currentScreen == null) {
-            return false;
-        }
-        String screenClass = mc.currentScreen.getClass().getName();
-        return "net.minecraft.client.gui.GuiChat".equals(screenClass);
+    private int currentReadFramebufferBinding() {
+        return GLContext.getCapabilities().OpenGL30
+                ? GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING)
+                : GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
     }
 
-    private String skyRendererName(World world) {
-        if (world == null || world.provider == null) {
-            return "none";
+    private boolean isIgnoredShaderlessSkyProbeScreen(Minecraft mc) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null) {
+            return false;
         }
-        try {
-            Object skyRenderer = world.provider.getSkyRenderer();
-            return skyRenderer != null ? skyRenderer.getClass().getName() : "none";
-        } catch (RuntimeException ignored) {
-            return "error";
-        }
+        String screenClass = com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc).getClass().getName();
+        return "net.minecraft.client.gui.GuiChat".equals(screenClass);
     }
 
     private int currentDrawFramebufferBinding() {
@@ -3914,33 +4693,67 @@ public class PipelineContext {
                 : GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
     }
 
+    private void restoreReadBufferForFramebuffer(int framebuffer, int readBuffer) {
+        GL11.glReadBuffer(safeBufferForFramebuffer(framebuffer, readBuffer));
+    }
+
+    private void restoreDrawBufferForFramebuffer(int framebuffer, int drawBuffer) {
+        GL11.glDrawBuffer(safeBufferForFramebuffer(framebuffer, drawBuffer));
+    }
+
+    private int safeBufferForFramebuffer(int framebuffer, int buffer) {
+        if (buffer == GL11.GL_NONE) {
+            return GL11.GL_NONE;
+        }
+        boolean attachmentBuffer = buffer >= GL30.GL_COLOR_ATTACHMENT0 && buffer < GL30.GL_COLOR_ATTACHMENT0 + maxDrawBuffers();
+        return framebuffer == 0
+                ? attachmentBuffer ? GL11.GL_BACK : buffer
+                : attachmentBuffer ? buffer : GL30.GL_COLOR_ATTACHMENT0;
+    }
+
+    private void bindMinecraftFramebufferForGui(Minecraft mc) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null) {
+            return;
+        }
+        Framebuffer framebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        int framebufferObject = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(framebuffer, false);
+        restoreDrawBufferForFramebuffer(framebufferObject, GL30.GL_COLOR_ATTACHMENT0);
+        restoreReadBufferForFramebuffer(framebufferObject, GL30.GL_COLOR_ATTACHMENT0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(
+                0,
+                0,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
+    }
+
     private int boundTexture2D(int textureUnit) {
         int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
         try {
-            GlStateManager.setActiveTexture(textureUnit);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(textureUnit);
             return GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
         } finally {
-            GlStateManager.setActiveTexture(previousActiveTexture);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(previousActiveTexture);
         }
     }
 
     private boolean texture2DEnabled(int textureUnit) {
         int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
         try {
-            GlStateManager.setActiveTexture(textureUnit);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(textureUnit);
             return GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
         } finally {
-            GlStateManager.setActiveTexture(previousActiveTexture);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(previousActiveTexture);
         }
     }
 
     private boolean textureCoordArrayEnabled(int textureUnit) {
         int previousClientTexture = GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE);
         try {
-            OpenGlHelper.setClientActiveTexture(textureUnit);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(textureUnit);
             return GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY);
         } finally {
-            OpenGlHelper.setClientActiveTexture(previousClientTexture);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(previousClientTexture);
         }
     }
 
@@ -4001,17 +4814,7 @@ public class PipelineContext {
         if (astralEmission > 0) {
             return astralEmission;
         }
-        try {
-            if (blockAccess != null && pos != null) {
-                return clampLightValue(state.getLightValue(blockAccess, pos));
-            }
-        } catch (RuntimeException ignored) {
-        }
-        try {
-            return clampLightValue(state.getLightValue());
-        } catch (RuntimeException ignored) {
-            return 0;
-        }
+        return intrinsicBlockEmission(state);
     }
 
     private int inheritedBlockRenderEmission(IBlockState state) {
@@ -4028,7 +4831,7 @@ public class PipelineContext {
             return astralEmission;
         }
         try {
-            return clampLightValue(state.getLightValue());
+            return clampLightValue(com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state));
         } catch (RuntimeException ignored) {
             return 0;
         }
@@ -4043,10 +4846,10 @@ public class PipelineContext {
             return 0;
         }
         try {
-            for (Map.Entry<net.minecraft.block.properties.IProperty<?>, Comparable<?>> entry : state.getProperties().entrySet()) {
+            for (Map.Entry<net.minecraft.block.properties.IProperty<?>, Comparable<?>> entry : com.l.ausm.impl.util.MinecraftReflectionCompat.stateProperties(state).entrySet()) {
                 net.minecraft.block.properties.IProperty<?> property = entry.getKey();
                 if (property != null
-                        && "light".equalsIgnoreCase(property.getName())
+                        && "light".equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.propertyName(property))
                         && Boolean.TRUE.equals(entry.getValue())) {
                     return 15;
                 }
@@ -4088,7 +4891,7 @@ public class PipelineContext {
     }
 
     private boolean isBloomOrEmissiveInheritedState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null || state.getBlock() == null) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return false;
         }
         if (isBlockcrafteryEditableBlock(state)) {
@@ -4098,7 +4901,7 @@ public class PipelineContext {
     }
 
     private boolean stateHasBloomResourceGeometry(IBlockState state) {
-        if (state == null || state.getBlock() == null) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return false;
         }
         if (isBlockcrafteryEditableBlock(state)) {
@@ -4123,14 +4926,16 @@ public class PipelineContext {
     }
 
     private boolean scanStateForBloomResourceGeometry(IBlockState state) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.getBlockRendererDispatcher() == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        BlockRendererDispatcher dispatcher = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRendererDispatcher(mc);
+        if (dispatcher == null) {
             return false;
         }
 
         net.minecraft.client.renderer.block.model.IBakedModel model;
         try {
-            model = mc.getBlockRendererDispatcher().getModelForState(state);
+            model = com.l.ausm.impl.util.MinecraftReflectionCompat.call((dispatcher), net.minecraft.client.renderer.block.model.IBakedModel.class, null, new String[] {"func_184389_a", "getModelForState"},
+                new Class<?>[] {net.minecraft.block.state.IBlockState.class}, (state));
         } catch (RuntimeException | LinkageError ignored) {
             return false;
         }
@@ -4138,13 +4943,13 @@ public class PipelineContext {
             return false;
         }
 
-        BlockRenderLayer previousLayer = MinecraftForgeClient.getRenderLayer();
+        BlockRenderLayer previousLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
         try {
             for (BlockRenderLayer layer : BlockRenderLayer.values()) {
                 if (AusmBloomLayer.isBloomLayer(layer) || !canRenderInLayer(state, layer)) {
                     continue;
                 }
-                net.minecraftforge.client.ForgeHooksClient.setRenderLayer(layer);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(layer);
                 if (modelQuadsHaveBloomSprite(model, state, null)) {
                     return true;
                 }
@@ -4155,7 +4960,7 @@ public class PipelineContext {
                 }
             }
         } finally {
-            net.minecraftforge.client.ForgeHooksClient.setRenderLayer(previousLayer);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(previousLayer);
         }
         return false;
     }
@@ -4165,7 +4970,7 @@ public class PipelineContext {
                                               EnumFacing side) {
         List<BakedQuad> quads;
         try {
-            quads = model.getQuads(state, side, 0L);
+            quads = com.l.ausm.impl.util.MinecraftReflectionCompat.bakedModelQuads(model, state, side, 0L);
         } catch (RuntimeException | LinkageError ignored) {
             return false;
         }
@@ -4173,8 +4978,8 @@ public class PipelineContext {
             return false;
         }
         for (BakedQuad quad : quads) {
-            TextureAtlasSprite sprite = quad != null ? quad.getSprite() : null;
-            if (sprite != null && (isEmissiveSpriteName(sprite.getIconName()) || bloomRenderer.hasBloomSprite(sprite.getIconName()))) {
+            TextureAtlasSprite sprite = quad != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadSprite(quad) : null;
+            if (sprite != null && (isEmissiveSpriteName(com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite)) || bloomRenderer.hasBloomSprite(com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite)))) {
                 return true;
             }
         }
@@ -4201,9 +5006,9 @@ public class PipelineContext {
         if (name == null) {
             return false;
         }
-        String path = name.getPath() != null ? name.getPath().toLowerCase(java.util.Locale.ROOT) : "";
-        String namespace = name.getNamespace() != null ? name.getNamespace().toLowerCase(java.util.Locale.ROOT) : "";
-        String blockClass = state.getBlock().getClass().getName().toLowerCase(java.util.Locale.ROOT);
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).toLowerCase(java.util.Locale.ROOT) : "";
+        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).toLowerCase(java.util.Locale.ROOT) : "";
+        String blockClass = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state).getClass().getName().toLowerCase(java.util.Locale.ROOT);
         return namespace.contains("lumenized")
                 || path.contains("lumenized")
                 || path.contains("luminous")
@@ -4217,10 +5022,10 @@ public class PipelineContext {
         if (name == null) {
             return false;
         }
-        String path = name.getPath() != null ? name.getPath().toLowerCase(java.util.Locale.ROOT) : "";
-        String namespace = name.getNamespace() != null ? name.getNamespace().toLowerCase(java.util.Locale.ROOT) : "";
-        String blockClass = state.getBlock() != null
-                ? state.getBlock().getClass().getName().toLowerCase(java.util.Locale.ROOT)
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).toLowerCase(java.util.Locale.ROOT) : "";
+        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).toLowerCase(java.util.Locale.ROOT) : "";
+        String blockClass = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state).getClass().getName().toLowerCase(java.util.Locale.ROOT)
                 : "";
         return namespace.contains("lumenized") || path.contains("lumenized") || blockClass.contains("lumenized");
     }
@@ -4250,7 +5055,7 @@ public class PipelineContext {
 
     private boolean isPriorityFramedDiagnosticState(IBlockState state, IBlockAccess blockAccess, BlockPos pos,
                                                    BlockRenderLayer bloomLayer) {
-        if (state == null || state.getBlock() == null) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return false;
         }
         if (blockRenderEmissionForState(state, blockAccess, pos) > 0 || blockEntityId(state, blockAccess, pos) != 0) {
@@ -4266,12 +5071,12 @@ public class PipelineContext {
     }
 
     private boolean isPriorityFramedDiagnosticName(IBlockState state) {
-        if (state == null || state.getBlock() == null) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return false;
         }
         ResourceLocation name = registryName(state);
-        String path = name != null && name.getPath() != null ? name.getPath().toLowerCase(java.util.Locale.ROOT) : "";
-        String namespace = name != null && name.getNamespace() != null ? name.getNamespace().toLowerCase(java.util.Locale.ROOT) : "";
+        String path = name != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).toLowerCase(java.util.Locale.ROOT) : "";
+        String namespace = name != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).toLowerCase(java.util.Locale.ROOT) : "";
         return path.contains("luminous")
                 || path.contains("emissive")
                 || path.contains("bloom")
@@ -4303,7 +5108,7 @@ public class PipelineContext {
             return label + "{state=null}";
         }
 
-        Block block = state.getBlock();
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
         return label + "{"
                 + "name=" + stateName(state)
                 + ", state=" + state
@@ -4323,13 +5128,13 @@ public class PipelineContext {
                 + ", metadata=" + blockMetadata(state)
                 + ", opaque=" + safeOpaqueCube(state)
                 + ", full=" + safeFullCube(state)
-                + ", material=" + (state.getMaterial() != null ? state.getMaterial() : "null")
+                + ", material=" + (com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(state) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(state) : "null")
                 + "}";
     }
 
     private static EnumBlockRenderType safeRenderType(IBlockState state) {
         try {
-            return state != null ? state.getRenderType() : null;
+            return state != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderType(state) : null;
         } catch (RuntimeException | LinkageError ignored) {
             return null;
         }
@@ -4337,7 +5142,7 @@ public class PipelineContext {
 
     private static BlockRenderLayer safeRenderLayer(IBlockState state) {
         try {
-            return state != null && state.getBlock() != null ? state.getBlock().getRenderLayer() : null;
+            return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRenderLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state)) : null;
         } catch (RuntimeException | LinkageError ignored) {
             return null;
         }
@@ -4349,9 +5154,9 @@ public class PipelineContext {
                 return 0;
             }
             if (blockAccess != null && pos != null) {
-                return state.getLightValue(blockAccess, pos);
+                return com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state, blockAccess, pos);
             }
-            return state.getLightValue();
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state);
         } catch (RuntimeException | LinkageError ignored) {
             return -1;
         }
@@ -4359,7 +5164,7 @@ public class PipelineContext {
 
     private static boolean safeOpaqueCube(IBlockState state) {
         try {
-            return state != null && state.isOpaqueCube();
+            return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((state), new String[] {"func_185913_b", "isOpaqueCube"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
         } catch (RuntimeException | LinkageError ignored) {
             return false;
         }
@@ -4367,7 +5172,7 @@ public class PipelineContext {
 
     private static boolean safeFullCube(IBlockState state) {
         try {
-            return state != null && state.isFullCube();
+            return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((state), new String[] {"func_185917_h", "isFullCube"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
         } catch (RuntimeException | LinkageError ignored) {
             return false;
         }
@@ -4375,18 +5180,19 @@ public class PipelineContext {
 
     private static boolean canRenderInLayer(IBlockState state, BlockRenderLayer layer) {
         try {
-            return state != null && state.getBlock() != null && layer != null && state.getBlock().canRenderInLayer(state, layer);
+            return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != null && layer != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockCanRenderInLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state), state, layer);
         } catch (RuntimeException | LinkageError ignored) {
             return false;
         }
     }
 
     private static int blockMetadata(IBlockState state) {
-        if (state == null || state.getBlock() == null) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return 0;
         }
         try {
-            return state.getBlock().getMetaFromState(state);
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState((state))), new String[] {"func_176201_c", "getMetaFromState"},
+                new Class<?>[] {net.minecraft.block.state.IBlockState.class}, 0, (state));
         } catch (RuntimeException ignored) {
             return 0;
         }
@@ -4397,7 +5203,7 @@ public class PipelineContext {
             return 0;
         }
 
-        Block block = state.getBlock();
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
         if (!isRandomThingsLuminousBlock(state)) {
             return 0;
         }
@@ -4414,7 +5220,8 @@ public class PipelineContext {
 
         int metadata = 0;
         try {
-            metadata = block.getMetaFromState(state);
+            metadata = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((block), new String[] {"func_176201_c", "getMetaFromState"},
+                new Class<?>[] {net.minecraft.block.state.IBlockState.class}, 0, (state));
         } catch (RuntimeException | LinkageError ignored) {
         }
 
@@ -4443,17 +5250,51 @@ public class PipelineContext {
 
     private static boolean isRandomThingsLuminousBlock(IBlockState state) {
         ResourceLocation name = registryName(state);
-        return name != null
-                && "randomthings".equals(name.getNamespace())
-                && containsIgnoreCase(name.getPath(), "luminous");
+        if (name == null) {
+            return false;
+        }
+        String fullName = name.toString();
+        return startsWithNamespace(fullName, "randomthings")
+                && isRandomThingsLuminousPath(resourcePathFromString(fullName));
     }
 
     private static boolean isRandomThingsTranslucentLuminousBlock(IBlockState state) {
         ResourceLocation name = registryName(state);
-        return name != null
-                && "randomthings".equals(name.getNamespace())
-                && containsIgnoreCase(name.getPath(), "translucent")
-                && containsIgnoreCase(name.getPath(), "luminous");
+        if (name == null) {
+            return false;
+        }
+        String fullName = name.toString();
+        return startsWithNamespace(fullName, "randomthings")
+                && "translucentluminousblock".equalsIgnoreCase(resourcePathFromString(fullName));
+    }
+
+    private static boolean isRandomThingsLuminousPath(String path) {
+        return "luminousblock".equalsIgnoreCase(path)
+                || "translucentluminousblock".equalsIgnoreCase(path)
+                || "luminousstainedbrick".equalsIgnoreCase(path);
+    }
+
+    private static boolean startsWithNamespace(String fullName, String namespace) {
+        return fullName != null
+                && fullName.length() > namespace.length()
+                && fullName.regionMatches(true, 0, namespace, 0, namespace.length())
+                && fullName.charAt(namespace.length()) == ':';
+    }
+
+    private static String resourcePathFromString(String fullName) {
+        if (fullName == null) {
+            return "";
+        }
+        int separator = fullName.indexOf(':');
+        return separator >= 0 && separator + 1 < fullName.length() ? fullName.substring(separator + 1) : fullName;
+    }
+
+    private static int intrinsicBlockEmission(IBlockState state) {
+        try {
+            return clampLightValue(com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state));
+        } catch (RuntimeException | LinkageError ignored) {
+            return 0;
+        }
     }
 
     private static int astralCrystalEmission(IBlockState state) {
@@ -4461,7 +5302,7 @@ public class PipelineContext {
             return 0;
         }
         ResourceLocation name = registryName(state);
-        String path = name.getPath();
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
         if ("blockcelestialcrystals".equalsIgnoreCase(path)) {
             int stage = parseIntProperty(state, "stage", 2);
             return clampLightValue(6 + Math.max(0, Math.min(4, stage)));
@@ -4483,21 +5324,21 @@ public class PipelineContext {
 
     private static boolean isAstralCrystalCluster(IBlockState state) {
         ResourceLocation name = registryName(state);
-        if (name == null || !"astralsorcery".equals(name.getNamespace())) {
+        if (name == null || !"astralsorcery".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))) {
             return false;
         }
-        String path = name.getPath();
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
         return "blockcelestialcrystals".equalsIgnoreCase(path)
                 || "blockgemcrystals".equalsIgnoreCase(path);
     }
 
     private static int astralCrystalMaterialId(IBlockState state) {
         ResourceLocation name = registryName(state);
-        if (name == null || !"astralsorcery".equals(name.getNamespace())) {
+        if (name == null || !"astralsorcery".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))) {
             return 0;
         }
 
-        String path = name.getPath();
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
         if ("blockcelestialcrystals".equalsIgnoreCase(path)) {
             return 10914; // cool light blue
         }
@@ -4535,10 +5376,10 @@ public class PipelineContext {
         if (state == null || propertyName == null) {
             return null;
         }
-        for (Map.Entry<net.minecraft.block.properties.IProperty<?>, Comparable<?>> entry : state.getProperties().entrySet()) {
+        for (Map.Entry<net.minecraft.block.properties.IProperty<?>, Comparable<?>> entry : com.l.ausm.impl.util.MinecraftReflectionCompat.stateProperties(state).entrySet()) {
             net.minecraft.block.properties.IProperty property = entry.getKey();
-            if (property != null && property.getName().equals(propertyName)) {
-                return property.getName(entry.getValue());
+            if (property != null && propertyName.equals(com.l.ausm.impl.util.MinecraftReflectionCompat.propertyName(property))) {
+                return com.l.ausm.impl.util.MinecraftReflectionCompat.propertyValueName(property, entry.getValue());
             }
         }
         return null;
@@ -4569,7 +5410,7 @@ public class PipelineContext {
             return;
         }
         if (!canTrackSyntheticLights() || state == null || blockAccess == null) {
-            syntheticLightCandidates.remove(pos.toLong());
+            syntheticLightCandidates.remove(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToLong(pos));
             return;
         }
         SyntheticLightInfo lightInfo = syntheticLightInfo(state, blockAccess, pos);
@@ -4585,22 +5426,22 @@ public class PipelineContext {
     }
 
     public void refreshSyntheticLightCandidate(BlockPos pos) {
-        Minecraft mc = Minecraft.getMinecraft();
-        refreshSyntheticLightCandidate(mc != null ? mc.world : null, pos);
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        refreshSyntheticLightCandidate(mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null, pos);
     }
 
     public void refreshSyntheticLightCandidate(World world, BlockPos pos) {
         if (pos == null) {
             return;
         }
-        long key = pos.toLong();
+        long key = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToLong(pos);
         syntheticLightCandidates.remove(key);
-        if (!canTrackSyntheticLights() || world == null || !world.isBlockLoaded(pos, false)) {
+        if (!canTrackSyntheticLights() || world == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos, false)) {
             return;
         }
         IBlockState state;
         try {
-            state = world.getBlockState(pos);
+            state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos);
         } catch (RuntimeException ignored) {
             return;
         }
@@ -4620,12 +5461,12 @@ public class PipelineContext {
         if (from == null || to == null) {
             return;
         }
-        int minX = Math.min(from.getX(), to.getX()) - 1;
-        int minY = Math.max(0, Math.min(from.getY(), to.getY()) - 1);
-        int minZ = Math.min(from.getZ(), to.getZ()) - 1;
-        int maxX = Math.max(from.getX(), to.getX()) + 1;
-        int maxY = Math.min(255, Math.max(from.getY(), to.getY()) + 1);
-        int maxZ = Math.max(from.getZ(), to.getZ()) + 1;
+        int minX = Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(to)) - 1;
+        int minY = Math.max(0, Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(to)) - 1);
+        int minZ = Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(to)) - 1;
+        int maxX = Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(to)) + 1;
+        int maxY = Math.min(255, Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(to)) + 1);
+        int maxZ = Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(to)) + 1;
         long volume = (long) (maxX - minX + 1) * (long) (maxY - minY + 1) * (long) (maxZ - minZ + 1);
         if (volume > MAX_SYNTHETIC_LIGHT_RANGE_REFRESH_VOLUME) {
             removeSyntheticLightCandidatesInRange(minX, minY, minZ, maxX, maxY, maxZ);
@@ -4642,7 +5483,7 @@ public class PipelineContext {
 
     public void removeSyntheticLightCandidate(BlockPos pos) {
         if (pos != null) {
-            syntheticLightCandidates.remove(pos.toLong());
+            syntheticLightCandidates.remove(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToLong(pos));
         }
     }
 
@@ -4674,17 +5515,7 @@ public class PipelineContext {
         if (voxelId <= 0) {
             voxelId = compatSyntheticLightVoxelId(actualState);
         }
-        int emission = 0;
-        try {
-            emission = actualState.getLightValue(blockAccess, pos);
-        } catch (RuntimeException ignored) {
-            emission = Math.max(randomThingsLuminousEmission(actualState), astralCrystalEmission(actualState));
-            if (emission <= 0) {
-                return new SyntheticLightInfo(state, actualState, shaderBlockId, voxelId, 0, "light_value_error");
-            }
-        }
-        emission = Math.max(emission, randomThingsLuminousEmission(actualState));
-        emission = Math.max(emission, astralCrystalEmission(actualState));
+        int emission = blockRenderEmissionForState(actualState, null, null);
         if (voxelId <= 0) {
             return new SyntheticLightInfo(state, actualState, shaderBlockId, 0, emission, "no_colored_voxel_mapping");
         }
@@ -4695,7 +5526,7 @@ public class PipelineContext {
     }
 
     private void putSyntheticLightCandidate(BlockPos pos, boolean force) {
-        long key = pos.toLong();
+        long key = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToLong(pos);
         if (syntheticLightCandidates.size() >= MAX_SYNTHETIC_LIGHT_CANDIDATES
                 && !syntheticLightCandidates.containsKey(key)) {
             if (!force) {
@@ -4706,7 +5537,7 @@ public class PipelineContext {
                 break;
             }
         }
-        syntheticLightCandidates.put(key, pos.toImmutable());
+        syntheticLightCandidates.put(key, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos));
     }
 
     private void removeSyntheticLightCandidatesInRange(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
@@ -4716,9 +5547,9 @@ public class PipelineContext {
                 syntheticLightCandidates.remove(entry.getKey());
                 continue;
             }
-            if (pos.getX() >= minX && pos.getX() <= maxX
-                    && pos.getY() >= minY && pos.getY() <= maxY
-                    && pos.getZ() >= minZ && pos.getZ() <= maxZ) {
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) >= minX && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) <= maxX
+                    && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) >= minY && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) <= maxY
+                    && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) >= minZ && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) <= maxZ) {
                 syntheticLightCandidates.remove(entry.getKey(), pos);
             }
         }
@@ -4799,7 +5630,7 @@ public class PipelineContext {
         if (MAX_COLORED_LIGHT_AUDIT_LOGS <= 0) {
             return;
         }
-        BlockPos pos = tileEntity != null ? tileEntity.getPos() : null;
+        BlockPos pos = tileEntity != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity) : null;
         String key = "projectred|" + result + "|" + formatBlockPos(pos) + "|" + diagnosis;
         if (!coloredLightAuditKeys.add(key)) {
             return;
@@ -4827,7 +5658,8 @@ public class PipelineContext {
         }
         TileEntity tileEntity;
         try {
-            tileEntity = world.getTileEntity(pos);
+            tileEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.tileentity.TileEntity.class, null, new String[] {"func_175625_s", "getTileEntity"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, (pos));
         } catch (RuntimeException ignored) {
             return;
         }
@@ -4867,7 +5699,7 @@ public class PipelineContext {
             return null;
         }
         try {
-            return blockAccess.getTileEntity(pos);
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessTileEntity(blockAccess, pos);
         } catch (RuntimeException ignored) {
             return null;
         }
@@ -4893,8 +5725,8 @@ public class PipelineContext {
     private boolean isProjectRedTileHost(IBlockState state) {
         ResourceLocation name = registryName(state);
         return name != null
-                && (("projectred-illumination".equals(name.getNamespace()))
-                || ("forgemultipartcbe".equals(name.getNamespace()) && "multipart_block".equals(name.getPath())));
+                && (("projectred-illumination".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)))
+                || ("forgemultipartcbe".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)) && "multipart_block".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name))));
     }
 
     private boolean isKnownColoredLightAuditTarget(IBlockState state) {
@@ -4903,8 +5735,8 @@ public class PipelineContext {
             return false;
         }
 
-        String namespace = name.getNamespace();
-        String path = name.getPath();
+        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name);
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
         if ("projectred-illumination".equals(namespace)
                 || ("forgemultipartcbe".equals(namespace) && "multipart_block".equals(path))) {
             return true;
@@ -4928,10 +5760,10 @@ public class PipelineContext {
     }
 
     private static ResourceLocation registryName(IBlockState state) {
-        if (state == null || state.getBlock() == null) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return null;
         }
-        return state.getBlock().getRegistryName();
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state));
     }
 
     private static String stateName(IBlockState state) {
@@ -4939,7 +5771,7 @@ public class PipelineContext {
     }
 
     private static String formatBlockPos(BlockPos pos) {
-        return pos != null ? pos.getX() + "," + pos.getY() + "," + pos.getZ() : "null";
+        return pos != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + "," + com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + "," + com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) : "null";
     }
 
     private static String formatVoxelIds(int[] voxelIds, int count) {
@@ -4977,7 +5809,8 @@ public class PipelineContext {
             return state;
         }
         try {
-            return state.getActualState(blockAccess, pos);
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.call((state), net.minecraft.block.state.IBlockState.class, (state), new String[] {"func_185899_b", "getActualState"},
+                new Class<?>[] {net.minecraft.world.IBlockAccess.class, net.minecraft.util.math.BlockPos.class}, (blockAccess), (pos));
         } catch (RuntimeException ignored) {
             return state;
         }
@@ -5017,7 +5850,7 @@ public class PipelineContext {
 
         TileEntity tile;
         try {
-            tile = blockAccess.getTileEntity(pos);
+            tile = com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessTileEntity(blockAccess, pos);
         } catch (RuntimeException | LinkageError ignored) {
             return null;
         }
@@ -5040,21 +5873,21 @@ public class PipelineContext {
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private IBlockState blockcrafteryExtendedDecoratedState(IBlockState state) {
-        if (!(state instanceof IExtendedBlockState extendedState) || state.getBlock() == null) {
+        if (!(state instanceof IExtendedBlockState extendedState) || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return null;
         }
 
-        Method method = blockcrafteryStatePropertyMethod(state.getBlock().getClass());
+        Method method = blockcrafteryStatePropertyMethod(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state).getClass());
         if (method == null) {
             return null;
         }
 
         try {
-            Object property = method.invoke(state.getBlock());
+            Object property = method.invoke(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state));
             if (!(property instanceof IUnlistedProperty)) {
                 return null;
             }
-            Object value = extendedState.getValue((IUnlistedProperty) property);
+            Object value = com.l.ausm.impl.util.MinecraftReflectionCompat.stateValue(extendedState, property);
             return value instanceof IBlockState decoratedState ? decoratedState : null;
         } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
             return null;
@@ -5063,8 +5896,8 @@ public class PipelineContext {
 
     private boolean isValidBlockcrafteryDecoratedState(IBlockState decoratedState) {
         return decoratedState != null
-                && decoratedState.getBlock() != null
-                && decoratedState.getBlock() != Blocks.AIR
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(decoratedState) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(decoratedState) != com.l.ausm.impl.util.MinecraftReflectionCompat.field(Blocks.class, Block.class, null, "field_150350_a", "AIR")
                 && !isBlockcrafteryEditableBlock(decoratedState);
     }
 
@@ -5077,17 +5910,18 @@ public class PipelineContext {
 
         @Override
         public TileEntity getTileEntity(BlockPos pos) {
-            return delegate.getTileEntity(pos);
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessTileEntity(delegate, pos);
         }
 
         @Override
         public int getCombinedLight(BlockPos pos, int lightValue) {
-            return delegate.getCombinedLight(pos, lightValue);
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessCombinedLight(delegate, pos, lightValue);
         }
 
         @Override
         public IBlockState getBlockState(BlockPos pos) {
-            IBlockState state = delegate.getBlockState(pos);
+            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.call((delegate), net.minecraft.block.state.IBlockState.class, null, new String[] {"func_180495_p", "getBlockState"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, (pos));
             IBlockState decoratedState = blockcrafteryDecoratedState(state, delegate, pos);
             return decoratedState != null ? decoratedState : state;
         }
@@ -5096,36 +5930,43 @@ public class PipelineContext {
         public boolean isAirBlock(BlockPos pos) {
             IBlockState state = getBlockState(pos);
             try {
-                return state == null || state.getBlock() == null || state.getBlock().isAir(state, this, pos);
+                return state == null
+                        || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null
+                        || com.l.ausm.impl.util.MinecraftReflectionCompat.blockIsAir(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state), state, this, pos);
             } catch (RuntimeException | LinkageError ignored) {
-                return delegate.isAirBlock(pos);
+                return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((delegate), new String[] {"func_175623_d", "isAirBlock"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, false, (pos));
             }
         }
 
         @Override
         public Biome getBiome(BlockPos pos) {
-            return delegate.getBiome(pos);
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.call((delegate), net.minecraft.world.biome.Biome.class, null, new String[] {"func_180494_b", "getBiome"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, (pos));
         }
 
         @Override
         public int getStrongPower(BlockPos pos, EnumFacing direction) {
-            return delegate.getStrongPower(pos, direction);
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((delegate), new String[] {"func_175627_a", "getStrongPower"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class, net.minecraft.util.EnumFacing.class}, 0, (pos), (direction));
         }
 
         @Override
         public WorldType getWorldType() {
-            return delegate.getWorldType();
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.call((delegate), net.minecraft.world.WorldType.class, net.minecraft.world.WorldType.DEFAULT,
+                new String[] {"func_175624_G", "getWorldType"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
         }
 
         @Override
         public boolean isSideSolid(BlockPos pos, EnumFacing side, boolean defaultValue) {
             IBlockState state = getBlockState(pos);
             try {
-                return state != null && state.getBlock() != null
-                        ? state.getBlock().isSideSolid(state, this, pos, side)
+                return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != null
+                        ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockIsSideSolid(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state), state, this, pos, side, defaultValue)
                         : defaultValue;
             } catch (RuntimeException | LinkageError ignored) {
-                return delegate.isSideSolid(pos, side, defaultValue);
+                return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((delegate), new String[] {"isSideSolid"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class, net.minecraft.util.EnumFacing.class, boolean.class}, (defaultValue), (pos), (side), (defaultValue));
             }
         }
     }
@@ -5168,54 +6009,10 @@ public class PipelineContext {
 
     private boolean isValidArchitectureCraftMaterialState(IBlockState materialState) {
         return materialState != null
-                && materialState.getBlock() != null
-                && materialState.getBlock() != Blocks.AIR
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(materialState) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(materialState) != com.l.ausm.impl.util.MinecraftReflectionCompat.field(Blocks.class, Block.class, null, "field_150350_a", "AIR")
                 && !isBlockcrafteryEditableBlock(materialState)
                 && !isArchitectureCraftShapeBlock(materialState);
-    }
-
-    public String describeBlockcrafteryDecoratedLayer(IBlockState state, IBlockAccess blockAccess, BlockPos pos, BlockRenderLayer layer) {
-        IBlockState decoratedState = blockcrafteryDecoratedState(state, blockAccess, pos);
-        if (decoratedState == null || decoratedState.getBlock() == null) {
-            return " decorated=null";
-        }
-
-        Block decoratedBlock = decoratedState.getBlock();
-        boolean canCurrentLayer = false;
-        try {
-            canCurrentLayer = layer != null && decoratedBlock.canRenderInLayer(decoratedState, layer);
-        } catch (RuntimeException | LinkageError ignored) {
-        }
-
-        return " decorated=" + registryName(decoratedState)
-                + " decoratedState=" + stateName(decoratedState)
-                + " decoratedLayer=" + decoratedBlock.getRenderLayer()
-                + " decoratedCanCurrent=" + canCurrentLayer
-                + " decoratedCanLayers=" + describeRenderableLayers(decoratedState);
-    }
-
-    private static String describeRenderableLayers(IBlockState state) {
-        if (state == null || state.getBlock() == null) {
-            return "[]";
-        }
-
-        StringBuilder builder = new StringBuilder("[");
-        boolean first = true;
-        for (BlockRenderLayer layer : BlockRenderLayer.values()) {
-            boolean canRender = false;
-            try {
-                canRender = state.getBlock().canRenderInLayer(state, layer);
-            } catch (RuntimeException | LinkageError ignored) {
-            }
-            if (canRender) {
-                if (!first) {
-                    builder.append(',');
-                }
-                builder.append(layer.name());
-                first = false;
-            }
-        }
-        return builder.append(']').toString();
     }
 
     private Class<?> blockcrafteryTileClass() {
@@ -5284,7 +6081,7 @@ public class PipelineContext {
         }
 
         try {
-            TileEntity tile = blockAccess.getTileEntity(pos);
+            TileEntity tile = com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessTileEntity(blockAccess, pos);
             if (tile != null && architectureCraftTileClass != null && architectureCraftTileClass.isInstance(tile)) {
                 return tile;
             }
@@ -5305,19 +6102,19 @@ public class PipelineContext {
     private static boolean isBlockcrafteryEditableBlock(IBlockState state) {
         ResourceLocation name = registryName(state);
         return name != null
-                && "blockcraftery".equals(name.getNamespace())
-                && name.getPath().startsWith("editable_");
+                && "blockcraftery".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).startsWith("editable_");
     }
 
     private static boolean isArchitectureCraftShapeBlock(IBlockState state) {
-        if (state == null || state.getBlock() == null) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return false;
         }
         ResourceLocation name = registryName(state);
-        if (name != null && "architecturecraft".equals(name.getNamespace())) {
+        if (name != null && "architecturecraft".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))) {
             return true;
         }
-        return state.getBlock().getClass().getName().startsWith(ARCHITECTURECRAFT_BLOCK_PACKAGE);
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state).getClass().getName().startsWith(ARCHITECTURECRAFT_BLOCK_PACKAGE);
     }
 
     public boolean shouldSeparateBlockAo(IBlockState state) {
@@ -5325,9 +6122,9 @@ public class PipelineContext {
             return false;
         }
 
-        Block block = state.getBlock();
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
         return block != null
-                && block.getRenderLayer() == BlockRenderLayer.SOLID
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockRenderLayer(block) == BlockRenderLayer.SOLID
                 && !isRandomThingsLuminousBlock(state);
     }
 
@@ -5368,11 +6165,15 @@ public class PipelineContext {
             return true;
         }
         return shaderProperties.renderSettings().underwaterOverlay()
-                || eyeFluidState(Minecraft.getMinecraft()) == 1;
+                || eyeFluidState(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) == 1;
     }
 
     public boolean shouldRenderSkyDisc() {
         return !isPipelineActive || shaderProperties.renderSettings().sky();
+    }
+
+    public boolean shouldSuppressVanillaUpperSkyGeometry() {
+        return shouldSuppressShaderlessOwnedSkyBaseGeometry();
     }
 
     public boolean shouldSuppressVanillaSunGeometry() {
@@ -5387,12 +6188,89 @@ public class PipelineContext {
         return isPipelineActive && !shaderProperties.renderSettings().stars();
     }
 
+    public boolean shouldSuppressVanillaLowerSkyGeometry() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        return world != null
+                && isSimpleVoidWorld(world)
+                && !isRenderingBetterPortalsNestedView()
+                && !isRenderingBetterPortalsRenderPass();
+    }
+
+    private boolean areShaderpacksEnabled() {
+        return MainMod.getShaderPackManager() != null
+                && MainMod.getShaderPackManager().areShadersEnabled();
+    }
+
+    private boolean shouldUseShaderlessOwnedSky(Minecraft mc) {
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        return !isPipelineActive
+                && !areShaderpacksEnabled()
+                && world != null
+                && isSimpleVoidWorld(world)
+                && !isRenderingBetterPortalsNestedView()
+                && !isRenderingBetterPortalsRenderPass();
+    }
+
+    public boolean shouldSuppressShaderlessOwnedSkyBaseGeometry() {
+        return shouldUseShaderlessOwnedSky(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
+    }
+
     public boolean shouldSuppressVanillaSunsetGeometry() {
         return false;
     }
 
     public boolean shouldSuppressVoidWorldCustomSkyRenderer(Object skyRenderer, WorldClient world) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        return skyRenderer != null
+                && world != null
+                && shouldUseShaderlessOwnedSky(mc)
+                && isSimpleVoidWorld(world)
+                && !isAstralSkyRenderer(skyRenderer);
+    }
+
+    private static boolean isAstralSkyRenderer(Object skyRenderer) {
+        if (skyRenderer == null) {
+            return false;
+        }
+        Class<?> type = skyRenderer.getClass();
+        while (type != null) {
+            if (ASTRAL_SKYBOX_CLASS.equals(type.getName())) {
+                return true;
+            }
+            type = type.getSuperclass();
+        }
         return false;
+    }
+
+    public void renderShaderlessBotaniaVoidDetailsIfNeeded(float partialTicks, WorldClient world, Minecraft mc) {
+        if (mc == null
+                || world == null
+                || !shouldUseShaderlessOwnedSky(mc)
+                || !isSimpleVoidWorld(world)) {
+            return;
+        }
+        try {
+            renderShaderlessBotaniaVoidDetails(partialTicks, world, mc);
+        } catch (RuntimeException | LinkageError ignored) {
+            // Decorative only; preserve the owned sky if a texture/state call fails.
+        }
+    }
+
+    public boolean shouldSuppressShaderedAstralLowerSky() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        return isPipelineActive
+                && world != null
+                && isSimpleVoidWorld(world);
+    }
+
+    public boolean shouldSuppressAstralUpperSkyGeometry() {
+        return shouldSuppressShaderedAstralLowerSky() || shouldSuppressShaderlessOwnedSkyBaseGeometry();
+    }
+
+    public boolean shouldSuppressAstralLowerSkyGeometry() {
+        return shouldSuppressShaderedAstralLowerSky() || shouldSuppressShaderlessOwnedSkyBaseGeometry();
     }
 
     public boolean shouldForceShaderlessAstralVoidLowerSky(WorldClient world) {
@@ -5407,10 +6285,6 @@ public class PipelineContext {
         // Old sky probe intentionally disabled; use AUSMFreshSkyProbe instead.
     }
 
-    public Vec3d shaderlessAstralVoidSkyColor(WorldClient world, Entity entity, float partialTicks, Vec3d originalSkyColor) {
-        return originalSkyColor;
-    }
-
     public Vec3d forcedShaderlessAstralVoidBaseSkyColor() {
         return null;
     }
@@ -5419,7 +6293,7 @@ public class PipelineContext {
         if (world == null) {
             return null;
         }
-        double time = (world.getWorldTime() % 24000L) / 24000.0D;
+        double time = (com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L) / 24000.0D;
         double dayFactor = (Math.cos((time - 0.25D) * Math.PI * 2.0D) + 1.0D) * 0.5D;
         dayFactor = Math.max(0.0D, Math.min(1.0D, dayFactor));
         double smoothDay = dayFactor * dayFactor * (3.0D - 2.0D * dayFactor);
@@ -5441,7 +6315,10 @@ public class PipelineContext {
         if (value == null) {
             return "null";
         }
-        return String.format(Locale.ROOT, "%.3f,%.3f,%.3f", value.x, value.y, value.z);
+        return String.format(Locale.ROOT, "%.3f,%.3f,%.3f",
+                com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(value),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(value),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(value));
     }
 
     private void logAstralVoidSkyProbe(String stage, WorldClient world, double originalHorizon, double adjustedHorizon, float partialTicks) {
@@ -5449,10 +6326,10 @@ public class PipelineContext {
 }
 
     public boolean shouldSanitizeShaderlessNothiriumFog() {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         return !isPipelineActive
                 && mc != null
-                && mc.world != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
     }
@@ -5488,11 +6365,11 @@ public class PipelineContext {
     }
 
     private boolean shouldDisableShaderlessNothiriumTerrainFog() {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         return !isPipelineActive
                 && mc != null
-                && mc.world != null
-                && safeDimensionId(mc.world) == SIMPLE_VOID_WORLD_DIMENSION_ID
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
+                && isOverworldShaderEnvironment(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc))
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
     }
@@ -5537,7 +6414,7 @@ public class PipelineContext {
         }
         int skyLight = packedLight >> 20 & 15;
         int blockLight = packedLight >> 4 & 15;
-        int requestedBlockLight = MathHelper.clamp(lightValue, 0, 15);
+        int requestedBlockLight = clampInt(lightValue, 0, 15);
         if (skyLight >= 15 && blockLight >= requestedBlockLight) {
             return packedLight;
         }
@@ -5556,14 +6433,15 @@ public class PipelineContext {
                 || isRenderingBetterPortalsRenderPass()) {
             return false;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        World world = mc != null ? mc.world : null;
-        if (world == null || safeDimensionId(world) != SIMPLE_VOID_WORLD_DIMENSION_ID) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        if (world == null || !isOverworldShaderEnvironment(world)) {
             return false;
         }
         try {
-            BlockPos skyProbePos = pos.up();
-            return world.isBlockLoaded(skyProbePos) && world.canSeeSky(skyProbePos);
+            BlockPos skyProbePos = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosUp(pos);
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, skyProbePos) && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((world), new String[] {"func_175678_i", "canSeeSky"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, false, (skyProbePos));
         } catch (RuntimeException | LinkageError ignored) {
             return false;
         }
@@ -5577,13 +6455,21 @@ public class PipelineContext {
         // Probe disabled.
     }
 
+    public void probeWorldPassSkyDome(String stage) {
+        logWorldPassSkyDomeProbe(stage);
+    }
+
+    public void probeShaderlessSolidTerrainSky(String stage) {
+        // Probe disabled.
+    }
+
     public void captureShaderlessWorldFramebufferForUi() {
         if (isPipelineActive || !shaderlessWorldPassActive || isRenderingBetterPortalsNestedView() || isRenderingBetterPortalsRenderPass()) {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             shaderlessWorldFramebufferForUi = 0;
             shaderlessWorldFramebufferFrame = Long.MIN_VALUE;
             return;
@@ -5595,17 +6481,21 @@ public class PipelineContext {
         }
 
         shaderlessWorldFramebufferForUi = drawFramebuffer;
-        shaderlessWorldFramebufferWidth = Math.max(1, mc.displayWidth);
-        shaderlessWorldFramebufferHeight = Math.max(1, mc.displayHeight);
+        shaderlessWorldFramebufferWidth = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc));
+        shaderlessWorldFramebufferHeight = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
         shaderlessWorldFramebufferFrame = clientRenderFrameNanos;
+        logShaderlessWorldFramebufferHandoff(
+                "capture",
+                "drawFramebuffer=" + drawFramebuffer
+                        + ", mcFramebuffer=" + describeFramebufferTarget(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)));
     }
 
     public void syncShaderlessWorldFramebufferBeforeGui() {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (isPipelineActive
                 || mc == null
-                || mc.world == null
-                || mc.getFramebuffer() == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null
                 || isRenderingBetterPortalsNestedView()
                 || isRenderingBetterPortalsRenderPass()
                 || shaderlessWorldFramebufferForUi <= 0
@@ -5613,11 +6503,18 @@ public class PipelineContext {
             return;
         }
 
-        Framebuffer target = mc.getFramebuffer();
-        if (target.framebufferObject == shaderlessWorldFramebufferForUi) {
+        Framebuffer target = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == shaderlessWorldFramebufferForUi) {
+            logShaderlessWorldFramebufferHandoff(
+                    "sync-skip-same-target",
+                    "target=" + describeFramebufferTarget(target));
             return;
         }
 
+        logShaderlessWorldFramebufferHandoff(
+                "sync-before-blit",
+                "source=" + shaderlessWorldFramebufferForUi
+                        + ", target=" + describeFramebufferTarget(target));
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
@@ -5627,9 +6524,9 @@ public class PipelineContext {
         GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, previousColorMask);
         try {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, shaderlessWorldFramebufferForUi);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, target.framebufferObject);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
             GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
-            GL11.glDrawBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
             GL11.glColorMask(true, true, true, true);
             GL11.glDepthMask(true);
             GL30.glBlitFramebuffer(
@@ -5639,16 +6536,20 @@ public class PipelineContext {
                     shaderlessWorldFramebufferHeight,
                     0,
                     0,
-                    target.framebufferWidth,
-                    target.framebufferHeight,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target),
                     GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT,
                     GL11.GL_NEAREST
             );
+            logShaderlessWorldFramebufferHandoff(
+                    "sync-after-blit-bound",
+                    "source=" + shaderlessWorldFramebufferForUi
+                            + ", target=" + describeFramebufferTarget(target));
         } finally {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-            GL11.glReadBuffer(previousReadBuffer);
-            GL11.glDrawBuffer(previousDrawBuffer);
+            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
+            restoreDrawBufferForFramebuffer(previousDrawFramebuffer, previousDrawBuffer);
             GL11.glDepthMask(previousDepthMask);
             GL11.glColorMask(
                     previousColorMask.get(0) != 0,
@@ -5657,6 +6558,10 @@ public class PipelineContext {
                     previousColorMask.get(3) != 0
             );
         }
+        logShaderlessWorldFramebufferHandoff(
+                "sync-after-blit-restored",
+                "source=" + shaderlessWorldFramebufferForUi
+                        + ", target=" + describeFramebufferTarget(target));
     }
 
     private void logShaderlessWorldFramebufferHandoff(String stage, String detail) {
@@ -5672,18 +6577,12 @@ public class PipelineContext {
         try {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebuffer);
             GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
-            int x = Math.max(0, width / 2);
-            int lowerY = Math.max(0, height / 4);
-            int centerY = Math.max(0, height / 2);
-            int upperY = Math.max(0, height * 3 / 4);
-            return "lower=" + readFramebufferPixelSummary(x, lowerY)
-                    + ", center=" + readFramebufferPixelSummary(x, centerY)
-                    + ", upper=" + readFramebufferPixelSummary(x, upperY);
+            return sampleBoundReadFramebuffer(width, height, true);
         } catch (RuntimeException | LinkageError ignored) {
             return "unreadable";
         } finally {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL11.glReadBuffer(previousReadBuffer);
+            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
         }
     }
 
@@ -5692,73 +6591,7 @@ public class PipelineContext {
     }
 
     private void renderShaderlessVoidSkyRepair(Minecraft mc, float partialTicks) {
-        if (mc == null || mc.renderGlobal == null || mc.getFramebuffer() == null) {
-            logShaderlessVoidSkyRepair("skip-render-no-renderglobal", null);
-            return;
-        }
-
-        int previousFramebuffer = currentDrawFramebufferBinding();
-        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
-        int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
-        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
-        boolean previousDepth = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
-        boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
-        boolean previousBlend = GL11.glIsEnabled(GL11.GL_BLEND);
-        boolean previousAlpha = GL11.glIsEnabled(GL11.GL_ALPHA_TEST);
-        boolean previousTexture2d = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
-        boolean previousCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
-        boolean previousFog = GL11.glIsEnabled(GL11.GL_FOG);
-        ByteBuffer previousColorMask = BufferUtils.createByteBuffer(4);
-        GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, previousColorMask);
-        try {
         // Probe disabled.
-} catch (RuntimeException | LinkageError e) {
-            MainMod.LOGGER.warn("[AUSMVoidSkyRepair] Failed to re-render shaderless void sky before GUI", e);
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousFramebuffer);
-            GL11.glDrawBuffer(previousDrawBuffer);
-            OpenGlHelper.glUseProgram(previousProgram);
-            GL13.glActiveTexture(previousActiveTexture);
-            GL11.glDepthMask(previousDepthMask);
-            if (previousDepth) {
-                GL11.glEnable(GL11.GL_DEPTH_TEST);
-            } else {
-                GL11.glDisable(GL11.GL_DEPTH_TEST);
-            }
-            if (previousBlend) {
-                GL11.glEnable(GL11.GL_BLEND);
-            } else {
-                GL11.glDisable(GL11.GL_BLEND);
-            }
-            if (previousAlpha) {
-                GL11.glEnable(GL11.GL_ALPHA_TEST);
-            } else {
-                GL11.glDisable(GL11.GL_ALPHA_TEST);
-            }
-            if (previousTexture2d) {
-                GL11.glEnable(GL11.GL_TEXTURE_2D);
-            } else {
-                GL11.glDisable(GL11.GL_TEXTURE_2D);
-            }
-            if (previousCull) {
-                GL11.glEnable(GL11.GL_CULL_FACE);
-            } else {
-                GL11.glDisable(GL11.GL_CULL_FACE);
-            }
-            if (previousFog) {
-                GL11.glEnable(GL11.GL_FOG);
-            } else {
-                GL11.glDisable(GL11.GL_FOG);
-            }
-            GL11.glColorMask(
-                    previousColorMask.get(0) != 0,
-                    previousColorMask.get(1) != 0,
-                    previousColorMask.get(2) != 0,
-                    previousColorMask.get(3) != 0
-            );
-            mc.getFramebuffer().bindFramebuffer(false);
-            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
-        }
     }
 
     private VoidSkyRepairSamples sampleVoidSkyRepairPixels(int width, int height) {
@@ -5824,18 +6657,24 @@ public class PipelineContext {
     }
 
     private String readFramebufferPixelSummary(int x, int y) {
+        return readFramebufferPixelSummary(x, y, true);
+    }
+
+    private String readFramebufferPixelSummary(int x, int y, boolean includeDepth) {
         try {
             IntBuffer color = BufferUtils.createIntBuffer(1);
-            FloatBuffer depth = BufferUtils.createFloatBuffer(1);
             GL11.glReadPixels(x, y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, color);
-            GL11.glReadPixels(x, y, 1, 1, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, depth);
             int rgba = color.get(0);
-            float z = depth.get(0);
             int r = rgba & 0xFF;
             int g = rgba >> 8 & 0xFF;
             int b = rgba >> 16 & 0xFF;
             int a = rgba >> 24 & 0xFF;
-            return x + "," + y + "=rgba(" + r + "," + g + "," + b + "," + a + ") depth=" + z;
+            if (!includeDepth) {
+                return x + "," + y + "=rgba(" + r + "," + g + "," + b + "," + a + ")";
+            }
+            FloatBuffer depth = BufferUtils.createFloatBuffer(1);
+            GL11.glReadPixels(x, y, 1, 1, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, depth);
+            return x + "," + y + "=rgba(" + r + "," + g + "," + b + "," + a + ") depth=" + depth.get(0);
         } catch (RuntimeException | LinkageError ignored) {
             return x + "," + y + "=unreadable";
         }
@@ -5864,13 +6703,13 @@ public class PipelineContext {
                 || shaderProperties.renderSettings().occlusionCulling()) {
             return;
         }
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null) {
             return;
         }
-        previousRenderChunksManyForOcclusion = mc.renderChunksMany;
+        previousRenderChunksManyForOcclusion = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((mc), false, "field_175612_E", "renderChunksMany");
         terrainOcclusionOverrideActive = true;
-        mc.renderChunksMany = false;
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setRenderChunksMany(mc, false);
     }
 
     public void restoreTerrainOcclusionCullingSetting() {
@@ -5878,9 +6717,9 @@ public class PipelineContext {
             return;
         }
         terrainOcclusionOverrideActive = false;
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc != null) {
-            mc.renderChunksMany = previousRenderChunksManyForOcclusion;
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setRenderChunksMany(mc, previousRenderChunksManyForOcclusion);
         }
     }
 
@@ -5897,7 +6736,8 @@ public class PipelineContext {
 
     public void applySkySunPathRotation() {
         if (isPipelineActive && sunPathRotation != 0.0f) {
-            GlStateManager.rotate(sunPathRotation, 0.0F, 0.0F, 1.0F);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179114_b", "rotate"},
+                new Class<?>[] {float.class, float.class, float.class, float.class}, (sunPathRotation), (0.0F), (0.0F), (1.0F));;
         }
     }
 
@@ -5907,7 +6747,7 @@ public class PipelineContext {
         }
         previousTerrainCullEnabled = GL11.glIsEnabled(GL11.GL_CULL_FACE);
         terrainCullOverrideActive = true;
-        GlStateManager.disableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
     }
 
     public void restoreTerrainCulling() {
@@ -5916,9 +6756,9 @@ public class PipelineContext {
         }
         terrainCullOverrideActive = false;
         if (previousTerrainCullEnabled) {
-            GlStateManager.enableCull();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
         } else {
-            GlStateManager.disableCull();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
         }
     }
 
@@ -5937,8 +6777,8 @@ public class PipelineContext {
     }
 
     public boolean shouldUsePipelineEntityFormat() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || !mc.isCallingFromMinecraftThread()) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((mc), new String[] {"func_152345_ab", "isCallingFromMinecraftThread"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
             return false;
         }
         RenderPass pass = activePass;
@@ -5990,24 +6830,23 @@ public class PipelineContext {
     }
 
     public void logSkyPipelineProbe(String stage) {
-        // Intentionally disabled in normal builds; keep the hook as a cheap
-        // no-op so old probes can be re-enabled locally without touching mixins.
+        freshSkyProbe("sky-" + stage, "");
     }
 
     private String skyProbeWorldSummary() {
-        Minecraft mc = Minecraft.getMinecraft();
-        World world = mc != null ? mc.world : null;
-        Entity view = mc != null ? mc.getRenderViewEntity() : null;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        Entity view = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) : null;
         if (world == null) {
             return "null";
         }
         return "dim=" + safeDimensionId(world)
-                + ",time=" + world.getWorldTime()
-                + ",celestial=" + world.getCelestialAngle(0.0f)
-                + ",rain=" + world.getRainStrength(0.0f)
-                + ",thunder=" + world.getThunderStrength(0.0f)
-                + ",viewYaw=" + (view != null ? view.rotationYaw : Float.NaN)
-                + ",viewPitch=" + (view != null ? view.rotationPitch : Float.NaN);
+                + ",time=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world)
+                + ",celestial=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, 0.0f)
+                + ",rain=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, 0.0f)
+                + ",thunder=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldThunderStrength(world, 0.0f)
+                + ",viewYaw=" + (view != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(view) : Float.NaN)
+                + ",viewPitch=" + (view != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.rotationPitch(view) : Float.NaN);
     }
 
     private static String skyProbeGlStateSummary() {
@@ -6047,9 +6886,9 @@ public class PipelineContext {
             return -1;
         }
 
-        double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
-        double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
-        double cameraZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
         nothiriumShadowRenderer.drainUploads();
         double fallbackDistance = nothiriumMainTerrainFallbackDistance();
         nothiriumShadowRenderer.scheduleLayerCompiles(layer, cameraX, cameraY, cameraZ, fallbackDistance);
@@ -6075,11 +6914,11 @@ public class PipelineContext {
     }
 
     private double nothiriumMainTerrainFallbackDistance() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.gameSettings == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) == null) {
             return -1.0D;
         }
-        int chunks = Math.max(2, mc.gameSettings.renderDistanceChunks);
+        int chunks = Math.max(2, com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc));
         return chunks * 16.0D + 32.0D;
     }
 
@@ -6102,19 +6941,19 @@ public class PipelineContext {
             return false;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null) {
             return false;
         }
 
-        Entity viewEntity = mc.getRenderViewEntity();
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         if (viewEntity == null) {
             return false;
         }
 
         int count = renderNothiriumTerrainLayer(
                 BlockRenderLayer.TRANSLUCENT,
-                mc.getRenderPartialTicks(),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc),
                 viewEntity
         );
         if (count < 0) {
@@ -6138,18 +6977,22 @@ public class PipelineContext {
         if (layer != BlockRenderLayer.TRANSLUCENT) {
             return 0;
         }
-        int stillWater = blockEntityId(Blocks.WATER.getDefaultState());
+        int stillWater = blockEntityId(nothiriumFallbackWaterState("field_150355_j", "WATER"));
         if (stillWater != 0) {
             return stillWater;
         }
-        return blockEntityId(Blocks.FLOWING_WATER.getDefaultState());
+        return blockEntityId(nothiriumFallbackWaterState("field_150358_i", "FLOWING_WATER"));
     }
 
     private short nothiriumFallbackRenderType(BlockRenderLayer layer) {
         if (layer != BlockRenderLayer.TRANSLUCENT) {
             return 0;
         }
-        return (short) Blocks.WATER.getDefaultState().getRenderType().ordinal();
+        return (short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(nothiriumFallbackWaterState("field_150355_j", "WATER"));
+    }
+
+    private IBlockState nothiriumFallbackWaterState(String srgName, String mcpName) {
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.blockDefaultState(com.l.ausm.impl.util.MinecraftReflectionCompat.field(Blocks.class, Block.class, null, srgName, mcpName));
     }
 
     public ShaderKey getShaderKey() {
@@ -6187,7 +7030,7 @@ public class PipelineContext {
             return 0;
         }
 
-        ResourceLocation entityKey = EntityList.getKey(entity);
+        ResourceLocation entityKey = com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity);
         if (entityKey != null) {
             Integer alias = shaderProperties.entityIds().get(entityKey);
             if (alias != null) {
@@ -6203,35 +7046,35 @@ public class PipelineContext {
     }
 
     private int vehicleId(Minecraft mc) {
-        if (mc == null || mc.player == null || mc.player.getRidingEntity() == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) == null) {
             return 0;
         }
-        return entityId(mc.player.getRidingEntity());
+        return entityId(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)));
     }
 
     private boolean vehicleInWater(Minecraft mc) {
         return mc != null
-                && mc.player != null
-                && mc.player.getRidingEntity() != null
-                && mc.player.getRidingEntity().isInWater();
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc))), new String[] {"func_70090_H", "isInWater"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
     }
 
     private float[] vehicleLookVector(Minecraft mc) {
-        if (mc == null || mc.player == null || mc.player.getRidingEntity() == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) == null) {
             return new float[]{0.0f, 0.0f, 0.0f};
         }
-        return vec3(mc.player.getRidingEntity().getLookVec());
+        return vec3(com.l.ausm.impl.util.MinecraftReflectionCompat.look(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)));
     }
 
     private float[] relativeVehiclePosition(Minecraft mc) {
-        if (mc == null || mc.player == null || mc.player.getRidingEntity() == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) == null) {
             return new float[]{0.0f, 0.0f, 0.0f};
         }
-        Entity vehicle = mc.player.getRidingEntity();
-        float partialTicks = mc.getRenderPartialTicks();
-        double x = interpolate(vehicle.prevPosX, vehicle.posX, partialTicks);
-        double y = interpolate(vehicle.prevPosY, vehicle.posY, partialTicks);
-        double z = interpolate(vehicle.prevPosZ, vehicle.posZ, partialTicks);
+        Entity vehicle = com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc));
+        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
+        double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosX(vehicle), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(vehicle), partialTicks);
+        double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosY(vehicle), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(vehicle), partialTicks);
+        double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosZ(vehicle), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(vehicle), partialTicks);
         return new float[]{
                 (float) (cameraPositionUnshifted[0] - x),
                 (float) (cameraPositionUnshifted[1] - y),
@@ -6243,7 +7086,7 @@ public class PipelineContext {
         if (entity == null) {
             return new float[]{0.0f, 0.0f, 0.0f};
         }
-        return vec3(entity.getForward());
+        return vec3(com.l.ausm.impl.util.MinecraftReflectionCompat.call((entity), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_189651_aD", "getForward", "func_70040_Z", "getLookVec"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS));
     }
 
     private float[] lightningBoltPosition(Minecraft mc) {
@@ -6251,12 +7094,12 @@ public class PipelineContext {
         if (mc == null || world == null) {
             return new float[]{0.0f, 0.0f, 0.0f, 0.0f};
         }
-        float partialTicks = mc.getRenderPartialTicks();
-        for (Entity entity : world.loadedEntityList) {
+        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
+        for (Entity entity : com.l.ausm.impl.util.MinecraftReflectionCompat.loadedEntityList(world)) {
             if (entity instanceof EntityLightningBolt) {
-                double x = interpolate(entity.prevPosX, entity.posX, partialTicks);
-                double y = interpolate(entity.prevPosY, entity.posY, partialTicks);
-                double z = interpolate(entity.prevPosZ, entity.posZ, partialTicks);
+                double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosX(entity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity), partialTicks);
+                double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosY(entity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(entity), partialTicks);
+                double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosZ(entity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity), partialTicks);
                 return new float[]{
                         (float) (x - cameraPositionUnshifted[0]),
                         (float) (y - cameraPositionUnshifted[1]),
@@ -6287,14 +7130,14 @@ public class PipelineContext {
             return;
         }
 
-        float partialTicks = mc.getRenderPartialTicks();
+        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
         EntityDragon strongestDragon = null;
         float strongestIntensity = 0.0f;
-        for (Entity entity : world.loadedEntityList) {
-            if (!(entity instanceof EntityDragon dragon) || dragon.deathTicks <= 0) {
+        for (Entity entity : com.l.ausm.impl.util.MinecraftReflectionCompat.loadedEntityList(world)) {
+            if (!(entity instanceof EntityDragon dragon) || com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((dragon), 0, "field_70995_bG", "deathTicks") <= 0) {
                 continue;
             }
-            float intensity = clamp01((dragon.deathTicks + partialTicks) / 200.0f);
+            float intensity = clamp01((com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((dragon), 0, "field_70995_bG", "deathTicks") + partialTicks) / 200.0f);
             if (intensity > strongestIntensity) {
                 strongestIntensity = intensity;
                 strongestDragon = dragon;
@@ -6304,9 +7147,9 @@ public class PipelineContext {
             return;
         }
 
-        double x = interpolate(strongestDragon.prevPosX, strongestDragon.posX, partialTicks) - cameraPositionUnshifted[0];
-        double y = interpolate(strongestDragon.prevPosY, strongestDragon.posY, partialTicks) - cameraPositionUnshifted[1];
-        double z = interpolate(strongestDragon.prevPosZ, strongestDragon.posZ, partialTicks) - cameraPositionUnshifted[2];
+        double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosX(strongestDragon), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(strongestDragon), partialTicks) - cameraPositionUnshifted[0];
+        double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosY(strongestDragon), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(strongestDragon), partialTicks) - cameraPositionUnshifted[1];
+        double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosZ(strongestDragon), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(strongestDragon), partialTicks) - cameraPositionUnshifted[2];
         double length = Math.sqrt(x * x + y * y + z * z);
         if (length > 1.0e-4) {
             double scale = 100.0 / length;
@@ -6338,7 +7181,7 @@ public class PipelineContext {
     }
 
     private static boolean isEndWorld(World world) {
-        return world != null && world.provider != null && world.provider.getDimension() == 1;
+        return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) == 1;
     }
 
     public void beginRenderedItem(ItemStack stack) {
@@ -6355,12 +7198,13 @@ public class PipelineContext {
     }
 
     private String renderedItemDebugName(ItemStack stack) {
-        if (stack == null || stack.isEmpty()) {
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack)) {
             return "empty";
         }
-        ResourceLocation key = stack.getItem().getRegistryName();
-        return (key != null ? key.toString() : stack.getItem().getClass().getName())
-                + ":" + stack.getMetadata();
+        Item item = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack);
+        ResourceLocation key = item != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.call((item), net.minecraft.util.ResourceLocation.class, null, new String[] {"getRegistryName"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS) : null;
+        return (key != null ? key.toString() : item != null ? item.getClass().getName() : "null")
+                + ":" + com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack);
     }
 
     private void uploadCurrentRenderedItemId() {
@@ -6377,11 +7221,11 @@ public class PipelineContext {
         if (activePass.stage() != ProgramStage.GBUFFERS) {
             return false;
         }
-        return isBetweenlandsEntity(EntityList.getKey(entity));
+        return isBetweenlandsEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity));
     }
 
     private static boolean isBetweenlandsEntity(ResourceLocation entityKey) {
-        return entityKey != null && "thebetweenlands".equals(entityKey.getNamespace());
+        return entityKey != null && "thebetweenlands".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(entityKey));
     }
 
     private static boolean isBetweenlandsRenderStack() {
@@ -6410,40 +7254,47 @@ public class PipelineContext {
     }
 
     private int currentRenderedBlockItemId(ItemStack stack) {
-        if (stack == null || stack.isEmpty()) {
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack)) {
             return 0;
         }
-        Block block = Block.getBlockFromItem(stack.getItem());
-        if (block == null || block == Blocks.AIR) {
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.call(net.minecraft.block.Block.class, net.minecraft.block.Block.class, null, new String[] {"func_149634_a", "getBlockFromItem"},
+                new Class<?>[] {net.minecraft.item.Item.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack)));
+        if (block == null || block == com.l.ausm.impl.util.MinecraftReflectionCompat.field(Blocks.class, Block.class, null, "field_150350_a", "AIR")) {
             return 0;
         }
         try {
-            int metadata = stack.getMetadata();
-            IBlockState state = block.getStateFromMeta(metadata);
+            int metadata = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack);
+            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.blockStateFromMeta(block, metadata);
             if (state != null) {
                 return shaderProperties.blockIds().idFor(state);
             }
         } catch (RuntimeException ignored) {
         }
-        return shaderProperties.blockIds().idFor(block.getDefaultState());
+        return shaderProperties.blockIds().idFor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockDefaultState(block));
     }
 
     private ItemStack heldMainStack(Minecraft mc) {
-        if (mc.player == null) {
-            return ItemStack.EMPTY;
+        EntityLivingBase player = com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc);
+        if (player == null) {
+            return null;
         }
 
-        ItemStack mainHand = mc.player.getHeldItemMainhand();
+        ItemStack mainHand = com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemMainhand(player);
         if (!shaderProperties.renderSettings().oldHandLight()) {
             return mainHand;
         }
 
-        ItemStack offHand = mc.player.getHeldItemOffhand();
+        ItemStack offHand = com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemOffhand(player);
         return heldBlockLightValue(offHand) > heldBlockLightValue(mainHand) ? offHand : mainHand;
     }
 
+    private ItemStack heldOffhandStack(Minecraft mc) {
+        EntityLivingBase player = com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc);
+        return player != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemOffhand(player) : null;
+    }
+
     private int heldBlockLightValue(ItemStack stack) {
-        if (stack == null || stack.isEmpty()) {
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack)) {
             return 0;
         }
 
@@ -6452,8 +7303,10 @@ public class PipelineContext {
             return 15;
         }
 
-        Block block = Block.getBlockFromItem(stack.getItem());
-        int blockLight = block != null ? block.getLightValue(block.getDefaultState()) : 0;
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.call(net.minecraft.block.Block.class, net.minecraft.block.Block.class, null, new String[] {"func_149634_a", "getBlockFromItem"},
+                new Class<?>[] {net.minecraft.item.Item.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack)));
+        int blockLight = block != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((block), new String[] {"getLightValue", "func_149750_m"},
+                new Class<?>[] {net.minecraft.block.state.IBlockState.class}, 0, (com.l.ausm.impl.util.MinecraftReflectionCompat.blockDefaultState(block))) : 0;
         if (blockLight > 0) {
             return blockLight;
         }
@@ -6473,7 +7326,8 @@ public class PipelineContext {
             return itemColor;
         }
 
-        Block block = Block.getBlockFromItem(stack.getItem());
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.call(net.minecraft.block.Block.class, net.minecraft.block.Block.class, null, new String[] {"func_149634_a", "getBlockFromItem"},
+                new Class<?>[] {net.minecraft.item.Item.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack)));
         if (block != null) {
             int shaderBlockId = currentRenderedBlockItemId(stack);
             float[] blockColor = compatLightColorForVoxelId(localActVoxelId(shaderBlockId));
@@ -6526,9 +7380,11 @@ public class PipelineContext {
 
     private float[] entityColor(Entity entity) {
         if (entity instanceof EntityLivingBase living) {
-            if (living.hurtTime > 0 || living.deathTime > 0) {
-                float hurtRatio = living.hurtTime / Math.max(1.0f, living.maxHurtTime);
-                float deathRatio = Math.min(1.0f, living.deathTime / 20.0f);
+            int hurtTime = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((living), 0, "field_70737_aN", "hurtTime");
+            int deathTime = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((living), 0, "field_70725_aQ", "deathTime");
+            if (hurtTime > 0 || deathTime > 0) {
+                float hurtRatio = hurtTime / Math.max(1.0f, com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((living), 0, "field_70738_aO", "maxHurtTime"));
+                float deathRatio = Math.min(1.0f, deathTime / 20.0f);
                 float alpha = Math.max(hurtRatio, deathRatio) * 0.25f;
                 return new float[]{1.0f, 0.0f, 0.0f, alpha};
             }
@@ -6537,7 +7393,7 @@ public class PipelineContext {
     }
 
     public void setCurrentEntity(Entity entity) {
-        currentEntityKey = entity != null ? EntityList.getKey(entity) : null;
+        currentEntityKey = com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity);
         currentEntityId = entityId(entity);
         currentEntityColor = entityColor(entity);
         uploadEntityUniforms();
@@ -6554,22 +7410,22 @@ public class PipelineContext {
         if (!isPipelineActive || shaderProperties.renderSettings().rainDepth()) {
             return;
         }
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
     }
 
     public void restoreWeatherRenderState() {
         if (!isPipelineActive || shaderProperties.renderSettings().rainDepth()) {
             return;
         }
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
     }
 
     public void applyWaterRenderState() {
         if (!isPipelineActive) {
             return;
         }
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
@@ -6585,22 +7441,22 @@ public class PipelineContext {
         setIndexedBlend(Attachment.AUX4.getIndex(), false);
         // Final passes reconstruct the current water pixel from depthtex0, so
         // water must update the live depth buffer.
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
     }
 
     public void restoreWaterRenderState() {
         if (!isPipelineActive) {
             return;
         }
-        GlStateManager.disableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         resetIndexedBlendState();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ZERO,
                 GL11.GL_ONE
         );
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
     }
 
     private void uploadEntityUniforms() {
@@ -6629,21 +7485,21 @@ public class PipelineContext {
             return;
         }
 
-        BlockPos position = renderChunk.getPosition();
+        BlockPos position = com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkPosition(renderChunk);
         if (position == null) {
             resetChunkFadeUniform();
             return;
         }
 
-        int dimensionId = safeDimensionId(renderChunk.getWorld());
+        int dimensionId = safeDimensionId(renderChunkWorld(renderChunk));
         if (dimensionId == Integer.MIN_VALUE) {
-            dimensionId = safeDimensionId(renderWorld(Minecraft.getMinecraft()));
+            dimensionId = safeDimensionId(renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
         }
-        applyChunkFade(dimensionId, position.getX(), position.getY(), position.getZ());
+        applyChunkFade(dimensionId, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(position), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(position), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(position));
     }
 
     public void applyChunkFade(int blockX, int blockY, int blockZ) {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World world = renderWorld(mc);
         applyChunkFade(safeDimensionId(world), blockX, blockY, blockZ);
     }
@@ -6875,13 +7731,42 @@ public class PipelineContext {
         if (phase != WorldRenderingPhase.HAND_SOLID) {
             return;
         }
-        GlStateManager.disableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         resetIndexedBlendState();
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glColorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    public void prepareVanillaHandRenderState() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        disablePipelineVertexAttributes();
+        restoreVanillaClientRenderState();
+        unbindShaderImages();
+        unbindShaderStorageBuffers();
+        resetIndexedBlendState();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(0.0F, 0.0F);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        restoreVanillaFixedFunctionTextureState(mc);
     }
 
     public void prepareUntexturedEmissiveWorldRenderState() {
@@ -6889,33 +7774,33 @@ public class PipelineContext {
             return;
         }
         TextureBinder.bindFallbackWhiteTexture();
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.0F);
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE,
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        GlStateManager.enableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.depthMask(false);
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     public void prepareGuiItemRenderState() {
         if (!isPipelineActive) {
             return;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.currentScreen == null && !renderingGuiScreen()) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
             return;
         }
 
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
@@ -6923,20 +7808,19 @@ public class PipelineContext {
             unbindShaderStorageBuffers();
         }
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.disableCull();
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     public void prepareFlatGuiBackgroundRenderState() {
-        probeShaderlessSkyGuiState("flat-gui-background-before");
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
@@ -6946,31 +7830,30 @@ public class PipelineContext {
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         GL11.glPolygonOffset(0.0F, 0.0F);
-        GlStateManager.disableLighting();
-        GlStateManager.disableColorMaterial();
-        GlStateManager.disableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
         GL11.glDepthMask(false);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ZERO,
                 GL11.GL_ONE
         );
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        probeShaderlessSkyGuiState("flat-gui-background-after");
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     public void prepareGuiEntityPreviewRenderState() {
         if (!isPipelineActive) {
             return;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.currentScreen == null && !renderingGuiScreen()) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
             return;
         }
 
@@ -6986,17 +7869,13 @@ public class PipelineContext {
                 | GL11.GL_VIEWPORT_BIT);
         guiEntityPreviewStateDepth++;
 
-        if (mc.getFramebuffer() != null) {
-            mc.getFramebuffer().bindFramebuffer(false);
-            GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
-            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
+        bindMinecraftFramebufferForGui(mc);
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.disableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
         }
-        if (mc.entityRenderer != null) {
-            mc.entityRenderer.disableLightmap();
-        }
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
         unbindShaderImages();
@@ -7009,17 +7888,17 @@ public class PipelineContext {
         GL11.glPolygonOffset(0.0F, 0.0F);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glColorMask(true, true, true, true);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
-        GlStateManager.disableBlend();
-        GlStateManager.disableLighting();
-        GlStateManager.disableColorMaterial();
-        GlStateManager.disableCull();
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     public void finishGuiEntityPreviewRenderState() {
@@ -7028,9 +7907,9 @@ public class PipelineContext {
         }
         guiEntityPreviewStateDepth--;
         GL11.glPopAttrib();
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
         unbindShaderStorageBuffers();
@@ -7047,8 +7926,8 @@ public class PipelineContext {
         if (!isPipelineActive) {
             return false;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.currentScreen == null && !renderingGuiScreen()) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
             return false;
         }
         GL11.glPushAttrib(GL11.GL_ENABLE_BIT
@@ -7061,9 +7940,9 @@ public class PipelineContext {
                 | GL11.GL_CURRENT_BIT
                 | GL11.GL_TRANSFORM_BIT
                 | GL11.GL_VIEWPORT_BIT);
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
         unbindShaderImages();
@@ -7075,47 +7954,47 @@ public class PipelineContext {
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         GL11.glPolygonOffset(0.0F, 0.0F);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
-        GlStateManager.disableCull();
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
         return true;
     }
 
     public void endGuiItemStateScope() {
         GL11.glPopAttrib();
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
         unbindShaderStorageBuffers();
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.colorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
     }
 
     public void prepareGuiItemGlintRenderState() {
         if (!isPipelineActive) {
             return;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.currentScreen == null && !renderingGuiScreen()) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
             return;
         }
 
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
@@ -7128,14 +8007,14 @@ public class PipelineContext {
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         GL11.glPolygonOffset(0.0F, 0.0F);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
-        GlStateManager.disableCull();
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     public void prepareHandItemDrawState(String source) {
@@ -7155,8 +8034,8 @@ public class PipelineContext {
         if (!isPipelineActive || !worldFrameActive || renderingShadowMap || renderingGuiScreen()) {
             return false;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.currentScreen != null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null) {
             return false;
         }
         WorldRenderingPhase phase = getPhase();
@@ -7171,8 +8050,8 @@ public class PipelineContext {
         if (!isPipelineActive || !worldFrameActive || renderingShadowMap || renderingGuiScreen()) {
             return false;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.currentScreen != null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null) {
             return false;
         }
         WorldRenderingPhase phase = getPhase();
@@ -7185,8 +8064,7 @@ public class PipelineContext {
     }
 
     public boolean isRenderingGuiScreen() {
-        Minecraft mc = Minecraft.getMinecraft();
-        return renderingGuiScreen() || mc != null && mc.currentScreen != null;
+        return renderingGuiScreen();
     }
 
     public boolean shouldDrawActiveProgramAsPatches() {
@@ -7247,8 +8125,8 @@ public class PipelineContext {
         configureShadowDrawBuffers(bindingProgram, drawBuffers);
         if (bindingProgram.stage() == ProgramStage.GBUFFERS) {
             restoreVanillaWorldTextureBindings();
-            GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-            GlStateManager.enableTexture2D();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
             GL11.glColorMask(true, true, true, true);
             boolean blockAtlasPass = usesBlockAtlas(pass);
             if (blockAtlasPass) {
@@ -7337,21 +8215,22 @@ public class PipelineContext {
 
     private void bindBlockAtlas() {
         TextureBinder.restoreDefaultTextureUnit();
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.getTextureManager() == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        TextureManager textureManager = com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc);
+        if (textureManager == null) {
             return;
         }
-        ITextureObject texture = mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+        ITextureObject texture = com.l.ausm.impl.util.MinecraftReflectionCompat.texture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
         if (texture == null) {
-            mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
-            texture = mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
+            texture = com.l.ausm.impl.util.MinecraftReflectionCompat.texture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
         }
         if (texture != null) {
-            int textureId = texture.getGlTextureId();
-            GlStateManager.bindTexture(textureId);
+            int textureId = com.l.ausm.impl.util.MinecraftReflectionCompat.glTextureId(texture);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(textureId);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
         } else {
-            mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
         }
         ShaderSamplerState.clampTextureAnisotropyIfNeeded(GL11.GL_TEXTURE_2D);
     }
@@ -7365,11 +8244,11 @@ public class PipelineContext {
 
         currentAlphaTestReference = alphaTest.reference();
         if (alphaTest.function() == GL11.GL_ALWAYS) {
-            GlStateManager.disableAlpha();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
         } else {
-            GlStateManager.enableAlpha();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
         }
-        GlStateManager.alphaFunc(alphaTest.function(), alphaTest.reference());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(alphaTest.function(), alphaTest.reference());
     }
 
     private static ShaderAlphaTest defaultAlphaTest(RenderPass pass) {
@@ -7385,8 +8264,8 @@ public class PipelineContext {
 
         ShaderAlphaTest alphaTest = ShaderAlphaTest.NON_ZERO_ALPHA;
         currentAlphaTestReference = alphaTest.reference();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(alphaTest.function(), alphaTest.reference());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(alphaTest.function(), alphaTest.reference());
 
         ShaderProgram program = activeProgram();
         if (program != null) {
@@ -7415,14 +8294,14 @@ public class PipelineContext {
         }
 
         if (blendMode != null && !blendMode.enabled()) {
-            GlStateManager.disableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
             resetIndexedBlendState();
             return;
         }
 
-        GlStateManager.enableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
         if (blendMode != null) {
-            GlStateManager.tryBlendFuncSeparate(
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                     blendMode.srcRgb(),
                     blendMode.dstRgb(),
                     blendMode.srcAlpha(),
@@ -7444,13 +8323,13 @@ public class PipelineContext {
 
     private void applyWaterBlendMode(List<Attachment> drawBuffers, ShaderBlendMode blendMode, Map<Attachment, ShaderBlendMode> attachmentModes) {
         if (!blendMode.enabled()) {
-            GlStateManager.disableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
             resetIndexedBlendState();
             return;
         }
 
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 blendMode.srcRgb(),
                 blendMode.dstRgb(),
                 blendMode.srcAlpha(),
@@ -7508,8 +8387,8 @@ public class PipelineContext {
         }
 
         ShaderOitSettings oitSettings = shaderProperties.oitSettings();
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
         for (int drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); drawBufferIndex++) {
             Attachment attachment = drawBuffers.get(drawBufferIndex);
             if (oitSettings.coefficientBuffer(attachment)) {
@@ -7525,31 +8404,31 @@ public class PipelineContext {
         if (pass != RenderPass.GBUFFERS_HAND && pass != RenderPass.GBUFFERS_HAND_WATER) {
             return;
         }
-        GlStateManager.disableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         resetIndexedBlendState();
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glColorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     private void applyOitDepthState(RenderPass pass) {
         if (!isOitGbufferPass(pass)) {
             return;
         }
-        GlStateManager.enableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.depthMask(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
     }
 
     private void applyGbufferDepthState(RenderPass pass) {
         if (!isOpaqueTerrainPass(pass) && pass != RenderPass.GBUFFERS_WATER && pass != RenderPass.DH_WATER) {
             return;
         }
-        GlStateManager.enableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glColorMask(true, true, true, true);
     }
 
@@ -7557,8 +8436,8 @@ public class PipelineContext {
         if (pass != RenderPass.GBUFFERS_SKYBASIC && pass != RenderPass.GBUFFERS_SKYTEXTURED) {
             return;
         }
-        GlStateManager.disableDepth();
-        GlStateManager.depthMask(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glColorMask(true, true, true, true);
     }
@@ -7570,9 +8449,9 @@ public class PipelineContext {
         if (pass != RenderPass.GBUFFERS_BEACONBEAM && getPhase() != WorldRenderingPhase.BEACON_BEAM) {
             return;
         }
-        GlStateManager.enableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.depthMask(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
     }
 
     private static boolean isOpaqueTerrainPass(RenderPass pass) {
@@ -7628,7 +8507,7 @@ public class PipelineContext {
                     blendMode.dstAlpha()
             );
         } else {
-            GlStateManager.tryBlendFuncSeparate(
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                     blendMode.srcRgb(),
                     blendMode.dstRgb(),
                     blendMode.srcAlpha(),
@@ -7695,8 +8574,8 @@ public class PipelineContext {
         if (!isPipelineActive) {
             return;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
         resizeFramebuffer(width, height, true);
@@ -7708,8 +8587,8 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             externalWorldFramebufferTarget = null;
             return;
         }
@@ -7726,7 +8605,7 @@ public class PipelineContext {
             resizeFramebuffer(targetWidth, targetHeight, true);
         }
 
-        boolean paused = mc.isGamePaused();
+        boolean paused = com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc);
         if (betterPortalsExternalTarget) {
             currentFrameTime = 0.0f;
         } else {
@@ -7769,6 +8648,8 @@ public class PipelineContext {
         boolean newFrame = frameNanos != clientRenderFrameNanos;
         if (newFrame) {
             clientRenderFrameNanos = frameNanos;
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+            shaderlessCustomSkyBackingThisFrame = shouldRenderShaderlessCustomSkyBackingNow(mc);
             bloomLayerRenderedThisWorldFrame = false;
             shaderlessBloomRenderedThisWorldFrame = false;
             resetShaderlessTerrainLayerCounts();
@@ -7843,7 +8724,7 @@ public class PipelineContext {
         System.arraycopy(cameraPosition, 0, previousCameraPosition, 0, 3);
         System.arraycopy(cameraPositionUnshifted, 0, previousCameraPositionUnshifted, 0, 3);
 
-        Entity viewEntity = mc.getRenderViewEntity();
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         if (viewEntity == null) {
             cameraPosition[0] = 0.0f;
             cameraPosition[1] = 0.0f;
@@ -7854,11 +8735,11 @@ public class PipelineContext {
             return;
         }
 
-        float partialTicks = mc.getRenderPartialTicks();
-        Vec3d eyePosition = viewEntity.getPositionEyes(partialTicks);
-        double x = eyePosition.x;
-        double y = eyePosition.y;
-        double z = eyePosition.z;
+        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
+        Vec3d eyePosition = com.l.ausm.impl.util.MinecraftReflectionCompat.positionEyes(viewEntity, partialTicks);
+        double x = com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(eyePosition);
+        double y = com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(eyePosition);
+        double z = com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(eyePosition);
         cameraPositionUnshifted[0] = x;
         cameraPositionUnshifted[1] = y;
         cameraPositionUnshifted[2] = z;
@@ -7884,7 +8765,7 @@ public class PipelineContext {
             previousCameraPosition[0] += (float) shiftX;
             previousCameraPosition[2] += (float) shiftZ;
         }
-        if (Math.abs(viewEntity.posX - x) > 1000.0 || Math.abs(viewEntity.posZ - z) > 1000.0) {
+        if (Math.abs(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity) - x) > 1000.0 || Math.abs(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity) - z) > 1000.0) {
             previousCameraPosition[0] = (float) (x + cameraShiftX);
             previousCameraPosition[1] = (float) y;
             previousCameraPosition[2] = (float) (z + cameraShiftZ);
@@ -7906,12 +8787,12 @@ public class PipelineContext {
     }
 
     private void restoreVanillaWorldPassState(boolean bindMinecraftFramebuffer, boolean resetPortalMasks) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (bindMinecraftFramebuffer && mc != null && mc.getFramebuffer() != null) {
-            mc.getFramebuffer().bindFramebuffer(false);
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (bindMinecraftFramebuffer && mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) != null) {
+            bindMinecraftFramebufferForGui(mc);
         }
 
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         disablePipelineVertexAttributes();
 
@@ -7925,16 +8806,16 @@ public class PipelineContext {
             resetPortalMaskState();
         }
 
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.enableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         restoreVanillaFixedFunctionTextureState(mc);
-        GlStateManager.enableDepth();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableCull();
-        GlStateManager.disableLighting();
-        GlStateManager.disableColorMaterial();
-        GlStateManager.disableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
     }
 
     public void prepareVanillaParticleRendering() {
@@ -7949,14 +8830,14 @@ public class PipelineContext {
     }
 
     public void clearClientParticles(String reason) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.effectRenderer == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), Object.class, null, "field_71452_i", "effectRenderer") == null) {
             return;
         }
-        mc.effectRenderer.clearEffects(mc.world);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), Object.class, null, "field_71452_i", "effectRenderer")), new String[] {"func_78870_a", "clearEffects"}, new Class<?>[] {net.minecraft.world.World.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)));;
         ThaumcraftParticleBridge.clearParticles(reason);
         vanillaParticleRecoveryFrames = 0;
-        logTerrainDiagnostic("particles:clear", mc.world, "reason=" + reason);
+        logTerrainDiagnostic("particles:clear", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "reason=" + reason);
     }
 
     public void prepareVanillaParticleRenderingState() {
@@ -7968,26 +8849,26 @@ public class PipelineContext {
     }
 
     private void restoreVanillaFixedFunctionTextureState(Minecraft mc) {
-        if (mc != null && mc.entityRenderer != null) {
-            mc.entityRenderer.enableLightmap();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.enableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
         } else {
             TextureBinder.restoreDefaultTextureUnit();
         }
         TextureBinder.restoreDefaultTextureUnit();
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GlStateManager.enableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         bindBlockAtlas();
         TextureBinder.restoreDefaultTextureUnit();
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
     }
 
     private static void restoreShaderlessTerrainClientTextureArrays() {
         int previousClientTexture = GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(previousClientTexture);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(previousClientTexture);
     }
 
     private static double irisCameraShift(double adjusted, double delta, double absoluteAdjusted) {
@@ -8033,21 +8914,21 @@ public class PipelineContext {
         temporalHistoryResetVelocity = 0.0f;
         temporalHistoryResetYaw = 0.0f;
         temporalHistoryResetPitch = 0.0f;
-        if (paused || betterPortalsExternalTarget || mc == null || mc.world == null || !pingPongManager.isInitialized()) {
+        if (paused || betterPortalsExternalTarget || mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || !pingPongManager.isInitialized()) {
             return false;
         }
 
         World world = renderWorld(mc);
         int dimensionId = safeDimensionId(world);
-        Entity viewEntity = mc.getRenderViewEntity();
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         if (viewEntity == null) {
             resetTemporalHistoryTracking(dimensionId);
             temporalHistoryResetReason = "missing-view-entity";
             return true;
         }
 
-        float yaw = interpolateAngle(viewEntity.prevRotationYaw, viewEntity.rotationYaw, currentWorldPartialTicks);
-        float pitch = viewEntity.prevRotationPitch + (viewEntity.rotationPitch - viewEntity.prevRotationPitch) * currentWorldPartialTicks;
+        float yaw = interpolateAngle(com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationYaw(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(viewEntity), currentWorldPartialTicks);
+        float pitch = com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationPitch(viewEntity) + (com.l.ausm.impl.util.MinecraftReflectionCompat.rotationPitch(viewEntity) - com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationPitch(viewEntity)) * currentWorldPartialTicks;
         float velocity = cameraVelocityMagnitude();
         float horizontalVelocity = cameraHorizontalVelocityMagnitude();
         float verticalVelocity = Math.abs(cameraPosition[1] - previousCameraPosition[1]);
@@ -8120,6 +9001,10 @@ public class PipelineContext {
         float y = cameraPosition[1] - previousCameraPosition[1];
         float z = cameraPosition[2] - previousCameraPosition[2];
         return (float) Math.sqrt(x * x + y * y + z * z);
+    }
+
+    private float cameraVerticalDelta() {
+        return cameraPosition[1] - previousCameraPosition[1];
     }
 
     private float cameraHorizontalVelocityMagnitude() {
@@ -8232,6 +9117,9 @@ public class PipelineContext {
         if (isBetterPortalsExternalWorldTarget() || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
             return false;
         }
+        if (hardwareSafeVanillaTerrain) {
+            return false;
+        }
         return !shouldUseNothiriumShadowBridge();
     }
 
@@ -8260,22 +9148,22 @@ public class PipelineContext {
     }
 
     public void ensureVanillaTerrainRenderer() {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World world = BetterPortalsCompat.currentRenderPassWorld();
         ensureVanillaTerrainRenderer(
-                world != null ? world : (mc != null ? mc.world : null),
+                world != null ? world : (mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null),
                 hardwareSafeVanillaTerrain || isPipelineActive
         );
     }
 
     private void pushVanillaTerrainRendererState() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.renderGlobal == null || !(mc.renderGlobal instanceof RenderGlobalAccessor renderGlobal)) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null || !(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor renderGlobal)) {
             vanillaViewFrustumStateStack.push(new Object[]{null, null});
             return;
         }
 
-        vanillaViewFrustumStateStack.push(new Object[]{mc.renderGlobal, renderGlobal.ausm$viewFrustum()});
+        vanillaViewFrustumStateStack.push(new Object[]{com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), renderGlobal.ausm$viewFrustum()});
     }
 
     private void popVanillaTerrainRendererState() {
@@ -8286,12 +9174,12 @@ public class PipelineContext {
         }
         ViewFrustum savedViewFrustum = state[1] instanceof ViewFrustum viewFrustum ? viewFrustum : null;
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (BetterPortalsCompat.isMainViewSwapRecoveryActive()
                 && !BetterPortalsCompat.isRenderingNestedView()
                 && mc != null
-                && mc.world != null) {
-            ensureVanillaTerrainRenderer(mc.world, true);
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null) {
+            ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
             activeVanillaViewFrustumRenderGlobal = null;
             activeVanillaViewFrustumWorld = null;
             activeVanillaViewFrustumRenderDistanceChunks = -1;
@@ -8299,8 +9187,8 @@ public class PipelineContext {
         }
 
         if (savedViewFrustum == null) {
-            if (mc != null && mc.world != null && renderGlobal.ausm$viewFrustum() == null) {
-                ensureVanillaTerrainRenderer(mc.world, true);
+            if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null && renderGlobal.ausm$viewFrustum() == null) {
+                ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
             }
             activeVanillaViewFrustumRenderGlobal = null;
             activeVanillaViewFrustumWorld = null;
@@ -8326,13 +9214,13 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.renderGlobal != renderGlobal) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != renderGlobal) {
             return;
         }
 
-        logTerrainDiagnostic("ensure-render-global-view-frustum", mc.world, "missing-view-frustum=true");
-        ensureVanillaTerrainRenderer(mc.world, true);
+        logTerrainDiagnostic("ensure-render-global-view-frustum", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "missing-view-frustum=true");
+        ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
     }
 
     public void updateShaderlessVanillaViewFrustumForCamera() {
@@ -8340,38 +9228,38 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null
-                || mc.world == null
-                || mc.renderGlobal == null
-                || !(mc.renderGlobal instanceof RenderGlobalAccessor renderGlobal)) {
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null
+                || !(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor renderGlobal)) {
             return;
         }
 
         WorldClient renderPassWorld = BetterPortalsCompat.currentRenderPassWorld();
-        if (renderPassWorld != null && renderPassWorld != mc.world) {
+        if (renderPassWorld != null && renderPassWorld != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) {
             return;
         }
 
         boolean worldChanged = false;
         World renderGlobalWorld = renderGlobal.ausm$world();
-        if (renderGlobalWorld != null && renderGlobalWorld != mc.world) {
-            worldChanged = syncRenderGlobalWorld(mc.renderGlobal, mc.world);
+        if (renderGlobalWorld != null && renderGlobalWorld != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) {
+            worldChanged = syncRenderGlobalWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
         }
-        ensureVanillaTerrainRenderer(mc.world, false);
+        ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), false);
 
         ViewFrustum viewFrustum = renderGlobal.ausm$viewFrustum();
         if (viewFrustum == null) {
-            ensureVanillaTerrainRenderer(mc.world, true);
+            ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
             viewFrustum = renderGlobal.ausm$viewFrustum();
         }
         if (viewFrustum == null) {
             return;
         }
 
-        Entity viewEntity = mc.getRenderViewEntity();
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         updateVanillaViewFrustumChunkPositions(viewFrustum, viewEntity);
-        logCameraFrustumSyncIfChanged(mc.world, viewFrustum, viewEntity, renderPassWorld != null, worldChanged);
+        logCameraFrustumSyncIfChanged(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), viewFrustum, viewEntity, renderPassWorld != null, worldChanged);
     }
 
     private boolean shouldSyncShaderlessVanillaViewFrustumForCamera() {
@@ -8387,8 +9275,8 @@ public class PipelineContext {
             return;
         }
 
-        int chunkX = (int) Math.floor(viewEntity.posX) >> 4;
-        int chunkZ = (int) Math.floor(viewEntity.posZ) >> 4;
+        int chunkX = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity)) >> 4;
+        int chunkZ = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity)) >> 4;
         if (lastCameraFrustumSyncWorld == world
                 && lastCameraFrustumSyncViewFrustum == viewFrustum
                 && lastCameraFrustumSyncChunkX == chunkX
@@ -8420,31 +9308,31 @@ public class PipelineContext {
     }
 
     public void handleBetterPortalsMainViewSwap() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
 
-        logTerrainDiagnostic("bp-main-view-swap:start", mc.world, "");
+        logTerrainDiagnostic("bp-main-view-swap:start", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
         startVanillaParticleRecovery();
         if (!isPipelineActive) {
             BetterPortalsCompat.clearMainViewSwapTransientState();
             BetterPortalsCompat.cancelMainViewSwapRecovery();
             clearScheduledWorldTerrainRefresh();
             recoverShaderlessMainWorldTerrain(mc, "bp-main-view-swap");
-            logInactiveBetterPortalsTerrainSkip("main-view-swap", mc.world);
+            logInactiveBetterPortalsTerrainSkip("main-view-swap", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
             return;
         }
 
-        boolean terrainTransition = beginTerrainTransition(mc.world);
-        logTerrainDiagnostic("bp-main-view-swap:transition", mc.world, "accepted=" + terrainTransition);
+        boolean terrainTransition = beginTerrainTransition(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
+        logTerrainDiagnostic("bp-main-view-swap:transition", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "accepted=" + terrainTransition);
         clearClientParticles("bp-main-view-swap");
         BetterPortalsCompat.clearMainViewSwapTransientState();
         BetterPortalsCompat.beginMainViewSwapHandling();
         try {
-            BetterPortalsCompat.startMainViewSwapRecovery(mc.world);
-            BetterPortalsCompat.logMainViewSwapRecoveryIfNeeded(mc.world);
-            rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "bp-main-view-swap");
+            BetterPortalsCompat.startMainViewSwapRecovery(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
+            BetterPortalsCompat.logMainViewSwapRecoveryIfNeeded(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
+            rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "bp-main-view-swap");
             resetCameraFrustumSyncState();
             scheduleDimensionSwitchTerrainRefresh();
             scheduleBloomTerrainRefresh("bp-main-view-swap");
@@ -8453,16 +9341,16 @@ public class PipelineContext {
         } finally {
             BetterPortalsCompat.endMainViewSwapHandling();
         }
-        logTerrainDiagnostic("bp-main-view-swap:end", mc.world, "accepted=" + terrainTransition);
+        logTerrainDiagnostic("bp-main-view-swap:end", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "accepted=" + terrainTransition);
     }
 
     public void handleWorldDimensionSwitch(int previousDimensionId, int dimensionId) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
 
-        logTerrainDiagnostic("dimension-switch:start", mc.world, "previous=" + previousDimensionId + ", current=" + dimensionId);
+        logTerrainDiagnostic("dimension-switch:start", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "previous=" + previousDimensionId + ", current=" + dimensionId);
         clearClientParticles("dimension-switch");
         startVanillaParticleRecovery();
         BetterPortalsCompat.clearMainViewSwapTransientState();
@@ -8476,16 +9364,16 @@ public class PipelineContext {
             currentWorldPass = 0;
             currentWorldPartialTicks = 0.0F;
             recoverShaderlessMainWorldTerrain(mc, "dimension-switch");
-            logInactiveBetterPortalsTerrainSkip("dimension-switch", mc.world);
+            logInactiveBetterPortalsTerrainSkip("dimension-switch", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
             return;
         }
 
-        boolean terrainTransition = beginTerrainTransition(mc.world);
+        boolean terrainTransition = beginTerrainTransition(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
         if (!terrainTransition) {
             clearPendingShaderChunkRefreshes();
             clearPendingBetterPortalsPortalBlockRefresh();
             scheduleWorldLoadLightRecalculation();
-            logTerrainDiagnostic("dimension-switch:debounced", mc.world, "previous=" + previousDimensionId + ", current=" + dimensionId);
+            logTerrainDiagnostic("dimension-switch:debounced", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "previous=" + previousDimensionId + ", current=" + dimensionId);
             return;
         }
 
@@ -8493,29 +9381,29 @@ public class PipelineContext {
         clearPendingBetterPortalsPortalBlockRefresh();
         boolean betterPortalsRecovery = BetterPortalsCompat.isMainViewSwapRecoveryActive();
         if (betterPortalsRecovery) {
-            rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "dimension-switch-bp-recovery");
+            rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "dimension-switch-bp-recovery");
             resetCameraFrustumSyncState();
             scheduleDimensionSwitchTerrainRefresh();
             scheduleBloomTerrainRefresh("dimension-switch-bp-recovery");
             scheduleInactiveVanillaRecoveryFrame();
             scheduleWorldLoadLightRecalculation();
-            logTerrainDiagnostic("dimension-switch:bp-recovery-deferred", mc.world,
+            logTerrainDiagnostic("dimension-switch:bp-recovery-deferred", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
                     "previous=" + previousDimensionId + ", current=" + dimensionId);
             return;
         }
 
         clearShaderlessBloomMetadata();
-        resetPipelineState(mc.getFramebuffer());
+        resetPipelineState(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc));
         currentWorldPass = 0;
         currentWorldPartialTicks = 0.0F;
 
-        rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "dimension-switch");
+        rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "dimension-switch");
         resetCameraFrustumSyncState();
         scheduleDimensionSwitchTerrainRefresh();
         scheduleBloomTerrainRefresh("dimension switch");
         scheduleInactiveVanillaRecoveryFrame();
         scheduleWorldLoadLightRecalculation();
-        logTerrainDiagnostic("dimension-switch:scheduled", mc.world, "previous=" + previousDimensionId + ", current=" + dimensionId
+        logTerrainDiagnostic("dimension-switch:scheduled", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "previous=" + previousDimensionId + ", current=" + dimensionId
                 + ", bpRecoveryWasActive=" + betterPortalsRecovery);
     }
 
@@ -8528,13 +9416,13 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
 
         String reason = dimensionChanged ? "client-teleport-dimension" : "client-teleport";
-        logTerrainDiagnostic(reason + ":start", mc.world,
+        logTerrainDiagnostic(reason + ":start", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
                 "previous=" + previousDimensionId + ", current=" + currentDimensionId
                         + ", distanceSq=" + distanceSq + ", horizontalDistanceSq=" + horizontalDistanceSq);
         if (dimensionChanged) {
@@ -8555,7 +9443,7 @@ public class PipelineContext {
             } else {
                 scheduleInactiveVanillaRecoveryFrame();
             }
-            logTerrainDiagnostic(reason + ":scheduled", mc.world, "preservedClientChunkQueue=true");
+            logTerrainDiagnostic(reason + ":scheduled", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "preservedClientChunkQueue=true");
             return;
         }
 
@@ -8572,22 +9460,22 @@ public class PipelineContext {
         if (!isPipelineActive) {
             recoverShaderlessMainWorldTerrain(mc, reason);
             scheduleWorldLoadLightRecalculation();
-            logTerrainDiagnostic(reason + ":shaderless", mc.world, "");
+            logTerrainDiagnostic(reason + ":shaderless", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
             return;
         }
 
-        resetPipelineState(mc.getFramebuffer());
-        rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, reason);
+        resetPipelineState(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc));
+        rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), reason);
         resetCameraFrustumSyncState();
         scheduleFullWorldTerrainRefresh();
         scheduleBloomTerrainRefresh(reason);
         scheduleInactiveVanillaRecoveryFrame();
         scheduleWorldLoadLightRecalculation();
-        logTerrainDiagnostic(reason + ":scheduled", mc.world, "");
+        logTerrainDiagnostic(reason + ":scheduled", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
     }
 
     private void recoverShaderlessMainWorldTerrain(Minecraft mc, String reason) {
-        if (mc == null || mc.world == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
         if (shouldLeaveShaderlessVanillaTerrainUntouched()) {
@@ -8604,35 +9492,35 @@ public class PipelineContext {
         boolean marked = hardReset ? NothiriumBypass.recreateRenderer() : NothiriumBypass.markAllChanged();
         boolean setup = hardReset && (marked || ready) && NothiriumBypass.setupForIsolatedShaderlessMainPass();
 
-        if (mc.renderGlobal != null) {
-            adoptMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, reason);
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null) {
+            adoptMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), reason);
         }
 
         if (marked || ready || setup) {
             scheduleInactiveVanillaRecoveryFrame();
         }
         scheduleWorldLoadLightRecalculation();
-        logShaderlessNothiriumLoadRendererReload(mc.world, marked, reason);
-        logTerrainDiagnostic(reason + ":shaderless-recover", mc.world,
+        logShaderlessNothiriumLoadRendererReload(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), marked, reason);
+        logTerrainDiagnostic(reason + ":shaderless-recover", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
                 "ready=" + ready + ", marked=" + marked + ", setup=" + setup + ", hardReset=" + hardReset);
     }
 
     private void recoverShaderlessVanillaOwnerTerrain(Minecraft mc, String reason) {
-        if (mc == null || mc.world == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
 
         boolean transitionReset = shouldHardResetShaderlessNothirium(reason);
-        if (transitionReset && mc.renderGlobal != null) {
-            rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, reason + "-vanilla-owner");
+        if (transitionReset && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null) {
+            rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), reason + "-vanilla-owner");
             resetCameraFrustumSyncState();
             scheduleInactiveVanillaRecoveryFrame();
-            logTerrainDiagnostic(reason + ":shaderless-vanilla-owner-rebuild", mc.world, "");
-        } else if (mc.renderGlobal != null) {
-            adoptMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, reason + "-vanilla-owner");
-            logTerrainDiagnostic(reason + ":shaderless-vanilla-owner-adopt", mc.world, "");
+            logTerrainDiagnostic(reason + ":shaderless-vanilla-owner-rebuild", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
+        } else if (com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null) {
+            adoptMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), reason + "-vanilla-owner");
+            logTerrainDiagnostic(reason + ":shaderless-vanilla-owner-adopt", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
         } else {
-            logTerrainDiagnostic(reason + ":shaderless-vanilla-owner-missing-render-global", mc.world, "");
+            logTerrainDiagnostic(reason + ":shaderless-vanilla-owner-missing-render-global", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
         }
 
         scheduleWorldLoadLightRecalculation();
@@ -8683,7 +9571,7 @@ public class PipelineContext {
         }
 
         pendingBetterPortalsPortalBlockWorld = world;
-        pendingBetterPortalsPortalBlockPos = pos.toImmutable();
+        pendingBetterPortalsPortalBlockPos = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos);
         pendingBetterPortalsPortalBlockOldState = oldState;
         pendingBetterPortalsPortalBlockNewState = newState;
         pendingBetterPortalsPortalBlockChangeCount++;
@@ -8743,8 +9631,8 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.renderGlobal == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
 
@@ -8760,8 +9648,8 @@ public class PipelineContext {
                     Math.max(1, changeCount),
                     safeDimensionId(world),
                     pos,
-                    oldState != null ? oldState.getBlock().getRegistryName() : "null",
-                    newState != null ? newState.getBlock().getRegistryName() : "null");
+                    oldState != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(oldState)) : "null",
+                    newState != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(newState)) : "null");
         } catch (RuntimeException e) {
             MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to refresh portal terrain after block change", e);
         } finally {
@@ -8784,7 +9672,7 @@ public class PipelineContext {
 
     private void rememberBetterPortalsPortalBlockRefresh(World world, BlockPos pos) {
         lastBetterPortalsPortalBlockRefreshWorld = world;
-        lastBetterPortalsPortalBlockRefreshPos = pos != null ? pos.toImmutable() : null;
+        lastBetterPortalsPortalBlockRefreshPos = pos != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos) : null;
         lastBetterPortalsPortalBlockRefreshDimension = safeDimensionId(world);
         lastBetterPortalsPortalBlockRefreshMillis = System.currentTimeMillis();
     }
@@ -8795,13 +9683,13 @@ public class PipelineContext {
         }
 
         int radius = 8;
-        world.markBlockRangeForRenderUpdate(
-                pos.getX() - radius,
-                Math.max(0, pos.getY() - radius),
-                pos.getZ() - radius,
-                pos.getX() + radius,
-                Math.min(255, pos.getY() + radius),
-                pos.getZ() + radius
+        com.l.ausm.impl.util.MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(world,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) - radius,
+                Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) - radius),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) - radius,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + radius,
+                Math.min(255, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + radius),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + radius
         );
     }
 
@@ -8812,15 +9700,15 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || world == null || mc.renderGlobal == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || world == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
 
         logSteadyVanillaTerrainDiagnostic("ensure-vanilla:start", world, "force=" + force + ", nothiriumBypass=" + bypass);
-        RenderGlobal currentRenderGlobal = mc.renderGlobal;
+        RenderGlobal currentRenderGlobal = com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc);
         RenderGlobalAccessor renderGlobal = (RenderGlobalAccessor) currentRenderGlobal;
-        int requestedRenderDistanceChunks = mc.gameSettings.renderDistanceChunks;
+        int requestedRenderDistanceChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc);
         Integer activeRenderDistanceChunks = activeVanillaViewFrustumRenderDistanceChunks > 0
                 ? activeVanillaViewFrustumRenderDistanceChunks
                 : null;
@@ -8830,7 +9718,7 @@ public class PipelineContext {
                 requestedRenderDistanceChunks
         );
         if (canReuseActiveVanillaTerrainRenderer(renderGlobal, currentRenderGlobal, world, expectedRenderDistanceChunks)) {
-            updateVanillaViewFrustumChunkPositions(renderGlobal.ausm$viewFrustum(), mc.getRenderViewEntity());
+            updateVanillaViewFrustumChunkPositions(renderGlobal.ausm$viewFrustum(), com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc));
             logSteadyVanillaTerrainDiagnostic("ensure-vanilla:reuse-active", world,
                     "renderDistance=" + expectedRenderDistanceChunks + ", force=" + force);
             return;
@@ -8840,7 +9728,7 @@ public class PipelineContext {
         ViewFrustum activeViewFrustum = renderGlobal.ausm$viewFrustum();
         pruneBetterPortalsVanillaViewFrustumCache(currentRenderGlobal, world);
 
-        boolean useVbo = OpenGlHelper.useVbo();
+        boolean useVbo = com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean(net.minecraft.client.renderer.OpenGlHelper.class, new String[] {"func_176075_f", "useVbo"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, true);
         if (renderGlobal.ausm$renderDispatcher() == null) {
             logVanillaTerrainRendererCreation(world, force, "missing-dispatcher");
             renderGlobal.ausm$setRenderDispatcher(new ChunkRenderDispatcher());
@@ -8877,7 +9765,7 @@ public class PipelineContext {
             removedViewFrustums.add(viewFrustum);
             clearQueuedUpdatesForViewFrustums(renderGlobal, removedViewFrustums);
             vanillaViewFrustumChunkPositionKeys.remove(viewFrustum);
-            viewFrustum.deleteGlResources();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(viewFrustum);
             if (viewFrustum == activeViewFrustum) {
                 activeViewFrustum = null;
             }
@@ -8905,7 +9793,7 @@ public class PipelineContext {
                 viewFrustum = new ViewFrustum(
                         world,
                         renderDistanceChunks,
-                        mc.renderGlobal,
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc),
                         renderChunkFactory
                 );
             }
@@ -8916,7 +9804,7 @@ public class PipelineContext {
             rendererViewFrustumDistances.put(world, renderDistanceChunks);
         }
 
-        updateVanillaViewFrustumChunkPositions(viewFrustum, mc.getRenderViewEntity());
+        updateVanillaViewFrustumChunkPositions(viewFrustum, com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc));
         if (activeViewFrustum != viewFrustum) {
             renderGlobal.ausm$setViewFrustum(viewFrustum);
             rendererStateChanged = true;
@@ -8960,13 +9848,13 @@ public class PipelineContext {
     }
 
     private boolean shouldUseBetterPortalsPortalRenderDistance(World world) {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         return BetterPortalsCompat.isInstalled()
                 && BetterPortalsCompat.isRenderingRenderPass()
                 && mc != null
-                && mc.world != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
                 && world != null
-                && world != mc.world;
+                && world != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
     }
 
     private boolean canReuseActiveVanillaTerrainRenderer(RenderGlobalAccessor renderGlobal,
@@ -8993,21 +9881,21 @@ public class PipelineContext {
     }
 
     private boolean shouldUseStableMainWorldRenderDistance(World world) {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         WorldClient renderPassWorld = BetterPortalsCompat.currentRenderPassWorld();
         return BetterPortalsCompat.isInstalled()
                 && !isPipelineActive
                 && BetterPortalsCompat.isRenderingRenderPass()
                 && !BetterPortalsCompat.isMainViewSwapRecoveryActive()
                 && mc != null
-                && mc.world != null
-                && renderPassWorld == mc.world
-                && world == mc.world;
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
+                && renderPassWorld == com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)
+                && world == com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
     }
 
     private void rememberStableMainWorldVanillaRenderDistance(World world, int renderDistanceChunks) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || world != mc.world || renderDistanceChunks <= 0) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || world != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) || renderDistanceChunks <= 0) {
             return;
         }
         if (BetterPortalsCompat.isRenderingRenderPass() || BetterPortalsCompat.isRenderingNestedView()) {
@@ -9022,13 +9910,13 @@ public class PipelineContext {
     }
 
     public void handleRenderGlobalLoadRenderersComplete(RenderGlobal renderGlobal) {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         String caller = externalRenderCaller();
         boolean manualChunkReload = isManualChunkReloadCaller(caller);
         if (renderGlobal == null
                 || mc == null
-                || mc.world == null
-                || mc.renderGlobal != renderGlobal
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != renderGlobal
                 || !isStableMainWorldLoadRenderersCaller(caller)
                 || isPipelineActive
                 || BetterPortalsCompat.isRenderingRenderPass()
@@ -9038,32 +9926,34 @@ public class PipelineContext {
         }
 
         World renderGlobalWorld = renderGlobal instanceof RenderGlobalAccessor accessor ? accessor.ausm$world() : null;
-        if (renderGlobalWorld != null && renderGlobalWorld != mc.world) {
+        if (renderGlobalWorld != null && renderGlobalWorld != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) {
             return;
         }
 
         if (shouldLeaveShaderlessVanillaTerrainUntouched()) {
             if (manualChunkReload) {
-                rebuildMainWorldVanillaViewFrustum(renderGlobal, mc.world, "manual-reload-vanilla-owner");
+                rebuildMainWorldVanillaViewFrustum(renderGlobal, com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "manual-reload-vanilla-owner");
             } else {
-                adoptMainWorldVanillaViewFrustum(renderGlobal, mc.world, "main-load-vanilla-owner");
+                adoptMainWorldVanillaViewFrustum(renderGlobal, com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "main-load-vanilla-owner");
             }
+            clearShaderlessBloomMetadata();
             scheduleWorldLoadLightRecalculation();
             return;
         }
 
-        adoptMainWorldVanillaViewFrustum(renderGlobal, mc.world, manualChunkReload ? "manual-reload" : "main-load");
-        markShaderlessMainWorldNothiriumReload(mc.world, manualChunkReload ? "manual-load-renderers" : "main-load-renderers");
+        adoptMainWorldVanillaViewFrustum(renderGlobal, com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), manualChunkReload ? "manual-reload" : "main-load");
+        markShaderlessMainWorldNothiriumReload(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), manualChunkReload ? "manual-load-renderers" : "main-load-renderers");
+        clearShaderlessBloomMetadata();
         scheduleInactiveVanillaRecoveryFrame();
     }
 
     private void handleShaderlessMainWorldNothiriumReload(RenderGlobal renderGlobal) {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         String caller = externalRenderCaller();
         if (renderGlobal == null
                 || mc == null
-                || mc.world == null
-                || mc.renderGlobal != renderGlobal
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != renderGlobal
                 || !isManualChunkReloadCaller(caller)
                 || isPipelineActive
                 || NothiriumBypass.shouldBypass()
@@ -9074,11 +9964,11 @@ public class PipelineContext {
         }
 
         World renderGlobalWorld = renderGlobal instanceof RenderGlobalAccessor accessor ? accessor.ausm$world() : null;
-        if (renderGlobalWorld != null && renderGlobalWorld != mc.world) {
+        if (renderGlobalWorld != null && renderGlobalWorld != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) {
             return;
         }
 
-        markShaderlessMainWorldNothiriumReload(mc.world, "manual-load-renderers");
+        markShaderlessMainWorldNothiriumReload(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "manual-load-renderers");
     }
 
     private void markShaderlessMainWorldNothiriumReload(World world, String reason) {
@@ -9149,8 +10039,8 @@ public class PipelineContext {
         }
 
         pruneBetterPortalsVanillaViewFrustumCache(renderGlobal, world);
-        Minecraft mc = Minecraft.getMinecraft();
-        int renderDistanceChunks = mc != null && mc.gameSettings != null ? mc.gameSettings.renderDistanceChunks : -1;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        int renderDistanceChunks = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc) : -1;
         ViewFrustum viewFrustum = accessor.ausm$viewFrustum();
         if (viewFrustum == null) {
             ensureVanillaTerrainRenderer(world, true);
@@ -9179,7 +10069,7 @@ public class PipelineContext {
             removedViewFrustums.add(previous);
             clearQueuedUpdatesForViewFrustums(accessor, removedViewFrustums);
             vanillaViewFrustumChunkPositionKeys.remove(previous);
-            previous.deleteGlResources();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(previous);
         }
 
         vanillaViewFrustumRenderDistances
@@ -9191,7 +10081,7 @@ public class PipelineContext {
         activeVanillaViewFrustumWorld = world;
         activeVanillaViewFrustumRenderDistanceChunks = renderDistanceChunks;
         if (mc != null) {
-            updateVanillaViewFrustumChunkPositions(viewFrustum, mc.getRenderViewEntity());
+            updateVanillaViewFrustumChunkPositions(viewFrustum, com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc));
         }
         accessor.ausm$setDisplayListEntitiesDirty(true);
         logTerrainDiagnostic(stagePrefix + ":adopt-view-frustum", world,
@@ -9206,13 +10096,13 @@ public class PipelineContext {
         }
 
         pruneBetterPortalsVanillaViewFrustumCache(renderGlobal, world);
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.gameSettings == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) == null) {
             return;
         }
 
         boolean worldChanged = syncRenderGlobalWorld(renderGlobal, world);
-        boolean useVbo = OpenGlHelper.useVbo();
+        boolean useVbo = com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean(net.minecraft.client.renderer.OpenGlHelper.class, new String[] {"func_176075_f", "useVbo"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, true);
         if (accessor.ausm$renderDispatcher() == null) {
             accessor.ausm$setRenderDispatcher(new ChunkRenderDispatcher());
         }
@@ -9225,7 +10115,7 @@ public class PipelineContext {
             accessor.ausm$setRenderContainer(useVbo ? new VboRenderList() : new RenderList());
         }
 
-        int renderDistanceChunks = mc.gameSettings.renderDistanceChunks;
+        int renderDistanceChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc);
         ViewFrustum previousActive = accessor.ausm$viewFrustum();
         Set<ViewFrustum> removedViewFrustums = new HashSet<>();
         if (previousActive != null) {
@@ -9262,14 +10152,14 @@ public class PipelineContext {
         activeVanillaViewFrustumRenderDistanceChunks = renderDistanceChunks;
 
         int scheduledChunks = scheduleAllFreshViewFrustumChunks(accessor, freshViewFrustum, world);
-        forceUpdateVanillaViewFrustumChunkPositions(freshViewFrustum, mc.getRenderViewEntity(), world, stagePrefix);
+        forceUpdateVanillaViewFrustumChunkPositions(freshViewFrustum, com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc), world, stagePrefix);
         accessor.ausm$setDisplayListEntitiesDirty(true);
 
         clearQueuedUpdatesForViewFrustums(accessor, removedViewFrustums);
         for (ViewFrustum removedViewFrustum : removedViewFrustums) {
             if (removedViewFrustum != null && removedViewFrustum != freshViewFrustum) {
                 vanillaViewFrustumChunkPositionKeys.remove(removedViewFrustum);
-                removedViewFrustum.deleteGlResources();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(removedViewFrustum);
             }
         }
 
@@ -9282,7 +10172,8 @@ public class PipelineContext {
     }
 
     private int scheduleAllFreshViewFrustumChunks(RenderGlobalAccessor renderGlobal, ViewFrustum viewFrustum, World world) {
-        if (renderGlobal == null || viewFrustum == null || viewFrustum.renderChunks == null) {
+        RenderChunk[] renderChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.viewFrustumRenderChunks(viewFrustum);
+        if (renderGlobal == null || renderChunks == null) {
             return 0;
         }
 
@@ -9293,12 +10184,12 @@ public class PipelineContext {
 
         chunksToUpdate.clear();
         int scheduled = 0;
-        for (RenderChunk renderChunk : viewFrustum.renderChunks) {
+        for (RenderChunk renderChunk : renderChunks) {
             if (renderChunk == null) {
                 continue;
             }
             assignRenderChunkWorld(renderChunk, world);
-            renderChunk.setNeedsUpdate(true);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((renderChunk), new String[] {"func_178575_a", "setNeedsUpdate"}, new Class<?>[] {boolean.class}, (true));;
             chunksToUpdate.add(renderChunk);
             scheduled++;
         }
@@ -9317,10 +10208,11 @@ public class PipelineContext {
 
         Set<RenderChunk> removedChunks = new HashSet<>();
         for (ViewFrustum viewFrustum : viewFrustums) {
-            if (viewFrustum == null || viewFrustum.renderChunks == null) {
+            RenderChunk[] renderChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.viewFrustumRenderChunks(viewFrustum);
+            if (renderChunks == null) {
                 continue;
             }
-            for (RenderChunk renderChunk : viewFrustum.renderChunks) {
+            for (RenderChunk renderChunk : renderChunks) {
                 if (renderChunk != null) {
                     removedChunks.add(renderChunk);
                 }
@@ -9337,7 +10229,8 @@ public class PipelineContext {
         }
 
         try {
-            viewFrustum.updateChunkPositions(viewEntity.posX, viewEntity.posZ);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((viewFrustum), new String[] {"func_178163_a", "updateChunkPositions"},
+                new Class<?>[] {double.class, double.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity)), (com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity)));;
             rememberVanillaViewFrustumChunkPosition(viewFrustum, viewEntity);
         } catch (NullPointerException e) {
             if (!BetterPortalsCompat.isInstalled()) {
@@ -9381,14 +10274,14 @@ public class PipelineContext {
         }
         renderGlobalLoadRendererLogs++;
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World renderGlobalWorld = renderGlobal instanceof RenderGlobalAccessor accessor ? accessor.ausm$world() : null;
         MainMod.LOGGER.info(
                 "[AUSMRenderGlobal] loadRenderers call={} frame={} renderGlobalWorld={} clientWorld={} active={} bypass={} nested={} renderPass={} recovery={} pendingAttempts={} pendingDelay={} pendingDim={} pendingReset={} pendingFullReset={} pendingVanillaReload={} bpState={} caller={}",
                 renderGlobalLoadRendererLogs,
                 pipelineFrameId,
                 safeDimensionId(renderGlobalWorld),
-                mc != null ? safeDimensionId(mc.world) : Integer.MIN_VALUE,
+                mc != null ? safeDimensionId(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) : Integer.MIN_VALUE,
                 isPipelineActive,
                 NothiriumBypass.shouldBypass(),
                 BetterPortalsCompat.isRenderingNestedView(),
@@ -9415,14 +10308,14 @@ public class PipelineContext {
         }
         vanillaTerrainRendererCreationLogs++;
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         MainMod.LOGGER.info(
                 "[AUSMRenderGlobal] created vanilla ChunkRenderDispatcher call={} reason={} force={} world={} clientWorld={} active={} bypass={} nested={} renderPass={} recovery={} caller={}",
                 vanillaTerrainRendererCreationLogs,
                 reason,
                 force,
                 safeDimensionId(world),
-                mc != null ? safeDimensionId(mc.world) : Integer.MIN_VALUE,
+                mc != null ? safeDimensionId(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) : Integer.MIN_VALUE,
                 isPipelineActive,
                 NothiriumBypass.shouldBypass(),
                 BetterPortalsCompat.isRenderingNestedView(),
@@ -9437,7 +10330,7 @@ public class PipelineContext {
     }
 
     private static String blockName(IBlockState state) {
-        return state != null && state.getBlock() != null ? String.valueOf(state.getBlock().getRegistryName()) : "null";
+        return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != null ? String.valueOf(com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state))) : "null";
     }
 
     private String externalRenderCaller() {
@@ -9473,7 +10366,8 @@ public class PipelineContext {
         }
 
         try {
-            viewFrustum.updateChunkPositions(viewEntity.posX, viewEntity.posZ);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((viewFrustum), new String[] {"func_178163_a", "updateChunkPositions"},
+                new Class<?>[] {double.class, double.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity)), (com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity)));;
             rememberVanillaViewFrustumChunkPosition(viewFrustum, viewEntity);
         } catch (NullPointerException e) {
             if (!BetterPortalsCompat.isInstalled()) {
@@ -9502,8 +10396,8 @@ public class PipelineContext {
     }
 
     private long vanillaViewFrustumChunkPositionKey(Entity viewEntity) {
-        int chunkX = (int) Math.floor(viewEntity.posX) >> 4;
-        int chunkZ = (int) Math.floor(viewEntity.posZ) >> 4;
+        int chunkX = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity)) >> 4;
+        int chunkZ = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity)) >> 4;
         return ((long) chunkX << 32) ^ (chunkZ & 0xFFFFFFFFL);
     }
 
@@ -9532,7 +10426,7 @@ public class PipelineContext {
         for (ViewFrustum viewFrustum : uniqueViewFrustums) {
             if (viewFrustum != null) {
                 vanillaViewFrustumChunkPositionKeys.remove(viewFrustum);
-                viewFrustum.deleteGlResources();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(viewFrustum);
             }
         }
         vanillaViewFrustums.clear();
@@ -9581,7 +10475,7 @@ public class PipelineContext {
                     clearQueuedUpdatesForViewFrustums(accessor, removedViewFrustums);
                 }
                 vanillaViewFrustumChunkPositionKeys.remove(removed);
-                removed.deleteGlResources();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(removed);
             }
         }
         for (Map<World, Integer> rendererViewFrustumDistances : vanillaViewFrustumRenderDistances.values()) {
@@ -9602,8 +10496,8 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        World mainWorld = mc != null ? mc.world : null;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World mainWorld = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         if (countCachedVanillaViewFrustums() <= 2) {
             return;
         }
@@ -9673,7 +10567,7 @@ public class PipelineContext {
         }
         for (ViewFrustum removedViewFrustum : removedViewFrustums) {
             vanillaViewFrustumChunkPositionKeys.remove(removedViewFrustum);
-            removedViewFrustum.deleteGlResources();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(removedViewFrustum);
         }
 
         if (!removedViewFrustums.isEmpty()) {
@@ -9701,20 +10595,20 @@ public class PipelineContext {
     }
 
     private void refreshBetterPortalsMainViewTerrain(Minecraft mc, String reason) {
-        if (mc == null || mc.world == null || mc.renderGlobal == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
         if (!isPipelineActive) {
-            logInactiveBetterPortalsTerrainSkip("refresh-main-view-terrain", mc.world);
+            logInactiveBetterPortalsTerrainSkip("refresh-main-view-terrain", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
             return;
         }
 
         try {
-            logTerrainDiagnostic("bp-refresh-main-view:start", mc.world, "");
-            boolean worldChanged = syncRenderGlobalWorld(mc.renderGlobal, mc.world);
-            adoptMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, reason);
+            logTerrainDiagnostic("bp-refresh-main-view:start", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
+            boolean worldChanged = syncRenderGlobalWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
+            adoptMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), reason);
             resetCameraFrustumSyncState();
-            logTerrainDiagnostic("bp-refresh-main-view:end", mc.world, "worldChanged=" + worldChanged);
+            logTerrainDiagnostic("bp-refresh-main-view:end", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "worldChanged=" + worldChanged);
         } catch (RuntimeException e) {
             MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to refresh terrain after main view swap", e);
         }
@@ -9725,11 +10619,11 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null
                 || world == null
-                || mc.renderGlobal == null
-                || !(mc.renderGlobal instanceof RenderGlobalAccessor renderGlobal)) {
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null
+                || !(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor renderGlobal)) {
             return;
         }
 
@@ -9740,17 +10634,17 @@ public class PipelineContext {
         }
 
         vanillaViewFrustums
-                .computeIfAbsent(mc.renderGlobal, ignored -> new IdentityHashMap<>())
+                .computeIfAbsent(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), ignored -> new IdentityHashMap<>())
                 .put(world, viewFrustum);
         vanillaViewFrustumRenderDistances
-                .computeIfAbsent(mc.renderGlobal, ignored -> new IdentityHashMap<>())
-                .put(world, mc.gameSettings.renderDistanceChunks);
-        rememberStableMainWorldVanillaRenderDistance(world, mc.gameSettings.renderDistanceChunks);
-        activeVanillaViewFrustumRenderGlobal = mc.renderGlobal;
+                .computeIfAbsent(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), ignored -> new IdentityHashMap<>())
+                .put(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc));
+        rememberStableMainWorldVanillaRenderDistance(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc));
+        activeVanillaViewFrustumRenderGlobal = com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc);
         activeVanillaViewFrustumWorld = world;
-        activeVanillaViewFrustumRenderDistanceChunks = mc.gameSettings.renderDistanceChunks;
+        activeVanillaViewFrustumRenderDistanceChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc);
         logTerrainDiagnostic("adopt-view-frustum", world, "viewFrustum=" + viewFrustumId(viewFrustum)
-                + ", renderDistance=" + mc.gameSettings.renderDistanceChunks);
+                + ", renderDistance=" + com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc));
     }
 
     private void logInactiveBetterPortalsTerrainSkip(String reason, World world) {
@@ -9788,14 +10682,30 @@ public class PipelineContext {
         if (!hasActiveShadowProgram()) {
             return;
         }
+        if (hardwareSafeVanillaTerrain) {
+            lastShadowFrameId = pipelineFrameId;
+            shadowMapPopulated = false;
+            shadowMapUsable = false;
+            shadowMapSparseForSampling = true;
+            shadowMapCoverageStableFrames = 0;
+            if (shadowMapSuppressedLogs < 16) {
+                shadowMapSuppressedLogs++;
+                MainMod.LOGGER.info(
+                        "[ShadowHealth] Skipping shadow terrain setup while hardware-safe terrain fallback is active. reason={} frame={}",
+                        hardwareSafeVanillaTerrainReason,
+                        pipelineFrameId
+                );
+            }
+            return;
+        }
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null) {
             return;
         }
-        Entity viewEntity = mc.getRenderViewEntity();
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         World world = renderWorld(mc);
-        if (world == null || viewEntity == null || mc.renderGlobal == null) {
+        if (world == null || viewEntity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
         if (shouldSkipStationaryShadowMap(world, viewEntity, partialTicks)) {
@@ -9810,7 +10720,7 @@ public class PipelineContext {
         GL11.glGetInteger(GL11.GL_VIEWPORT, viewportBuffer);
         int previousFramebuffer = GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
         boolean previousCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
-        boolean previousRenderChunksMany = mc.renderChunksMany;
+        boolean previousRenderChunksMany = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((mc), false, "field_175612_E", "renderChunksMany");
 
         GL11.glMatrixMode(GL11.GL_PROJECTION);
         GL11.glPushMatrix();
@@ -9823,16 +10733,17 @@ public class PipelineContext {
             // Iris disables chunk occlusion culling while building the shadow terrain list.
             // The 1.12 equivalent is renderChunksMany; leaving it enabled lets the normal
             // camera visibility graph leak into the light-space pass.
-            mc.renderChunksMany = false;
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setRenderChunksMany(mc, false);
             boolean useNothiriumShadowBridge = shouldUseNothiriumShadowBridge();
             if (!useNothiriumShadowBridge) {
                 ensureVanillaTerrainRenderer();
-                mc.renderGlobal.setupTerrain(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.setupTerrain(
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc),
                         viewEntity,
                         partialTicks,
                         shadowCamera,
                         nextShadowFrameCount(),
-                        mc.player != null && mc.player.isSpectator()
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc))
                 );
             }
 
@@ -9851,7 +10762,7 @@ public class PipelineContext {
                 GL11.glPolygonOffset(shadowPolygonOffsetFactor, shadowPolygonOffsetUnits);
             }
             TextureBinder.restoreDefaultTextureUnit();
-            mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
 
             renderingShadowMap = true;
             int solidCount = -1;
@@ -9885,32 +10796,33 @@ public class PipelineContext {
             }
             injectMappedTileEntityVoxels(mc);
             applyShaderImageTextureBarrier();
-            if (solidCount > 0 || cutoutMippedCount > 0 || cutoutCount > 0 || translucentCount > 0 || blockEntityCount > 0) {
-                shadowMapPopulated = true;
-            }
             shadowFramebuffer.generateShadowColorMipmaps();
-            logShadowHealth(solidCount, cutoutMippedCount, cutoutCount, translucentCount);
+            updateShadowMapUsability(solidCount, cutoutMippedCount, cutoutCount, translucentCount, blockEntityCount);
             runComputePrograms(shadowComputePrograms, RenderPass.SHADOW);
             runFullscreenPasses(ProgramArrayId.SHADOWCOMP);
-            rememberShadowMapRender(world, viewEntity, partialTicks);
+            if (shadowMapUsable) {
+                rememberShadowMapRender(world, viewEntity, partialTicks);
+            } else {
+                resetShadowRenderCache();
+            }
         } finally {
-            mc.renderChunksMany = previousRenderChunksMany;
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setRenderChunksMany(mc, previousRenderChunksMany);
             renderingShadowMap = false;
             activePass = null;
             activeShaderKey = null;
             activePhase = WorldRenderingPhase.NONE;
             overridePhase = null;
             passStack.clear();
-            OpenGlHelper.glUseProgram(0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
             GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
             GL11.glColorMask(true, true, true, true);
             if (previousCull) {
-                GlStateManager.enableCull();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
             } else {
-                GlStateManager.disableCull();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
             }
-            GlStateManager.enableAlpha();
-            GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
             GL11.glDepthFunc(GL11.GL_LEQUAL);
 
             GL11.glMatrixMode(GL11.GL_MODELVIEW);
@@ -9919,7 +10831,7 @@ public class PipelineContext {
             GL11.glPopMatrix();
             GL11.glMatrixMode(GL11.GL_MODELVIEW);
 
-            OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, previousFramebuffer);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), previousFramebuffer);
             viewportBuffer.position(0);
             GL11.glViewport(viewportBuffer.get(0), viewportBuffer.get(1), viewportBuffer.get(2), viewportBuffer.get(3));
             TextureBinder.restoreDefaultTextureUnit();
@@ -9934,13 +10846,18 @@ public class PipelineContext {
             return false;
         }
         int dimensionId = safeDimensionId(world);
-        long worldTime = world.getTotalWorldTime();
+        Object time = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
+                world,
+                new String[] {"func_82737_E", "getTotalWorldTime"},
+                new Class<?>[0]
+        );
+        long worldTime = time instanceof Number ? ((Number) time).longValue() : 0L;
         if (dimensionId != lastShadowRenderDimensionId || worldTime != lastShadowRenderWorldTime) {
             return false;
         }
-        double x = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
-        double y = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
-        double z = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
         double dx = x - lastShadowRenderX;
         double dy = y - lastShadowRenderY;
         double dz = z - lastShadowRenderZ;
@@ -9949,10 +10866,15 @@ public class PipelineContext {
 
     private void rememberShadowMapRender(World world, Entity viewEntity, float partialTicks) {
         lastShadowRenderDimensionId = safeDimensionId(world);
-        lastShadowRenderWorldTime = world.getTotalWorldTime();
-        lastShadowRenderX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
-        lastShadowRenderY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
-        lastShadowRenderZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        Object time = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
+                world,
+                new String[] {"func_82737_E", "getTotalWorldTime"},
+                new Class<?>[0]
+        );
+        lastShadowRenderWorldTime = time instanceof Number ? ((Number) time).longValue() : 0L;
+        lastShadowRenderX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        lastShadowRenderY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        lastShadowRenderZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
     }
 
     private void resetShadowRenderCache() {
@@ -9961,6 +10883,10 @@ public class PipelineContext {
         lastShadowRenderX = Double.NaN;
         lastShadowRenderY = Double.NaN;
         lastShadowRenderZ = Double.NaN;
+    }
+
+    private int positiveShadowCount(int count) {
+        return Math.max(0, count);
     }
 
     private void injectMappedTileEntityVoxels(Minecraft mc) {
@@ -9995,11 +10921,11 @@ public class PipelineContext {
                 cpuLightTileEntityScanCursor = 0;
             }
             TileEntity tileEntity = loadedTileEntities.get(cpuLightTileEntityScanCursor++);
-            if (tileEntity == null || tileEntity.isInvalid()) {
+            if (tileEntity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((tileEntity), new String[] {"func_145837_r", "isInvalid"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
                 continue;
             }
 
-            BlockPos pos = tileEntity.getPos();
+            BlockPos pos = com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity);
             if (!isInsideVoxelVolume(pos, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ)) {
                 continue;
             }
@@ -10065,7 +10991,7 @@ public class PipelineContext {
         if (refresh) {
             cpuLightTileEntitySnapshotWorld = world;
             cpuLightTileEntitySnapshotFrame = pipelineFrameId;
-            cpuLightTileEntitySnapshot = new ArrayList<>(world.loadedTileEntityList);
+            cpuLightTileEntitySnapshot = new ArrayList<>(com.l.ausm.impl.util.MinecraftReflectionCompat.worldLoadedTileEntities(world));
             if (worldChanged || cpuLightTileEntitySnapshot.isEmpty()) {
                 cpuLightTileEntityScanCursor = 0;
             } else {
@@ -10108,13 +11034,13 @@ public class PipelineContext {
                     cameraFloorY + localY - scanHeight / 2,
                     cameraFloorZ + localZ - scanDepth / 2
             );
-            if (pos.getY() < 0 || pos.getY() > 255 || !world.isBlockLoaded(pos, false)) {
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) < 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) > 255 || !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos, false)) {
                 continue;
             }
 
             IBlockState state;
             try {
-                state = world.getBlockState(pos);
+                state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos);
             } catch (RuntimeException ignored) {
                 continue;
             }
@@ -10143,7 +11069,7 @@ public class PipelineContext {
                 break;
             }
             BlockPos pos = entry.getValue();
-            if (pos == null || !world.isBlockLoaded(pos, false)) {
+            if (pos == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos, false)) {
                 if (isWellOutsideVoxelVolume(pos, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ)) {
                     syntheticLightCandidates.remove(entry.getKey(), pos);
                 }
@@ -10158,7 +11084,8 @@ public class PipelineContext {
 
             TileEntity tileEntity;
             try {
-                tileEntity = world.getTileEntity(pos);
+                tileEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.tileentity.TileEntity.class, null, new String[] {"func_175625_s", "getTileEntity"},
+                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, (pos));
             } catch (RuntimeException ignored) {
                 tileEntity = null;
             }
@@ -10176,7 +11103,7 @@ public class PipelineContext {
                 continue;
             }
 
-            IBlockState state = actualLightState(world.getBlockState(pos), world, pos);
+            IBlockState state = actualLightState(com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos), world, pos);
             SyntheticLightInfo lightInfo = syntheticLightInfo(state, world, pos);
             if (lightInfo.voxelId <= 0 || lightInfo.emission <= 0) {
                 syntheticLightCandidates.remove(entry.getKey(), pos);
@@ -10198,18 +11125,18 @@ public class PipelineContext {
         if (pos == null || dimensions == null || dimensions.length < 3) {
             return false;
         }
-        return Math.abs(pos.getX() - cameraFloorX) > dimensions[0]
-                || Math.abs(pos.getY() - cameraFloorY) > dimensions[1]
-                || Math.abs(pos.getZ() - cameraFloorZ) > dimensions[2];
+        return Math.abs(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) - cameraFloorX) > dimensions[0]
+                || Math.abs(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) - cameraFloorY) > dimensions[1]
+                || Math.abs(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) - cameraFloorZ) > dimensions[2];
     }
 
     private boolean isInsideVoxelVolume(BlockPos pos, int[] dimensions, int cameraFloorX, int cameraFloorY, int cameraFloorZ) {
         if (pos == null || dimensions == null || dimensions.length < 3) {
             return false;
         }
-        int x = (int) Math.floor(pos.getX() + 0.5 - cameraFloorX + dimensions[0] * 0.5);
-        int y = (int) Math.floor(pos.getY() + 0.5 - cameraFloorY + dimensions[1] * 0.5);
-        int z = (int) Math.floor(pos.getZ() + 0.5 - cameraFloorZ + dimensions[2] * 0.5);
+        int x = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + 0.5 - cameraFloorX + dimensions[0] * 0.5);
+        int y = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + 0.5 - cameraFloorY + dimensions[1] * 0.5);
+        int z = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + 0.5 - cameraFloorZ + dimensions[2] * 0.5);
         return x >= 0 && y >= 0 && z >= 0
                 && x < dimensions[0] && y < dimensions[1] && z < dimensions[2];
     }
@@ -10220,9 +11147,9 @@ public class PipelineContext {
             return false;
         }
 
-        int x = (int) Math.floor(pos.getX() + 0.5 - cameraFloorX + dimensions[0] * 0.5);
-        int y = (int) Math.floor(pos.getY() + 0.5 - cameraFloorY + dimensions[1] * 0.5);
-        int z = (int) Math.floor(pos.getZ() + 0.5 - cameraFloorZ + dimensions[2] * 0.5);
+        int x = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + 0.5 - cameraFloorX + dimensions[0] * 0.5);
+        int y = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + 0.5 - cameraFloorY + dimensions[1] * 0.5);
+        int z = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + 0.5 - cameraFloorZ + dimensions[2] * 0.5);
         if (x < 0 || y < 0 || z < 0 || x >= dimensions[0] || y >= dimensions[1] || z >= dimensions[2]) {
             return false;
         }
@@ -10260,13 +11187,13 @@ public class PipelineContext {
         if (name == null) {
             return 0;
         }
-        if ("tconstruct".equals(name.getNamespace())
-                && "seared_furnace_controller".equals(name.getPath())
+        if ("tconstruct".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
+                && "seared_furnace_controller".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name))
                 && stateName(state).contains("active=true")) {
             return 71;
         }
-        if ("aether_legacy".equals(name.getNamespace())
-                && "aether_portal".equals(name.getPath())) {
+        if ("aether_legacy".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
+                && "aether_portal".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name))) {
             return localActVoxelId(10914); // Aether sky blue.
         }
         int astralVoxel = astralCrystalVoxelId(state);
@@ -10278,10 +11205,10 @@ public class PipelineContext {
 
     private static boolean isRandomThingsLuminousColoredLightDisabled(IBlockState state) {
         ResourceLocation name = registryName(state);
-        if (name == null || !"randomthings".equals(name.getNamespace())) {
+        if (name == null || !"randomthings".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))) {
             return false;
         }
-        String path = name.getPath();
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
         return "luminousblock".equalsIgnoreCase(path)
                 || "translucentluminousblock".equalsIgnoreCase(path)
                 || "luminousstainedbrick".equalsIgnoreCase(path);
@@ -10299,36 +11226,37 @@ public class PipelineContext {
             return true;
         }
 
-        if (mc == null || viewEntity == null || !(mc.renderGlobal instanceof RenderGlobalAccessor renderGlobal)) {
+        if (mc == null || viewEntity == null || !(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor renderGlobal)) {
             return true;
         }
         ViewFrustum viewFrustum = renderGlobal.ausm$viewFrustum();
-        if (viewFrustum == null || viewFrustum.renderChunks == null) {
+        RenderChunk[] renderChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.viewFrustumRenderChunks(viewFrustum);
+        if (renderChunks == null) {
             return true;
         }
 
-        double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
-        double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
-        double cameraZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
         double maxDistance = shadowRenderCullDistance();
         double maxDistanceSquared = maxDistance * maxDistance;
 
-        for (RenderChunk renderChunk : viewFrustum.renderChunks) {
+        for (RenderChunk renderChunk : renderChunks) {
             if (renderChunk == null) {
                 continue;
             }
-            BlockPos position = renderChunk.getPosition();
-            double dx = position.getX() + 8.0D - cameraX;
-            double dy = position.getY() + 8.0D - cameraY;
-            double dz = position.getZ() + 8.0D - cameraZ;
+            BlockPos position = com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkPosition(renderChunk);
+            double dx = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(position) + 8.0D - cameraX;
+            double dy = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(position) + 8.0D - cameraY;
+            double dz = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(position) + 8.0D - cameraZ;
             if (maxDistanceSquared >= 0.0D && dx * dx + dy * dy + dz * dz > maxDistanceSquared) {
                 continue;
             }
-            if (!renderChunk.getCompiledChunk().isLayerEmpty(BlockRenderLayer.SOLID)
-                    || !renderChunk.getCompiledChunk().isLayerEmpty(BlockRenderLayer.CUTOUT_MIPPED)
-                    || !renderChunk.getCompiledChunk().isLayerEmpty(BlockRenderLayer.CUTOUT)
+            if (!com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, BlockRenderLayer.SOLID)
+                    || !com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, BlockRenderLayer.CUTOUT_MIPPED)
+                    || !com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, BlockRenderLayer.CUTOUT)
                     || (shaderProperties.renderSettings().shadowTranslucent()
-                    && !renderChunk.getCompiledChunk().isLayerEmpty(BlockRenderLayer.TRANSLUCENT))) {
+                    && !com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, BlockRenderLayer.TRANSLUCENT))) {
                 return true;
             }
         }
@@ -10336,16 +11264,16 @@ public class PipelineContext {
     }
 
     private static void configureShadowTerrainRenderState() {
-        GlStateManager.disableBlend();
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glColorMask(true, true, true, true);
         resetPortalMaskState();
-        GlStateManager.disableCull();
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
     }
 
     private static void resetPortalMaskState() {
@@ -10371,7 +11299,7 @@ public class PipelineContext {
             GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         }
         if (phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT) {
-            GlStateManager.disableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
             GL11.glDepthFunc(GL11.GL_ALWAYS);
         }
         try {
@@ -10380,9 +11308,9 @@ public class PipelineContext {
         } finally {
             GL11.glDepthFunc(previousDepthFunc);
             if (previousBlend) {
-                GlStateManager.enableBlend();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
             } else {
-                GlStateManager.disableBlend();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
             }
             if (previousPolygonOffset) {
                 GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
@@ -10398,79 +11326,158 @@ public class PipelineContext {
             return 0;
         }
         if (shouldUseNothiriumShadowBridge()) {
-            double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
-            double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
-            double cameraZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+            double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+            double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+            double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
             return nothiriumShadowRenderer.renderLayer(layer, cameraX, cameraY, cameraZ, shadowRenderCullDistance());
         }
 
-        if (mc.renderGlobal == null) {
+        RenderGlobal renderGlobal = com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc);
+        if (renderGlobal == null) {
             return 0;
         }
-        int count = mc.renderGlobal.renderBlockLayer(layer, partialTicks, 2, viewEntity);
+        int count = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, 2, viewEntity);
         if (count != 0) {
             return count;
         }
         return renderShadowBlockLayerFromViewFrustum(mc, layer, partialTicks, viewEntity);
     }
 
-    private void logShadowHealth(int solidCount, int cutoutMippedCount, int cutoutCount, int translucentCount) {
-        if (shadowHealthLogged || shadowFramebuffer == null) {
+    private void updateShadowMapUsability(int solidCount, int cutoutMippedCount, int cutoutCount, int translucentCount, int blockEntityCount) {
+        if (shadowFramebuffer == null) {
+            shadowMapPopulated = false;
+            shadowMapUsable = false;
+            shadowMapSparseForSampling = false;
+            shadowMapCoverageStableFrames = 0;
             return;
         }
-        if (shadowHealthLogAttempts >= 6) {
-            return;
-        }
-        shadowHealthLogAttempts++;
-        shadowHealthLogged = true;
         ShadowFramebuffer.DepthStats stats = shadowFramebuffer.readDepthStats(4);
         boolean terrainPopulated = solidCount > 0
                 || cutoutMippedCount > 0
                 || cutoutCount > 0
                 || translucentCount > 0;
+        boolean drawPopulated = terrainPopulated || blockEntityCount > 0;
         boolean populated = terrainPopulated
                 || (!shouldUseNothiriumShadowBridge() && stats.nonClear() > 0);
-        shadowHealthLogged = populated;
-        MainMod.LOGGER.info(
-                "[ShadowHealth] depth center={} min={} max={} nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={}",
-                stats.center(),
-                stats.min(),
-                stats.max(),
-                stats.nonClear(),
-                stats.total(),
-                solidCount,
-                cutoutMippedCount,
-                cutoutCount,
-                translucentCount
-        );
+        shadowMapPopulated = populated || drawPopulated;
+        int terrainDrawCount = positiveShadowCount(solidCount)
+                + positiveShadowCount(cutoutMippedCount)
+                + positiveShadowCount(cutoutCount)
+                + positiveShadowCount(translucentCount);
+        World renderWorld = renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
+        int dimensionId = safeDimensionId(renderWorld);
+        float verticalDelta = cameraVerticalDelta();
+        boolean upwardMotion = verticalDelta > SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION;
+        boolean useNothiriumShadowBridge = shouldUseNothiriumShadowBridge();
+        boolean nothiriumTerrainCoverageReady = !useNothiriumShadowBridge
+                || (terrainDrawCount >= SPARSE_SHADOW_MIN_TERRAIN_DRAWS
+                && stats.nonClear() >= SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES);
+        if (nothiriumTerrainCoverageReady) {
+            shadowMapCoverageStableFrames = Math.min(SPARSE_SHADOW_STABLE_FRAMES, shadowMapCoverageStableFrames + 1);
+        } else {
+            shadowMapCoverageStableFrames = 0;
+        }
+        boolean nothiriumTerrainStable = !useNothiriumShadowBridge
+                || shadowMapCoverageStableFrames >= SPARSE_SHADOW_STABLE_FRAMES;
+        boolean sparseNothiriumShadow = !nothiriumTerrainCoverageReady || !nothiriumTerrainStable;
+        boolean unstableSparseShadow = sparseNothiriumShadow && upwardMotion;
+        shadowMapSparseForSampling = sparseNothiriumShadow;
+        shadowMapUsable = stats.nonClear() > 0
+                && !sparseNothiriumShadow
+                && !unstableSparseShadow;
+
+        if (!shadowHealthLogged && shadowHealthLogAttempts < 6) {
+            shadowHealthLogAttempts++;
+            shadowHealthLogged = populated && shadowMapUsable;
+            MainMod.LOGGER.info(
+                    "[ShadowHealth] depth center={} min={} max={} nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} terrainDraws={} minTerrainDraws={} minNonClear={} stableFrames={}/{} blockEntities={} dim={} sparseNothirium={} verticalDelta={} usable={}",
+                    stats.center(),
+                    stats.min(),
+                    stats.max(),
+                    stats.nonClear(),
+                    stats.total(),
+                    solidCount,
+                    cutoutMippedCount,
+                    cutoutCount,
+                    translucentCount,
+                    terrainDrawCount,
+                    SPARSE_SHADOW_MIN_TERRAIN_DRAWS,
+                    SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES,
+                    shadowMapCoverageStableFrames,
+                    SPARSE_SHADOW_STABLE_FRAMES,
+                    blockEntityCount,
+                    dimensionId,
+                    sparseNothiriumShadow,
+                    verticalDelta,
+                    shadowMapUsable
+            );
+        }
+        if (stats.nonClear() > 0
+                && (sparseNothiriumShadow || unstableSparseShadow)
+                && shadowMapSuppressedLogs < 16) {
+            shadowMapSuppressedLogs++;
+            MainMod.LOGGER.info(
+                    "[ShadowHealth] Sparse Nothirium shadow map observed; keeping real shadow textures bound. reason={} dim={} nonClear={}/{} minNonClear={} terrainDraws={} minTerrainDraws={} stableFrames={}/{} verticalDelta={} upwardThreshold={} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
+                    nothiriumTerrainCoverageReady ? "warming-up" : (unstableSparseShadow ? "sparse-terrain-upward-camera-motion" : "sparse-terrain"),
+                    dimensionId,
+                    stats.nonClear(),
+                    stats.total(),
+                    SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES,
+                    terrainDrawCount,
+                    SPARSE_SHADOW_MIN_TERRAIN_DRAWS,
+                    shadowMapCoverageStableFrames,
+                    SPARSE_SHADOW_STABLE_FRAMES,
+                    verticalDelta,
+                    SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION,
+                    solidCount,
+                    cutoutMippedCount,
+                    cutoutCount,
+                    translucentCount,
+                    blockEntityCount
+            );
+        }
+        if (drawPopulated && !shadowMapUsable && shadowMapInvalidLogs < 8) {
+            shadowMapInvalidLogs++;
+            MainMod.LOGGER.info(
+                    "[ShadowHealth] Shadow map draw produced clear/sparse depth; keeping real shadow textures bound. nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
+                    stats.nonClear(),
+                    stats.total(),
+                    solidCount,
+                    cutoutMippedCount,
+                    cutoutCount,
+                    translucentCount,
+                    blockEntityCount
+            );
+        }
     }
 
     private int renderShadowBlockLayerFromViewFrustum(Minecraft mc, BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
-        if (mc == null || viewEntity == null || !(mc.renderGlobal instanceof RenderGlobalAccessor renderGlobal)) {
+        if (mc == null || viewEntity == null || !(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor renderGlobal)) {
             return 0;
         }
         ViewFrustum viewFrustum = renderGlobal.ausm$viewFrustum();
         ChunkRenderContainer renderContainer = renderGlobal.ausm$renderContainer();
-        if (viewFrustum == null || viewFrustum.renderChunks == null || renderContainer == null) {
+        RenderChunk[] renderChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.viewFrustumRenderChunks(viewFrustum);
+        if (renderChunks == null || renderContainer == null) {
             return 0;
         }
 
-        double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
-        double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
-        double cameraZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
         double maxDistance = shadowRenderCullDistance();
         double maxDistanceSquared = maxDistance * maxDistance;
 
         renderContainer.initialize(cameraX, cameraY, cameraZ);
         int fallbackCount = 0;
-        for (RenderChunk renderChunk : viewFrustum.renderChunks) {
-            if (renderChunk == null || renderChunk.getCompiledChunk().isLayerEmpty(layer)) {
+        for (RenderChunk renderChunk : renderChunks) {
+            if (renderChunk == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, layer)) {
                 continue;
             }
-            BlockPos position = renderChunk.getPosition();
-            double dx = position.getX() + 8.0D - cameraX;
-            double dy = position.getY() + 8.0D - cameraY;
-            double dz = position.getZ() + 8.0D - cameraZ;
+            BlockPos position = com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkPosition(renderChunk);
+            double dx = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(position) + 8.0D - cameraX;
+            double dy = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(position) + 8.0D - cameraY;
+            double dz = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(position) + 8.0D - cameraZ;
             if (maxDistanceSquared >= 0.0D && dx * dx + dy * dy + dz * dz > maxDistanceSquared) {
                 continue;
             }
@@ -10505,9 +11512,9 @@ public class PipelineContext {
     }
 
     private void setupShadowCamera(Entity viewEntity, float partialTicks) {
-        double x = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
-        double y = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
-        double z = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
 
         GL11.glMatrixMode(GL11.GL_PROJECTION);
         GL11.glLoadIdentity();
@@ -10526,13 +11533,13 @@ public class PipelineContext {
         GL11.glLoadIdentity();
         GL11.glTranslatef(0.0F, 0.0F, -shadowDepthCenter);
 
-        World world = renderWorld(Minecraft.getMinecraft());
+        World world = renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
         if (world != null && useEndFlashShadowLight(world)) {
             GL11.glRotatef(90.0F - endFlashPitchDegrees, 1.0F, 0.0F, 0.0F);
             GL11.glRotatef(endFlashYawDegrees, 0.0F, 1.0F, 0.0F);
         } else {
             GL11.glRotatef(90.0F, 1.0F, 0.0F, 0.0F);
-            float celestialAngle = world != null ? world.getCelestialAngle(partialTicks) : 0.0F;
+            float celestialAngle = world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks) : 0.0F;
             float sunAngle = celestialAngle < 0.75F ? celestialAngle + 0.25F : celestialAngle - 0.75F;
             float angle = celestialAngle * -360.0F;
             if (sunAngle <= 0.5F) {
@@ -10552,8 +11559,8 @@ public class PipelineContext {
     }
 
     private static float shadowAngle(float partialTicks) {
-        World world = renderWorld(Minecraft.getMinecraft());
-        float celestialAngle = world != null ? world.getCelestialAngle(partialTicks) : 0.0F;
+        World world = renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
+        float celestialAngle = world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks) : 0.0F;
         float angle = celestialAngle + 0.25F;
         if (angle >= 1.0F) {
             angle -= 1.0F;
@@ -10580,9 +11587,9 @@ public class PipelineContext {
             }
 
             double[] position = {
-                    interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks),
-                    interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks),
-                    interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks)
+                    interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks),
+                    interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks),
+                    interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks)
             };
             InvocationHandler handler = (proxy, method, args) -> {
                 String name = method.getName();
@@ -10666,28 +11673,28 @@ public class PipelineContext {
         }
 
         World world = renderWorld(mc);
-        if (mc == null || world == null || viewEntity == null || shadowCamera == null || mc.entityRenderer == null) {
+        if (mc == null || world == null || viewEntity == null || shadowCamera == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) == null) {
             return;
         }
-        RenderManager renderManager = mc.getRenderManager();
+        RenderManager renderManager = com.l.ausm.impl.util.MinecraftReflectionCompat.renderManager(mc);
         if (renderManager == null) {
             return;
         }
-        double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
-        double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
-        double cameraZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
 
-        renderManager.cacheActiveRenderInfo(world, mc.fontRenderer, viewEntity, mc.pointedEntity, mc.gameSettings, partialTicks);
-        renderManager.setRenderPosition(cameraX, cameraY, cameraZ);
-        mc.entityRenderer.enableLightmap();
-        RenderHelper.enableStandardItemLighting();
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerCacheActiveRenderInfo(renderManager, world, com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc), viewEntity, com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.entity.Entity.class, null, "field_147125_j", "pointedEntity"), com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc), partialTicks);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerSetRenderPosition(renderManager, cameraX, cameraY, cameraZ);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.enableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
+        com.l.ausm.impl.util.MinecraftReflectionCompat.enableStandardItemLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
 
-        List<Entity> loadedEntities = world.getLoadedEntityList();
+        List<Entity> loadedEntities = com.l.ausm.impl.util.MinecraftReflectionCompat.loadedEntityList(world);
         if (loadedEntities == null) {
             return;
         }
@@ -10696,9 +11703,9 @@ public class PipelineContext {
                 continue;
             }
 
-            renderManager.renderEntityStatic(entity, partialTicks, false);
-            if (renderManager.isRenderMultipass(entity)) {
-                renderManager.renderMultipass(entity, partialTicks);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerRenderEntityStatic(renderManager, entity, partialTicks, false);
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerIsRenderMultipass(renderManager, entity)) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerRenderMultipass(renderManager, entity, partialTicks);
             }
         }
     }
@@ -10714,27 +11721,28 @@ public class PipelineContext {
             return 0;
         }
 
-        TileEntityRendererDispatcher dispatcher = TileEntityRendererDispatcher.instance;
+        TileEntityRendererDispatcher dispatcher = com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityRendererDispatcher();
         if (dispatcher == null) {
             return 0;
         }
 
-        double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
-        double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
-        double cameraZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
         double maxDistance = shadowRenderCullDistance();
         double maxDistanceSquared = maxDistance * maxDistance;
 
-        dispatcher.prepare(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityRendererPrepare(
+                dispatcher,
                 world,
-                mc.getTextureManager(),
-                mc.fontRenderer,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc),
                 viewEntity,
-                mc.objectMouseOver,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.util.math.RayTraceResult.class, null, "field_71476_x", "objectMouseOver"),
                 partialTicks
         );
-        mc.entityRenderer.enableLightmap();
-        RenderHelper.enableStandardItemLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.enableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
+        com.l.ausm.impl.util.MinecraftReflectionCompat.enableStandardItemLighting();
         configureShadowTerrainRenderState();
 
         int rendered = 0;
@@ -10743,12 +11751,13 @@ public class PipelineContext {
                 continue;
             }
 
-            BlockPos pos = tileEntity.getPos();
-            dispatcher.render(
+            BlockPos pos = com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityRendererRender(
+                    dispatcher,
                     tileEntity,
-                    pos.getX() - cameraX,
-                    pos.getY() - cameraY,
-                    pos.getZ() - cameraZ,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) - cameraX,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) - cameraY,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) - cameraZ,
                     partialTicks,
                     -1,
                     1.0F
@@ -10761,12 +11770,12 @@ public class PipelineContext {
     private boolean shouldRenderBlockEntityInShadowMap(World world, TileEntity tileEntity, ICamera shadowCamera,
                                                        double cameraX, double cameraY, double cameraZ,
                                                        double maxDistanceSquared) {
-        if (world == null || tileEntity == null || tileEntity.isInvalid()) {
+        if (world == null || tileEntity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((tileEntity), new String[] {"func_145837_r", "isInvalid"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
             return false;
         }
 
-        BlockPos pos = tileEntity.getPos();
-        if (pos == null || !world.isBlockLoaded(pos, false)) {
+        BlockPos pos = com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity);
+        if (pos == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos, false)) {
             return false;
         }
         if (!shaderProperties.renderSettings().shadowBlockEntities()
@@ -10774,21 +11783,21 @@ public class PipelineContext {
             return false;
         }
 
-        double dx = pos.getX() + 0.5D - cameraX;
-        double dy = pos.getY() + 0.5D - cameraY;
-        double dz = pos.getZ() + 0.5D - cameraZ;
+        double dx = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + 0.5D - cameraX;
+        double dy = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + 0.5D - cameraY;
+        double dz = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + 0.5D - cameraZ;
         if (maxDistanceSquared >= 0.0D && dx * dx + dy * dy + dz * dz > maxDistanceSquared) {
             return false;
         }
 
-        AxisAlignedBB box = tileEntity.getRenderBoundingBox();
-        return box == null || shadowCamera.isBoundingBoxInFrustum(box);
+        AxisAlignedBB box = com.l.ausm.impl.util.MinecraftReflectionCompat.call(tileEntity, AxisAlignedBB.class, null, new String[] {"getRenderBoundingBox"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+        return box == null || com.l.ausm.impl.util.MinecraftReflectionCompat.cameraIsBoundingBoxInFrustum(shadowCamera, box);
     }
 
     private static boolean isLightEmittingBlockEntity(World world, TileEntity tileEntity, BlockPos pos) {
         try {
-            IBlockState state = world.getBlockState(pos);
-            return state != null && state.getLightValue(world, pos) > 0;
+            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos);
+            return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state, world, pos) > 0;
         } catch (RuntimeException ignored) {
             return false;
         }
@@ -10796,13 +11805,13 @@ public class PipelineContext {
 
     private boolean shouldRenderEntityInShadowMap(Minecraft mc, World world, RenderManager renderManager, Entity entity, Entity viewEntity,
                                                   ICamera shadowCamera, double cameraX, double cameraY, double cameraZ) {
-        if (mc == null || world == null || renderManager == null || entity == null || entity.isDead || !entity.shouldRenderInPass(0)) {
+        if (mc == null || world == null || renderManager == null || entity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((entity), false, "field_70128_L", "isDead") || !com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, 0)) {
             return false;
         }
         if (BetterPortalsCompat.isPortalEntity(entity)) {
             return false;
         }
-        if (entity instanceof AbstractClientPlayer player && player.isSpectator()) {
+        if (entity instanceof AbstractClientPlayer player && com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(player)) {
             return false;
         }
         if (entity == viewEntity
@@ -10813,14 +11822,18 @@ public class PipelineContext {
         if (entity != viewEntity && !shaderProperties.renderSettings().shadowEntities()) {
             return false;
         }
-        if (!renderManager.shouldRender(entity, shadowCamera, cameraX, cameraY, cameraZ)
-                && (mc.player == null || !entity.isRidingOrBeingRiddenBy(mc.player))) {
+        if (!com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerShouldRender(renderManager, entity, shadowCamera, cameraX, cameraY, cameraZ)
+                && (com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.entityIsRidingOrBeingRiddenBy(entity, com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)))) {
             return false;
         }
-        if (entity.posY >= 0.0D && entity.posY < 256.0D && !world.isBlockLoaded(new BlockPos(entity))) {
+        double entityY = com.l.ausm.impl.util.MinecraftReflectionCompat.posY(entity);
+        if (entityY >= 0.0D && entityY < 256.0D && !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, new BlockPos(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity),
+                entityY,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity)))) {
             return false;
         }
-        return entity.isInRangeToRender3d(cameraX, cameraY, cameraZ);
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.entityIsInRangeToRender3d(entity, cameraX, cameraY, cameraZ);
     }
 
     private static double interpolate(double previous, double current, float partialTicks) {
@@ -10831,19 +11844,17 @@ public class PipelineContext {
         if (mc == null) {
             return 0;
         }
-        Entity viewEntity = mc.getRenderViewEntity();
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         World world = renderWorld(mc);
         if (world == null || viewEntity == null) {
             return 0;
         }
 
-        Material cameraMaterial = ActiveRenderInfo
-                .getBlockStateAtEntityViewpoint(world, viewEntity, mc.getRenderPartialTicks())
-                .getMaterial();
-        if (cameraMaterial == Material.WATER) {
+        IBlockState cameraState = com.l.ausm.impl.util.MinecraftReflectionCompat.blockStateAtEntityViewpoint(world, viewEntity, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsWater(cameraState)) {
             return 1;
         }
-        if (cameraMaterial == Material.LAVA && (mc.player == null || !mc.player.isSpectator())) {
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(cameraState) == com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.block.material.Material.class, net.minecraft.block.material.Material.class, null, "field_151587_i", "LAVA") && !com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc))) {
             return 2;
         }
         return 0;
@@ -10860,8 +11871,8 @@ public class PipelineContext {
 
         pingPongManager.bindForGbuffers(fallbackColorAttachment());
         restoreVanillaWorldTextureBindings();
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
@@ -10884,8 +11895,8 @@ public class PipelineContext {
                 && pingPongManager.isInitialized()
                 && !renderingShadowMap
                 && !renderingGuiScreen()
-                && Minecraft.getMinecraft() != null
-                && Minecraft.getMinecraft().world != null;
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) != null;
     }
 
     private boolean shouldCompositeDistantHorizonsFramebuffer() {
@@ -10894,8 +11905,8 @@ public class PipelineContext {
                 && pingPongManager.isInitialized()
                 && !renderingShadowMap
                 && !renderingGuiScreen()
-                && Minecraft.getMinecraft() != null
-                && Minecraft.getMinecraft().world != null;
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) != null;
     }
 
     public boolean shouldSuppressDistantHorizonsMinecraftApply() {
@@ -10908,8 +11919,8 @@ public class PipelineContext {
                 && isPipelineActive
                 && worldFrameActive
                 && pingPongManager.isInitialized()
-                && Minecraft.getMinecraft() != null
-                && Minecraft.getMinecraft().world != null;
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) != null;
     }
 
     public void logDistantHorizonsApiCallback(String method, String detail) {
@@ -10979,7 +11990,7 @@ public class PipelineContext {
 
     public int distantHorizonsFramebufferId() {
         if (renderingDistantHorizonsPresentation && distantHorizonsPresentationTarget != null) {
-            return distantHorizonsPresentationTarget.framebufferObject;
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(distantHorizonsPresentationTarget);
         }
         return shouldUseDistantHorizonsFramebufferOverride() ? currentPipelineWorldFramebufferId() : 0;
     }
@@ -11007,17 +12018,17 @@ public class PipelineContext {
 
         if (renderingDistantHorizonsPresentation && distantHorizonsPresentationTarget != null) {
             Framebuffer target = distantHorizonsPresentationTarget;
-            OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, target.framebufferObject);
-            GL11.glDrawBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GL11.glReadBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GlStateManager.viewport(0, 0, framebufferWidth(target, Minecraft.getMinecraft()), framebufferHeight(target, Minecraft.getMinecraft()));
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
+            GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, framebufferWidth(target, com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()), framebufferHeight(target, com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
             GL11.glColorMask(true, true, true, true);
-            GlStateManager.enableDepth();
-            GlStateManager.depthMask(false);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
             GL11.glEnable(GL11.GL_DEPTH_TEST);
             GL11.glDepthFunc(GL11.GL_LEQUAL);
-            GlStateManager.disableBlend();
-            GlStateManager.disableCull();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
             logDistantHorizonsDiagnostic("bind-presentation", distantHorizonsProbeState(null));
             return;
         }
@@ -11025,8 +12036,8 @@ public class PipelineContext {
         pingPongManager.bindForGbuffers(fallbackColorAttachment());
         restoreVanillaWorldTextureBindings();
         GL11.glColorMask(true, true, true, true);
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         distantHorizonsFramebufferPendingComposite = false;
@@ -11060,34 +12071,34 @@ public class PipelineContext {
         try {
             String sample = sampleDistantHorizonsColorTexture();
             if (target != null) {
-                OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, target.framebufferObject);
-                GlStateManager.viewport(0, 0, framebufferWidth(target, Minecraft.getMinecraft()), framebufferHeight(target, Minecraft.getMinecraft()));
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, framebufferWidth(target, com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()), framebufferHeight(target, com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
             } else {
                 pingPongManager.bindForGbuffers(fallbackColorAttachment());
-                GlStateManager.viewport(0, 0, pingPongManager.width(), pingPongManager.height());
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, pingPongManager.width(), pingPongManager.height());
             }
-            GL11.glDrawBuffer(target != null && target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GL11.glReadBuffer(target != null && target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glDrawBuffer(target != null && com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadBuffer(target != null && com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
             GL11.glColorMask(true, true, true, true);
-            GlStateManager.enableDepth();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
             GL11.glDepthFunc(GL11.GL_LEQUAL);
-            GlStateManager.depthMask(false);
-            GlStateManager.disableCull();
-            GlStateManager.enableBlend();
-            GlStateManager.tryBlendFuncSeparate(
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                     GL11.GL_SRC_ALPHA,
                     GL11.GL_ONE_MINUS_SRC_ALPHA,
                     GL11.GL_ONE,
                     GL11.GL_ONE_MINUS_SRC_ALPHA
             );
-            OpenGlHelper.glUseProgram(distantHorizonsCompositeProgramId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(distantHorizonsCompositeProgramId);
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            GlStateManager.bindTexture(distantHorizonsColorTextureId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(distantHorizonsColorTextureId);
             if (distantHorizonsCompositeTextureUniform >= 0) {
                 GL20.glUniform1i(distantHorizonsCompositeTextureUniform, 0);
             }
             GL13.glActiveTexture(GL13.GL_TEXTURE1);
-            GlStateManager.bindTexture(distantHorizonsDepthTextureId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(distantHorizonsDepthTextureId);
             if (distantHorizonsCompositeDepthUniform >= 0) {
                 GL20.glUniform1i(distantHorizonsCompositeDepthUniform, 1);
             }
@@ -11099,37 +12110,37 @@ public class PipelineContext {
                     + ", sample=" + sample
                     + ", targetSample=" + targetSample);
         } finally {
-            OpenGlHelper.glUseProgram(previousProgram);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(previousProgram);
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
             if (previousDepthTest) {
-                GlStateManager.enableDepth();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
             } else {
-                GlStateManager.disableDepth();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
             }
             GL11.glDepthFunc(previousDepthFunc);
-            GlStateManager.depthMask(previousDepthMask);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(previousDepthMask);
             if (previousBlend) {
-                GlStateManager.enableBlend();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
             } else {
-                GlStateManager.disableBlend();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
             }
             if (previousAlpha) {
-                GlStateManager.enableAlpha();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
             } else {
-                GlStateManager.disableAlpha();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
             }
             if (previousCull) {
-                GlStateManager.enableCull();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
             } else {
-                GlStateManager.disableCull();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
             }
             TextureBinder.restoreDefaultTextureUnit();
         }
     }
 
     private void drawDistantHorizonsCompositeQuad() {
-        OpenGlHelper.glBindBuffer(OpenGlHelper.GL_ARRAY_BUFFER, 0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER, "field_176089_P", "GL_ARRAY_BUFFER"), 0);
         if (GLContext.getCapabilities().OpenGL30) {
             GL30.glBindVertexArray(0);
         }
@@ -11159,28 +12170,28 @@ public class PipelineContext {
 
         distantHorizonsFramebufferWidth = width;
         distantHorizonsFramebufferHeight = height;
-        distantHorizonsFramebufferId = OpenGlHelper.glGenFramebuffers();
+        distantHorizonsFramebufferId = com.l.ausm.impl.util.MinecraftReflectionCompat.glGenFramebuffers();
         distantHorizonsColorTextureId = GL11.glGenTextures();
         distantHorizonsDepthTextureId = GL11.glGenTextures();
         distantHorizonsTexturesOwned = true;
 
-        GlStateManager.bindTexture(distantHorizonsColorTextureId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(distantHorizonsColorTextureId);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, width, height, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, (java.nio.ByteBuffer) null);
 
-        GlStateManager.bindTexture(distantHorizonsDepthTextureId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(distantHorizonsDepthTextureId);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
         GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_DEPTH_COMPONENT, width, height, 0, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, (FloatBuffer) null);
 
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, distantHorizonsFramebufferId);
-        OpenGlHelper.glFramebufferTexture2D(OpenGlHelper.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, distantHorizonsColorTextureId, 0);
-        OpenGlHelper.glFramebufferTexture2D(OpenGlHelper.GL_FRAMEBUFFER, GL30.GL_DEPTH_ATTACHMENT, GL11.GL_TEXTURE_2D, distantHorizonsDepthTextureId, 0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), distantHorizonsFramebufferId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, distantHorizonsColorTextureId, 0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), GL30.GL_DEPTH_ATTACHMENT, GL11.GL_TEXTURE_2D, distantHorizonsDepthTextureId, 0);
         GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         boolean complete = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER) == GL30.GL_FRAMEBUFFER_COMPLETE;
@@ -11193,7 +12204,7 @@ public class PipelineContext {
 
     private void clearDistantHorizonsFramebuffer() {
         GL11.glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
-        GlStateManager.clearDepth(1.0D);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateClearDepth(1.0D);
         GL11.glColorMask(true, true, true, true);
         GL11.glDepthMask(true);
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
@@ -11214,7 +12225,7 @@ public class PipelineContext {
             if (readFramebuffer == 0) {
                 readFramebuffer = ensureDistantHorizonsTextureReadbackFramebuffer();
                 GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFramebuffer);
-                OpenGlHelper.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, distantHorizonsColorTextureId, 0);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, distantHorizonsColorTextureId, 0);
             } else {
                 GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFramebuffer);
             }
@@ -11245,13 +12256,13 @@ public class PipelineContext {
             return builder.toString();
         } finally {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL11.glReadBuffer(previousReadBuffer);
+            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
         }
     }
 
     private int ensureDistantHorizonsTextureReadbackFramebuffer() {
         if (distantHorizonsTextureReadbackFramebufferId == 0) {
-            distantHorizonsTextureReadbackFramebufferId = OpenGlHelper.glGenFramebuffers();
+            distantHorizonsTextureReadbackFramebufferId = com.l.ausm.impl.util.MinecraftReflectionCompat.glGenFramebuffers();
         }
         return distantHorizonsTextureReadbackFramebufferId;
     }
@@ -11261,9 +12272,9 @@ public class PipelineContext {
             return "skipped";
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        int framebuffer = target != null ? target.framebufferObject : GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        int readBuffer = target != null && target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        int framebuffer = target != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) : GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int readBuffer = target != null && com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0;
         int width = target != null ? framebufferWidth(target, mc) : pingPongManager.width();
         int height = target != null ? framebufferHeight(target, mc) : pingPongManager.height();
         if (width <= 0 || height <= 0) {
@@ -11297,7 +12308,7 @@ public class PipelineContext {
             return builder.toString();
         } finally {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL11.glReadBuffer(previousReadBuffer);
+            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
         }
     }
 
@@ -11398,7 +12409,7 @@ public class PipelineContext {
         if (worldFrameActive) {
             pingPongManager.bindForGbuffers(fallbackColorAttachment());
         }
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         resetIndexedBlendState();
         disablePipelineVertexAttributes();
         unbindShaderStorageBuffers();
@@ -11407,23 +12418,23 @@ public class PipelineContext {
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
         GL11.glColorMask(true, true, true, true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.enableDepth();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     private void restoreVanillaWorldTextureBindings() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.entityRenderer != null) {
-            DynamicTexture lightmapTexture = ((EntityRendererAccessor) mc.entityRenderer).ausm$getLightmapTexture();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
+            DynamicTexture lightmapTexture = ((EntityRendererAccessor) com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc)).ausm$getLightmapTexture();
             restoreVanillaLightmapTexture(mc);
             if (lightmapTexture != null) {
                 int irisLightmapTextureId = irisLightmapTexture.updateFrom(lightmapTexture);
                 if (irisLightmapTextureId > 0) {
                     TextureBinder.bindIrisLightmap(irisLightmapTextureId);
                 } else {
-                    TextureBinder.bindIrisLightmap(lightmapTexture.getGlTextureId());
+                    TextureBinder.bindIrisLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.glTextureId(lightmapTexture));
                 }
             } else {
                 TextureBinder.mirrorVanillaLightmapToIrisUnit();
@@ -11484,7 +12495,41 @@ public class PipelineContext {
     }
 
     private void logColorBufferProbe(String stage) {
-        // Probe disabled.
+        if (!isPipelineActive || !pingPongManager.isInitialized()) {
+            return;
+        }
+        boolean finalStage = stage != null && stage.contains("final");
+        if (finalStage) {
+            if (finalColorProbeLogs >= MAX_FINAL_COLOR_PROBE_LOGS) {
+                return;
+            }
+            finalColorProbeLogs++;
+        } else {
+            if (terrainColorProbeLogs >= MAX_TERRAIN_COLOR_PROBE_LOGS) {
+                return;
+            }
+            terrainColorProbeLogs++;
+        }
+
+        DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
+        String color = deferredFramebufferColorSamples(readBuffer, fallbackColorAttachment());
+        String normal = deferredFramebufferColorSamples(readBuffer, Attachment.NORMAL);
+        String depth = readBuffer != null && readBuffer.isUsable()
+                ? framebufferIdDepthSamples(readBuffer.getFramebufferId(), readBuffer.getWidth(), readBuffer.getHeight(), GL30.GL_COLOR_ATTACHMENT0)
+                : "none";
+        MainMod.LOGGER.info(
+                "[AUSMColorProbe] stage={} color={} normal={} depth={} activePass={} phase={} safeVanilla={} reason='{}' read={} gl={}",
+                stage,
+                color,
+                normal,
+                depth,
+                activePass,
+                getPhase(),
+                hardwareSafeVanillaTerrain,
+                hardwareSafeVanillaTerrainReason,
+                describeDeferredFramebuffer(readBuffer),
+                glStateSummary()
+        );
     }
 
     private void logDistantHorizonsColorProbe(String stage) {
@@ -11542,11 +12587,11 @@ public class PipelineContext {
         }
 
         try {
-            int nothiriumCount = renderNothiriumTerrainLayer(layer, (float) partialTicks, viewEntity);
+            int nothiriumCount = hardwareSafeVanillaTerrain ? 0 : renderNothiriumTerrainLayer(layer, (float) partialTicks, viewEntity);
             boolean forceVanillaAfterEmptyNothirium = nothiriumCount == 0;
             if (nothiriumCount > 0) {
                 markNothiriumPipelineTranslucentBridge(layer);
-                recordTerrainLayerCount(layer, nothiriumCount);
+                recordTerrainLayerCount(layer, nothiriumCount, true);
                 recordShaderlessTerrainLayerCount(layer, nothiriumCount);
                 logWorldLayerDiag("nothirium", layer, pass, nothiriumCount, viewEntity);
                 return nothiriumCount;
@@ -11555,13 +12600,15 @@ public class PipelineContext {
             boolean forceVanillaFallback = isPipelineActive
                     && (hardwareSafeVanillaTerrain || forceVanillaAfterEmptyNothirium || NothiriumBypass.shouldBypass());
             if (forceVanillaFallback) {
-                ensureVanillaTerrainRenderer(renderWorld(Minecraft.getMinecraft()), true);
-                rebindActiveTerrainPassForForcedVanillaFallback();
+                ensureVanillaTerrainRenderer(renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()), true);
+                if (!prepareVanillaState) {
+                    rebindActiveTerrainPassForForcedVanillaFallback();
+                }
                 NothiriumBypass.pushForcedBypass();
             }
             int count;
             try {
-                count = renderGlobal.renderBlockLayer(layer, partialTicks, pass, viewEntity);
+                count = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
             } finally {
                 if (forceVanillaFallback) {
                     NothiriumBypass.popForcedBypass();
@@ -11592,7 +12639,34 @@ public class PipelineContext {
     }
 
     private void logWorldLayerDiag(String stage, BlockRenderLayer layer, int pass, int count, Entity viewEntity) {
-        // Diagnostic disabled.
+        if (worldLayerDiagLogs >= MAX_WORLD_LAYER_DIAG_LOGS) {
+            return;
+        }
+        if (!isPipelineActive && !"skip-null-render-global".equals(stage)) {
+            return;
+        }
+        if (!stage.startsWith("vanilla") && !"skip-all-rendering".equals(stage)) {
+            return;
+        }
+        worldLayerDiagLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMWorldLayer] call={} stage={} layer={} pass={} count={} active={} safeVanilla={} reason='{}' nothiriumBypass={} activePass={} phase={} frame={} worldFrame={} view={} gl={}",
+                worldLayerDiagLogs,
+                stage,
+                layer,
+                pass,
+                count,
+                isPipelineActive,
+                hardwareSafeVanillaTerrain,
+                hardwareSafeVanillaTerrainReason,
+                NothiriumBypass.shouldBypass(),
+                activePass,
+                getPhase(),
+                pipelineFrameId,
+                worldFrameActive,
+                viewEntity != null ? viewEntity.getClass().getName() : "null",
+                glStateSummary()
+        );
     }
 
     private void markNothiriumPipelineTranslucentBridge(BlockRenderLayer layer) {
@@ -11653,13 +12727,24 @@ public class PipelineContext {
     }
 
     private boolean shouldPrepareShaderlessBlockLayerState() {
-        return !isPipelineActive || shouldBypassWorldPassRendering();
+        return !isPipelineActive || shouldBypassWorldPassRendering() || shouldUseHardwareSafeVanillaBlockLayerState();
+    }
+
+    private boolean shouldUseHardwareSafeVanillaBlockLayerState() {
+        return isPipelineActive
+                && hardwareSafeVanillaTerrain
+                && worldFrameActive
+                && !renderingShadowMap
+                && !renderingGuiScreen();
     }
 
     private void prepareShaderlessBlockLayerState(BlockRenderLayer layer) {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (!shaderlessBloomExtractionActive) {
-            OpenGlHelper.glUseProgram(0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+        }
+        if (shouldUseHardwareSafeVanillaBlockLayerState() && pingPongManager.isInitialized()) {
+            pingPongManager.bindForGbuffers(fallbackColorAttachment());
         }
         TextureBinder.restoreDefaultTextureUnit();
         resetIndexedBlendState();
@@ -11671,53 +12756,44 @@ public class PipelineContext {
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         GL11.glPolygonOffset(0.0F, 0.0F);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.disableLighting();
-        GlStateManager.disableColorMaterial();
-        GlStateManager.enableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         restoreVanillaFixedFunctionTextureState(mc);
         restoreShaderlessTerrainClientTextureArrays();
-        GlStateManager.enableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
 
         if (shouldRenderLayerWithTranslucentState(layer)) {
-            GlStateManager.enableAlpha();
-            GlStateManager.alphaFunc(GL11.GL_GREATER, 0.003921569F);
-            GlStateManager.enableBlend();
-            GlStateManager.tryBlendFuncSeparate(
-                    GL11.GL_SRC_ALPHA,
-                    GL11.GL_ONE_MINUS_SRC_ALPHA,
-                    GL11.GL_ONE,
-                    GL11.GL_ZERO
-            );
-            GlStateManager.depthMask(false);
-            forceTranslucentFixedFunctionState();
+            FixedFunctionGlState.prepareTranslucentDepthBlendState();
+            FixedFunctionGlState.forceTranslucentBlockLayer();
             return;
         }
 
-        GlStateManager.depthMask(true);
-        GlStateManager.disableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         if (layer == BlockRenderLayer.SOLID) {
-            GlStateManager.disableAlpha();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
         } else {
-            GlStateManager.enableAlpha();
-            GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
         }
     }
 
     private void finishShaderlessBlockLayerState(BlockRenderLayer layer) {
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         if (shouldRenderLayerWithTranslucentState(layer)) {
-            GlStateManager.depthMask(true);
-            GlStateManager.disableBlend();
-            GlStateManager.enableAlpha();
-            GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
         }
     }
 
@@ -11725,49 +12801,31 @@ public class PipelineContext {
         if (isPipelineActive || shaderlessTerrainLightmapCoordsSaved) {
             return;
         }
-        shaderlessTerrainPreviousLightmapX = OpenGlHelper.lastBrightnessX;
-        shaderlessTerrainPreviousLightmapY = OpenGlHelper.lastBrightnessY;
+        shaderlessTerrainPreviousLightmapX = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldFloat(net.minecraft.client.renderer.OpenGlHelper.class, 0.0F, "lastBrightnessX", "lastBrightnessX");
+        shaderlessTerrainPreviousLightmapY = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldFloat(net.minecraft.client.renderer.OpenGlHelper.class, 0.0F, "lastBrightnessY", "lastBrightnessY");
         shaderlessTerrainLightmapCoordsSaved = true;
-        OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, 0.0F, 240.0F);
-        probeShaderlessLightState("shaderless-terrain-lightmap-stable");
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.OpenGlHelper.class, new String[] {"func_77475_a", "setLightmapTextureCoords"},
+                new Class<?>[] {int.class, float.class, float.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit()), (0.0F), (240.0F));;
     }
 
     private void restoreShaderlessTerrainLightmapCoords() {
         if (!shaderlessTerrainLightmapCoordsSaved) {
             return;
         }
-        OpenGlHelper.setLightmapTextureCoords(
-                OpenGlHelper.lightmapTexUnit,
-                shaderlessTerrainPreviousLightmapX,
-                shaderlessTerrainPreviousLightmapY
-        );
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.OpenGlHelper.class, new String[] {"func_77475_a", "setLightmapTextureCoords"},
+                new Class<?>[] {int.class, float.class, float.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit()), (shaderlessTerrainPreviousLightmapX), (shaderlessTerrainPreviousLightmapY));;
         shaderlessTerrainLightmapCoordsSaved = false;
-        probeShaderlessLightState("shaderless-terrain-lightmap-restore");
     }
 
     private static boolean shouldRenderLayerWithTranslucentState(BlockRenderLayer layer) {
         return layer == BlockRenderLayer.TRANSLUCENT || AusmBloomLayer.isBloomLayer(layer);
     }
 
-    private static void forceTranslucentFixedFunctionState() {
-        GL13.glActiveTexture(OpenGlHelper.defaultTexUnit);
-        GL11.glEnable(GL11.GL_TEXTURE_2D);
-        GL13.glClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GL11.glEnable(GL11.GL_DEPTH_TEST);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glEnable(GL11.GL_ALPHA_TEST);
-        GL11.glAlphaFunc(GL11.GL_GREATER, 0.003921569F);
-        GL11.glEnable(GL11.GL_BLEND);
-        GL14.glBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE_MINUS_SRC_ALPHA,
-                GL11.GL_ONE,
-                GL11.GL_ZERO
-        );
-        GL11.glDepthMask(false);
+    private void recordTerrainLayerCount(BlockRenderLayer layer, int count) {
+        recordTerrainLayerCount(layer, count, false);
     }
 
-    private void recordTerrainLayerCount(BlockRenderLayer layer, int count) {
+    private void recordTerrainLayerCount(BlockRenderLayer layer, int count, boolean nothiriumMainTerrain) {
         if (!isPipelineActive
                 || !worldFrameActive
                 || renderingShadowMap
@@ -11796,6 +12854,7 @@ public class PipelineContext {
         if (layer == BlockRenderLayer.CUTOUT
                 && terrainOpaqueLayerCount >= 3
                 && terrainOpaqueDrawCount == 0) {
+            sparseOpaqueTerrainFrames = 0;
             requestPersistentHistoryClear("zero-opaque-terrain");
             if (hasLoadedTerrainNearPlayer()) {
                 zeroOpaqueTerrainFrames++;
@@ -11810,13 +12869,13 @@ public class PipelineContext {
                     if (!zeroOpaqueTerrainRecoveryRequested) {
                         zeroOpaqueTerrainRecoveryRequested = true;
                         zeroOpaqueTerrainFrames = 0;
-                        Minecraft mc = Minecraft.getMinecraft();
+                        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
                         logHardwareTerrainFallback(
                                 "zero-opaque-rebuild",
                                 "rebuilding stale shader terrain before hardware fallback"
                         );
-                        if (mc != null && mc.world != null && mc.renderGlobal != null) {
-                            rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "zero-opaque-recovery");
+                        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null) {
+                            rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "zero-opaque-recovery");
                         }
                         rebuildTerrainRenderers(true, true);
                         scheduleWorldTerrainRefresh(true, true, 0);
@@ -11825,8 +12884,32 @@ public class PipelineContext {
                     activateHardwareSafeVanillaTerrain("zero opaque shader terrain for " + zeroOpaqueTerrainFrames + " consecutive frames");
                 }
             } else {
-                logHardwareTerrainFallback("zero-opaque-no-loaded-terrain", "world=" + describeWorld(Minecraft.getMinecraft() != null ? Minecraft.getMinecraft().world : null));
+                logHardwareTerrainFallback("zero-opaque-no-loaded-terrain", "world=" + describeWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) : null));
             }
+        } else if (layer == BlockRenderLayer.CUTOUT
+                && terrainOpaqueLayerCount >= 3
+                && nothiriumMainTerrain
+                && terrainOpaqueDrawCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
+                && hasLoadedTerrainNearPlayer()) {
+            sparseOpaqueTerrainFrames++;
+            requestPersistentHistoryClear("sparse-opaque-terrain");
+            logHardwareTerrainFallback(
+                    "sparse-opaque-frame",
+                    "frames=" + sparseOpaqueTerrainFrames
+                            + ", opaqueDraws=" + terrainOpaqueDrawCount
+                            + ", minOpaqueDraws=" + HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
+                            + ", activePass=" + activePass
+                            + ", phase=" + getPhase()
+                            + ", bypass=" + NothiriumBypass.shouldBypass()
+            );
+            if (sparseOpaqueTerrainFrames >= HARDWARE_TERRAIN_FALLBACK_SPARSE_FRAMES) {
+                activateHardwareSafeVanillaTerrain(
+                        "sparse Nothirium shader terrain for " + sparseOpaqueTerrainFrames
+                                + " consecutive frames: opaque draws=" + terrainOpaqueDrawCount
+                );
+            }
+        } else if (layer == BlockRenderLayer.CUTOUT && terrainOpaqueLayerCount >= 3) {
+            sparseOpaqueTerrainFrames = 0;
         }
     }
 
@@ -11880,25 +12963,29 @@ public class PipelineContext {
     }
 
     private boolean hasLoadedTerrainNearPlayer() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.player == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             return false;
         }
 
-        int playerChunkX = ((int) Math.floor(mc.player.posX)) >> 4;
-        int playerChunkZ = ((int) Math.floor(mc.player.posZ)) >> 4;
-        if (mc.world.getChunkProvider() instanceof ChunkProviderClient provider) {
+        int playerChunkX = ((int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)))) >> 4;
+        int playerChunkZ = ((int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)))) >> 4;
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.call((com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)), net.minecraft.client.multiplayer.ChunkProviderClient.class, null, new String[] {"func_72863_F", "getChunkProvider"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS) instanceof ChunkProviderClient provider) {
             for (int dz = -1; dz <= 1; dz++) {
                 for (int dx = -1; dx <= 1; dx++) {
-                    Chunk chunk = provider.getLoadedChunk(playerChunkX + dx, playerChunkZ + dz);
-                    if (chunk != null && !chunk.isEmpty()) {
+                    Chunk chunk = com.l.ausm.impl.util.MinecraftReflectionCompat.call((provider), net.minecraft.world.chunk.Chunk.class, null, new String[] {"func_186026_b", "getLoadedChunk"},
+                new Class<?>[] {int.class, int.class}, (playerChunkX + dx), (playerChunkZ + dz));
+                    if (chunk != null && !com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((chunk), new String[] {"func_76621_g", "isEmpty"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
                         return true;
                     }
                 }
             }
             return false;
         }
-        return mc.world.isBlockLoaded(new BlockPos(mc.player));
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
+                new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc))
+        );
     }
 
     private void activateHardwareSafeVanillaTerrain(String reason) {
@@ -11922,7 +13009,7 @@ public class PipelineContext {
     }
 
     private void refreshHardwareSafeVanillaTerrainForCamera(Minecraft mc) {
-        if (!isPipelineActive || !hardwareSafeVanillaTerrain || mc == null || mc.world == null) {
+        if (!isPipelineActive || !hardwareSafeVanillaTerrain || mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             lastHardwareSafeVanillaTerrainRefreshWorld = null;
             lastHardwareSafeVanillaTerrainRefreshChunkX = Integer.MIN_VALUE;
             lastHardwareSafeVanillaTerrainRefreshChunkZ = Integer.MIN_VALUE;
@@ -11934,19 +13021,19 @@ public class PipelineContext {
             hardwareSafeVanillaTerrainRefreshCooldown--;
         }
 
-        Entity viewEntity = mc.getRenderViewEntity();
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         if (viewEntity == null) {
             return;
         }
-        int chunkX = ((int) Math.floor(viewEntity.posX)) >> 4;
-        int chunkZ = ((int) Math.floor(viewEntity.posZ)) >> 4;
+        int chunkX = ((int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity))) >> 4;
+        int chunkZ = ((int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity))) >> 4;
         boolean loadedNearPlayer = hasLoadedTerrainNearPlayer();
-        boolean changed = lastHardwareSafeVanillaTerrainRefreshWorld != mc.world
+        boolean changed = lastHardwareSafeVanillaTerrainRefreshWorld != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)
                 || lastHardwareSafeVanillaTerrainRefreshChunkX != chunkX
                 || lastHardwareSafeVanillaTerrainRefreshChunkZ != chunkZ
                 || (loadedNearPlayer && !lastHardwareSafeVanillaTerrainLoadedNearPlayer);
 
-        lastHardwareSafeVanillaTerrainRefreshWorld = mc.world;
+        lastHardwareSafeVanillaTerrainRefreshWorld = com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
         lastHardwareSafeVanillaTerrainRefreshChunkX = chunkX;
         lastHardwareSafeVanillaTerrainRefreshChunkZ = chunkZ;
         lastHardwareSafeVanillaTerrainLoadedNearPlayer = loadedNearPlayer;
@@ -11962,22 +13049,23 @@ public class PipelineContext {
         }
         hardwareSafeVanillaTerrainRefreshCooldown = HARDWARE_TERRAIN_FALLBACK_REFRESH_COOLDOWN_FRAMES;
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.world != null && mc.renderGlobal != null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null) {
             if (hardReset) {
                 deleteCachedVanillaTerrainRenderers();
                 vanillaViewFrustumStateStack.clear();
                 activeVanillaViewFrustumRenderGlobal = null;
                 activeVanillaViewFrustumWorld = null;
                 activeVanillaViewFrustumRenderDistanceChunks = -1;
-                rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "hardware-safe-vanilla");
+                rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "hardware-safe-vanilla");
             }
-            ensureVanillaTerrainRenderer(mc.world, true);
-            mc.renderGlobal.loadRenderers();
+            ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.loadRenderers(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc));
         } else {
             ensureVanillaTerrainRenderer();
         }
         NothiriumBypass.markAllChanged();
+        sparseOpaqueTerrainFrames = 0;
         zeroOpaqueTerrainRecoveryRequested = false;
         scheduleWorldTerrainRefresh(true, true, 0);
         scheduleInactiveVanillaRecoveryFrame();
@@ -12003,7 +13091,7 @@ public class PipelineContext {
                 detail,
                 pipelineFrameId,
                 worldFrameActive,
-                describeWorld(Minecraft.getMinecraft() != null ? Minecraft.getMinecraft().world : null),
+                describeWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) : null),
                 glStateSummary()
         );
     }
@@ -12188,7 +13276,7 @@ public class PipelineContext {
             resetPipelineState();
             return;
         }
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         Framebuffer target = currentWorldFramebufferTarget(mc);
         if (target == null) {
             resetPipelineState();
@@ -12202,6 +13290,18 @@ public class PipelineContext {
                 + ", targetStatus=" + framebufferStatus(target));
         beginTranslucents();
         logBetterPortalsPipeline("after-translucents");
+        readBuffer = pingPongManager.getReadBuffer();
+        if (readBuffer == null) {
+            logBetterPortalsPipeline("abort-null-read-after-translucents");
+            resetPipelineState(target);
+            return;
+        }
+        if (hardwareSafeVanillaTerrain) {
+            blitReadBufferToPresentationTarget(readBuffer, target, mc,
+                    externalTarget ? "choose-external-hardware-safe-pre-composite-blit" : "choose-hardware-safe-pre-composite-blit",
+                    externalTarget, true, true);
+            return;
+        }
         if (externalTarget) {
             runFullscreenPasses(ProgramArrayId.COMPOSITE);
             logBetterPortalsPipeline("after-external-composite");
@@ -12223,21 +13323,14 @@ public class PipelineContext {
                 return;
             }
 
-            logBetterPortalsPipeline("choose-external-composite-blit");
-            readBuffer.blitTo(
-                    fallbackColorAttachment(),
-                    target.framebufferObject,
-                    target.framebufferWidth,
-                    target.framebufferHeight
-            );
-            target.bindFramebuffer(false);
-            GlStateManager.viewport(0, 0, framebufferWidth(target, mc), framebufferHeight(target, mc));
-            finishWorldFramebuffer(target, true);
+            blitReadBufferToPresentationTarget(readBuffer, target, mc,
+                    "choose-external-composite-blit", true, false, false);
             return;
         }
 
         runFullscreenPasses(ProgramArrayId.COMPOSITE);
         logBetterPortalsPipeline("after-composite");
+        logShaderedVoidSkyTargetProbe("after-composite-before-final", target);
         readBuffer = pingPongManager.getReadBuffer();
         if (readBuffer == null) {
             logBetterPortalsPipeline("abort-null-read-after-composite");
@@ -12246,26 +13339,44 @@ public class PipelineContext {
         }
         runComputePrograms(finalComputePrograms, RenderPass.FINAL);
         logBetterPortalsPipeline("after-final-compute");
+        logShaderedVoidSkyTargetProbe("after-final-compute", target);
 
         PipelineProgram finalProgram = programs.get(RenderPass.FINAL);
         if (finalProgram != null && finalProgram.hasOwnProgram()) {
             logBetterPortalsPipeline("choose-final-pass");
             renderFinalPass(target);
+            logShaderedVoidSkyTargetProbe("after-final-pass", target);
             finishWorldFramebuffer(target, externalTarget);
             return;
         }
 
-        logBetterPortalsPipeline("choose-direct-blit");
-        clearPresentationTarget(target, "direct-blit");
+        blitReadBufferToPresentationTarget(readBuffer, target, mc,
+                "choose-direct-blit", externalTarget, true, true);
+    }
+
+    private void blitReadBufferToPresentationTarget(DeferredFramebuffer readBuffer,
+                                                    Framebuffer target,
+                                                    Minecraft mc,
+                                                    String reason,
+                                                    boolean externalTarget,
+                                                    boolean clearPresentation,
+                                                    boolean probeTarget) {
+        logBetterPortalsPipeline(reason);
+        if (clearPresentation) {
+            clearPresentationTarget(target, reason);
+        }
         readBuffer.blitTo(
                 fallbackColorAttachment(),
-                target.framebufferObject,
-                target.framebufferWidth,
-                target.framebufferHeight
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target)
         );
 
-        target.bindFramebuffer(false);
-        GlStateManager.viewport(0, 0, framebufferWidth(target, mc), framebufferHeight(target, mc));
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, framebufferWidth(target, mc), framebufferHeight(target, mc));
+        if (probeTarget) {
+            logShaderedVoidSkyTargetProbe("after-" + reason, target);
+        }
         finishWorldFramebuffer(target, externalTarget);
     }
 
@@ -12275,10 +13386,10 @@ public class PipelineContext {
         logBetterPortalsPipeline("finish-before-reset", "external=" + externalTarget
                 + ", target=" + describeFramebufferTargetDetailed(target)
                 + ", targetStatus=" + framebufferStatus(target));
-        target.bindFramebuffer(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
         renderPostWorldBloom(target, externalTarget);
         if (!externalTarget) {
-            GlStateManager.clearDepth(1.0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateClearDepth(1.0);
             GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
         }
         resetPipelineState(target);
@@ -12296,15 +13407,15 @@ public class PipelineContext {
         int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
         boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
         try {
-            target.bindFramebuffer(false);
-            GL11.glDrawBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
+            GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
             GL11.glColorMask(true, true, true, true);
             GL11.glDepthMask(true);
             GL11.glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
             GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
         } finally {
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-            GL11.glDrawBuffer(previousDrawBuffer);
+            restoreDrawBufferForFramebuffer(previousDrawFramebuffer, previousDrawBuffer);
             GL11.glDepthMask(previousDepthMask);
         }
     }
@@ -12473,6 +13584,14 @@ public class PipelineContext {
         Attachment[] flippedAttachments = program.directives().flippedAttachments(drawBuffers);
         pingPongManager.flipWrittenTextures(flippedAttachments);
         generateWrittenMipmaps(program.directives(), flippedAttachments);
+        if (program.arrayId() == ProgramArrayId.COMPOSITE) {
+            logShaderedVoidSkyAttachmentProbe(
+                    "after-indexed-composite-pass",
+                    "name=" + program.name()
+                            + ", index=" + program.index()
+                            + ", drawBuffers=" + drawBuffers
+                            + ", flipped=" + java.util.Arrays.toString(flippedAttachments));
+        }
     }
 
     private void bindFullscreenArrayProgram(FullscreenArrayProgram program) {
@@ -12499,11 +13618,11 @@ public class PipelineContext {
         if (alphaTest != null) {
             currentAlphaTestReference = alphaTest.reference();
             if (alphaTest.function() == GL11.GL_ALWAYS) {
-                GlStateManager.disableAlpha();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
             } else {
-                GlStateManager.enableAlpha();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
             }
-            GlStateManager.alphaFunc(alphaTest.function(), alphaTest.reference());
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(alphaTest.function(), alphaTest.reference());
         }
 
         ShaderBlendMode blendMode = directives.blendModeOverride();
@@ -12512,14 +13631,14 @@ public class PipelineContext {
             return;
         }
         if (blendMode != null && !blendMode.enabled()) {
-            GlStateManager.disableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
             resetIndexedBlendState();
             return;
         }
 
-        GlStateManager.enableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
         if (blendMode != null) {
-            GlStateManager.tryBlendFuncSeparate(
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                     blendMode.srcRgb(),
                     blendMode.dstRgb(),
                     blendMode.srcAlpha(),
@@ -12539,9 +13658,9 @@ public class PipelineContext {
             return;
         }
         DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
-        Minecraft mc = Minecraft.getMinecraft();
-        int width = framebuffer != null ? framebuffer.getWidth() : mc != null ? mc.displayWidth : 1;
-        int height = framebuffer != null ? framebuffer.getHeight() : mc != null ? mc.displayHeight : 1;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        int width = framebuffer != null ? framebuffer.getWidth() : mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) : 1;
+        int height = framebuffer != null ? framebuffer.getHeight() : mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) : 1;
         runComputePrograms(computes, bindingPass, width, height);
     }
 
@@ -12579,7 +13698,7 @@ public class PipelineContext {
             }
             applyComputeMemoryBarrier(false);
         }
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
     }
 
@@ -12641,6 +13760,13 @@ public class PipelineContext {
         Attachment[] flippedAttachments = program.directives().flippedAttachments(drawBuffers);
         pingPongManager.flipWrittenTextures(flippedAttachments);
         generateWrittenMipmaps(program, flippedAttachments);
+        if (program.stage() == ProgramStage.COMPOSITE) {
+            logShaderedVoidSkyAttachmentProbe(
+                    "after-composite-pass",
+                    "pass=" + program.pass()
+                            + ", drawBuffers=" + drawBuffers
+                            + ", flipped=" + java.util.Arrays.toString(flippedAttachments));
+        }
     }
 
     private boolean bindFullscreenPipelineProgram(PipelineProgram program) {
@@ -12666,7 +13792,7 @@ public class PipelineContext {
     }
 
     private void applyViewportScale(ShaderViewportScale scale, int width, int height) {
-        GlStateManager.viewport(scale.x(width), scale.y(height), scale.width(width), scale.height(height));
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(scale.x(width), scale.y(height), scale.width(width), scale.height(height));
     }
 
     private void applyFullscreenViewport(PipelineProgram program, List<Attachment> drawBuffers) {
@@ -12710,17 +13836,18 @@ public class PipelineContext {
                 + ", read=" + describeDeferredFramebuffer(readBuffer)
                 + ", final=" + describePipelineProgram(finalProgram));
         logColorBufferProbe("before-final");
+        logShaderedVoidSkyTargetProbe("final-before-clear", target);
         clearPresentationTarget(target, "final-pass");
         readBuffer.blitDepthTo(
-                target.framebufferObject,
-                target.framebufferWidth,
-                target.framebufferHeight
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target)
         );
 
-        target.bindFramebuffer(false);
-        GL11.glDrawBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
+        GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
         GL11.glColorMask(true, true, true, true);
-        GlStateManager.viewport(0, 0, target.framebufferWidth, target.framebufferHeight);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target), com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target));
         generateReadMipmaps(finalProgram);
 
         setupFullscreenState();
@@ -12730,7 +13857,7 @@ public class PipelineContext {
         boolean previousProgramTessellated = activeProgramTessellated;
         boolean previousProgramGeometric = activeProgramGeometric;
         try {
-            applyViewportScale(finalProgram, target.framebufferWidth, target.framebufferHeight);
+            applyViewportScale(finalProgram, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target), com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target));
             applyFullscreenArrayRenderState(finalProgram.directives(), finalProgram.drawBuffers());
             if (bindFullscreenPipelineProgram(finalProgram)) {
                 FullscreenQuad.draw();
@@ -12749,9 +13876,10 @@ public class PipelineContext {
             TextureBinder.restoreDefaultTextureUnit();
         }
 
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
         TextureBinder.restoreDefaultTextureUnit();
-        GlStateManager.viewport(0, 0, target.framebufferWidth, target.framebufferHeight);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target), com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target));
+        logShaderedVoidSkyTargetProbe("final-after-draw", target);
         logBetterPortalsPipeline("final-pass-end", "target=" + describeFramebufferTargetDetailed(target)
                 + ", targetStatus=" + framebufferStatus(target));
     }
@@ -12832,12 +13960,12 @@ public class PipelineContext {
     }
 
     private void setupFullscreenState() {
-        GlStateManager.disableDepth();
-        GlStateManager.depthMask(false);
-        GlStateManager.disableBlend();
-        GlStateManager.disableAlpha();
-        GlStateManager.enableTexture2D();
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
         GL11.glColorMask(true, true, true, true);
 
         GL11.glMatrixMode(GL11.GL_PROJECTION);
@@ -12857,9 +13985,9 @@ public class PipelineContext {
         GL11.glMatrixMode(GL11.GL_MODELVIEW);
         GL11.glPopMatrix();
 
-        GlStateManager.depthMask(true);
-        GlStateManager.enableDepth();
-        GlStateManager.enableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
     }
 
     public void cleanup() {
@@ -12872,7 +14000,7 @@ public class PipelineContext {
 
     private void cleanupRuntimeState(boolean deleteActiveCompiledPrograms, boolean deleteCachedCompiledPrograms, boolean deleteVanillaTerrainRenderers) {
         resetPipelineState();
-        OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, 0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), 0);
 
         pingPongManager.cleanup();
         if (shadowFramebuffer != null) {
@@ -12880,6 +14008,9 @@ public class PipelineContext {
             shadowFramebuffer = null;
         }
         shadowMapPopulated = false;
+        shadowMapUsable = false;
+        shadowMapSparseForSampling = false;
+        shadowMapCoverageStableFrames = 0;
         resetShadowRenderCache();
         deleteCenterDepthSmoothTexture();
         deleteNoiseTexture();
@@ -12965,6 +14096,7 @@ public class PipelineContext {
         terrainLayerCountFrame = Long.MIN_VALUE;
         terrainOpaqueLayerCount = 0;
         terrainOpaqueDrawCount = 0;
+        sparseOpaqueTerrainFrames = 0;
         hardwareSafeVanillaTerrainRefreshCooldown = 0;
         lastHardwareSafeVanillaTerrainRefreshWorld = null;
         lastHardwareSafeVanillaTerrainRefreshChunkX = Integer.MIN_VALUE;
@@ -12987,6 +14119,7 @@ public class PipelineContext {
         passStack.clear();
         worldPassBypassStack.clear();
         clientRenderFrameNanos = Long.MIN_VALUE;
+        shaderlessCustomSkyBackingThisFrame = false;
         bloomLayerRenderedThisWorldFrame = false;
         shaderlessBloomRenderedThisWorldFrame = false;
         shaderlessWorldPassActive = false;
@@ -13090,11 +14223,11 @@ public class PipelineContext {
             return "null";
         }
 
-        return framebuffer.framebufferObject
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer)
                 + "("
-                + framebuffer.framebufferWidth
+                + com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer)
                 + "x"
-                + framebuffer.framebufferHeight
+                + com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer)
                 + ")";
     }
 
@@ -13111,9 +14244,9 @@ public class PipelineContext {
         }
         betterPortalsPipelineLogs++;
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World renderWorld = renderWorld(mc);
-        World clientWorld = mc != null ? mc.world : null;
+        World clientWorld = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
         PipelineProgram finalProgram = programs.get(RenderPass.FINAL);
         MainMod.LOGGER.info("[BetterPortalsPipeline] stage={} detail={} active={} worldFrame={} frame={} activePass={} phase={} renderWorld={} clientWorld={} nested={} renderPass={} nestedShaders={} externalTarget={} externalStatus={} read={} pack={} finalProgram={} compositePrograms={} finalComputes={} deferred={} setupComputePending={} gl={}",
@@ -13162,19 +14295,19 @@ public class PipelineContext {
         if (framebuffer == null) {
             return "null";
         }
-        return framebuffer.framebufferObject
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer)
                 + "("
-                + framebuffer.framebufferWidth
+                + com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer)
                 + "x"
-                + framebuffer.framebufferHeight
+                + com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer)
                 + ", tex="
-                + framebuffer.framebufferTexture
+                + com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(framebuffer)
                 + ", texSize="
-                + framebuffer.framebufferTextureWidth
+                + com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((framebuffer), 0, "field_147622_a", "framebufferTextureWidth")
                 + "x"
-                + framebuffer.framebufferTextureHeight
+                + com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((framebuffer), 0, "field_147620_b", "framebufferTextureHeight")
                 + ", depth="
-                + framebuffer.depthBuffer
+                + com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((framebuffer), 0, "field_147624_h", "depthBuffer")
                 + ")";
     }
 
@@ -13182,13 +14315,13 @@ public class PipelineContext {
         if (framebuffer == null) {
             return "null";
         }
-        if (!OpenGlHelper.isFramebufferEnabled()) {
+        if (!com.l.ausm.impl.util.MinecraftReflectionCompat.isFramebufferEnabled()) {
             return "disabled";
         }
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         try {
-            GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer.framebufferObject);
+            GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer));
             int status = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER);
             return status == GL30.GL_FRAMEBUFFER_COMPLETE ? "complete" : "0x" + Integer.toHexString(status);
         } catch (RuntimeException error) {
@@ -13269,8 +14402,8 @@ public class PipelineContext {
 
         World renderPassWorld = BetterPortalsCompat.currentRenderPassWorld();
         if (renderPassWorld == null) {
-            Minecraft mc = Minecraft.getMinecraft();
-            renderPassWorld = mc != null ? mc.world : null;
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+            renderPassWorld = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         }
         if (renderPassWorld == null) {
             MainMod.LOGGER.debug("[BetterPortalsCompat] Skipped chunk updates with no active render-pass world");
@@ -13328,8 +14461,8 @@ public class PipelineContext {
             return null;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        return mc != null ? mc.world : null;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        return mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
     }
 
     private boolean isBetterPortalsChunkUpdateNullWorldFailure(NullPointerException exception) {
@@ -13389,18 +14522,15 @@ public class PipelineContext {
     }
 
     private World renderChunkWorld(RenderChunk chunk) {
-        if (chunk instanceof RenderChunkAccessor accessor) {
-            return accessor.ausm$world();
-        }
-        return chunk.getWorld();
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkWorld(chunk);
     }
 
     private boolean assignRenderChunkWorld(RenderChunk chunk, World world) {
-        if (chunk == null || world == null || !(chunk instanceof RenderChunkAccessor accessor)) {
+        if (chunk == null || world == null) {
             return false;
         }
         try {
-            accessor.ausm$setWorld(world);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setField(chunk, world, "field_178588_d", "world");
             return true;
         } catch (RuntimeException ignored) {
             return false;
@@ -13415,7 +14545,14 @@ public class PipelineContext {
     }
 
     private int safeDimensionId(World world) {
-        return world != null && world.provider != null ? world.provider.getDimension() : Integer.MIN_VALUE;
+        return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) : Integer.MIN_VALUE;
+    }
+
+    private boolean isOverworldShaderEnvironment(World world) {
+        int dimensionId = safeDimensionId(world);
+        return dimensionId != Integer.MIN_VALUE
+                && dimensionId != -1
+                && dimensionId != 1;
     }
 
     private String describeWorld(World world) {
@@ -13443,9 +14580,9 @@ public class PipelineContext {
         if (useNestedVanillaRenderer) {
             pushVanillaTerrainRendererState();
         }
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World world = BetterPortalsCompat.currentRenderPassWorld();
-        World targetWorld = world != null ? world : (mc != null ? mc.world : null);
+        World targetWorld = world != null ? world : (mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null);
         if (useNestedVanillaRenderer || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
             ensureVanillaTerrainRenderer(targetWorld, true);
         } else if (!nestedBetterPortalsView) {
@@ -13485,9 +14622,9 @@ public class PipelineContext {
             return false;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World world = BetterPortalsCompat.currentRenderPassWorld();
-        World targetWorld = world != null ? world : (mc != null ? mc.world : null);
+        World targetWorld = world != null ? world : (mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null);
         if (useNestedVanillaRenderer) {
             pushVanillaTerrainRendererState();
         }
@@ -13506,16 +14643,16 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.renderGlobal == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
 
         renderAusmBloomLayer(
-                mc.renderGlobal,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc),
                 currentWorldPartialTicks,
                 currentWorldPass,
-                mc.getRenderViewEntity()
+                com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc)
         );
     }
 
@@ -13530,14 +14667,14 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.renderGlobal == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
 
         currentWorldPass = pass;
         currentWorldPartialTicks = partialTicks;
-        renderAusmBloomLayer(mc.renderGlobal, partialTicks, pass, mc.getRenderViewEntity());
+        renderAusmBloomLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), partialTicks, pass, com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc));
     }
 
     public int renderShaderlessVisibleBloomLayerFromWorldPass(float partialTicks, int pass) {
@@ -13552,9 +14689,9 @@ public class PipelineContext {
             return 0;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        if (mc == null || mc.renderGlobal == null || bloomLayer == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null || bloomLayer == null) {
             return 0;
         }
 
@@ -13562,16 +14699,16 @@ public class PipelineContext {
                 ? BetterPortalsCompat.currentRenderPassFramebuffer()
                 : null;
         if (bloomTarget == null) {
-            bloomTarget = mc.getFramebuffer();
+            bloomTarget = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
         }
 
         int bloomRendered = 0;
         if (bloomTarget != null) {
             bloomRendered = bloomRenderer.renderBloomLayer(
-                    mc.renderGlobal,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc),
                     partialTicks,
                     pass,
-                    mc.getRenderViewEntity(),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc),
                     null,
                     bloomTarget,
                     false
@@ -13597,16 +14734,14 @@ public class PipelineContext {
             return 0;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.renderGlobal == null || mc.getRenderViewEntity() == null || mc.getFramebuffer() == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null) {
             return 0;
         }
 
         boolean hasBloomResources = bloomRenderer.hasBloomResources();
         boolean hasShaderlessBloomMetadata = hasShaderlessBloomMetadata();
-        boolean framedBloomBootstrap = !pipelineActive
-                && !shaderlessBloomVertexFormatRefreshRequested
-                && hasShaderlessFramedBloomBootstrapCandidate();
+        boolean framedBloomBootstrap = false;
         refreshShaderlessBloomVertexFormatIfNeeded(hasBloomResources);
 
         boolean shouldExtractBloom = hasShaderlessBloomMetadata || framedBloomBootstrap;
@@ -13617,7 +14752,7 @@ public class PipelineContext {
             return 0;
         }
 
-        Entity renderViewEntity = mc.getRenderViewEntity();
+        Entity renderViewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         boolean previousShaderlessBloomExtractionActive = shaderlessBloomExtractionActive;
         boolean previousShaderlessBloomExtractionBootstrapActive = shaderlessBloomExtractionBootstrapActive;
         DeferredFramebuffer pipelineDepthSource = pipelineActive && worldFrameActive && pingPongManager.isInitialized()
@@ -13628,7 +14763,7 @@ public class PipelineContext {
         shaderlessBloomExtractionBootstrapActive = framedBloomBootstrap && !hasShaderlessBloomMetadata;
         try {
             rendered = bloomRenderer.renderEmissiveTerrainBloomCount(
-                    mc.getFramebuffer(),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc),
                     pipelineDepthSource,
                     () -> renderBloomExtractionGeometry(mc, renderViewEntity, true),
                     true
@@ -13650,7 +14785,7 @@ public class PipelineContext {
             bloomLayerRenderedThisWorldPass = true;
             bloomLayerRenderedThisWorldFrame = true;
         } else {
-            bloomRenderer.renderPostWorldBloom(mc.getFramebuffer());
+            bloomRenderer.renderPostWorldBloom(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc));
             shaderlessBloomRenderedThisWorldPass = true;
             shaderlessBloomRenderedThisWorldFrame = true;
         }
@@ -13676,14 +14811,14 @@ public class PipelineContext {
             return 0;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null) {
             return 0;
         }
 
         pendingDeferredNativeBloom = false;
-        Entity renderEntity = entity != null ? entity : mc.getRenderViewEntity();
-        Framebuffer minecraftTarget = mc.getFramebuffer();
+        Entity renderEntity = entity != null ? entity : com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
+        Framebuffer minecraftTarget = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
         DeferredFramebuffer pipelineDepthSource = isPipelineActive && worldFrameActive && pingPongManager.isInitialized()
                 ? pingPongManager.getReadBuffer()
                 : null;
@@ -13728,15 +14863,15 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.renderGlobal == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
 
         double partialTicks = pendingDeferredBloomPartialTicks;
         int pass = pendingDeferredBloomPass;
         pendingDeferredNativeBloom = false;
-        renderAusmBloomLayer(mc.renderGlobal, partialTicks, pass, mc.getRenderViewEntity());
+        renderAusmBloomLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), partialTicks, pass, com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc));
     }
 
     private void recordBloomRenderResult(int rendered) {
@@ -13769,11 +14904,11 @@ public class PipelineContext {
     }
 
     private void renderPostWorldBloom(Framebuffer target, boolean externalTarget) {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (target == null
                 || mc == null
-                || mc.world == null
-                || mc.getRenderViewEntity() == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) == null
                 || externalTarget
                 || renderingGuiScreen()
                 || isRenderingBetterPortalsRenderPass()) {
@@ -13781,7 +14916,16 @@ public class PipelineContext {
         }
         renderDeferredNativeBloomIfNeeded();
         if (bloomLayerRenderedThisWorldPass || bloomLayerRenderedThisWorldFrame) {
-            bloomRenderer.renderPostWorldBloom(target);
+            DeferredFramebuffer handMaskSource = isPipelineActive && pingPongManager.isInitialized()
+                    ? pingPongManager.getReadBuffer()
+                    : null;
+            int preHandDepthTexture = handMaskSource != null
+                    ? handMaskSource.getDepthSamplerTexture(DeferredFramebuffer.DEPTHTEX1_SNAPSHOT)
+                    : 0;
+            int postHandDepthTexture = handMaskSource != null
+                    ? handMaskSource.getDepthSamplerTexture(DeferredFramebuffer.DEPTHTEX2_SNAPSHOT)
+                    : 0;
+            bloomRenderer.renderPostWorldBloom(target, preHandDepthTexture, postHandDepthTexture);
             return;
         }
         bloomRenderer.renderPostWorldBloom(target);
@@ -13806,24 +14950,23 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.getRenderViewEntity() == null || mc.getFramebuffer() == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null) {
             logShaderlessBloomHook("skip missing-minecraft-state mc=" + (mc != null)
-                    + " world=" + (mc != null && mc.world != null)
-                    + " entity=" + (mc != null && mc.getRenderViewEntity() != null)
-                    + " framebuffer=" + (mc != null && mc.getFramebuffer() != null));
+                    + " world=" + (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null)
+                    + " entity=" + (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) != null)
+                    + " framebuffer=" + (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) != null));
             return;
         }
         boolean hasBloomResources = bloomRenderer.hasBloomResources();
         boolean hasShaderlessBloomMetadata = hasShaderlessBloomMetadata();
-        boolean framedBloomBootstrap = !shaderlessBloomVertexFormatRefreshRequested
-                && hasShaderlessFramedBloomBootstrapCandidate();
+        boolean framedBloomBootstrap = false;
         refreshShaderlessBloomVertexFormatIfNeeded(hasBloomResources);
 
         boolean shouldExtractShaderlessBloom = hasShaderlessBloomMetadata || framedBloomBootstrap;
         boolean nativeBloom = AusmBloomLayer.shouldUseShaderlessNativeHook();
-        Entity renderViewEntity = mc.getRenderViewEntity();
-        logShaderlessBloomHook("render target=" + describeFramebufferTarget(mc.getFramebuffer())
+        Entity renderViewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
+        logShaderlessBloomHook("render target=" + describeFramebufferTarget(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc))
                 + " bloomResources=" + hasBloomResources
                 + " metadata=" + hasShaderlessBloomMetadata
                 + " framedBootstrap=" + framedBloomBootstrap
@@ -13833,6 +14976,7 @@ public class PipelineContext {
         if (!shouldExtractShaderlessBloom && !nativeBloom) {
             shaderlessBloomRenderedThisWorldPass = true;
             shaderlessBloomRenderedThisWorldFrame = true;
+            sealShaderlessWorldFramebufferAlpha("no-bloom-before-gui");
             restoreShaderlessBloomExitState(mc);
             return;
         }
@@ -13845,7 +14989,7 @@ public class PipelineContext {
             shaderlessBloomExtractionBootstrapActive = framedBloomBootstrap && !hasShaderlessBloomMetadata;
             try {
                 shaderlessExtractRendered = bloomRenderer.renderShaderlessEmissiveTerrainBloom(
-                        mc.getFramebuffer(),
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc),
                         () -> renderShaderlessBloomExtractionGeometry(mc, renderViewEntity)
                 );
             } finally {
@@ -13857,68 +15001,612 @@ public class PipelineContext {
                     + " bypass=" + NothiriumBypass.shouldBypass());
         }
         if (shaderlessExtractRendered) {
-            bloomRenderer.renderPostWorldBloom(mc.getFramebuffer());
+            bloomRenderer.renderPostWorldBloom(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc));
             logShaderlessBloomHook("extract-composited");
         } else {
-            renderPostWorldBloom(mc.getFramebuffer(), false);
+            renderPostWorldBloom(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc), false);
         }
         shaderlessBloomRenderedThisWorldPass = true;
         shaderlessBloomRenderedThisWorldFrame = true;
+        sealShaderlessWorldFramebufferAlpha("post-bloom-before-gui");
         restoreShaderlessBloomExitState(mc);
     }
 
-    private void restoreShaderlessBloomExitState(Minecraft mc) {
-        OpenGlHelper.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        GlStateManager.bindTexture(0);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glDisable(GL11.GL_SCISSOR_TEST);
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GlStateManager.colorMask(true, true, true, true);
-        if (mc != null) {
-            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
+    private boolean shouldRenderShaderlessCustomSkyBacking(Minecraft mc) {
+        if (clientRenderFrameNanos != Long.MIN_VALUE) {
+            return shaderlessCustomSkyBackingThisFrame;
+        }
+        return shouldRenderShaderlessCustomSkyBackingNow(mc);
+    }
+
+    private boolean shouldRenderShaderlessCustomSkyBackingNow(Minecraft mc) {
+        return shouldUseShaderlessOwnedSky(mc);
+    }
+
+    private Vec3d desaturateSkyColor(Vec3d color, double saturation) {
+        double s = clamp01(saturation);
+        double x = com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(color);
+        double y = com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(color);
+        double z = com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(color);
+        double luminance = x * 0.299D + y * 0.587D + z * 0.114D;
+        return new Vec3d(
+                clamp01(luminance + (x - luminance) * s),
+                clamp01(luminance + (y - luminance) * s),
+                clamp01(luminance + (z - luminance) * s)
+        );
+    }
+
+    private Vec3d mixSkyColors(Vec3d from, Vec3d to, double factor) {
+        double t = clamp01(factor);
+        double inverse = 1.0D - t;
+        return new Vec3d(
+                clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(from) * inverse + com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(to) * t),
+                clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(from) * inverse + com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(to) * t),
+                clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(from) * inverse + com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(to) * t)
+        );
+    }
+
+    private double clamp01(double value) {
+        return Math.max(0.0D, Math.min(1.0D, value));
+    }
+
+    private static int clampInt(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static int floorDiv(int value, int divisor) {
+        return Math.floorDiv(value, divisor);
+    }
+
+    public void renderOwnedSkyBackingBeforeSky(float partialTicks) {
+        if (externalWorldFramebufferTarget != null
+                || isRenderingBetterPortalsNestedView()
+                || isRenderingBetterPortalsRenderPass()) {
+            return;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null
+                || !isSimpleVoidWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc))
+                || (!shouldRenderShaderlessCustomSkyBacking(mc) && !shouldRenderShaderedOwnedSkyBacking(mc))) {
+            return;
+        }
+
+        Vec3d skyColor = null;
+        try {
+            skyColor = com.l.ausm.impl.util.MinecraftReflectionCompat.call((com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_72833_a", "getSkyColor"},
+                new Class<?>[] {net.minecraft.entity.Entity.class, float.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc)), (partialTicks));
+        } catch (RuntimeException | LinkageError ignored) {
+            skyColor = null;
+        }
+
+        try {
+            if (shouldRenderShaderlessCustomSkyBacking(mc)) {
+                bindMinecraftFramebufferForGui(mc);
+                drawOwnedSkyBackingGradient(
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
+                        skyColor,
+                        mc);
+            } else {
+                drawOwnedSkyBackingGradient(
+                        Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc)),
+                        Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc)),
+                        skyColor,
+                        mc);
+            }
+        } catch (RuntimeException | LinkageError ignored) {
+            // Keep sky rendering on vanilla's path if the optional backing pass fails.
+        } finally {
+            if (shouldRenderShaderlessCustomSkyBacking(mc)) {
+                restoreShaderlessBloomExitState(mc);
+            }
         }
     }
 
-    public void prepareShaderlessUiRenderingBoundary() {
-        probeShaderlessSkyGuiState("shaderless-ui-boundary-enter");
+    public void renderShaderlessGuiCustomSkyBackingBeforeSky(float partialTicks) {
+        renderOwnedSkyBackingBeforeSky(partialTicks);
+    }
+
+    private boolean shouldRenderShaderedOwnedSkyBacking(Minecraft mc) {
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        return isPipelineActive
+                && world != null
+                && isSimpleVoidWorld(world)
+                && !isRenderingBetterPortalsNestedView()
+                && !isRenderingBetterPortalsRenderPass();
+    }
+
+    private void drawOwnedSkyBackingGradient(int width, int height, Vec3d skyColor, Minecraft mc) {
+        int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+        int previousShadeModel = GL11.glGetInteger(GL11.GL_SHADE_MODEL);
+        int previousDepthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
+        boolean previousDepthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
+        boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+        boolean previousTexture2D = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
+        boolean previousBlend = GL11.glIsEnabled(GL11.GL_BLEND);
+        boolean previousCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+        boolean previousFog = GL11.glIsEnabled(GL11.GL_FOG);
+        boolean pushedProjection = false;
+        boolean pushedModelView = false;
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179106_n", "disableFog"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+            GL11.glDepthFunc(GL11.GL_LEQUAL);
+
+            GL11.glMatrixMode(GL11.GL_PROJECTION);
+            GL11.glPushMatrix();
+            pushedProjection = true;
+            GL11.glLoadIdentity();
+            GL11.glOrtho(0.0D, Math.max(1, width), 0.0D, Math.max(1, height), -1.0D, 1.0D);
+            GL11.glMatrixMode(GL11.GL_MODELVIEW);
+            GL11.glPushMatrix();
+            pushedModelView = true;
+            GL11.glLoadIdentity();
+            GL11.glShadeModel(GL11.GL_SMOOTH);
+
+            width = Math.max(1, width);
+            height = Math.max(1, height);
+            Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
+            BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181706_f", "POSITION_COLOR"));
+            int bands = Math.max(24, Math.min(96, height / 8));
+            for (int i = 0; i < bands; i++) {
+                double y0 = (height * i) / (double) bands;
+                double y1 = (height * (i + 1)) / (double) bands;
+                float[] c0 = officialOwnedSkyBackingColorAt(y0, height, skyColor, mc);
+                float[] c1 = officialOwnedSkyBackingColorAt(y1, height, skyColor, mc);
+                putGradientQuad(buffer, 0.0D, y0, width, y1, c0, c1);
+            }
+            com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+        } finally {
+            if (pushedModelView) {
+                GL11.glMatrixMode(GL11.GL_MODELVIEW);
+                GL11.glPopMatrix();
+            }
+            if (pushedProjection) {
+                GL11.glMatrixMode(GL11.GL_PROJECTION);
+                GL11.glPopMatrix();
+            }
+            GL11.glMatrixMode(previousMatrixMode);
+            GL11.glShadeModel(previousShadeModel);
+            if (previousTexture2D) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
+            }
+            if (previousBlend) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+            }
+            if (previousCull) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+            }
+            if (previousFog) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179127_m", "enableFog"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179106_n", "disableFog"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+            }
+            if (previousDepthTest) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+            }
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(previousDepthMask);
+            GL11.glDepthFunc(previousDepthFunc);
+        }
+    }
+
+    private void renderShaderlessBotaniaVoidDetails(float partialTicks, WorldClient world, Minecraft mc) {
+        TextureManager textureManager = com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc);
+        if (textureManager == null) {
+            return;
+        }
+
+        int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+        int previousShadeModel = GL11.glGetInteger(GL11.GL_SHADE_MODEL);
+        int previousDepthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
+        int previousBlendSrcRgb = GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB);
+        int previousBlendDstRgb = GL11.glGetInteger(GL14.GL_BLEND_DST_RGB);
+        int previousBlendSrcAlpha = GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA);
+        int previousBlendDstAlpha = GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA);
+        boolean previousTexture2D = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
+        boolean previousBlend = GL11.glIsEnabled(GL11.GL_BLEND);
+        boolean previousAlpha = GL11.glIsEnabled(GL11.GL_ALPHA_TEST);
+        boolean previousDepthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
+        boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+        boolean previousCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+        boolean previousFog = GL11.glIsEnabled(GL11.GL_FOG);
+        boolean previousLighting = GL11.glIsEnabled(GL11.GL_LIGHTING);
+        boolean pushed = false;
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179106_n", "disableFog"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+            GL11.glDepthFunc(GL11.GL_LEQUAL);
+
+            GL11.glMatrixMode(GL11.GL_MODELVIEW);
+            GL11.glPushMatrix();
+            pushed = true;
+
+            float rainFade = 1.0F - clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, partialTicks));
+            float celestial = com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks);
+            float dayDistance = celestial > 0.5F ? 1.0F - celestial : celestial;
+            float nightAlpha = clamp01((dayDistance - 0.30F) * 5.0F) * rainFade;
+            float ornamentAlpha = Math.max(0.10F, nightAlpha) * rainFade;
+            long time = com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world);
+
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO);
+            drawBotaniaVoidPlanets(textureManager, time, partialTicks, ornamentAlpha);
+            drawBotaniaVoidSkyBands(textureManager, time, partialTicks, nightAlpha * 0.45F);
+            drawBotaniaVoidRainbow(textureManager, time, partialTicks, rainFade, celestial);
+        } finally {
+            if (pushed) {
+                GL11.glMatrixMode(GL11.GL_MODELVIEW);
+                GL11.glPopMatrix();
+            }
+            GL11.glMatrixMode(previousMatrixMode);
+            GL11.glShadeModel(previousShadeModel);
+            if (previousTexture2D) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
+            }
+            if (previousBlend) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+            }
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(previousBlendSrcRgb, previousBlendDstRgb, previousBlendSrcAlpha, previousBlendDstAlpha);
+            if (previousAlpha) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
+            }
+            if (previousDepthTest) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+            }
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(previousDepthMask);
+            if (previousCull) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+            }
+            if (previousLighting) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179145_e", "enableLighting"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+            }
+            if (previousFog) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179127_m", "enableFog"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179106_n", "disableFog"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+            }
+            GL11.glDepthFunc(previousDepthFunc);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        }
+    }
+
+    private void drawBotaniaVoidPlanets(TextureManager textureManager, long time, float partialTicks, float alpha) {
+        if (alpha <= 0.01F) {
+            return;
+        }
+        GL11.glPushMatrix();
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, clamp01(alpha * 1.8F));
+            GL11.glRotatef(90.0F, 0.5F, 0.5F, 0.0F);
+            float size = 20.0F;
+            for (int i = 0; i < BOTANIA_VOID_PLANET_TEXTURES.length; i++) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, BOTANIA_VOID_PLANET_TEXTURES[i]);
+                drawBotaniaVoidBillboard(size);
+                switch (i) {
+                    case 0:
+                        GL11.glRotatef(70.0F, 1.0F, 0.0F, 0.0F);
+                        size = 12.0F;
+                        break;
+                    case 1:
+                        GL11.glRotatef(120.0F, 0.0F, 0.0F, 1.0F);
+                        size = 15.0F;
+                        break;
+                    case 2:
+                        GL11.glRotatef(80.0F, 1.0F, 0.0F, 1.0F);
+                        size = 25.0F;
+                        break;
+                    case 3:
+                        GL11.glRotatef(100.0F, 0.0F, 0.0F, 1.0F);
+                        size = 10.0F;
+                        break;
+                    case 4:
+                        GL11.glRotatef(-60.0F, 1.0F, 0.0F, 0.5F);
+                        size = 40.0F;
+                        break;
+                    default:
+                        GL11.glRotatef(((time + (long) (partialTicks * 20.0F)) % 360L) * 0.02F, 0.0F, 1.0F, 0.0F);
+                        break;
+                }
+            }
+        } finally {
+            GL11.glPopMatrix();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        }
+    }
+
+    private void drawBotaniaVoidSkyBands(TextureManager textureManager, long time, float partialTicks, float alpha) {
+        if (alpha <= 0.01F) {
+            return;
+        }
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, BOTANIA_VOID_SKYBOX_TEXTURE);
+        GL11.glPushMatrix();
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, clamp01(alpha));
+            GL11.glTranslatef(0.0F, -1.0F, 0.0F);
+            GL11.glRotatef(220.0F, 1.0F, 0.0F, 0.0F);
+            drawBotaniaRibbon((time + partialTicks) * 0.16F, 20.0F, 2.0F, 90);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 0.4F, 0.4F, clamp01(alpha * 0.75F));
+            GL11.glRotatef(20.0F, 1.0F, 0.0F, 0.0F);
+            drawBotaniaRibbon((time + partialTicks) * 0.04F, 20.0F, 2.0F, 90);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(0.4F, 1.0F, 0.7F, clamp01(alpha * 0.75F));
+            GL11.glRotatef(50.0F, 1.0F, 0.0F, 0.0F);
+            drawBotaniaRibbon((time + partialTicks) * 0.40F, 20.0F, 2.0F, 90);
+        } finally {
+            GL11.glPopMatrix();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        }
+    }
+
+    private void drawBotaniaVoidRainbow(TextureManager textureManager, long time, float partialTicks, float rainFade, float celestial) {
+        float daySide = celestial > 0.25F ? 1.0F - celestial : celestial;
+        float alpha = clamp01((0.25F - Math.min(0.25F, daySide)) * 4.0F) * rainFade * 0.35F;
+        if (alpha <= 0.01F) {
+            return;
+        }
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, BOTANIA_VOID_RAINBOW_TEXTURE);
+        GL11.glPushMatrix();
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, alpha);
+            GL11.glRotatef(35.0F + ((time + partialTicks) % 24000.0F) * 0.002F, 0.0F, 0.0F, 1.0F);
+            GL11.glTranslatef(0.0F, 18.0F, 0.0F);
+            drawBotaniaRibbon((time + partialTicks) * 0.02F, 30.0F, 2.5F, 96);
+        } finally {
+            GL11.glPopMatrix();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        }
+    }
+
+    private void drawBotaniaVoidBillboard(float size) {
+        Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
+        BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181707_g", "POSITION_TEX"));
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, -size, 100.0D, -size, 0.0D, 0.0D);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, size, 100.0D, -size, 1.0D, 0.0D);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, size, 100.0D, size, 1.0D, 1.0D);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, -size, 100.0D, size, 0.0D, 1.0D);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+    }
+
+    private void drawBotaniaRibbon(float scrollDegrees, float radius, float height, int segments) {
+        Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
+        BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUAD_STRIP, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181707_g", "POSITION_TEX"));
+        double scroll = scrollDegrees / 360.0D;
+        for (int i = 0; i <= segments; i++) {
+            double angle = ((i / (double) segments) * Math.PI * 2.0D);
+            double x = Math.cos(angle) * radius;
+            double z = Math.sin(angle) * radius;
+            double wave = Math.sin(angle * 5.0D) * 0.75D;
+            double u = (i / (double) segments) + scroll;
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, x, wave, z, u, 1.0D);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosTexEnd(buffer, x, wave + height, z, u, 0.0D);
+        }
+        com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+    }
+
+    private float[] officialOwnedSkyBackingColorAt(double y, int height, Vec3d skyColor, Minecraft mc) {
+        double uvY = clamp01(y / Math.max(1.0D, height));
+        return vec3Color(officialOwnedSkyBackingColor(uvY, skyColor, mc));
+    }
+
+    private Vec3d officialOwnedSkyBackingColor(double uvY, Vec3d skyColor, Minecraft mc) {
+        double horizonY = 0.50D;
+        double softness = 0.70D;
+        double dayFactor = 1.0D - officialSkyNightFactor(mc);
+
+        Vec3d source = skyColor != null ? skyColor : new Vec3d(0.0D, 0.0D, 0.0D);
+        Vec3d dayTop = maxSkyColor(source, new Vec3d(0.45D, 0.62D, 0.86D));
+        Vec3d dayHorizon = mixSkyColors(desaturateSkyColor(dayTop, 0.35D), new Vec3d(0.84D, 0.90D, 1.0D), 0.62D);
+        Vec3d dayLower = dayHorizon;
+
+        Vec3d nightFloor = new Vec3d(0.018D, 0.024D, 0.045D);
+        Vec3d nightSky = maxSkyColor(source, new Vec3d(0.026D, 0.034D, 0.062D));
+        Vec3d nightBase = mixSkyColors(nightFloor, nightSky, 0.75D);
+
+        Vec3d topColor = mixSkyColors(nightBase, dayTop, dayFactor);
+        Vec3d lowerColor = mixSkyColors(nightBase, dayLower, dayFactor);
+
+        double band = (uvY - (horizonY - softness)) / (softness * 2.0D);
+        Vec3d result = mixSkyColors(lowerColor, topColor, smootherstep(band));
+
+        double rainAmount = officialSkyRainFactor(mc);
+        Vec3d rainyDome = mixSkyColors(lowerColor, topColor, 0.48D);
+        result = mixSkyColors(result, rainyDome, clamp01(rainAmount * 0.75D));
+
+        Vec3d rainColor = new Vec3d(
+                Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(result), 0.17D),
+                Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(result), 0.185D),
+                Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(result), 0.235D)
+        );
+        return mixSkyColors(result, rainColor, clamp01(rainAmount * 0.50D));
+    }
+
+    private double officialSkyNightFactor(Minecraft mc) {
+        World world = renderWorld(mc);
+        if (world == null) {
+            return 0.0D;
+        }
+        double timeAngle = ((com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L) / 24000.0D) % 1.0D;
+        return clamp01(Math.max(Math.sin(timeAngle * -Math.PI * 2.0D), 0.0D));
+    }
+
+    private double officialSkyRainFactor(Minecraft mc) {
+        World world = renderWorld(mc);
+        if (world == null) {
+            return 0.0D;
+        }
+        float partialTicks = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc) : 0.0F;
+        return clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, partialTicks));
+    }
+
+    private Vec3d maxSkyColor(Vec3d left, Vec3d right) {
+        return new Vec3d(
+                Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(left), com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(right)),
+                Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(left), com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(right)),
+                Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(left), com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(right))
+        );
+    }
+
+    private double smootherstep(double value) {
+        double t = clamp01(value);
+        return t * t * t * (t * (t * 6.0D - 15.0D) + 10.0D);
+    }
+
+    private float[] vec3Color(Vec3d color) {
+        return new float[] {
+                clamp01((float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(color)),
+                clamp01((float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(color)),
+                clamp01((float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(color))
+        };
+    }
+
+    private void putGradientQuad(BufferBuilder buffer, double x0, double y0, double x1, double y1, float[] bottom, float[] top) {
+        putGradientQuad(buffer, x0, y0, x1, y1, bottom, top, 0.0D);
+    }
+
+    private void putGradientQuad(BufferBuilder buffer, double x0, double y0, double x1, double y1, float[] bottom, float[] top, double z) {
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, x0, y0, z, colorByte(bottom[0]), colorByte(bottom[1]), colorByte(bottom[2]), 255);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, x1, y0, z, colorByte(bottom[0]), colorByte(bottom[1]), colorByte(bottom[2]), 255);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, x1, y1, z, colorByte(top[0]), colorByte(top[1]), colorByte(top[2]), 255);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, x0, y1, z, colorByte(top[0]), colorByte(top[1]), colorByte(top[2]), 255);
+    }
+
+    private int colorByte(float value) {
+        return clampInt((int) (clamp01(value) * 255.0F + 0.5F), 0, 255);
+    }
+
+    private void sealShaderlessWorldFramebufferAlpha(String stage) {
         if (isPipelineActive
                 || externalWorldFramebufferTarget != null
                 || isRenderingBetterPortalsNestedView()
                 || isRenderingBetterPortalsRenderPass()) {
-            probeShaderlessSkyGuiState("shaderless-ui-boundary-skip");
             return;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.getRenderViewEntity() == null) {
-            probeShaderlessSkyGuiState("shaderless-ui-boundary-no-world");
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null
+                || !isOverworldShaderEnvironment(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc))) {
             return;
         }
-        if (mc.getFramebuffer() != null) {
-            mc.getFramebuffer().bindFramebuffer(false);
+
+        Framebuffer target = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        FloatBuffer previousClearColor = BufferUtils.createFloatBuffer(4);
+        ByteBuffer previousColorMask = BufferUtils.createByteBuffer(4);
+        GL11.glGetFloat(GL11.GL_COLOR_CLEAR_VALUE, previousClearColor);
+        GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, previousColorMask);
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
+            GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glColorMask(false, false, false, true);
+            GL11.glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
+            GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
+        } catch (RuntimeException | LinkageError ignored) {
+        } finally {
+            GL11.glClearColor(
+                    previousClearColor.get(0),
+                    previousClearColor.get(1),
+                    previousClearColor.get(2),
+                    previousClearColor.get(3)
+            );
+            GL11.glColorMask(
+                    previousColorMask.get(0) != 0,
+                    previousColorMask.get(1) != 0,
+                    previousColorMask.get(2) != 0,
+                    previousColorMask.get(3) != 0
+            );
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
+            restoreDrawBufferForFramebuffer(previousDrawFramebuffer, previousDrawBuffer);
         }
+    }
+
+    private void restoreShaderlessBloomExitState(Minecraft mc) {
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        if (mc != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
+        }
+    }
+
+    public void prepareShaderlessUiRenderingBoundary() {
+        if (isPipelineActive
+                || externalWorldFramebufferTarget != null
+                || isRenderingBetterPortalsNestedView()
+                || isRenderingBetterPortalsRenderPass()) {
+            return;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) == null) {
+            return;
+        }
+        bindMinecraftFramebufferForGui(mc);
         restoreShaderlessBloomExitState(mc);
-        if (mc.currentScreen != null) {
-            GlStateManager.disableDepth();
-            GlStateManager.depthMask(false);
+        sealShaderlessWorldFramebufferAlpha("ui-boundary");
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
         }
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        GlStateManager.disableLighting();
-        GlStateManager.disableColorMaterial();
-        probeShaderlessSkyGuiState("shaderless-ui-boundary-exit");
-        probeShaderlessLightState("shaderless-ui-boundary-exit");
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
     }
 
     private void refreshShaderlessBloomVertexFormatIfNeeded() {
@@ -13955,7 +15643,7 @@ public class PipelineContext {
         if (pos == null) {
             return;
         }
-        recordShaderlessBloomMetadata(pos.getX(), pos.getY(), pos.getZ(), layer);
+        recordShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos), layer);
     }
 
     public void recordShaderlessBloomMetadata(int blockX, int blockY, int blockZ, BlockRenderLayer layer) {
@@ -13966,7 +15654,7 @@ public class PipelineContext {
         if (pos == null) {
             return;
         }
-        recordShaderlessBloomMetadata(pos.getX(), pos.getY(), pos.getZ(), layer, hasBloom);
+        recordShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos), layer, hasBloom);
     }
 
     public void recordShaderlessBloomMetadata(int blockX, int blockY, int blockZ, BlockRenderLayer layer, boolean hasBloom) {
@@ -13988,9 +15676,166 @@ public class PipelineContext {
         }
     }
 
+    public void recordShaderlessBloomLayerSummary(BlockPos pos, BlockRenderLayer layer, boolean hasBloom) {
+        if (pos == null) {
+            return;
+        }
+        recordShaderlessBloomLayerSummary(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos),
+                layer,
+                hasBloom
+        );
+    }
+
+    public void recordShaderlessBloomLayerSummary(int blockX, int blockY, int blockZ, BlockRenderLayer layer, boolean hasBloom) {
+        if (layer == null) {
+            return;
+        }
+        long key = shaderlessBloomMetadataKey(
+                currentClientDimensionId(),
+                blockX >> 4,
+                blockY >> 4,
+                blockZ >> 4,
+                layer
+        );
+        shaderlessBloomMetadataKnownChunkLayers.add(key);
+        if (hasBloom) {
+            shaderlessBloomMetadataChunkLayers.add(key);
+        } else {
+            shaderlessBloomMetadataChunkLayers.remove(key);
+        }
+    }
+
     public void clearShaderlessBloomMetadata() {
         shaderlessBloomMetadataKnownChunkLayers.clear();
         shaderlessBloomMetadataChunkLayers.clear();
+    }
+
+    public void rebuildShaderlessBloomTerrain(String reason) {
+        clearShaderlessBloomMetadata();
+        scheduleBloomTerrainRefresh(reason);
+    }
+
+    public void handleShaderlessBloomBlockUpdate(World world, BlockPos pos, IBlockState oldState, IBlockState newState, int flags) {
+        if (world == null || pos == null) {
+            return;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != world) {
+            return;
+        }
+
+        int dimension = safeDimensionId(world);
+        int sectionX = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) >> 4;
+        int sectionY = Math.max(0, Math.min(15, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) >> 4));
+        int sectionZ = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) >> 4;
+        boolean hadBloomMetadata = invalidateShaderlessBloomMetadataSection(dimension, sectionX, sectionY, sectionZ);
+        boolean bloomSourceChanged = stateHasShaderlessBloomSource(oldState) || stateHasShaderlessBloomSource(newState);
+        if (!hadBloomMetadata && !bloomSourceChanged) {
+            return;
+        }
+
+        int x = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos);
+        int y = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos);
+        int z = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(
+                world,
+                x - 1,
+                Math.max(0, y - 1),
+                z - 1,
+                x + 1,
+                Math.min(255, y + 1),
+                z + 1
+        );
+        queueShaderlessBloomClientChunkRefresh(world, sectionX, sectionZ);
+    }
+
+    public void handleShaderlessBloomRenderUpdateRange(World world, int minX, int minY, int minZ,
+                                                       int maxX, int maxY, int maxZ) {
+        if (world == null) {
+            return;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != world) {
+            return;
+        }
+
+        // Generic render updates are not proof that shaderless bloom sources changed.
+        // Keep extraction metadata stable until the requested rebuild publishes its
+        // compile summary; actual block changes invalidate through the block-update path.
+    }
+
+    private boolean renderUpdateRangeContainsShaderlessBloomSource(World world, int minX, int minY, int minZ,
+                                                                  int maxX, int maxY, int maxZ) {
+        int startX = Math.min(minX, maxX);
+        int endX = Math.max(minX, maxX);
+        int startY = Math.max(0, Math.min(255, Math.min(minY, maxY)));
+        int endY = Math.max(0, Math.min(255, Math.max(minY, maxY)));
+        int startZ = Math.min(minZ, maxZ);
+        int endZ = Math.max(minZ, maxZ);
+        long volume = (long) (endX - startX + 1) * (long) (endY - startY + 1) * (long) (endZ - startZ + 1);
+        if (volume <= 0L || volume > 4096L) {
+            return false;
+        }
+
+        BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+        for (int y = startY; y <= endY; y++) {
+            for (int z = startZ; z <= endZ; z++) {
+                for (int x = startX; x <= endX; x++) {
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.mutableBlockPosSet(mutablePos, x, y, z);
+                    if (!com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, mutablePos, false)) {
+                        continue;
+                    }
+                    try {
+                        IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, mutablePos);
+                        if (stateHasShaderlessBloomSource(state)) {
+                            return true;
+                        }
+                    } catch (RuntimeException | LinkageError ignored) {
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private void queueShaderlessBloomClientChunkRefreshes(World world, int sectionMinX, int sectionMaxX,
+                                                         int sectionMinZ, int sectionMaxZ) {
+        int startX = Math.min(sectionMinX, sectionMaxX);
+        int endX = Math.max(sectionMinX, sectionMaxX);
+        int startZ = Math.min(sectionMinZ, sectionMaxZ);
+        int endZ = Math.max(sectionMinZ, sectionMaxZ);
+        int queued = 0;
+        for (int sectionZ = startZ; sectionZ <= endZ; sectionZ++) {
+            for (int sectionX = startX; sectionX <= endX; sectionX++) {
+                queueShaderlessBloomClientChunkRefresh(world, sectionX, sectionZ);
+                queued++;
+                if (queued >= MAX_SHADERLESS_BLOOM_LOCAL_CHUNK_REFRESHES_PER_UPDATE) {
+                    return;
+                }
+            }
+        }
+    }
+
+    private void queueShaderlessBloomClientChunkRefresh(World world, int chunkX, int chunkZ) {
+        if (world instanceof WorldClient worldClient) {
+            queueClientChunkRenderRefresh(worldClient, chunkX, chunkZ, CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM);
+        }
+    }
+
+    private boolean invalidateShaderlessBloomMetadataSection(int dimension, int sectionX, int sectionY, int sectionZ) {
+        boolean hadBloomMetadata = false;
+        for (BlockRenderLayer layer : BlockRenderLayer.values()) {
+            if (layer == null) {
+                continue;
+            }
+            long key = shaderlessBloomMetadataKey(dimension, sectionX, sectionY, sectionZ, layer);
+            hadBloomMetadata |= shaderlessBloomMetadataChunkLayers.remove(key);
+            shaderlessBloomMetadataKnownChunkLayers.remove(key);
+        }
+        return hadBloomMetadata;
     }
 
     private boolean hasShaderlessBloomMetadata() {
@@ -14022,10 +15867,18 @@ public class PipelineContext {
     }
 
     private int currentClientDimensionId() {
-        Minecraft mc = Minecraft.getMinecraft();
-        return mc != null && mc.world != null && mc.world.provider != null
-                ? mc.world.provider.getDimension()
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        WorldProvider provider = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
+        return provider != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider)
                 : Integer.MIN_VALUE;
+    }
+
+    private boolean isSimpleVoidWorld(World world) {
+        WorldProvider provider = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
+        return provider != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider) == SIMPLE_VOID_WORLD_DIMENSION_ID;
     }
 
     private static long shaderlessBloomMetadataKey(int dimension, int sectionX, int sectionY, int sectionZ, BlockRenderLayer layer) {
@@ -14044,9 +15897,9 @@ public class PipelineContext {
         if (mc == null || viewEntity == null) {
             return 0;
         }
-        float partialTicks = mc.getRenderPartialTicks();
-        if (!isPipelineActive && mc.entityRenderer != null) {
-            ((EntityRendererAccessor) mc.entityRenderer).ausm$setupCameraTransform(partialTicks, 2);
+        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
+        if (!isPipelineActive && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
+            ((EntityRendererAccessor) com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc)).ausm$setupCameraTransform(partialTicks, 2);
             MatrixState.captureGbufferMatrices();
         }
         return renderEmissiveExtractionTerrain(partialTicks, viewEntity, allowPipelineActive);
@@ -14064,9 +15917,9 @@ public class PipelineContext {
             return renderVanillaEmissiveTerrain(partialTicks, viewEntity, allowPipelineActive);
         }
 
-        double cameraX = interpolate(viewEntity.lastTickPosX, viewEntity.posX, partialTicks);
-        double cameraY = interpolate(viewEntity.lastTickPosY, viewEntity.posY, partialTicks);
-        double cameraZ = interpolate(viewEntity.lastTickPosZ, viewEntity.posZ, partialTicks);
+        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
         nothiriumShadowRenderer.drainUploads();
 
         int solid = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.SOLID, cameraX, cameraY, cameraZ);
@@ -14074,8 +15927,8 @@ public class PipelineContext {
         int cutout = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.CUTOUT, cameraX, cameraY, cameraZ);
         int translucent = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.TRANSLUCENT, cameraX, cameraY, cameraZ);
         BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        Minecraft mc = Minecraft.getMinecraft();
-        int bloom = shouldRenderSyntheticBloomLayerWithRenderGlobal(bloomLayer) && mc != null && mc.renderGlobal != null
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        int bloom = shouldRenderSyntheticBloomLayerWithRenderGlobal(bloomLayer) && mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null
                 ? renderShaderlessVanillaEmissiveLayerIfVisible(mc, WorldRenderingPhase.TERRAIN_TRANSLUCENT,
                         bloomLayer, partialTicks, viewEntity)
                 : 0;
@@ -14106,8 +15959,8 @@ public class PipelineContext {
         if (!allowPipelineActive && isPipelineActive) {
             return 0;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.renderGlobal == null || mc.world == null || viewEntity == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || viewEntity == null) {
             return 0;
         }
 
@@ -14148,7 +16001,8 @@ public class PipelineContext {
         prepareShaderlessBlockLayerState(layer);
         bloomRenderer.setShaderlessForceEmission(forceBloomLayerEmission ? 1.0F : 0.0F);
         try {
-            return positiveCount(mc.renderGlobal.renderBlockLayer(layer, partialTicks, 2, viewEntity));
+            RenderGlobal renderGlobal = com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc);
+            return renderGlobal != null ? positiveCount(com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, 2, viewEntity)) : 0;
         } finally {
             if (forceBloomLayerEmission) {
                 bloomRenderer.setShaderlessForceEmission(0.0F);
@@ -14179,26 +16033,12 @@ public class PipelineContext {
     }
 
     private static String glStateSummary() {
-        return "program=" + GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
-                + ",activeTex=" + GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE)
-                + ",clientTex=" + GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE)
-                + ",tex=" + GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D)
-                + ",blend=" + GL11.glIsEnabled(GL11.GL_BLEND)
-                + ",blendFunc=" + GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB)
-                + "/" + GL11.glGetInteger(GL14.GL_BLEND_DST_RGB)
-                + "/" + GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA)
-                + "/" + GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA)
-                + ",alpha=" + GL11.glIsEnabled(GL11.GL_ALPHA_TEST)
-                + ",alphaFunc=" + GL11.glGetInteger(GL11.GL_ALPHA_TEST_FUNC)
-                + ",alphaRef=" + GL11.glGetFloat(GL11.GL_ALPHA_TEST_REF)
-                + ",depth=" + GL11.glIsEnabled(GL11.GL_DEPTH_TEST)
-                + ",depthMask=" + GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
-                + ",depthFunc=" + GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
+        return FixedFunctionGlState.summary();
     }
 
     public void prepareExternalOverlayRender(String source) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.getFramebuffer() == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null) {
             return;
         }
 
@@ -14209,7 +16049,7 @@ public class PipelineContext {
                     isPipelineActive,
                     worldFrameActive,
                     renderingGuiScreen(),
-                    describeFramebufferTarget(mc.getFramebuffer()));
+                    describeFramebufferTarget(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)));
         }
 
         if (isPipelineActive
@@ -14219,29 +16059,28 @@ public class PipelineContext {
             prepareFramebufferPresentation();
         }
 
-        mc.getFramebuffer().bindFramebuffer(false);
-        GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
-        if (mc.entityRenderer != null) {
-            mc.entityRenderer.disableLightmap();
+        bindMinecraftFramebufferForGui(mc);
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.disableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
         }
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
-        GlStateManager.bindTexture(0);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
-        GlStateManager.enableAlpha();
-        GlStateManager.disableLighting();
-        GlStateManager.disableColorMaterial();
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        GlStateManager.colorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
     }
@@ -14251,22 +16090,19 @@ public class PipelineContext {
     }
 
     public void finishExternalWorldOverlayRender(String source) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (!isPipelineActive && (mc == null || mc.world == null || mc.getRenderViewEntity() == null)) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (!isPipelineActive && (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) == null)) {
             return;
         }
         restoreWorldSafeRenderState(source);
     }
 
     private void restoreGuiSafeRenderState(String source) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.getFramebuffer() != null) {
-            mc.getFramebuffer().bindFramebuffer(false);
-            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
-        }
-        OpenGlHelper.glUseProgram(0);
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        bindMinecraftFramebufferForGui(mc);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         resetIndexedBlendState();
         disablePipelineVertexAttributes();
         unbindShaderImages();
@@ -14277,18 +16113,18 @@ public class PipelineContext {
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         GL11.glPolygonOffset(0.0F, 0.0F);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.bindTexture(0);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
-        GlStateManager.disableLighting();
-        GlStateManager.disableColorMaterial();
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
@@ -14297,7 +16133,7 @@ public class PipelineContext {
     }
 
     private void restoreWorldSafeRenderState(String source) {
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         resetIndexedBlendState();
         disablePipelineVertexAttributes();
@@ -14308,19 +16144,19 @@ public class PipelineContext {
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         GL11.glPolygonOffset(0.0F, 0.0F);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.bindTexture(0);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.enableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         bindBlockAtlas();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
-        GlStateManager.enableCull();
-        GlStateManager.disableLighting();
-        GlStateManager.disableColorMaterial();
-        GlStateManager.disableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
     }
 
     public void restoreActiveWorldPassAfterExternalShader() {
@@ -14341,14 +16177,14 @@ public class PipelineContext {
         TextureBinder.restoreDefaultTextureUnit();
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        GlStateManager.colorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GlStateManager.enableDepth();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
         bindPass(pass);
         activePhase = phase;
         BetterPortalsCompat.logRenderStateDiagnostic("pipeline:restore-active-after-external pass=" + pass + " phase=" + phase);
@@ -14357,27 +16193,27 @@ public class PipelineContext {
     public void prepareFramebufferPresentation() {
         if (!isPipelineActive) {
             if (externalWorldFramebufferTarget == null && !isRenderingBetterPortalsNestedView()) {
-                Minecraft mc = Minecraft.getMinecraft();
-                if (mc != null && mc.world != null && mc.getRenderViewEntity() != null) {
-                    OpenGlHelper.glUseProgram(0);
+                Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+                if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) != null) {
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
                     TextureBinder.restoreDefaultTextureUnit();
-                    GlStateManager.bindTexture(0);
-                    GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-                    GlStateManager.enableTexture2D();
-                    GlStateManager.enableAlpha();
-                    GlStateManager.enableBlend();
-                    GlStateManager.tryBlendFuncSeparate(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                             GL11.GL_SRC_ALPHA,
                             GL11.GL_ONE_MINUS_SRC_ALPHA,
                             GL11.GL_ONE,
                             GL11.GL_ZERO
                     );
-                    GlStateManager.enableDepth();
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
                     GL11.glDepthMask(true);
                     GL11.glDepthFunc(GL11.GL_LEQUAL);
                     GL11.glDisable(GL11.GL_SCISSOR_TEST);
                     GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-                    GlStateManager.colorMask(true, true, true, true);
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
                 }
             }
             return;
@@ -14392,16 +16228,16 @@ public class PipelineContext {
             blitWorldFramebufferToMinecraft();
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.entityRenderer != null) {
-            mc.entityRenderer.disableLightmap();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.disableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
         }
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
-        GlStateManager.bindTexture(0);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.enableTexture2D();
-        GlStateManager.colorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
     }
 
     public void prepareGuiRendering() {
@@ -14424,48 +16260,49 @@ public class PipelineContext {
     }
 
     public void prepareShaderlessGuiScreenRendering() {
-        probeShaderlessSkyGuiState("shaderless-gui-screen-before");
         if (isPipelineActive) {
             return;
         }
         renderingGui = false;
         guiRenderDepth = 0;
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         disablePipelineVertexAttributes();
         unbindShaderImages();
         unbindShaderStorageBuffers();
         resetIndexedBlendState();
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.getFramebuffer() != null) {
-            mc.getFramebuffer().bindFramebuffer(false);
-            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) != null) {
+            Framebuffer framebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(framebuffer, false);
+            restoreDrawBufferForFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer), GL30.GL_COLOR_ATTACHMENT0);
+            restoreReadBufferForFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer), GL30.GL_COLOR_ATTACHMENT0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
         }
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         GL11.glPolygonOffset(0.0F, 0.0F);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glDepthMask(true);
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.enableTexture2D();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableDepth();
-        GlStateManager.depthMask(true);
-        GlStateManager.disableLighting();
-        GlStateManager.disableColorMaterial();
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        probeShaderlessSkyGuiState("shaderless-gui-screen-after");
     }
 
     public void beginGuiRendering() {
@@ -14491,40 +16328,38 @@ public class PipelineContext {
     }
 
     private void bindGuiTarget() {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null) {
             return;
         }
         if (renderingDeferredIngameHud) {
-            OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, 0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), 0);
             GL11.glDrawBuffer(GL11.GL_BACK);
-            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
-        } else if (mc.getFramebuffer() != null) {
-            mc.getFramebuffer().bindFramebuffer(false);
-            GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
-            GlStateManager.viewport(0, 0, mc.displayWidth, mc.displayHeight);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
+        } else if (com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) != null) {
+            bindMinecraftFramebufferForGui(mc);
         }
     }
 
     private void prepareGuiState() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.entityRenderer != null) {
-            mc.entityRenderer.disableLightmap();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.disableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
         }
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
-        GlStateManager.bindTexture(0);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.colorMask(true, true, true, true);
-        GlStateManager.disableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
         GL11.glDepthMask(false);
-        GlStateManager.enableTexture2D();
-        GlStateManager.disableLighting();
-        GlStateManager.disableColorMaterial();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
@@ -14534,20 +16369,20 @@ public class PipelineContext {
     }
 
     public boolean shouldDirectPresentFramebuffer() {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         return isPipelineActive
                 && mc != null
-                && mc.world != null
-                && mc.currentScreen == null
-                && mc.gameSettings != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null
                 && externalWorldFramebufferTarget == null
                 && !isRenderingBetterPortalsNestedView()
-                && mc.gameSettings.thirdPersonView != 0;
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.thirdPersonView(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)) != 0;
     }
 
     public boolean shouldDeferIngameHud() {
-        Minecraft mc = Minecraft.getMinecraft();
-        return mc != null && shouldDirectPresentFramebuffer() && mc.currentScreen == null && !renderingDeferredIngameHud;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        return mc != null && shouldDirectPresentFramebuffer() && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingDeferredIngameHud;
     }
 
     public void beginDeferredIngameHud() {
@@ -14561,7 +16396,7 @@ public class PipelineContext {
         guiRenderDepth = 0;
         TextureBinder.restoreDefaultTextureUnit();
         GL11.glColorMask(true, true, true, true);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     public void presentFramebufferDirectly(Framebuffer target, int width, int height) {
@@ -14569,29 +16404,31 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || target == null || target != mc.getFramebuffer()) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || target == null || target != com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)) {
             return;
         }
 
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
 
-        OpenGlHelper.glUseProgram(0);
-        GlStateManager.disableDepth();
-        GlStateManager.depthMask(false);
-        GlStateManager.disableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         GL11.glColorMask(true, true, true, false);
-        GlStateManager.viewport(0, 0, width, height);
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, target.framebufferObject);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, width, height);
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, 0);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glDrawBuffer(GL11.GL_BACK);
         GL30.glBlitFramebuffer(
                 0,
                 0,
-                target.framebufferWidth,
-                target.framebufferHeight,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target),
                 0,
                 0,
                 width,
@@ -14599,15 +16436,17 @@ public class PipelineContext {
                 GL11.GL_COLOR_BUFFER_BIT,
                 GL11.GL_NEAREST
         );
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.enableTexture2D();
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glColorMask(true, true, true, true);
 
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+        restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
+        restoreDrawBufferForFramebuffer(previousDrawFramebuffer, previousDrawBuffer);
         TextureBinder.restoreDefaultTextureUnit();
     }
 
@@ -14634,8 +16473,8 @@ public class PipelineContext {
                 && pingPongManager.isInitialized()
                 && !renderingShadowMap
                 && !renderingGuiScreen()
-                && Minecraft.getMinecraft() != null
-                && Minecraft.getMinecraft().world != null;
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) != null;
     }
 
     public int distantHorizonsShaderProgramId() {
@@ -14673,7 +16512,7 @@ public class PipelineContext {
     public void unbindDistantHorizonsShaderProgram() {
         currentDistantHorizonsProgram = null;
         currentDistantHorizonsFallbackProgram = false;
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         GL30.glBindVertexArray(0);
     }
 
@@ -14693,8 +16532,8 @@ public class PipelineContext {
         applyGbufferDepthState(pass);
         pingPongManager.bindForGbuffers(drawBuffers.toArray(new Attachment[0]));
         restoreVanillaWorldTextureBindings();
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.enableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         GL11.glColorMask(true, true, true, true);
         if (usesBlockAtlas(pass)) {
             bindBlockAtlas();
@@ -14717,6 +16556,16 @@ public class PipelineContext {
         GL30.glVertexAttribIPointer(0, 4, GL11.GL_UNSIGNED_SHORT, 16, 0L);
         GL20.glVertexAttribPointer(1, 4, GL11.GL_UNSIGNED_BYTE, true, 16, 8L);
         GL30.glVertexAttribIPointer(2, 4, GL11.GL_UNSIGNED_BYTE, 16, 12L);
+        if (ExtendedVertexFormats.isAttributeAvailable(ExtendedVertexFormats.DH_MATERIAL_ID_ATTRIBUTE)) {
+            GL20.glEnableVertexAttribArray(ExtendedVertexFormats.DH_MATERIAL_ID_ATTRIBUTE);
+            GL30.glVertexAttribIPointer(
+                    ExtendedVertexFormats.DH_MATERIAL_ID_ATTRIBUTE,
+                    1,
+                    GL11.GL_UNSIGNED_BYTE,
+                    16,
+                    12L
+            );
+        }
     }
 
     private void bindDistantHorizonsVertexArray() {
@@ -14733,7 +16582,7 @@ public class PipelineContext {
         currentDistantHorizonsProgram = null;
         currentDistantHorizonsFallbackProgram = true;
         bindDistantHorizonsVertexArray();
-        OpenGlHelper.glUseProgram(distantHorizonsFallbackProgramId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(distantHorizonsFallbackProgramId);
         uploadDistantHorizonsFallbackMatrices();
         uploadDistantHorizonsFallbackModelOffset();
     }
@@ -14858,7 +16707,7 @@ public class PipelineContext {
         if (distantHorizonsCompositeProgramId != 0) {
             return true;
         }
-        if (distantHorizonsCompositeProgramFailed || !OpenGlHelper.shadersSupported) {
+        if (distantHorizonsCompositeProgramFailed || !com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean(net.minecraft.client.renderer.OpenGlHelper.class, false, "field_148824_g", "shadersSupported")) {
             return false;
         }
 
@@ -14924,7 +16773,7 @@ public class PipelineContext {
 
     private void deleteDistantHorizonsFramebuffer() {
         if (distantHorizonsFramebufferId != 0) {
-            OpenGlHelper.glDeleteFramebuffers(distantHorizonsFramebufferId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteFramebuffers(distantHorizonsFramebufferId);
         }
         if (distantHorizonsTexturesOwned && distantHorizonsColorTextureId != 0) {
             GL11.glDeleteTextures(distantHorizonsColorTextureId);
@@ -14933,7 +16782,7 @@ public class PipelineContext {
             GL11.glDeleteTextures(distantHorizonsDepthTextureId);
         }
         if (distantHorizonsTextureReadbackFramebufferId != 0) {
-            OpenGlHelper.glDeleteFramebuffers(distantHorizonsTextureReadbackFramebufferId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteFramebuffers(distantHorizonsTextureReadbackFramebufferId);
         }
         distantHorizonsFramebufferId = 0;
         distantHorizonsColorTextureId = 0;
@@ -15091,12 +16940,13 @@ public class PipelineContext {
         boolean activeStateChanged = wasPipelineActive != isPipelineActive;
         if (isPipelineActive) {
             zeroOpaqueTerrainFrames = 0;
+            sparseOpaqueTerrainFrames = 0;
             zeroOpaqueTerrainRecoveryRequested = false;
             betterPortalsPipelineLogs = 0;
             BetterPortalsCompat.resetRenderStateDiagnostics();
-            Minecraft mc = Minecraft.getMinecraft();
-            if (mc != null && mc.world != null) {
-                resizeFramebuffer(mc.displayWidth, mc.displayHeight, true);
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+            if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null) {
+                resizeFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), true);
             }
         } else {
             clearPendingShaderChunkRefreshes();
@@ -15130,20 +16980,20 @@ public class PipelineContext {
     }
 
     public void handleResourcePackReload() {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null) {
             return;
         }
 
         textureReloadCount++;
-        resetPipelineState(mc.getFramebuffer());
+        resetPipelineState(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc));
         clearPendingShaderChunkRefreshes();
         clearPendingClientChunkRenderRefreshes();
         clearScheduledWorldTerrainRefresh();
         clearScheduledBloomTerrainRefresh();
         scheduleWorldTerrainRefresh();
         scheduleBloomTerrainRefresh("resource-pack-reload");
-        if (mc.world != null) {
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null) {
             scheduleWorldLoadLightRecalculation();
             rebuildTerrainRenderers(updateNothiriumPipelineBlockFormatMode());
         }
@@ -15155,11 +17005,11 @@ public class PipelineContext {
     }
 
     private void rebuildTerrainRenderers(boolean recreateNothiriumRenderer, boolean reloadVanillaRenderGlobal) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.renderGlobal == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
-        logTerrainDiagnostic("rebuild-terrain-renderers", mc.world, "recreateNothirium=" + recreateNothiriumRenderer
+        logTerrainDiagnostic("rebuild-terrain-renderers", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "recreateNothirium=" + recreateNothiriumRenderer
                 + ", reloadVanilla=" + reloadVanillaRenderGlobal);
         if (recreateNothiriumRenderer) {
             NothiriumBypass.recreateRenderer();
@@ -15167,10 +17017,10 @@ public class PipelineContext {
             NothiriumBypass.markAllChanged();
         }
         if (reloadVanillaRenderGlobal) {
-            mc.renderGlobal.loadRenderers();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.loadRenderers(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc));
         }
-        if (isPipelineActive && mc.world != null) {
-            rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "rebuild-terrain-renderers");
+        if (isPipelineActive && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null) {
+            rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "rebuild-terrain-renderers");
             resetCameraFrustumSyncState();
         } else if (isPipelineActive) {
             ensureVanillaTerrainRenderer();
@@ -15193,24 +17043,24 @@ public class PipelineContext {
     }
 
     public int[] forceLightRecalculation() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.player == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             return new int[]{0, 0, 0, 0};
         }
 
-        World world = mc.world;
-        BlockPos center = new BlockPos(mc.player);
+        World world = com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
+        BlockPos center = new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc));
         int horizontalRadius = Math.min(
                 FORCE_LIGHT_RECALC_MAX_RADIUS,
                 Math.max(FORCE_LIGHT_RECALC_MIN_RADIUS, WORLD_LOAD_LIGHT_REFRESH_RADIUS)
         );
         int verticalRadius = Math.min(8, horizontalRadius);
-        int minX = center.getX() - horizontalRadius;
-        int maxX = center.getX() + horizontalRadius;
-        int minY = Math.max(0, center.getY() - verticalRadius);
-        int maxY = Math.min(255, center.getY() + verticalRadius);
-        int minZ = center.getZ() - horizontalRadius;
-        int maxZ = center.getZ() + horizontalRadius;
+        int minX = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) - horizontalRadius;
+        int maxX = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) + horizontalRadius;
+        int minY = Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(center) - verticalRadius);
+        int maxY = Math.min(255, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(center) + verticalRadius);
+        int minZ = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) - horizontalRadius;
+        int maxZ = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) + horizontalRadius;
 
         syntheticLightCandidates.clear();
         if (shaderImages.active()) {
@@ -15221,7 +17071,7 @@ public class PipelineContext {
         int chunkCount = forceChunkLightingRefresh(world, minX, maxX, minZ, maxZ);
         int blockChecks = forceBlockLightingRefresh(world, minX, minY, minZ, maxX, maxY, maxZ);
 
-        world.markBlockRangeForRenderUpdate(minX, minY, minZ, maxX, maxY, maxZ);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(world, minX, minY, minZ, maxX, maxY, maxZ);
         refreshVanillaLightmap(mc);
         rebuildTerrainRenderers();
 
@@ -15237,8 +17087,8 @@ public class PipelineContext {
     }
 
     public void scheduleWorldLoadLightRecalculation() {
-        Minecraft mc = Minecraft.getMinecraft();
-        int dimension = mc != null && mc.world != null ? safeDimensionId(mc.world) : Integer.MIN_VALUE;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        int dimension = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null ? safeDimensionId(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) : Integer.MIN_VALUE;
         if (pendingWorldLoadLightRecalculationAttempts > 0
                 && pendingWorldLoadLightRecalculationDimension == dimension) {
             pendingWorldLoadLightRecalculationAttempts = Math.max(
@@ -15271,6 +17121,10 @@ public class PipelineContext {
         scheduleWorldTerrainRefresh(true, true);
     }
 
+    public void scheduleSingleFullWorldTerrainRefresh() {
+        scheduleWorldTerrainRefresh(true, true, WORLD_LOAD_TERRAIN_REFRESH_INITIAL_DELAY_FRAMES, 1);
+    }
+
     private void scheduleDimensionSwitchTerrainRefresh() {
         scheduleWorldTerrainRefresh(true, true, 0);
     }
@@ -15284,18 +17138,24 @@ public class PipelineContext {
     }
 
     private void scheduleWorldTerrainRefresh(boolean fullRendererReset, boolean vanillaReload, int initialDelay) {
-        Minecraft mc = Minecraft.getMinecraft();
-        int dimension = mc != null && mc.world != null ? safeDimensionId(mc.world) : Integer.MIN_VALUE;
+        scheduleWorldTerrainRefresh(fullRendererReset, vanillaReload, initialDelay, WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS);
+    }
+
+    private void scheduleWorldTerrainRefresh(boolean fullRendererReset, boolean vanillaReload, int initialDelay, int attempts) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        int dimension = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null ? safeDimensionId(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) : Integer.MIN_VALUE;
         int delay = Math.max(0, initialDelay);
+        int refreshAttempts = Math.max(1, attempts);
         if (pendingWorldTerrainRefreshAttempts > 0 && pendingWorldTerrainRefreshDimension == dimension) {
             logTerrainDiagnostic("schedule-world-terrain:coalesce",
-                    mc != null ? mc.world : null,
+                    mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null,
                     "fullReset=" + fullRendererReset
                             + ", vanillaReload=" + vanillaReload
                             + ", initialDelay=" + delay
+                            + ", requestedAttempts=" + refreshAttempts
                             + ", oldAttempts=" + pendingWorldTerrainRefreshAttempts
                             + ", oldDelay=" + pendingWorldTerrainRefreshDelay);
-            pendingWorldTerrainRefreshAttempts = Math.max(pendingWorldTerrainRefreshAttempts, WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS);
+            pendingWorldTerrainRefreshAttempts = Math.max(pendingWorldTerrainRefreshAttempts, refreshAttempts);
             pendingWorldTerrainRefreshDelay = Math.min(pendingWorldTerrainRefreshDelay, delay);
             pendingWorldTerrainRendererReset |= fullRendererReset;
             pendingWorldTerrainFullRendererReset |= fullRendererReset;
@@ -15303,22 +17163,22 @@ public class PipelineContext {
             return;
         }
 
-        pendingWorldTerrainRefreshAttempts = WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS;
+        pendingWorldTerrainRefreshAttempts = refreshAttempts;
         pendingWorldTerrainRefreshDelay = delay;
         pendingWorldTerrainRefreshDimension = dimension;
         pendingWorldTerrainRendererReset = fullRendererReset;
         pendingWorldTerrainFullRendererReset = fullRendererReset;
         pendingWorldTerrainVanillaReload = vanillaReload;
         logTerrainDiagnostic("schedule-world-terrain:new",
-                mc != null ? mc.world : null,
-                "fullReset=" + fullRendererReset + ", vanillaReload=" + vanillaReload + ", initialDelay=" + delay);
+                mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null,
+                "fullReset=" + fullRendererReset + ", vanillaReload=" + vanillaReload + ", initialDelay=" + delay + ", attempts=" + refreshAttempts);
     }
 
     public void clearScheduledWorldTerrainRefresh() {
         if (pendingWorldTerrainRefreshAttempts > 0) {
-            Minecraft mc = Minecraft.getMinecraft();
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
             logTerrainDiagnostic("schedule-world-terrain:clear",
-                    mc != null ? mc.world : null,
+                    mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null,
                     "attempts=" + pendingWorldTerrainRefreshAttempts
                             + ", delay=" + pendingWorldTerrainRefreshDelay
                             + ", dim=" + pendingWorldTerrainRefreshDimension
@@ -15360,7 +17220,8 @@ public class PipelineContext {
 
         synchronized (pendingClientChunkRenderRefreshes) {
             long chunkKey = clientChunkRenderRefreshChunkKey(chunkX, chunkZ);
-            if ("chunk-data".equals(normalizedReason)) {
+            if ("chunk-data".equals(normalizedReason)
+                    || CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(normalizedReason)) {
                 forgetRecentlyCompletedClientChunkRenderRefreshLocked(world, chunkKey);
             } else if (isRecentlyCompletedClientChunkRenderRefreshLocked(world, chunkKey)) {
                 return;
@@ -15392,15 +17253,19 @@ public class PipelineContext {
             return;
         }
         existing.attemptsRemaining = Math.max(existing.attemptsRemaining, CLIENT_CHUNK_RENDER_REFRESH_ATTEMPTS);
-        if ("chunk-data".equals(reason)) {
+        if ("chunk-data".equals(reason)
+                || CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(reason)) {
             existing.reason = reason;
-            existing.delayFrames = Math.min(existing.delayFrames, CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES);
+            existing.delayFrames = Math.min(existing.delayFrames, clientChunkRenderRefreshInitialDelay(reason));
         } else {
             existing.delayFrames = Math.min(existing.delayFrames, CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES);
         }
     }
 
     private int clientChunkRenderRefreshInitialDelay(String reason) {
+        if (CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(reason)) {
+            return 0;
+        }
         return CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES;
     }
 
@@ -15429,8 +17294,8 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.renderGlobal == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
 
@@ -15449,11 +17314,11 @@ public class PipelineContext {
     }
 
     public void runPendingClientChunkRenderRefreshes() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.renderGlobal == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
-        runPendingClientChunkRenderRefreshesForWorld(mc, mc.world, true);
+        runPendingClientChunkRenderRefreshesForWorld(mc, com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
     }
 
     public void runPendingClientChunkRenderRefreshesForCurrentRenderPass() {
@@ -15461,9 +17326,9 @@ public class PipelineContext {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         WorldClient renderPassWorld = BetterPortalsCompat.currentRenderPassWorld();
-        if (mc == null || mc.renderGlobal == null || renderPassWorld == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null || renderPassWorld == null) {
             return;
         }
 
@@ -15694,11 +17559,14 @@ public class PipelineContext {
         if ("chunk-data".equals(reason)) {
             return true;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return false;
         }
-        if (world == mc.world && ("pre-chunk".equals(reason)
+        if (CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(reason)) {
+            return world == com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
+        }
+        if (world == com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) && ("pre-chunk".equals(reason)
                 || pendingWorldTerrainRefreshAttempts > 0
                 || isPipelineActive
                 || NothiriumBypass.shouldBypass())) {
@@ -15707,28 +17575,29 @@ public class PipelineContext {
         if (!BetterPortalsCompat.isInstalled()) {
             return false;
         }
-        return world != mc.world
+        return world != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)
                 || BetterPortalsCompat.isMainViewSwapRecoveryActive()
                 || BetterPortalsCompat.isRenderingRenderPass()
                 || BetterPortalsCompat.isRenderingNestedView();
     }
 
     private boolean refreshClientChunkRender(Minecraft mc, ClientChunkRenderRefresh refresh, WorldClient targetWorld) {
-        if (refresh == null || refresh.world == null || targetWorld == null || refresh.world != targetWorld || mc.renderGlobal == null) {
+        if (refresh == null || refresh.world == null || targetWorld == null || refresh.world != targetWorld || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return false;
         }
 
-        ChunkProviderClient chunkProvider = targetWorld.getChunkProvider();
-        Chunk chunk = chunkProvider != null ? chunkProvider.getLoadedChunk(refresh.chunkX, refresh.chunkZ) : null;
+        ChunkProviderClient chunkProvider = com.l.ausm.impl.util.MinecraftReflectionCompat.call((targetWorld), net.minecraft.client.multiplayer.ChunkProviderClient.class, null, new String[] {"func_72863_F", "getChunkProvider"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+        Chunk chunk = chunkProvider != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.call((chunkProvider), net.minecraft.world.chunk.Chunk.class, null, new String[] {"func_186026_b", "getLoadedChunk"},
+                new Class<?>[] {int.class, int.class}, (refresh.chunkX), (refresh.chunkZ)) : null;
         boolean loaded = chunk != null;
         ClientChunkRenderScheduleResult scheduleResult = ClientChunkRenderScheduleResult.empty();
         if (loaded) {
             ensureVanillaTerrainRenderer(targetWorld, true);
-            if (mc.renderGlobal instanceof RenderGlobalAccessor accessor) {
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor accessor) {
                 ViewFrustum viewFrustum = accessor.ausm$viewFrustum();
                 updateVanillaViewFrustumChunkPositions(
                         viewFrustum,
-                        mc.getRenderViewEntity()
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc)
                 );
                 scheduleResult = scheduleLoadedClientChunkRenderChunks(
                         accessor,
@@ -15751,7 +17620,9 @@ public class PipelineContext {
                 }
             }
 
-            if (isPipelineActive && !refresh.shadowRefreshed && !NothiriumBypass.shouldBypass()) {
+            if ((isPipelineActive || CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(refresh.reason))
+                    && !refresh.shadowRefreshed
+                    && !NothiriumBypass.shouldBypass()) {
                 nothiriumShadowRenderer.refreshChunkColumn(refresh.chunkX, refresh.chunkZ);
                 refresh.shadowRefreshed = true;
             }
@@ -15774,7 +17645,8 @@ public class PipelineContext {
         if (requiredSections == 0) {
             return new ClientChunkRenderScheduleResult(0, 0, 0, true, requiredSections);
         }
-        if (renderGlobal == null || viewFrustum == null || viewFrustum.renderChunks == null) {
+        RenderChunk[] renderChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.viewFrustumRenderChunks(viewFrustum);
+        if (renderGlobal == null || renderChunks == null) {
             return ClientChunkRenderScheduleResult.empty();
         }
 
@@ -15784,7 +17656,7 @@ public class PipelineContext {
         }
 
         if (viewFrustum instanceof ViewFrustumAccessor accessor) {
-            return scheduleLoadedClientChunkRenderChunksIndexed(accessor, viewFrustum.renderChunks,
+            return scheduleLoadedClientChunkRenderChunksIndexed(accessor, renderChunks,
                     chunksToUpdate, world, chunk, chunkX, chunkZ, requiredSections, startSectionY, sectionBudget);
         }
 
@@ -15792,14 +17664,14 @@ public class PipelineContext {
         int covered = 0;
         int processed = 0;
         int maxSections = maxClientChunkRefreshSections(sectionBudget);
-        ExtendedBlockStorage[] sections = chunk.getBlockStorageArray();
+        ExtendedBlockStorage[] sections = com.l.ausm.impl.util.MinecraftReflectionCompat.chunkBlockStorageArray(chunk);
         int sectionCount = sections != null ? sections.length : 0;
         int start = clampSectionCursor(startSectionY, sectionCount);
         for (int sectionY = start; sectionY < sectionCount; sectionY++) {
             if (!hasNonEmptyClientChunkSection(sections, sectionY)) {
                 continue;
             }
-            RenderChunk renderChunk = findRenderChunkForSection(viewFrustum.renderChunks, chunkX, chunkZ, sectionY);
+            RenderChunk renderChunk = findRenderChunkForSection(renderChunks, chunkX, chunkZ, sectionY);
             processed++;
             if (renderChunk == null) {
                 if (processed >= maxSections) {
@@ -15809,13 +17681,13 @@ public class PipelineContext {
             }
             covered++;
             assignRenderChunkWorld(renderChunk, world);
-            if (renderChunk.needsUpdate() || chunksToUpdate.contains(renderChunk)) {
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((renderChunk), new String[] {"func_178571_g", "needsUpdate"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) || chunksToUpdate.contains(renderChunk)) {
                 if (processed >= maxSections) {
                     return new ClientChunkRenderScheduleResult(scheduled, covered, sectionY + 1, false, requiredSections);
                 }
                 continue;
             }
-            renderChunk.setNeedsUpdate(true);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((renderChunk), new String[] {"func_178575_a", "setNeedsUpdate"}, new Class<?>[] {boolean.class}, (true));;
             chunksToUpdate.add(renderChunk);
             scheduled++;
             if (processed >= maxSections) {
@@ -15842,12 +17714,12 @@ public class PipelineContext {
             return ClientChunkRenderScheduleResult.empty();
         }
 
-        int xIndex = MathHelper.intFloorDiv(chunkX, countX);
+        int xIndex = floorDiv(chunkX, countX);
         xIndex = chunkX - xIndex * countX;
         if (xIndex < 0) {
             xIndex += countX;
         }
-        int zIndex = MathHelper.intFloorDiv(chunkZ, countZ);
+        int zIndex = floorDiv(chunkZ, countZ);
         zIndex = chunkZ - zIndex * countZ;
         if (zIndex < 0) {
             zIndex += countZ;
@@ -15857,7 +17729,7 @@ public class PipelineContext {
         int covered = 0;
         int processed = 0;
         int maxSections = maxClientChunkRefreshSections(sectionBudget);
-        ExtendedBlockStorage[] sections = chunk.getBlockStorageArray();
+        ExtendedBlockStorage[] sections = com.l.ausm.impl.util.MinecraftReflectionCompat.chunkBlockStorageArray(chunk);
         int sectionCount = Math.min(countY, sections != null ? sections.length : 0);
         int start = clampSectionCursor(startSectionY, sectionCount);
         for (int sectionY = start; sectionY < sectionCount; sectionY++) {
@@ -15874,11 +17746,11 @@ public class PipelineContext {
             }
 
             RenderChunk renderChunk = renderChunks[index];
-            BlockPos position = renderChunk != null ? renderChunk.getPosition() : null;
+            BlockPos position = renderChunk != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkPosition(renderChunk) : null;
             if (renderChunk == null
                     || position == null
-                    || (position.getX() >> 4) != chunkX
-                    || (position.getZ() >> 4) != chunkZ
+                    || (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(position) >> 4) != chunkX
+                    || (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(position) >> 4) != chunkZ
                     || !shouldScheduleLoadedClientRenderChunk(renderChunk, chunk, position)) {
                 processed++;
                 if (processed >= maxSections) {
@@ -15889,13 +17761,13 @@ public class PipelineContext {
             processed++;
             covered++;
             assignRenderChunkWorld(renderChunk, world);
-            if (renderChunk.needsUpdate() || chunksToUpdate.contains(renderChunk)) {
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((renderChunk), new String[] {"func_178571_g", "needsUpdate"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) || chunksToUpdate.contains(renderChunk)) {
                 if (processed >= maxSections) {
                     return new ClientChunkRenderScheduleResult(scheduled, covered, sectionY + 1, false, requiredSections);
                 }
                 continue;
             }
-            renderChunk.setNeedsUpdate(true);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((renderChunk), new String[] {"func_178575_a", "setNeedsUpdate"}, new Class<?>[] {boolean.class}, (true));;
             chunksToUpdate.add(renderChunk);
             scheduled++;
             if (processed >= maxSections) {
@@ -15909,13 +17781,13 @@ public class PipelineContext {
         if (chunk == null) {
             return 0;
         }
-        ExtendedBlockStorage[] sections = chunk.getBlockStorageArray();
+        ExtendedBlockStorage[] sections = com.l.ausm.impl.util.MinecraftReflectionCompat.chunkBlockStorageArray(chunk);
         if (sections == null) {
             return 0;
         }
         int count = 0;
         for (ExtendedBlockStorage section : sections) {
-            if (section != null && !section.isEmpty()) {
+            if (!com.l.ausm.impl.util.MinecraftReflectionCompat.blockStorageEmpty(section)) {
                 count++;
             }
         }
@@ -15927,14 +17799,14 @@ public class PipelineContext {
             return false;
         }
 
-        int sectionY = position.getY() >> 4;
-        ExtendedBlockStorage[] sections = chunk.getBlockStorageArray();
+        int sectionY = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(position) >> 4;
+        ExtendedBlockStorage[] sections = com.l.ausm.impl.util.MinecraftReflectionCompat.chunkBlockStorageArray(chunk);
         if (sectionY < 0 || sections == null || sectionY >= sections.length) {
             return false;
         }
 
         ExtendedBlockStorage section = sections[sectionY];
-        return section != null && !section.isEmpty();
+        return !com.l.ausm.impl.util.MinecraftReflectionCompat.blockStorageEmpty(section);
     }
 
     private static int maxClientChunkRefreshSections(int sectionBudget) {
@@ -15952,8 +17824,7 @@ public class PipelineContext {
         return sections != null
                 && sectionY >= 0
                 && sectionY < sections.length
-                && sections[sectionY] != null
-                && !sections[sectionY].isEmpty();
+                && !com.l.ausm.impl.util.MinecraftReflectionCompat.blockStorageEmpty(sections[sectionY]);
     }
 
     private RenderChunk findRenderChunkForSection(RenderChunk[] renderChunks, int chunkX, int chunkZ, int sectionY) {
@@ -15961,11 +17832,11 @@ public class PipelineContext {
             return null;
         }
         for (RenderChunk renderChunk : renderChunks) {
-            BlockPos position = renderChunk != null ? renderChunk.getPosition() : null;
+            BlockPos position = renderChunk != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkPosition(renderChunk) : null;
             if (position != null
-                    && (position.getX() >> 4) == chunkX
-                    && (position.getZ() >> 4) == chunkZ
-                    && (position.getY() >> 4) == sectionY) {
+                    && (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(position) >> 4) == chunkX
+                    && (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(position) >> 4) == chunkZ
+                    && (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(position) >> 4) == sectionY) {
                 return renderChunk;
             }
         }
@@ -15994,11 +17865,11 @@ public class PipelineContext {
     }
 
     private void refreshShaderChunk(Minecraft mc, ShaderChunkRefresh refresh) {
-        if (refresh == null || refresh.world == null || refresh.world.provider == null) {
+        if (refresh == null || refresh.world == null || com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(refresh.world) == null) {
             return;
         }
 
-        if (mc.world != refresh.world) {
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != refresh.world) {
             return;
         }
 
@@ -16050,8 +17921,8 @@ public class PipelineContext {
         if (pendingWorldLoadLightRecalculationAttempts <= 0) {
             return;
         }
-        Minecraft mc = Minecraft.getMinecraft();
-        int dimension = mc != null && mc.world != null ? safeDimensionId(mc.world) : Integer.MIN_VALUE;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        int dimension = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null ? safeDimensionId(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) : Integer.MIN_VALUE;
         if (pendingWorldLoadLightRecalculationDimension != Integer.MIN_VALUE
                 && pendingWorldLoadLightRecalculationDimension != dimension) {
             clearScheduledWorldLoadLightRecalculation();
@@ -16073,13 +17944,13 @@ public class PipelineContext {
     }
 
     public void runRenderDistanceChangeCheck() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.gameSettings == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) == null) {
             lastObservedRenderDistanceChunks = -1;
             return;
         }
 
-        int renderDistanceChunks = mc.gameSettings.renderDistanceChunks;
+        int renderDistanceChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc);
         if (renderDistanceChunks <= 0) {
             return;
         }
@@ -16101,7 +17972,7 @@ public class PipelineContext {
     }
 
     private void forceRenderDistanceTerrainReload(Minecraft mc, int previousRenderDistanceChunks, int renderDistanceChunks) {
-        if (mc == null || mc.world == null || mc.renderGlobal == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
 
@@ -16115,12 +17986,12 @@ public class PipelineContext {
         activeVanillaViewFrustumRenderDistanceChunks = -1;
         resetCameraFrustumSyncState();
         boolean nothiriumRecreated = NothiriumBypass.recreateRenderer();
-        mc.renderGlobal.loadRenderers();
-        rebuildMainWorldVanillaViewFrustum(mc.renderGlobal, mc.world, "render-distance-change");
+        com.l.ausm.impl.util.MinecraftReflectionCompat.loadRenderers(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc));
+        rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "render-distance-change");
         NothiriumBypass.markAllChanged();
         scheduleInactiveVanillaRecoveryFrame();
         MainMod.LOGGER.info("[Pipeline] Forced terrain renderer reload for render distance change: world={} old={} new={} nothiriumRecreated={}",
-                safeDimensionId(mc.world),
+                safeDimensionId(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)),
                 previousRenderDistanceChunks,
                 renderDistanceChunks,
                 nothiriumRecreated);
@@ -16130,20 +18001,20 @@ public class PipelineContext {
         if (pendingWorldTerrainRefreshAttempts <= 0) {
             return;
         }
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (BetterPortalsCompat.isMainViewSwapRecoveryActive() && mc != null) {
-            BetterPortalsCompat.keepMainViewSwapRecoveryAlive(mc.world);
+            BetterPortalsCompat.keepMainViewSwapRecoveryAlive(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
         }
         if (pendingWorldTerrainRefreshDelay > 0) {
             logTerrainDiagnostic("run-world-terrain:delay",
-                    mc != null ? mc.world : null,
+                    mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null,
                     "attempts=" + pendingWorldTerrainRefreshAttempts + ", delay=" + pendingWorldTerrainRefreshDelay);
             pendingWorldTerrainRefreshDelay--;
             return;
         }
 
         logTerrainDiagnostic("run-world-terrain:start",
-                mc != null ? mc.world : null,
+                mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null,
                 "attempts=" + pendingWorldTerrainRefreshAttempts);
         if (refreshWorldTerrainState()) {
             pendingWorldTerrainRefreshAttempts--;
@@ -16151,51 +18022,56 @@ public class PipelineContext {
 
         if (pendingWorldTerrainRefreshAttempts <= 0) {
             logTerrainDiagnostic("run-world-terrain:done",
-                    mc != null ? mc.world : null,
+                    mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null,
                     "");
             clearScheduledWorldTerrainRefresh();
         } else {
             pendingWorldTerrainRefreshDelay = WORLD_LOAD_TERRAIN_REFRESH_REPEAT_DELAY_FRAMES;
             logTerrainDiagnostic("run-world-terrain:reschedule",
-                    mc != null ? mc.world : null,
+                    mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null,
                     "attempts=" + pendingWorldTerrainRefreshAttempts + ", delay=" + pendingWorldTerrainRefreshDelay);
         }
     }
 
     private boolean refreshBloomTerrainState(String reason) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.player == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             return false;
         }
         if (!AusmBloomLayer.isAvailable() || !bloomRenderer.hasBloomResources()) {
             return false;
         }
 
-        BlockPos center = new BlockPos(mc.player);
-        int radius = Math.max(64, Math.min(512, (mc.gameSettings.renderDistanceChunks * 16) + 16));
-        mc.world.markBlockRangeForRenderUpdate(
-                center.getX() - radius,
-                0,
-                center.getZ() - radius,
-                center.getX() + radius,
-                255,
-                center.getZ() + radius
-        );
+        BlockPos center = new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc));
+        int radius = Math.max(64, Math.min(512, (com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc) * 16) + 16));
+        runningBloomTerrainRefresh = true;
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) - radius,
+                    0,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) - radius,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) + radius,
+                    255,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) + radius
+            );
+        } finally {
+            runningBloomTerrainRefresh = false;
+        }
         boolean nothiriumDirty = NothiriumBypass.markAllChanged();
-        
+
         return true;
     }
 
     private boolean refreshWorldTerrainState() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.player == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             return false;
         }
 
-        int dimension = safeDimensionId(mc.world);
+        int dimension = safeDimensionId(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
         if (pendingWorldTerrainRefreshDimension != Integer.MIN_VALUE
                 && pendingWorldTerrainRefreshDimension != dimension) {
-            logTerrainDiagnostic("refresh-world-terrain:dimension-mismatch", mc.world,
+            logTerrainDiagnostic("refresh-world-terrain:dimension-mismatch", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
                     "pendingDim=" + pendingWorldTerrainRefreshDimension + ", currentDim=" + dimension);
             clearScheduledWorldTerrainRefresh();
             return false;
@@ -16208,7 +18084,7 @@ public class PipelineContext {
 
         if (pendingWorldTerrainFullRendererReset) {
             pendingWorldTerrainFullRendererReset = false;
-            logTerrainDiagnostic("refresh-world-terrain:full-reset", mc.world,
+            logTerrainDiagnostic("refresh-world-terrain:full-reset", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
                     "rendererReset=" + rendererReset + ", vanillaReload=" + vanillaReload);
             if (rendererReset) {
                 deleteCachedVanillaTerrainRenderers();
@@ -16219,18 +18095,18 @@ public class PipelineContext {
             return true;
         }
 
-        ensureVanillaTerrainRenderer(mc.world, true);
-        BlockPos center = new BlockPos(mc.player);
-        int radius = Math.max(32, Math.min(128, mc.gameSettings.renderDistanceChunks * 16));
-        logTerrainDiagnostic("refresh-world-terrain:range", mc.world,
+        ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
+        BlockPos center = new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc));
+        int radius = Math.max(32, Math.min(128, com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc) * 16));
+        logTerrainDiagnostic("refresh-world-terrain:range", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
                 "center=" + center + ", radius=" + radius + ", rendererReset=" + rendererReset + ", vanillaReload=" + vanillaReload);
-        mc.world.markBlockRangeForRenderUpdate(
-                center.getX() - radius,
+        com.l.ausm.impl.util.MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) - radius,
                 0,
-                center.getZ() - radius,
-                center.getX() + radius,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) - radius,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) + radius,
                 255,
-                center.getZ() + radius
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) + radius
         );
         if (isPipelineActive || NothiriumBypass.shouldBypass()) {
             NothiriumBypass.markAllChanged();
@@ -16240,8 +18116,8 @@ public class PipelineContext {
     }
 
     private boolean refreshWorldLoadLightState() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.player == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             return false;
         }
 
@@ -16249,15 +18125,15 @@ public class PipelineContext {
         if (!isPipelineActive) {
             return true;
         }
-        BlockPos center = new BlockPos(mc.player);
+        BlockPos center = new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc));
         int radius = WORLD_LOAD_LIGHT_REFRESH_RADIUS;
-        mc.world.markBlockRangeForRenderUpdate(
-                center.getX() - radius,
-                Math.max(0, center.getY() - radius),
-                center.getZ() - radius,
-                center.getX() + radius,
-                Math.min(255, center.getY() + radius),
-                center.getZ() + radius
+        com.l.ausm.impl.util.MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) - radius,
+                Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(center) - radius),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) - radius,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) + radius,
+                Math.min(255, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(center) + radius),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) + radius
         );
         return true;
     }
@@ -16266,7 +18142,7 @@ public class PipelineContext {
         if (!(world instanceof WorldClient worldClient)) {
             return 0;
         }
-        ChunkProviderClient chunkProvider = worldClient.getChunkProvider();
+        ChunkProviderClient chunkProvider = com.l.ausm.impl.util.MinecraftReflectionCompat.call((worldClient), net.minecraft.client.multiplayer.ChunkProviderClient.class, null, new String[] {"func_72863_F", "getChunkProvider"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
         if (chunkProvider == null) {
             return 0;
         }
@@ -16278,17 +18154,18 @@ public class PipelineContext {
         int refreshed = 0;
         for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
             for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
-                Chunk chunk = chunkProvider.getLoadedChunk(chunkX, chunkZ);
-                if (chunk == null || chunk.isEmpty()) {
+                Chunk chunk = com.l.ausm.impl.util.MinecraftReflectionCompat.call((chunkProvider), net.minecraft.world.chunk.Chunk.class, null, new String[] {"func_186026_b", "getLoadedChunk"},
+                new Class<?>[] {int.class, int.class}, (chunkX), (chunkZ));
+                if (chunk == null || com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((chunk), new String[] {"func_76621_g", "isEmpty"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
                     continue;
                 }
                 try {
-                    if (world.provider.hasSkyLight()) {
-                        chunk.generateSkylightMap();
+                    if (com.l.ausm.impl.util.MinecraftReflectionCompat.providerHasSkyLight(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world))) {
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((chunk), new String[] {"func_76603_b", "generateSkylightMap"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
                     }
-                    chunk.resetRelightChecks();
-                    chunk.enqueueRelightChecks();
-                    chunk.checkLight();
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((chunk), new String[] {"func_76613_n", "resetRelightChecks"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((chunk), new String[] {"func_76594_o", "enqueueRelightChecks"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((chunk), new String[] {"func_150809_p", "checkLight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
                     refreshed++;
                 } catch (RuntimeException ignored) {
                 }
@@ -16303,17 +18180,17 @@ public class PipelineContext {
         for (int y = minY; y <= maxY; y++) {
             for (int z = minZ; z <= maxZ; z++) {
                 for (int x = minX; x <= maxX; x++) {
-                    mutablePos.setPos(x, y, z);
-                    if (!world.isBlockLoaded(mutablePos, false)) {
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.mutableBlockPosSet(mutablePos, x, y, z);
+                    if (!com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, mutablePos, false)) {
                         continue;
                     }
                     IBlockState state;
                     int sourceLight;
                     int storedBlockLight;
                     try {
-                        state = world.getBlockState(mutablePos);
-                        sourceLight = state.getLightValue(world, mutablePos);
-                        storedBlockLight = world.getLightFor(EnumSkyBlock.BLOCK, mutablePos);
+                        state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, mutablePos);
+                        sourceLight = com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state, world, mutablePos);
+                        storedBlockLight = com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.BLOCK, mutablePos);
                     } catch (RuntimeException ignored) {
                         continue;
                     }
@@ -16321,15 +18198,17 @@ public class PipelineContext {
                         continue;
                     }
                     try {
-                        world.checkLightFor(EnumSkyBlock.BLOCK, mutablePos);
-                        if (world.provider.hasSkyLight()) {
-                            world.checkLightFor(EnumSkyBlock.SKY, mutablePos);
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((world), new String[] {"func_180500_c", "checkLightFor"},
+                new Class<?>[] {net.minecraft.world.EnumSkyBlock.class, net.minecraft.util.math.BlockPos.class}, false, (net.minecraft.world.EnumSkyBlock.BLOCK), (mutablePos));
+                        if (com.l.ausm.impl.util.MinecraftReflectionCompat.providerHasSkyLight(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world))) {
+                            com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((world), new String[] {"func_180500_c", "checkLightFor"},
+                new Class<?>[] {net.minecraft.world.EnumSkyBlock.class, net.minecraft.util.math.BlockPos.class}, false, (net.minecraft.world.EnumSkyBlock.SKY), (mutablePos));
                         }
                         checks++;
                     } catch (RuntimeException ignored) {
                     }
                     if (sourceLight > 0) {
-                        refreshSyntheticLightCandidate(world, mutablePos.toImmutable());
+                        refreshSyntheticLightCandidate(world, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(mutablePos));
                     }
                 }
             }
@@ -16372,17 +18251,17 @@ public class PipelineContext {
         currentEntityKey = null;
         currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
         restoreTerrainCulling();
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         resetShaderResourceBindings();
         GL11.glColorMask(true, true, true, true);
         GL11.glDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         resetPortalMaskState();
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.enableTexture2D();
-        GlStateManager.disableBlend();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
@@ -16391,19 +18270,19 @@ public class PipelineContext {
         for (int i = 0; i < maxDrawBuffers(); i++) {
             setIndexedBlend(i, false);
         }
-        GlStateManager.enableDepth();
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
 
-        Minecraft mc = Minecraft.getMinecraft();
-        Framebuffer target = preferredTarget != null ? preferredTarget : mc != null ? mc.getFramebuffer() : null;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Framebuffer target = preferredTarget != null ? preferredTarget : mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) : null;
         if (target != null) {
-            target.bindFramebuffer(false);
-            GL11.glDrawBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GL11.glReadBuffer(target.framebufferObject == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GlStateManager.viewport(0, 0, framebufferWidth(target, mc), framebufferHeight(target, mc));
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
+            GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, framebufferWidth(target, mc), framebufferHeight(target, mc));
         } else {
-            OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, 0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), 0);
             GL11.glDrawBuffer(GL11.GL_BACK);
             GL11.glReadBuffer(GL11.GL_BACK);
         }
@@ -16422,7 +18301,7 @@ public class PipelineContext {
         unbindShaderStorageBuffers(true);
         disablePipelineVertexAttributes();
         TextureBinder.restoreDefaultTextureUnit();
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
     }
 
     private static void setIndexedBlend(int drawBufferIndex, boolean enabled) {
@@ -16443,9 +18322,9 @@ public class PipelineContext {
     }
 
     private static void resetOitRenderState() {
-        GlStateManager.depthMask(true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         resetIndexedBlendState();
-        GlStateManager.tryBlendFuncSeparate(
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
@@ -16463,73 +18342,71 @@ public class PipelineContext {
     }
 
     private void restoreVanillaTextureBindingsAfterPipeline() {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null) {
             TextureBinder.restoreDefaultTextureUnit();
-            GlStateManager.bindTexture(0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
             return;
         }
 
         restoreVanillaLightmapTexture(mc);
 
         TextureBinder.restoreDefaultTextureUnit();
-        if (mc.getTextureManager() != null) {
-            mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
-            ITextureObject atlasTexture = mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+        TextureManager textureManager = com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc);
+        if (textureManager != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
+            ITextureObject atlasTexture = com.l.ausm.impl.util.MinecraftReflectionCompat.texture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
             if (atlasTexture != null) {
-                GL11.glBindTexture(GL11.GL_TEXTURE_2D, atlasTexture.getGlTextureId());
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, com.l.ausm.impl.util.MinecraftReflectionCompat.glTextureId(atlasTexture));
             }
         } else {
-            GlStateManager.bindTexture(0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
         }
         TextureBinder.restoreDefaultTextureUnit();
     }
 
     private void restoreVanillaLightmapTexture(Minecraft mc) {
-        if (mc == null || mc.entityRenderer == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) == null) {
             return;
         }
 
         int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
-        DynamicTexture lightmapTexture = ((EntityRendererAccessor) mc.entityRenderer).ausm$getLightmapTexture();
+        DynamicTexture lightmapTexture = ((EntityRendererAccessor) com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc)).ausm$getLightmapTexture();
         try {
-            GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
             boolean lightmapTextureEnabled = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
-            int textureId = lightmapTexture != null ? lightmapTexture.getGlTextureId() : 0;
-            GlStateManager.bindTexture(textureId);
+            int textureId = lightmapTexture != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.glTextureId(lightmapTexture) : 0;
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(textureId);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
             if (lightmapTextureEnabled) {
-                GlStateManager.enableTexture2D();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
             } else {
-                GlStateManager.disableTexture2D();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
             }
         } finally {
             GL13.glActiveTexture(previousActiveTexture);
             TextureBinder.restoreDefaultTextureUnit();
-            OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         }
-        probeShaderlessLightState("restore-vanilla-lightmap-texture");
     }
 
     private void refreshVanillaLightmap(Minecraft mc) {
-        if (mc == null || mc.world == null || mc.player == null || mc.entityRenderer == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) == null) {
             return;
         }
-        probeShaderlessLightState("refresh-vanilla-lightmap-before");
-        EntityRendererAccessor accessor = (EntityRendererAccessor) mc.entityRenderer;
+        EntityRendererAccessor accessor = (EntityRendererAccessor) com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc);
         accessor.ausm$setLightmapUpdateNeeded(true);
-        accessor.ausm$updateLightmap(mc.getRenderPartialTicks());
+        accessor.ausm$updateLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
         restoreVanillaLightmapTexture(mc);
-        probeShaderlessLightState("refresh-vanilla-lightmap-after");
     }
 
     private void disableVanillaLightmap(Minecraft mc) {
-        if (mc == null || mc.entityRenderer == null) {
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) == null) {
             return;
         }
-        mc.entityRenderer.disableLightmap();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.disableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
         TextureBinder.restoreDefaultTextureUnit();
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
     }
 
     private static void unbindShaderImages() {
@@ -16602,17 +18479,17 @@ public class PipelineContext {
         GL11.glLoadIdentity();
         GL11.glMatrixMode(GL11.GL_MODELVIEW);
 
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
         GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
         GL11.glDisableClientState(GL11.GL_COLOR_ARRAY);
         GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
 
-        OpenGlHelper.setActiveTexture(OpenGlHelper.lightmapTexUnit);
-        GlStateManager.disableTexture2D();
-        OpenGlHelper.setActiveTexture(OpenGlHelper.defaultTexUnit);
-        GlStateManager.enableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
     }
 
     private void loadCustomTextures(ShaderPack pack, ShaderProperties properties) {
@@ -16621,7 +18498,7 @@ public class PipelineContext {
         Map<String, Integer> customUnitsBySampler = new HashMap<>();
         Set<String> failedTexturePaths = new HashSet<>();
         int[] nextCustomUnit = {com.l.ausm.impl.pipeline.shader.ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT};
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
 
         for (RenderPass pass : RenderPass.values()) {
             List<LoadedCustomTexture> textures = loadCustomTextureList(
@@ -16751,16 +18628,17 @@ public class PipelineContext {
     }
 
     private int minecraftBlockAtlasTexture(Minecraft mc, String resourcePath) {
-        if (mc == null || mc.getTextureManager() == null || !isMinecraftBlockAtlasPath(resourcePath)) {
+        TextureManager textureManager = com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc);
+        if (textureManager == null || !isMinecraftBlockAtlasPath(resourcePath)) {
             return -1;
         }
 
-        ITextureObject texture = mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+        ITextureObject texture = com.l.ausm.impl.util.MinecraftReflectionCompat.texture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
         if (texture == null) {
-            mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
-            texture = mc.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
+            texture = com.l.ausm.impl.util.MinecraftReflectionCompat.texture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
         }
-        return texture != null ? texture.getGlTextureId() : -1;
+        return texture != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.glTextureId(texture) : -1;
     }
 
     private static boolean isMinecraftBlockAtlasPath(String resourcePath) {
@@ -16787,12 +18665,12 @@ public class PipelineContext {
             TextureBinder.bindTexture(texture.textureTarget(), texture.textureUnit(), texture.textureId());
             int location = program.getUniformLocation(texture.samplerName());
             if (location != -1) {
-                OpenGlHelper.glUniform1i(location, texture.textureUnit());
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(location, texture.textureUnit());
             }
             if (!texture.replacementSamplerName().equals(texture.samplerName())) {
                 int replacementLocation = program.getUniformLocation(texture.replacementSamplerName());
                 if (replacementLocation != -1) {
-                    OpenGlHelper.glUniform1i(replacementLocation, texture.textureUnit());
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(replacementLocation, texture.textureUnit());
                 }
             }
         }

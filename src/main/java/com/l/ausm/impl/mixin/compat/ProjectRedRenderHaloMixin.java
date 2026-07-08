@@ -32,21 +32,24 @@ public class ProjectRedRenderHaloMixin {
         }
 
         ci.cancel();
-        Minecraft minecraft = Minecraft.getMinecraft();
-        Entity viewEntity = minecraft != null ? minecraft.getRenderViewEntity() : null;
-        if (minecraft == null || minecraft.world == null || viewEntity == null) {
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Entity viewEntity = minecraft != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(minecraft) : null;
+        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) == null || viewEntity == null) {
             ausm$clearProjectRedHaloQueue();
             return;
         }
 
         float partialTicks = event.getPartialTicks();
-        GlStateManager.pushMatrix();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179094_E", "pushMatrix"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
         try {
-            GlStateManager.translate(
-                    viewEntity.posX - (viewEntity.posX - viewEntity.lastTickPosX) * partialTicks - viewEntity.lastTickPosX,
-                    viewEntity.posY - (viewEntity.posY - viewEntity.lastTickPosY) * partialTicks - viewEntity.lastTickPosY,
-                    viewEntity.posZ - (viewEntity.posZ - viewEntity.lastTickPosZ) * partialTicks - viewEntity.lastTickPosZ
-            );
+            double viewX = com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity);
+            double viewY = com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity);
+            double viewZ = com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity);
+            double lastViewX = com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity);
+            double lastViewY = com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity);
+            double lastViewZ = com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179109_b", "translate"},
+                new Class<?>[] {float.class, float.class, float.class}, (viewX - (viewX - lastViewX) * partialTicks - lastViewX), (viewY - (viewY - lastViewY) * partialTicks - lastViewY), (viewZ - (viewZ - lastViewZ) * partialTicks - lastViewZ));;
 
             ProjectRedHaloRenderer.beginImmediateHalo();
             try {
@@ -62,7 +65,7 @@ public class ProjectRedRenderHaloMixin {
             }
         } finally {
             ausm$clearProjectRedHaloQueue();
-            GlStateManager.popMatrix();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179121_F", "popMatrix"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
         }
     }
 
@@ -123,9 +126,9 @@ public class ProjectRedRenderHaloMixin {
             int color = ((Number) ausm$invoke(lightCache, "color")).intValue();
             Object cuboid = ausm$invoke(lightCache, "cube");
             Object transformation = ausm$translation(
-                    pos.getX() - viewEntity.posX,
-                    pos.getY() - viewEntity.posY,
-                    pos.getZ() - viewEntity.posZ
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) - com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) - com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) - com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity)
             );
             ProjectRedHaloRenderer.renderImmediateHalo(cuboid, color, transformation);
         } catch (ReflectiveOperationException | RuntimeException ignored) {

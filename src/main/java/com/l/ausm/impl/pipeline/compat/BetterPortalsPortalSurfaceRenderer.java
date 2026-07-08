@@ -1,12 +1,12 @@
 package com.l.ausm.impl.pipeline.compat;
 
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.Tessellator;
-import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.Rotation;
@@ -92,26 +92,26 @@ public final class BetterPortalsPortalSurfaceRenderer {
         SurfaceRenderState state = new SurfaceRenderState();
 
         try {
-            GlStateManager.enableTexture2D();
-            GlStateManager.enableDepth();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
             GL11.glDepthMask(true);
             GL11.glDepthFunc(GL11.GL_LEQUAL);
             if (opacity < 0.999F) {
-                GlStateManager.enableBlend();
-                GlStateManager.tryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
             } else {
-                GlStateManager.disableBlend();
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
             }
             GL11.glColorMask(true, true, true, true);
-            GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
 
-            OpenGlHelper.glUseProgram(shader);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(shader);
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, framebuffer.framebufferTexture);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(framebuffer));
             GL20.glUniform1i(textureUniform, 0);
             GL20.glUniform2f(screenSizeUniform,
-                    Math.max(1.0F, framebuffer.framebufferTextureWidth),
-                    Math.max(1.0F, framebuffer.framebufferTextureHeight));
+                    Math.max(1.0F, com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((framebuffer), 0, "field_147622_a", "framebufferTextureWidth")),
+                    Math.max(1.0F, com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((framebuffer), 0, "field_147620_b", "framebufferTextureHeight")));
             GL20.glUniform1f(opacityUniform, Math.max(0.0F, Math.min(1.0F, opacity)));
 
             drawFramedGeometry(geometry, pos);
@@ -121,25 +121,28 @@ public final class BetterPortalsPortalSurfaceRenderer {
     }
 
     private static void drawFramedGeometry(PortalGeometry geometry, Vec3d pos) {
-        Vec3d origin = pos.subtract(0.5D, 0.5D, 0.5D);
-        Tessellator tessellator = Tessellator.getInstance();
-        BufferBuilder buffer = tessellator.getBuffer();
+        Vec3d origin = com.l.ausm.impl.util.MinecraftReflectionCompat.vecSubtract(pos, 0.5D, 0.5D, 0.5D);
+        Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
+        BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
         forceResetBuffer(buffer);
         try {
-            buffer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181705_e", "POSITION"));
 
-            EnumFacing surfaceFacing = geometry.viewFacing().getOpposite();
+            EnumFacing surfaceFacing = com.l.ausm.impl.util.MinecraftReflectionCompat.facingOpposite(geometry.viewFacing());
             for (BlockPos block : geometry.blocks()) {
-                buffer.setTranslation(origin.x + block.getX(), origin.y + block.getY(), origin.z + block.getZ());
+                com.l.ausm.impl.util.MinecraftReflectionCompat.bufferSetTranslation(buffer,
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(origin) + com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(block),
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(origin) + com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(block),
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(origin) + com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(block));
                 renderPartialPortalFace(buffer, surfaceFacing);
             }
-            buffer.setTranslation(0.0D, 0.0D, 0.0D);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferSetTranslation(buffer, 0.0D, 0.0D, 0.0D);
 
             GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
             GL11.glPolygonOffset(-1.0F, -1.0F);
-            tessellator.draw();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
         } finally {
-            buffer.setTranslation(0.0D, 0.0D, 0.0D);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferSetTranslation(buffer, 0.0D, 0.0D, 0.0D);
             GL11.glPolygonOffset(0.0F, 0.0F);
             GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
             forceResetBuffer(buffer);
@@ -150,26 +153,27 @@ public final class BetterPortalsPortalSurfaceRenderer {
         if (buffer instanceof IBufferBuilderExtension extension) {
             extension.ausm$forceResetDrawingState();
         } else if (buffer != null) {
-            buffer.reset();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((buffer), new String[] {"func_178965_a", "reset"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
         }
     }
 
     private static void renderPartialPortalFace(BufferBuilder buffer, EnumFacing facing) {
-        double x = facing.getXOffset() * 0.5D;
-        double y = facing.getYOffset() * 0.5D;
-        double z = facing.getZOffset() * 0.5D;
-        EnumFacing rotFacing = facing.getAxis() == EnumFacing.Axis.Y ? EnumFacing.NORTH : EnumFacing.UP;
+        double x = com.l.ausm.impl.util.MinecraftReflectionCompat.facingXOffset(facing) * 0.5D;
+        double y = com.l.ausm.impl.util.MinecraftReflectionCompat.facingYOffset(facing) * 0.5D;
+        double z = com.l.ausm.impl.util.MinecraftReflectionCompat.facingZOffset(facing) * 0.5D;
+        EnumFacing.Axis axis = com.l.ausm.impl.util.MinecraftReflectionCompat.facingAxis(facing);
+        EnumFacing rotFacing = axis == EnumFacing.Axis.Y ? EnumFacing.NORTH : EnumFacing.UP;
 
         for (int i = 0; i < 4; i++) {
-            rotFacing = rotFacing.rotateAround(facing.getAxis());
-            EnumFacing nextRotFacing = facing.getAxisDirection() == EnumFacing.AxisDirection.POSITIVE
+            rotFacing = com.l.ausm.impl.util.MinecraftReflectionCompat.facingRotateAround(rotFacing, axis);
+            EnumFacing nextRotFacing = com.l.ausm.impl.util.MinecraftReflectionCompat.facingAxisDirection(facing) == EnumFacing.AxisDirection.POSITIVE
                     ? rotFacing
-                    : rotFacing.getOpposite();
-            buffer.pos(
-                    x + rotFacing.getXOffset() * 0.5D + nextRotFacing.getXOffset() * 0.5D + 0.5D,
-                    y + rotFacing.getYOffset() * 0.5D + nextRotFacing.getYOffset() * 0.5D + 0.5D,
-                    z + rotFacing.getZOffset() * 0.5D + nextRotFacing.getZOffset() * 0.5D + 0.5D
-            ).endVertex();
+                    : com.l.ausm.impl.util.MinecraftReflectionCompat.facingOpposite(rotFacing);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosEnd(buffer,
+                    x + com.l.ausm.impl.util.MinecraftReflectionCompat.facingXOffset(rotFacing) * 0.5D + com.l.ausm.impl.util.MinecraftReflectionCompat.facingXOffset(nextRotFacing) * 0.5D + 0.5D,
+                    y + com.l.ausm.impl.util.MinecraftReflectionCompat.facingYOffset(rotFacing) * 0.5D + com.l.ausm.impl.util.MinecraftReflectionCompat.facingYOffset(nextRotFacing) * 0.5D + 0.5D,
+                    z + com.l.ausm.impl.util.MinecraftReflectionCompat.facingZOffset(rotFacing) * 0.5D + com.l.ausm.impl.util.MinecraftReflectionCompat.facingZOffset(nextRotFacing) * 0.5D + 0.5D
+            );
             rotFacing = nextRotFacing;
         }
     }
@@ -339,45 +343,45 @@ public final class BetterPortalsPortalSurfaceRenderer {
         }
 
         private void restore() {
-            OpenGlHelper.glUseProgram(program);
-            GlStateManager.setActiveTexture(GL13.GL_TEXTURE0);
-            GlStateManager.bindTexture(texture0);
-            GlStateManager.setActiveTexture(activeTexture);
-            GlStateManager.bindTexture(activeTextureBinding);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(program);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(GL13.GL_TEXTURE0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(texture0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(activeTexture);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(activeTextureBinding);
             setManagedCapability(GL11.GL_DEPTH_TEST, depthTest);
-            GlStateManager.depthMask(depthMask);
-            GlStateManager.depthFunc(depthFunc);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(depthMask);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179143_c", "depthFunc"}, new Class<?>[] {int.class}, (depthFunc));;
             setManagedCapability(GL11.GL_ALPHA_TEST, alphaTest);
-            GlStateManager.alphaFunc(alphaFunc, alphaRef);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(alphaFunc, alphaRef);
             setManagedCapability(GL11.GL_BLEND, blend);
-            GlStateManager.tryBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
             setCapability(GL11.GL_POLYGON_OFFSET_FILL, polygonOffsetFill);
             GL11.glPolygonOffset(polygonOffsetFactor, polygonOffsetUnits);
-            GlStateManager.colorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
-            GlStateManager.color(color[0], color[1], color[2], color[3]);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(color[0], color[1], color[2], color[3]);
         }
 
         private static void setManagedCapability(int capability, boolean enabled) {
             switch (capability) {
                 case GL11.GL_DEPTH_TEST -> {
                     if (enabled) {
-                        GlStateManager.enableDepth();
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
                     } else {
-                        GlStateManager.disableDepth();
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
                     }
                 }
                 case GL11.GL_ALPHA_TEST -> {
                     if (enabled) {
-                        GlStateManager.enableAlpha();
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
                     } else {
-                        GlStateManager.disableAlpha();
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
                     }
                 }
                 case GL11.GL_BLEND -> {
                     if (enabled) {
-                        GlStateManager.enableBlend();
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
                     } else {
-                        GlStateManager.disableBlend();
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
                     }
                 }
                 default -> setCapability(capability, enabled);

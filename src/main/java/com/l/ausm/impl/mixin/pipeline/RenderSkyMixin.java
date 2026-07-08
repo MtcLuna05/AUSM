@@ -7,6 +7,7 @@ import com.l.ausm.api.pipeline.pack.*;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -55,12 +56,14 @@ public class RenderSkyMixin {
             ci.cancel();
             return;
         }
+        PipelineContext.getInstance().renderOwnedSkyBackingBeforeSky(partialTicks);
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.SKY);
     }
 
     @Inject(method = "renderSky(FI)V", at = @At("RETURN"))
     private void onRenderSkyReturn(float partialTicks, int pass, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
     }
 
     @Redirect(
@@ -77,11 +80,13 @@ public class RenderSkyMixin {
                                                         Minecraft minecraft) {
         PipelineContext context = PipelineContext.getInstance();
         context.endPass();
+        context.prepareExternalWorldOverlayRender();
         context.beginPhase(WorldRenderingPhase.CUSTOM_SKY);
         try {
             if (!context.shouldSuppressVoidWorldCustomSkyRenderer(skyRenderer, world)) {
                 skyRenderer.render(partialTicks, world, minecraft);
             }
+            context.renderShaderlessBotaniaVoidDetailsIfNeeded(partialTicks, world, minecraft);
         } finally {
             context.endPass();
             context.finishExternalWorldOverlayRender("custom sky renderer");
@@ -90,8 +95,10 @@ public class RenderSkyMixin {
 
     @Inject(method = "renderSkyEnd()V", at = @At("HEAD"), require = 0)
     private void ausm$beforeVoidSkybox(CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.VOID);
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
+        context.prepareExternalWorldOverlayRender();
+        context.beginPhase(WorldRenderingPhase.VOID);
     }
 
     @Inject(method = "renderSkyEnd()V", at = @At("RETURN"), require = 0)
@@ -129,7 +136,7 @@ public class RenderSkyMixin {
                 ausm$forceResetTessellator(tessellator);
                 return;
             }
-            tessellator.draw();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
         } finally {
             context.endPass();
         }
@@ -155,18 +162,6 @@ public class RenderSkyMixin {
             at = @At(
                     value = "INVOKE",
                     target = "Lnet/minecraft/client/renderer/texture/TextureManager;bindTexture(Lnet/minecraft/util/ResourceLocation;)V",
-                    ordinal = 0,
-                    shift = At.Shift.AFTER
-            )
-    )
-    private void ausm$afterSunTextureBind(float partialTicks, int pass, CallbackInfo ci) {
-    }
-
-    @Inject(
-            method = "renderSky(FI)V",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/texture/TextureManager;bindTexture(Lnet/minecraft/util/ResourceLocation;)V",
                     ordinal = 1,
                     shift = At.Shift.BEFORE
             )
@@ -175,18 +170,6 @@ public class RenderSkyMixin {
         PipelineContext context = PipelineContext.getInstance();
         context.endPass();
         context.beginPhase(WorldRenderingPhase.MOON);
-    }
-
-    @Inject(
-            method = "renderSky(FI)V",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/texture/TextureManager;bindTexture(Lnet/minecraft/util/ResourceLocation;)V",
-                    ordinal = 1,
-                    shift = At.Shift.AFTER
-            )
-    )
-    private void ausm$afterMoonTextureBind(float partialTicks, int pass, CallbackInfo ci) {
     }
 
     @Redirect(
@@ -203,7 +186,7 @@ public class RenderSkyMixin {
             ausm$forceResetTessellator(tessellator);
             return;
         }
-        tessellator.draw();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
     }
 
     @Redirect(
@@ -220,23 +203,55 @@ public class RenderSkyMixin {
             ausm$forceResetTessellator(tessellator);
             return;
         }
-        tessellator.draw();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
     }
 
     private static void ausm$forceResetTessellator() {
-        ausm$forceResetTessellator(Tessellator.getInstance());
+        ausm$forceResetTessellator(com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator());
     }
 
     private static void ausm$forceResetTessellator(Tessellator tessellator) {
         if (tessellator == null) {
             return;
         }
-        BufferBuilder buffer = tessellator.getBuffer();
+        BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
         if (buffer instanceof IBufferBuilderExtension extension) {
             extension.ausm$forceResetDrawingState();
         } else if (buffer != null) {
-            buffer.reset();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((buffer), new String[] {"func_178965_a", "reset"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
         }
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;drawArrays(I)V",
+                    ordinal = 0
+            ),
+            require = 0
+    )
+    private void ausm$drawOrSuppressVanillaUpperSkyVbo(VertexBuffer vertexBuffer, int mode) {
+        if (PipelineContext.getInstance().shouldSuppressVanillaUpperSkyGeometry()) {
+            return;
+        }
+        vertexBuffer.drawArrays(mode);
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;callList(I)V",
+                    ordinal = 0
+            ),
+            require = 0
+    )
+    private void ausm$drawOrSuppressVanillaUpperSkyList(int list) {
+        if (PipelineContext.getInstance().shouldSuppressVanillaUpperSkyGeometry()) {
+            return;
+        }
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
     }
 
     @Inject(
@@ -279,7 +294,96 @@ public class RenderSkyMixin {
         if (PipelineContext.getInstance().shouldSuppressVanillaStarsGeometry()) {
             return;
         }
-        GlStateManager.callList(list);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;drawArrays(I)V",
+                    ordinal = 2
+            ),
+            require = 0
+    )
+    private void ausm$drawShaderedLowerSkyVbo(VertexBuffer vertexBuffer, int mode) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldSuppressVanillaLowerSkyGeometry()) {
+            return;
+        }
+        context.beginPhase(WorldRenderingPhase.SKY_GROUND);
+        try {
+            vertexBuffer.drawArrays(mode);
+        } finally {
+            context.endPass();
+        }
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;callList(I)V",
+                    ordinal = 2
+            ),
+            require = 0
+    )
+    private void ausm$drawShaderedLowerSkyList(int list) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldSuppressVanillaLowerSkyGeometry()) {
+            return;
+        }
+        context.beginPhase(WorldRenderingPhase.SKY_GROUND);
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
+        } finally {
+            context.endPass();
+        }
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;callList(I)V",
+                    ordinal = 3
+            ),
+            require = 0
+    )
+    private void ausm$drawShaderedLowerSkyListAfterHorizon(int list) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldSuppressVanillaLowerSkyGeometry()) {
+            return;
+        }
+        context.beginPhase(WorldRenderingPhase.SKY_GROUND);
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
+        } finally {
+            context.endPass();
+        }
+    }
+
+    @Redirect(
+            method = "renderSky(FI)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/Tessellator;draw()V",
+                    ordinal = 3
+            ),
+            require = 0
+    )
+    private void ausm$drawShaderedLowerSkyBox(Tessellator tessellator) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldSuppressVanillaLowerSkyGeometry()) {
+            ausm$forceResetTessellator(tessellator);
+            return;
+        }
+        context.beginPhase(WorldRenderingPhase.SKY_GROUND);
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+        } finally {
+            context.endPass();
+        }
     }
 
     @Inject(

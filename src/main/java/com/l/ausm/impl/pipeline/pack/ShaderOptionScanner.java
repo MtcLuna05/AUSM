@@ -27,24 +27,28 @@ public final class ShaderOptionScanner {
 
     private static final Pattern CHOICES_PATTERN = Pattern.compile("//\\s*\\[([^]]+)]");
     private static final Pattern COMMENTED_DEFINE_PATTERN = Pattern.compile("^\\s*//\\s*#define\\s+.*$");
+    private static final Pattern SYMBOL_PATTERN = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+    private static final String AUSM_CUSTOM_VOID_WORLD = "AUSM_CUSTOM_VOID_WORLD";
 
     private ShaderOptionScanner() {
     }
 
     public static ShaderOptions scan(ShaderPack pack, Properties properties, Map<String, String> overrides) {
         Set<String> sliders = parseList(properties.getProperty("sliders"));
+        Set<String> propertyOptions = parsePropertyOptionNames(properties, sliders);
         Map<String, ShaderOption> options = new LinkedHashMap<>();
         Set<String> visitedFiles = new HashSet<>();
         ShaderPackLayout layout = ShaderPackLayout.detect(pack);
 
         for (RenderPass pass : RenderPass.values()) {
             for (String base : layout.programBases(pass)) {
-                scanShaderFile(pack, base + ".vsh", sliders, options, visitedFiles);
-                scanShaderFile(pack, base + ".fsh", sliders, options, visitedFiles);
-                scanShaderFile(pack, base + ".gsh", sliders, options, visitedFiles);
+                scanShaderFile(pack, base + ".vsh", sliders, propertyOptions, options, visitedFiles);
+                scanShaderFile(pack, base + ".fsh", sliders, propertyOptions, options, visitedFiles);
+                scanShaderFile(pack, base + ".gsh", sliders, propertyOptions, options, visitedFiles);
             }
         }
-        scanShaderFile(pack, layout.rootPath("shader.h"), sliders, options, visitedFiles);
+        scanShaderFile(pack, layout.rootPath("shader.h"), sliders, propertyOptions, options, visitedFiles);
+        addFallbackBinaryOptionIfReferenced(properties, sliders, options, AUSM_CUSTOM_VOID_WORLD, "1");
 
         overrides.forEach((name, value) -> {
             ShaderOption option = options.get(name);
@@ -55,6 +59,38 @@ public final class ShaderOptionScanner {
 
         MainMod.LOGGER.debug("[ShaderOptions] Discovered {} shader options", options.size());
         return new ShaderOptions(options);
+    }
+
+    private static void addFallbackBinaryOptionIfReferenced(Properties properties, Set<String> sliders,
+                                                            Map<String, ShaderOption> options, String name,
+                                                            String defaultValue) {
+        if (options.containsKey(name) || !propertiesMention(properties, name)) {
+            return;
+        }
+
+        ShaderOption option = new ShaderOption(
+                name,
+                defaultValue,
+                defaultValue,
+                List.of("0", "1"),
+                sliders.contains(name),
+                false
+        );
+        options.put(name, option);
+        MainMod.LOGGER.warn("[ShaderOptions] Added fallback binary option {} because shaders.properties references it but shader source scanning did not discover it", name);
+    }
+
+    private static boolean propertiesMention(Properties properties, String token) {
+        if (properties == null || token == null || token.isBlank()) {
+            return false;
+        }
+        for (String key : properties.stringPropertyNames()) {
+            String value = properties.getProperty(key);
+            if ((key != null && key.contains(token)) || (value != null && value.contains(token))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Set<String> parseList(String value) {
@@ -71,10 +107,44 @@ public final class ShaderOptionScanner {
         return result;
     }
 
+    private static Set<String> parsePropertyOptionNames(Properties properties, Set<String> sliders) {
+        Set<String> result = new HashSet<>(sliders);
+        if (properties == null) {
+            return result;
+        }
+
+        for (String key : properties.stringPropertyNames()) {
+            String value = properties.getProperty(key);
+            addSymbols(result, key);
+            addSymbols(result, value);
+        }
+        result.remove("screen");
+        result.remove("profile");
+        result.remove("program");
+        result.remove("sliders");
+        result.remove("true");
+        result.remove("false");
+        return result;
+    }
+
+    private static void addSymbols(Set<String> result, String value) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        Matcher matcher = SYMBOL_PATTERN.matcher(value);
+        while (matcher.find()) {
+            String token = matcher.group();
+            if (!token.equals("empty")) {
+                result.add(token);
+            }
+        }
+    }
+
     private static void scanShaderFile(
             ShaderPack pack,
             String path,
             Set<String> sliders,
+            Set<String> propertyOptions,
             Map<String, ShaderOption> options,
             Set<String> visitedFiles
     ) {
@@ -94,20 +164,20 @@ public final class ShaderOptionScanner {
                     if (trimmed.startsWith("#include ")) {
                         String includePath = ShaderPreprocessor.extractIncludePath(trimmed, path);
                         if (includePath != null) {
-                            scanShaderFile(pack, includePath, sliders, options, visitedFiles);
+                            scanShaderFile(pack, includePath, sliders, propertyOptions, options, visitedFiles);
                         }
                         continue;
                     }
 
                     DefineOption define = parseDefine(line);
                     if (define != null) {
-                        addOption(define, sliders, options);
+                        addOption(define, sliders, propertyOptions, options);
                         continue;
                     }
 
                     DefineOption constant = parseConst(line);
                     if (constant != null) {
-                        addOption(constant, sliders, options);
+                        addOption(constant, sliders, propertyOptions, options);
                     }
                 }
             }
@@ -116,8 +186,11 @@ public final class ShaderOptionScanner {
         }
     }
 
-    private static void addOption(DefineOption define, Set<String> sliders, Map<String, ShaderOption> options) {
+    private static void addOption(DefineOption define, Set<String> sliders, Set<String> propertyOptions, Map<String, ShaderOption> options) {
         String name = define.name();
+        if (define.choices() == null && !propertyOptions.contains(name)) {
+            return;
+        }
         String rawValue = define.value();
         String value = rawValue == null ? Boolean.toString(define.enabled()) : rawValue;
         List<String> choices = parseChoices(define.choices());
@@ -162,8 +235,13 @@ public final class ShaderOptionScanner {
             return null;
         }
 
+        String name = tokens[1];
+        if (!SYMBOL_PATTERN.matcher(name).matches()) {
+            return null;
+        }
+
         String value = tokens.length >= 3 && !tokens[2].isBlank() ? tokens[2].trim().split("\\s+")[0] : null;
-        return new DefineOption(tokens[1], value, choices, !commented);
+        return new DefineOption(name, value, choices, !commented);
     }
 
     private static DefineOption parseConst(String line) {

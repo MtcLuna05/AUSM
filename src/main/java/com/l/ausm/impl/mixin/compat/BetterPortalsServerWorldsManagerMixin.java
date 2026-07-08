@@ -21,10 +21,10 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
     private static final String WORLD_MANAGER_CLASS = "de.johni0702.minecraft.view.impl.server.ServerWorldManager";
     private static final String VIEW_ENTITY_CLASS = "de.johni0702.minecraft.view.impl.server.ViewEntity";
 
-    @Shadow
+    @Shadow(remap = false)
     public abstract Map getWorldManagers();
 
-    @Shadow
+    @Shadow(remap = false)
     public abstract EntityPlayerMP getPlayer();
 
     @Inject(method = "beforeTransferToDimension", at = @At("HEAD"))
@@ -35,7 +35,7 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
     @Inject(method = "updateActiveViews", at = @At("HEAD"))
     private void ausm$repairMissedDimensionTransfer(CallbackInfo ci) {
         EntityPlayerMP player = getPlayer();
-        if (player == null || player.isSpectator()) {
+        if (player == null || com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(player)) {
             return;
         }
 
@@ -49,7 +49,7 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
             worldManagers.put(playerWorld, ausm$createWorldManager(playerWorld, player));
             MainMod.LOGGER.warn("[BetterPortalsCompat] Repaired missed Better Portals server view transfer for player={} world={}",
                     player.getName(),
-                    playerWorld.provider != null ? playerWorld.provider.getDimension() : "null");
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(playerWorld) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(playerWorld)) : "null");
         } catch (RuntimeException e) {
             MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to repair missed Better Portals server view transfer", e);
         }
@@ -94,8 +94,8 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
                     removed,
                     reason,
                     player.getName(),
-                    currentWorld.provider != null ? currentWorld.provider.getDimension() : "null",
-                    destination != null && destination.provider != null ? destination.provider.getDimension() : "null",
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(currentWorld) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(currentWorld)) : "null",
+                    destination != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(destination) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(destination)) : "null",
                     worldManagers.size());
         }
     }

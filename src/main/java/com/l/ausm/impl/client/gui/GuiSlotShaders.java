@@ -107,7 +107,7 @@ public class GuiSlotShaders {
             }
 
             int color = selected ? 0xFFFFFF : 0xC8CED6;
-            mc.fontRenderer.drawString(shaderPacks.get(index), panelLeft + 28, y + 4, color);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(shaderPacks.get(index), panelLeft + 28, y + 4, color);
         }
 
         drawScrollbar(visibleRows);

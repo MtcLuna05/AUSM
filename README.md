@@ -26,14 +26,14 @@ AUSM is not designed to be installed alongside OptiFine. Both mods target the sa
 
 ## Installation
 
-1. Download `AUSM-latest.jar` from the latest prerelease on GitHub.
+1. Download the newest `AUSM-<version>+<commit>.jar` from the GitHub releases page.
 2. Put the jar in the instance `mods/` folder.
 3. Start the game once so AUSM can create `shaderpacks/` and `config/ausm/` if they do not already exist.
 4. Put shader-pack zip files or folders in `shaderpacks/`.
 5. Open the AUSM shader screen in game and select a pack.
 
-Latest build:
-https://github.com/MtcLuna05/AUSM/releases/tag/latest
+Builds:
+https://github.com/MtcLuna05/AUSM/releases
 
 ## Controls
 
@@ -74,7 +74,7 @@ Useful Gradle tasks:
 | `runServer` | Launch a development server |
 | `genSources` | Generate Minecraft sources for IDE navigation |
 
-The repository uses GitHub Actions to build every push to `master`, upload an `AUSM-latest` artifact, and recreate the `latest` prerelease with `AUSM-latest.jar` attached.
+The repository uses GitHub Actions to build every push to `master`, upload an `AUSM-latest` artifact, and publish an immutable prerelease tagged as `v<mod_version>+<short_sha>` with `AUSM-<mod_version>+<short_sha>.jar` attached.
 
 ## Repository Hygiene
 

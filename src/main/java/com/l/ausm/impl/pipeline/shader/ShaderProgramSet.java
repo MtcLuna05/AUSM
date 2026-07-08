@@ -5,6 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.pipeline.pack.AusmOfficialSkyDomeTransformStage;
 import com.l.ausm.impl.pipeline.pack.ShaderDimensionContext;
 import com.l.ausm.impl.pipeline.pack.ShaderPack;
 import com.l.ausm.impl.pipeline.pack.ShaderPackLayout;
@@ -17,8 +18,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Iris-style container for all shaderpack programs.
@@ -28,9 +27,6 @@ import java.util.regex.Pattern;
  * pass layer should increasingly become a backport adapter.</p>
  */
 public final class ShaderProgramSet {
-    private static final Pattern WORK_GROUPS_PATTERN = Pattern.compile("\\bconst\\s+ivec3\\s+workGroups\\s*=\\s*ivec3\\s*\\(([^)]*)\\)\\s*;.*");
-    private static final Pattern WORK_GROUPS_RENDER_PATTERN = Pattern.compile("\\bconst\\s+vec2\\s+workGroupsRender\\s*=\\s*vec2\\s*\\(([^)]*)\\)\\s*;.*");
-
     private final Map<ProgramId, ShaderProgramSource> programs;
     private final Map<ProgramArrayId, List<ShaderProgramSource>> programArrays;
     private final Map<ProgramArrayId, List<ComputeProgramSource>> computeArrays;
@@ -56,6 +52,9 @@ public final class ShaderProgramSet {
         Map<ProgramId, ShaderProgramSource> programs = new EnumMap<>(ProgramId.class);
         for (ProgramId programId : ProgramId.values()) {
             ProgramSourceSet paths = ProgramSourceResolver.resolve(pack, programId);
+            String fragmentSource = programId == ProgramId.FINAL && paths.fragmentPath() == null
+                    ? AusmOfficialSkyDomeTransformStage.builtinFinalFragmentSource()
+                    : null;
             programs.put(programId, new ShaderProgramSource(
                     programId,
                     programId.sourceName(),
@@ -68,7 +67,7 @@ public final class ShaderProgramSet {
                     paths.geometryPath(),
                     null,
                     paths.fragmentPath(),
-                    null,
+                    fragmentSource,
                     properties.directivesFor(programId)
             ));
         }
@@ -171,7 +170,7 @@ public final class ShaderProgramSet {
             String tessellationControlPath = resolveProgramArrayStage(pack, layout, name, ".tcs");
             String tessellationEvaluationPath = resolveProgramArrayStage(pack, layout, name, ".tes");
             String geometryPath = resolveProgramArrayStage(pack, layout, name, ".gsh");
-            String fragmentPath = resolveProgramArrayStage(pack, layout, name, ".fsh");
+            String fragmentPath = resolveProgramArrayFragmentStage(pack, layout, arrayId, name);
             ShaderProgramSource source = new ShaderProgramSource(
                     null,
                     name,
@@ -192,6 +191,25 @@ public final class ShaderProgramSet {
         return List.copyOf(sources);
     }
 
+    private static String resolveProgramArrayFragmentStage(ShaderPack pack, ShaderPackLayout layout, ProgramArrayId arrayId, String name) {
+        String fragmentPath = resolveProgramArrayStage(pack, layout, name, ".fsh");
+        if (fragmentPath != null) {
+            return fragmentPath;
+        }
+        String glslPath = resolveProgramArrayStage(pack, layout, name, ".glsl");
+        if (glslPath == null || arrayId == ProgramArrayId.SHADOWCOMP || isComputeLikeSource(pack, glslPath)) {
+            return null;
+        }
+        if (isStageGuardedSource(pack, glslPath)) {
+            MainMod.LOGGER.debug(
+                    "[ShaderProgramSet] Skipping unreferenced stage-guarded program source '{}'.",
+                    glslPath
+            );
+            return null;
+        }
+        return glslPath;
+    }
+
     private static String resolveProgramArrayStage(ShaderPack pack, ShaderPackLayout layout, String name, String extension) {
         int dimensionId = ShaderDimensionContext.currentDimensionId();
         for (int candidateDimensionId : dimensionFallbackOrder(dimensionId)) {
@@ -202,7 +220,14 @@ public final class ShaderProgramSet {
                 }
             }
         }
-        return existingPath(pack, layout.rootPath(name + extension));
+        String rootPath = existingPath(pack, layout.rootPath(name + extension));
+        if (rootPath != null) {
+            return rootPath;
+        }
+        if (".glsl".equals(extension)) {
+            return existingPath(pack, layout.rootPath("program/" + name + extension));
+        }
+        return null;
     }
 
     private static List<ComputeProgramSource> loadComputeArray(
@@ -293,7 +318,30 @@ public final class ShaderProgramSet {
         if (rootPath != null) {
             return rootPath;
         }
+        String programGlslPath = existingPath(pack, layout.rootPath("program/" + name + ".glsl"));
+        if (programGlslPath != null && isComputeLikeSource(pack, programGlslPath)) {
+            return programGlslPath;
+        }
         return null;
+    }
+
+    private static boolean isComputeLikeSource(ShaderPack pack, String path) {
+        String source = readKnownExisting(pack, path);
+        return source != null
+                && (source.contains("local_size_x")
+                || source.contains("gl_GlobalInvocationID")
+                || source.contains("gl_WorkGroupID"));
+    }
+
+    private static boolean isStageGuardedSource(ShaderPack pack, String path) {
+        String source = readKnownExisting(pack, path);
+        return source != null
+                && (source.contains("#ifdef FRAGMENT_SHADER")
+                || source.contains("#ifdef VERTEX_SHADER")
+                || source.contains("#if defined FRAGMENT_SHADER")
+                || source.contains("#if defined VERTEX_SHADER")
+                || source.contains("#if defined(FRAGMENT_SHADER)")
+                || source.contains("#if defined(VERTEX_SHADER)"));
     }
 
     private static int[] dimensionFallbackOrder(int dimensionId) {
@@ -304,46 +352,11 @@ public final class ShaderProgramSet {
     }
 
     private static int[] parseWorkGroups(String source) {
-        Matcher matcher = WORK_GROUPS_PATTERN.matcher(source == null ? "" : source);
-        if (!matcher.find()) {
-            return null;
-        }
-        String[] parts = matcher.group(1).split(",");
-        if (parts.length != 3) {
-            MainMod.LOGGER.warn("[ShaderProgramSet] Ignoring malformed workGroups directive: {}", matcher.group(0));
-            return null;
-        }
-        try {
-            return new int[]{
-                    Integer.parseInt(parts[0].trim()),
-                    Integer.parseInt(parts[1].trim()),
-                    Integer.parseInt(parts[2].trim())
-            };
-        } catch (NumberFormatException e) {
-            MainMod.LOGGER.warn("[ShaderProgramSet] Ignoring malformed workGroups directive: {}", matcher.group(0));
-            return null;
-        }
+        return ComputeDirectiveParser.parseWorkGroups(source, false, "[ShaderProgramSet]", "workGroups");
     }
 
     private static float[] parseWorkGroupRelative(String source) {
-        Matcher matcher = WORK_GROUPS_RENDER_PATTERN.matcher(source == null ? "" : source);
-        if (!matcher.find()) {
-            return null;
-        }
-        String[] parts = matcher.group(1).split(",");
-        if (parts.length != 2) {
-            MainMod.LOGGER.warn("[ShaderProgramSet] Ignoring malformed workGroupsRender directive: {}", matcher.group(0));
-            return null;
-        }
-        try {
-            return new float[]{
-                    Float.parseFloat(parts[0].trim()),
-                    Float.parseFloat(parts[1].trim())
-            };
-        } catch (NumberFormatException e) {
-            MainMod.LOGGER.warn("[ShaderProgramSet] Ignoring malformed workGroupsRender directive: {}", matcher.group(0));
-            return null;
-        }
+        return ComputeDirectiveParser.parseWorkGroupRelative(source, false, "[ShaderProgramSet]", "workGroupsRender");
     }
 
     private static String existingPath(ShaderPack pack, String path) {

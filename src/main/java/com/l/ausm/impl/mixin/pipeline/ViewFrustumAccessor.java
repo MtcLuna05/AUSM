@@ -6,12 +6,12 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 
 @Mixin(ViewFrustum.class)
 public interface ViewFrustumAccessor {
-    @Accessor("countChunksX")
+    @Accessor(value = "field_178165_d", remap = false)
     int ausm$countChunksX();
 
-    @Accessor("countChunksY")
+    @Accessor(value = "field_178168_c", remap = false)
     int ausm$countChunksY();
 
-    @Accessor("countChunksZ")
+    @Accessor(value = "field_178166_e", remap = false)
     int ausm$countChunksZ();
 }

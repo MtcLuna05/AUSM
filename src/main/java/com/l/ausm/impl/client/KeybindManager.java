@@ -13,7 +13,7 @@ import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.settings.KeyBinding;
-import net.minecraft.client.entity.EntityPlayerSP;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.text.TextComponentString;
 import net.minecraftforge.fml.client.registry.ClientRegistry;
 import net.minecraftforge.fml.common.Mod;
@@ -57,7 +57,7 @@ public class KeybindManager {
      */
     @SubscribeEvent
     public static void onKeyInput(InputEvent.KeyInputEvent event) {
-        Minecraft minecraft = Minecraft.getMinecraft();
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (minecraft == null
                 || openConfig == null
                 || reloadShader == null
@@ -67,18 +67,18 @@ public class KeybindManager {
             return;
         }
 
-        while (openConfig.isPressed()) {
-            minecraft.displayGuiScreen(new GuiShaders(null));
+        while (com.l.ausm.impl.util.MinecraftReflectionCompat.keyBindingIsPressed(openConfig)) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(minecraft, new GuiShaders(null));
         }
 
-        while (reloadShader.isPressed()) {
+        while (com.l.ausm.impl.util.MinecraftReflectionCompat.keyBindingIsPressed(reloadShader)) {
             MainMod.LOGGER.info("Reloading Shaders...");
             ShaderPackManager manager = MainMod.getShaderPackManager();
             manager.reloadPack();
             sendActionBar("Shaders reloaded: " + displayPackName(manager.getSelectedPackName()));
         }
 
-        while (toggleShader.isPressed()) {
+        while (com.l.ausm.impl.util.MinecraftReflectionCompat.keyBindingIsPressed(toggleShader)) {
             ShaderPackManager manager = MainMod.getShaderPackManager();
             boolean currentState = manager.areShadersEnabled();
             MainMod.LOGGER.info("Toggling Pipeline Active state to: {}", !currentState);
@@ -88,19 +88,21 @@ public class KeybindManager {
             sendActionBar(state + " shaders: " + displayPackName(manager.getSelectedPackName()));
         }
 
-        while (forceLightRecalculation.isPressed()) {
+        while (com.l.ausm.impl.util.MinecraftReflectionCompat.keyBindingIsPressed(forceLightRecalculation)) {
             MainMod.LOGGER.info("Forcing nearby light recalculation...");
-            int[] result = PipelineContext.getInstance().forceLightRecalculation();
+            PipelineContext context = PipelineContext.getInstance();
+            int[] result = context.forceLightRecalculation();
             int chunks = result.length > 1 ? result[1] : 0;
             int blockChecks = result.length > 2 ? result[2] : 0;
             if (chunks > 0 || blockChecks > 0) {
-                sendActionBar("Forced light recalculation: " + blockChecks + " light checks, " + chunks + " chunks");
+                context.scheduleBloomTerrainRefresh("manual-light-keybind");
+                sendActionBar("Forced light recalculation: " + blockChecks + " light checks, " + chunks + " chunks; bloom refresh queued");
             } else {
                 sendActionBar("No loaded world light data to recalculate");
             }
         }
 
-        while (toggleDynamicLights.isPressed()) {
+        while (com.l.ausm.impl.util.MinecraftReflectionCompat.keyBindingIsPressed(toggleDynamicLights)) {
             toggleDynamicLights();
         }
     }
@@ -125,10 +127,11 @@ public class KeybindManager {
     }
 
     private static void sendActionBar(String message) {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        EntityPlayerSP player = minecraft != null ? minecraft.player : null;
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        EntityPlayer player = minecraft != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft) : null;
         if (player != null) {
-            player.sendStatusMessage(new TextComponentString(message), true);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((player), new String[] {"func_146105_b", "sendStatusMessage"},
+                new Class<?>[] {net.minecraft.util.text.ITextComponent.class, boolean.class}, (new TextComponentString(message)), (true));;
         }
     }
 

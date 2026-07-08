@@ -61,7 +61,7 @@ public class GuiVideoSettingsMixin extends GuiScreen {
     @Inject(method = "actionPerformed", at = @At("HEAD"), cancellable = true)
     private void onActionPerformed(GuiButton button, CallbackInfo ci) {
         if (button.id == 300) {
-            this.mc.displayGuiScreen(new GuiShaders(this));
+            com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, new GuiShaders(this));
             ci.cancel();
         }
     }

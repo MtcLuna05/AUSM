@@ -34,3 +34,6 @@ AUSM_RESUME_STATE.json
 
 # Local vision/watch helper scripts
 tools/
+
+# Hidden/dot folders
+**/.*/

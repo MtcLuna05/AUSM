@@ -18,8 +18,8 @@ public class BewitchmentSyncExtendedPlayerHandlerMixin {
     )
     private void ausm$skipSyncWithoutPlayer(IMessage message, MessageContext context,
                                             CallbackInfoReturnable<IMessage> cir) {
-        Minecraft minecraft = Minecraft.getMinecraft();
-        if (minecraft == null || minecraft.player == null) {
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft) == null) {
             cir.setReturnValue(null);
         }
     }

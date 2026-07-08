@@ -142,11 +142,11 @@ public class GuiShaders extends GuiScreen {
         switch (button.id) {
             case ID_DONE:
                 if (this.parentScreen == null) {
-                    this.mc.currentScreen = null;
-                    this.mc.setIngameFocus();
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.setField((this.mc), (null), "field_71462_r", "currentScreen");;
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((this.mc), new String[] {"func_71381_h", "setIngameFocus"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
                     return;
                 }
-                this.mc.displayGuiScreen(this.parentScreen);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, this.parentScreen);
                 break;
             case ID_APPLY:
                 applySelectedPack();
@@ -160,13 +160,10 @@ public class GuiShaders extends GuiScreen {
             case ID_TOGGLE_ENABLED:
                 boolean enabled = !MainMod.getShaderPackManager().areShadersEnabled();
                 MainMod.getShaderPackManager().setShadersEnabled(enabled);
-                if (this.mc != null && this.mc.renderGlobal != null) {
-                    this.mc.renderGlobal.loadRenderers();
-                }
                 updateEnabledButton();
                 break;
             case ID_SETTINGS:
-                this.mc.displayGuiScreen(new GuiDynamicLights(this));
+                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, new GuiDynamicLights(this));
                 break;
             case ID_PREVIEW:
                 setPreviewHidden(!previewHidden);
@@ -175,7 +172,7 @@ public class GuiShaders extends GuiScreen {
                 openShaderpacksFolder();
                 break;
             case ID_CANCEL:
-                this.mc.displayGuiScreen(this.parentScreen);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, this.parentScreen);
                 break;
             default:
                 break;
@@ -232,9 +229,6 @@ public class GuiShaders extends GuiScreen {
         }
 
         MainMod.getShaderPackManager().loadPack(selectedPack);
-        if (this.mc != null && this.mc.renderGlobal != null) {
-            this.mc.renderGlobal.loadRenderers();
-        }
         if (this.applyButton != null) {
             this.applyButton.enabled = false;
         }
@@ -253,29 +247,40 @@ public class GuiShaders extends GuiScreen {
         if (!canConfigure(packName)) {
             return;
         }
-        this.mc.displayGuiScreen(new GuiShaderOptions(this, packName));
+        com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, new GuiShaderOptions(this, packName));
     }
 
     @Override
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
-        lastMouseX = mouseX;
-        lastMouseY = mouseY;
-        if (previewHidden) {
+        PipelineContext context = PipelineContext.getInstance();
+        boolean managedGuiRender = context.isActive();
+        if (managedGuiRender) {
+            context.beginGuiRendering();
+        }
+        try {
+            lastMouseX = mouseX;
+            lastMouseY = mouseY;
+            if (previewHidden) {
+                super.drawScreen(mouseX, mouseY, partialTicks);
+                drawFocusedButtonOutline();
+                return;
+            }
+
+            drawRect(0, 0, this.width, this.height, 0x330B1016);
+            drawPanels();
+            this.shaderList.drawScreen(mouseX, mouseY, partialTicks, focusedControl == -1);
+            drawHeader();
+            drawPackDetails();
+            drawNotification();
+
             super.drawScreen(mouseX, mouseY, partialTicks);
             drawFocusedButtonOutline();
-            return;
+            drawEscapeHintTooltip(mouseX, mouseY);
+        } finally {
+            if (managedGuiRender) {
+                context.finishGuiRendering();
+            }
         }
-
-        drawRect(0, 0, this.width, this.height, 0x330B1016);
-        drawPanels();
-        this.shaderList.drawScreen(mouseX, mouseY, partialTicks, focusedControl == -1);
-        drawHeader();
-        drawPackDetails();
-        drawNotification();
-
-        super.drawScreen(mouseX, mouseY, partialTicks);
-        drawFocusedButtonOutline();
-        drawEscapeHintTooltip(mouseX, mouseY);
     }
 
     @Override
@@ -292,14 +297,14 @@ public class GuiShaders extends GuiScreen {
     protected void keyTyped(char typedChar, int keyCode) throws IOException {
         if (keyCode == Keyboard.KEY_ESCAPE) {
             if (GuiControlHints.isShiftDown()) {
-                this.mc.displayGuiScreen(null);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, null);
                 return;
             }
             if (previewHidden) {
                 setPreviewHidden(false);
                 return;
             }
-            this.mc.displayGuiScreen(parentScreen);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, parentScreen);
             return;
         }
         if (keyCode == Keyboard.KEY_TAB) {
@@ -354,11 +359,11 @@ public class GuiShaders extends GuiScreen {
     }
 
     private int currentMouseX() {
-        return Mouse.getX() * this.width / this.mc.displayWidth;
+        return Mouse.getX() * this.width / com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(this.mc);
     }
 
     private int currentMouseY() {
-        return this.height - Mouse.getY() * this.height / this.mc.displayHeight - 1;
+        return this.height - Mouse.getY() * this.height / com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(this.mc) - 1;
     }
 
     private void moveFocusHorizontal(int direction) {
@@ -659,7 +664,7 @@ public class GuiShaders extends GuiScreen {
                     paths.add(Paths.get(name));
                 }
             }
-            this.mc.addScheduledTask(() -> handleDroppedFiles(paths));
+            com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(this.mc, () -> handleDroppedFiles(paths));
         });
         previousDropCallback = GLFW.glfwSetDropCallback(window, dropCallback);
     }

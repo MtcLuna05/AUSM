@@ -1,7 +1,6 @@
 package com.l.ausm.impl.pipeline.bloom;
 
 import com.l.ausm.impl.MainMod;
-import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraftforge.common.util.EnumHelper;
 import net.minecraftforge.fml.common.Loader;
@@ -18,22 +17,15 @@ public final class AusmBloomLayer {
     private static final String NOTHIRIUM_MOD_ID = "nothirium";
     private static final String NOTHIRIUM_CHUNK_RENDER_PASS = "meldexun.nothirium.api.renderer.chunk.ChunkRenderPass";
     private static final String NOTHIRIUM_BLOCK_RENDER_LAYER_UTIL = "meldexun.nothirium.mc.util.BlockRenderLayerUtil";
-    private static final String CTM_MOD_ID = "ctm";
-    private static final String CTM_ABSTRACT_BAKED_MODEL = "team.chisel.ctm.client.model.AbstractCTMBakedModel";
-    private static final int BLOOM_BUFFER_SIZE = 131072;
 
     private static BlockRenderLayer bloomLayer;
     private static boolean standaloneCreateAttempted;
     private static boolean nothiriumLayerPatched;
-    private static boolean ctmLayerPatched;
     private static boolean loggedAvailable;
     private static boolean loggedUnavailable;
-    private static boolean loggedBufferInitialized;
-    private static boolean loggedBufferOutOfRange;
     private static boolean loggedCreateFailure;
     private static boolean loggedLumenizedInitFailure;
     private static boolean loggedNothiriumPatchFailure;
-    private static boolean loggedCtmPatchFailure;
     private static boolean loggedNativeLayerDisabledForNothirium;
 
     private AusmBloomLayer() {
@@ -58,7 +50,6 @@ public final class AusmBloomLayer {
 
         if (bloomLayer != null) {
             sanitizeNothiriumLayerArrays();
-            patchCtmBloomLayer();
             if (!loggedAvailable) {
                 loggedAvailable = true;
                 MainMod.LOGGER.info("[AUSMBloom] BLOOM render layer available at ordinal {}", bloomLayer.ordinal());
@@ -81,7 +72,11 @@ public final class AusmBloomLayer {
     public static boolean shouldUseNativeHook() {
         if (Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
             sanitizeNothiriumLayerArrays();
-            return isAvailable();
+            if (!loggedNativeLayerDisabledForNothirium) {
+                loggedNativeLayerDisabledForNothirium = true;
+                MainMod.LOGGER.info("[AUSMBloom] Disabled native BLOOM render-layer hook because Nothirium cannot index the added BLOOM layer.");
+            }
+            return false;
         }
         return isAvailable();
     }
@@ -94,30 +89,6 @@ public final class AusmBloomLayer {
         return shouldUseNativeHook();
     }
 
-    public static void ensureRegionBuffer(BufferBuilder[] worldRenderers) {
-        if (!shouldUseNativeHook() || worldRenderers == null) {
-            return;
-        }
-
-        BlockRenderLayer layer = bloomLayer;
-        int ordinal = layer.ordinal();
-        if (ordinal < 0 || ordinal >= worldRenderers.length) {
-            if (!loggedBufferOutOfRange) {
-                loggedBufferOutOfRange = true;
-                MainMod.LOGGER.warn("[AUSMBloom] BLOOM layer ordinal {} is outside RegionRenderCacheBuilder array length {}", ordinal, worldRenderers.length);
-            }
-            return;
-        }
-
-        if (worldRenderers[ordinal] == null) {
-            worldRenderers[ordinal] = new BufferBuilder(BLOOM_BUFFER_SIZE);
-            if (!loggedBufferInitialized) {
-                loggedBufferInitialized = true;
-                MainMod.LOGGER.info("[AUSMBloom] Initialized BLOOM chunk buffer at layer ordinal {}", ordinal);
-            }
-        }
-    }
-
     private static BlockRenderLayer existingLayer() {
         try {
             return BlockRenderLayer.valueOf("BLOOM");
@@ -128,11 +99,10 @@ public final class AusmBloomLayer {
 
     private static void initializeLumenizedBloomLayer() {
         try {
-            Class<?> bloomEffectUtil = Class.forName(LUMENIZED_BLOOM_EFFECT_UTIL, true, AusmBloomLayer.class.getClassLoader());
             if (existingLayer() == null) {
-                bloomEffectUtil.getMethod("init").invoke(null);
+                ensureEnumConstant(BlockRenderLayer.class, "BLOOM");
             }
-        } catch (ReflectiveOperationException | LinkageError | RuntimeException error) {
+        } catch (LinkageError | RuntimeException error) {
             if (!loggedLumenizedInitFailure) {
                 loggedLumenizedInitFailure = true;
                 MainMod.LOGGER.warn("[AUSMBloom] Failed to initialize Lumenized BLOOM layer early", error);
@@ -205,37 +175,6 @@ public final class AusmBloomLayer {
             Array.set(filtered, i, entries.get(i));
         }
         return filtered;
-    }
-
-    private static void patchCtmBloomLayer() {
-        if (ctmLayerPatched || bloomLayer == null || !Loader.isModLoaded(CTM_MOD_ID)) {
-            return;
-        }
-
-        try {
-            Class<?> abstractBakedModelClass = Class.forName(CTM_ABSTRACT_BAKED_MODEL, true, AusmBloomLayer.class.getClassLoader());
-            BlockRenderLayer[] layers = BlockRenderLayer.values();
-            writeStaticField(abstractBakedModelClass, "LAYERS", layers);
-            invalidateCtmModelCaches(abstractBakedModelClass);
-            ctmLayerPatched = true;
-            MainMod.LOGGER.info("[AUSMBloom] Patched CTM baked-model layer snapshot for BLOOM ordinal {} (layers={}).",
-                    bloomLayer.ordinal(),
-                    layers.length);
-        } catch (Throwable error) {
-            if (!loggedCtmPatchFailure) {
-                loggedCtmPatchFailure = true;
-                MainMod.LOGGER.warn("[AUSMBloom] Failed to patch CTM BLOOM baked-model layer support", error);
-            }
-        }
-    }
-
-    private static void invalidateCtmModelCaches(Class<?> abstractBakedModelClass) {
-        try {
-            Method invalidateCaches = abstractBakedModelClass.getMethod("invalidateCaches");
-            invalidateCaches.invoke(null);
-        } catch (ReflectiveOperationException | RuntimeException ignored) {
-            // Cache invalidation is best-effort; new worlds still compile against the patched layer array.
-        }
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

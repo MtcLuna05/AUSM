@@ -19,8 +19,8 @@ public class TombstoneSyncCapClientMessageHandlerMixin {
     )
     private void ausm$ignoreSyncWithoutPlayer(@Coerce Object message, MessageContext ctx,
                                               CallbackInfoReturnable<IMessage> cir) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.player == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             cir.setReturnValue(null);
         }
     }

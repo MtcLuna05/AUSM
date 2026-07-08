@@ -6,20 +6,12 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.Map;
 
-public final class FolderShaderPack implements ShaderPack {
+public final class FolderShaderPack extends CachedShaderPack {
 
     private final Path rootDir;
     private final String name;
-    private final Map<String, Boolean> resourceExistenceCache = new HashMap<>();
-    private final Map<String, byte[]> resourceContentCache = new HashMap<>();
 
     public FolderShaderPack(Path rootDir) {
         // Ensure rootDir is absolute to avoid resolution issues
@@ -33,47 +25,34 @@ public final class FolderShaderPack implements ShaderPack {
     }
 
     @Override
-    public InputStream getResourceAsStream(String path) throws IOException {
+    protected Path resolveResourcePath(String path, boolean logFailures) {
         Path resolved = rootDir.resolve(path).normalize();
         if (!resolved.startsWith(rootDir)) {
-            MainMod.LOGGER.warn("[FolderShaderPack] Blocked path traversal attempt to read: {}", path);
+            if (logFailures) {
+                MainMod.LOGGER.warn("[FolderShaderPack] Blocked path traversal attempt to read: {}", path);
+            }
             return null;
         }
-        if (!Files.isRegularFile(resolved)) {
-            MainMod.LOGGER.debug("[FolderShaderPack] File not found when reading: {}", resolved);
-            return null;
-        }
-
-        byte[] bytes = resourceContentCache.get(path);
-        if (bytes == null) {
-            MainMod.LOGGER.debug("[FolderShaderPack] Reading file: {}", resolved);
-            bytes = Files.readAllBytes(resolved);
-            resourceContentCache.put(path, bytes);
-        }
-        return new ByteArrayInputStream(bytes);
+        return resolved;
     }
 
     @Override
-    public boolean hasResource(String path) {
-        if (path == null) {
-            return false;
-        }
-        Boolean cached = resourceExistenceCache.get(path);
-        if (cached != null) {
-            return cached;
-        }
-        boolean exists = hasResourceUncached(path);
-        resourceExistenceCache.put(path, exists);
-        return exists;
+    protected String logPrefix() {
+        return "FolderShaderPack";
+    }
+
+    @Override
+    protected void logMissingResource(String path, Path resolved) {
+        MainMod.LOGGER.debug("[FolderShaderPack] File not found when reading: {}", resolved);
+    }
+
+    @Override
+    protected void logReadResource(String path, Path resolved) {
+        MainMod.LOGGER.debug("[FolderShaderPack] Reading file: {}", resolved);
     }
 
     @Override
     public void close() {
         MainMod.LOGGER.debug("Closed FolderShaderPack: {}", name);
-    }
-
-    private boolean hasResourceUncached(String path) {
-        Path resolved = rootDir.resolve(path).normalize();
-        return resolved.startsWith(rootDir) && Files.isRegularFile(resolved);
     }
 }

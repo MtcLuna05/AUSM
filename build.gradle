@@ -34,7 +34,7 @@ version = propertyString('mod_version')
 group = propertyString('root_package')
 
 base {
-    archivesName = propertyString('mod_id')
+    archivesName = 'AUSM'
 }
 
 ext.resolvePreferredJavaHome = {

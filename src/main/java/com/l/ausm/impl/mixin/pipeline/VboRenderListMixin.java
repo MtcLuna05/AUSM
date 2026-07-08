@@ -6,14 +6,17 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.pipeline.vertex.IPipelineRenderChunk;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.VboRenderList;
 import net.minecraft.client.renderer.chunk.RenderChunk;
 import net.minecraft.client.renderer.texture.TextureMap;
+import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.renderer.vertex.VertexBuffer;
 import net.minecraft.util.BlockRenderLayer;
 import org.lwjgl.opengl.GL11;
@@ -58,33 +61,12 @@ public class VboRenderListMixin {
             return;
         }
 
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc != null && mc.entityRenderer != null) {
-            mc.entityRenderer.enableLightmap();
-        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         boolean shaderPipelineActive = PipelineContext.getInstance().isActive();
         if (!shaderPipelineActive) {
-            OpenGlHelper.glUseProgram(0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         }
-        OpenGlHelper.setActiveTexture(OpenGlHelper.defaultTexUnit);
-        GlStateManager.enableTexture2D();
-        if (mc != null && mc.getTextureManager() != null) {
-            mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
-        }
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GlStateManager.enableDepth();
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.enableAlpha();
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.003921569F);
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE_MINUS_SRC_ALPHA,
-                GL11.GL_ONE,
-                GL11.GL_ZERO
-        );
-        GlStateManager.depthMask(false);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        FixedFunctionGlState.prepareTranslucentBlockLayer(mc);
         if (!shaderPipelineActive) {
             ausm$forceTranslucentFixedFunctionState();
         }
@@ -128,17 +110,19 @@ public class VboRenderListMixin {
 
     @Unique
     private static void ausm$setupPipelineArrayPointers() {
-        int stride = ExtendedVertexFormats.PIPELINE_BLOCK.getSize();
+        int stride = ExtendedVertexFormats.size(ExtendedVertexFormats.PIPELINE_BLOCK);
 
         ausm$preparePipelineArrayPointerState();
 
-        GlStateManager.glVertexPointer(3, GL11.GL_FLOAT, stride, 0);
-        GlStateManager.glColorPointer(4, GL11.GL_UNSIGNED_BYTE, stride, 12);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GlStateManager.glTexCoordPointer(2, GL11.GL_FLOAT, stride, 16);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
-        GlStateManager.glTexCoordPointer(2, GL11.GL_SHORT, stride, 24);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_187420_d", "glVertexPointer"},
+                new Class<?>[] {int.class, int.class, int.class, int.class}, (3), (GL11.GL_FLOAT), (stride), (0));;
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_187406_e", "glColorPointer"},
+                new Class<?>[] {int.class, int.class, int.class, int.class}, (4), (GL11.GL_UNSIGNED_BYTE), (stride), (12));;
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateGlTexCoordPointer(2, GL11.GL_FLOAT, stride, 16);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateGlTexCoordPointer(2, GL11.GL_SHORT, stride, 24);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
 
         GL11.glNormalPointer(GL11.GL_BYTE, stride, (long) ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET);
 
@@ -183,13 +167,15 @@ public class VboRenderListMixin {
     private static void ausm$setupVanillaArrayPointers() {
         ausm$prepareVanillaArrayPointerState();
 
-        GlStateManager.glVertexPointer(3, GL11.GL_FLOAT, 28, 0);
-        GlStateManager.glColorPointer(4, GL11.GL_UNSIGNED_BYTE, 28, 12);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GlStateManager.glTexCoordPointer(2, GL11.GL_FLOAT, 28, 16);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
-        GlStateManager.glTexCoordPointer(2, GL11.GL_SHORT, 28, 24);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_187420_d", "glVertexPointer"},
+                new Class<?>[] {int.class, int.class, int.class, int.class}, (3), (GL11.GL_FLOAT), (28), (0));;
+        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_187406_e", "glColorPointer"},
+                new Class<?>[] {int.class, int.class, int.class, int.class}, (4), (GL11.GL_UNSIGNED_BYTE), (28), (12));;
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateGlTexCoordPointer(2, GL11.GL_FLOAT, 28, 16);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateGlTexCoordPointer(2, GL11.GL_SHORT, 28, 24);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
     }
 
     @Unique
@@ -200,11 +186,11 @@ public class VboRenderListMixin {
 
         GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
         GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         GL11.glEnableClientState(GL11.GL_NORMAL_ARRAY);
         ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
         ExtendedVertexFormats.enableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
@@ -221,11 +207,11 @@ public class VboRenderListMixin {
 
         GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
         GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
         GL11.glNormal3f(0.0F, 1.0F, 0.0F);
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
@@ -274,29 +260,15 @@ public class VboRenderListMixin {
 
     @Unique
     private static void ausm$forceTranslucentFixedFunctionState() {
-        GL13.glActiveTexture(OpenGlHelper.defaultTexUnit);
-        GL11.glEnable(GL11.GL_TEXTURE_2D);
-        GL13.glClientActiveTexture(OpenGlHelper.defaultTexUnit);
-        GL11.glEnable(GL11.GL_DEPTH_TEST);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glEnable(GL11.GL_ALPHA_TEST);
-        GL11.glAlphaFunc(GL11.GL_GREATER, 0.003921569F);
-        GL11.glEnable(GL11.GL_BLEND);
-        GL14.glBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE_MINUS_SRC_ALPHA,
-                GL11.GL_ONE,
-                GL11.GL_ZERO
-        );
-        GL11.glDepthMask(false);
+        FixedFunctionGlState.forceTranslucentBlockLayer();
     }
 
     @Unique
     private static boolean ausm$lightmapTexCoordArrayEnabled() {
         int previousClientTexture = GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
         boolean enabled = GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(previousClientTexture);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(previousClientTexture);
         return enabled;
     }
 }

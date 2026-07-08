@@ -41,7 +41,10 @@ jobs:
           mod_id="$(sed -n 's/^mod_id[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
           short_sha="${GITHUB_SHA::7}"
           mkdir -p dist
-          jar_path="$(find build/libs -maxdepth 1 -type f -name "${mod_id}-*.jar" ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
+          jar_path="$(find build/libs -maxdepth 1 -type f -name 'AUSM-*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
+          if [[ -z "${jar_path}" && -n "${mod_id}" ]]; then
+            jar_path="$(find build/libs -maxdepth 1 -type f -name "${mod_id}-*.jar" ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
+          fi
           if [[ -z "${jar_path}" ]]; then
             jar_path="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
           fi
@@ -60,8 +63,8 @@ jobs:
           path: dist/*.jar
           if-no-files-found: error
 
-  latest-release:
-    name: Publish latest release
+  build-release:
+    name: Publish build release
     needs: jar
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.actor == 'MtcLuna05')
@@ -75,17 +78,30 @@ jobs:
           name: AUSM-${{ github.sha }}
           path: dist
 
-      - name: Publish latest release jar
+      - name: Publish versioned release jar
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           test -f dist/AUSM-latest.jar
-          gh release delete latest --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag 2>/dev/null || true
-          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" 2>/dev/null || true
-          gh release create latest dist/AUSM-latest.jar --repo "${GITHUB_REPOSITORY}" \
-            --title "AUSM Latest Build" \
-            --notes "Latest jar from commit ${GITHUB_SHA}." \
-            --prerelease \
-            --target "${GITHUB_SHA}"
+          short_sha="${GITHUB_SHA::7}"
+          versioned_jar="$(find dist -maxdepth 1 -type f -name "AUSM-*+${short_sha}.jar" | sort | tail -n 1)"
+          if [[ -z "${versioned_jar}" ]]; then
+            echo "No versioned AUSM jar found in dist" >&2
+            find dist -maxdepth 1 -type f -print >&2 || true
+            exit 1
+          fi
+          version="$(basename "${versioned_jar}")"
+          version="${version#AUSM-}"
+          version="${version%+${short_sha}.jar}"
+          release_tag="v${version}+${short_sha}"
+          if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${release_tag}" "${versioned_jar}" --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${release_tag}" "${versioned_jar}" --repo "${GITHUB_REPOSITORY}" \
+              --title "AUSM ${version} (${short_sha})" \
+              --notes "Build from commit ${GITHUB_SHA}." \
+              --prerelease \
+              --target "${GITHUB_SHA}"
+          fi

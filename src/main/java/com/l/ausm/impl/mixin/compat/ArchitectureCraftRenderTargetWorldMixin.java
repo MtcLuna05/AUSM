@@ -68,7 +68,7 @@ public abstract class ArchitectureCraftRenderTargetWorldMixin {
     @Inject(method = "setLight", at = @At("RETURN"), remap = false)
     private void ausm$forceInheritedEmissionLight(float shade, int packedLight, CallbackInfo ci) {
         int contextEmission = BlockRenderContext.blockEmission();
-        if (contextEmission <= 0 || AusmBloomLayer.isBloomLayer(MinecraftForgeClient.getRenderLayer())) {
+        if (contextEmission <= 0 || AusmBloomLayer.isBloomLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer())) {
             return;
         }
         vlm1 = Math.max(vlm1, 240);
@@ -101,10 +101,10 @@ public abstract class ArchitectureCraftRenderTargetWorldMixin {
             contextState = blockState;
         }
         BlockRenderContext.setBlockEntityId(pipeline.blockEntityId(blockState, world, blockPos));
-        BlockRenderContext.setRenderType((short) (contextState != null ? contextState.getRenderType().ordinal() : -1));
+        BlockRenderContext.setRenderType((short) (contextState != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState) : -1));
         BlockRenderContext.setMetadata(pipeline.blockMetadata(blockState, world, blockPos));
         if (blockPos != null) {
-            BlockRenderContext.setLocalBlockPos(blockPos.getX(), blockPos.getY(), blockPos.getZ());
+            BlockRenderContext.setLocalBlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(blockPos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(blockPos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(blockPos));
         }
         BlockRenderContext.setBlockEmission(pipeline.blockRenderEmissionWithFramedInheritance(blockState, world, blockPos));
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(blockState, world, blockPos));
@@ -128,10 +128,10 @@ public abstract class ArchitectureCraftRenderTargetWorldMixin {
     }
 
     private static String ausm$stateName(IBlockState state) {
-        if (state == null || state.getBlock() == null) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return String.valueOf(state);
         }
-        ResourceLocation name = state.getBlock().getRegistryName();
+        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state));
         return name != null ? name.toString() : state.toString();
     }
 

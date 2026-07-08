@@ -38,6 +38,8 @@ jobs:
       - uses: ncipollo/release-action@v1.21.0
         with:
           artifacts: "build/libs/*"
+          allowUpdates: false
+          artifactErrorsFailBuild: true
           generateReleaseNotes: true
           tag: ${{ inputs.tag }}
           commit: ${{ inputs.tag }}

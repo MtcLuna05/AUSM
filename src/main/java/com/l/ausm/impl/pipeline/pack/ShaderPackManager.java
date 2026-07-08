@@ -793,7 +793,7 @@ public class ShaderPackManager implements ShaderPackController {
             pendingPipelineReload = false;
             if (activate && !terrainAlreadyRebuilt && !terrainCacheReusable) {
                 if (fullTerrainRefresh && dimensionId == getClientDimensionId()) {
-                    context.scheduleFullWorldTerrainRefresh();
+                    context.scheduleSingleFullWorldTerrainRefresh();
                 } else {
                     context.scheduleWorldTerrainRefresh();
                 }
@@ -1151,11 +1151,13 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     private int getClientDimensionId() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null || mc.world.provider == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        net.minecraft.client.multiplayer.WorldClient world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        net.minecraft.world.WorldProvider provider = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
+        if (provider == null) {
             return Integer.MIN_VALUE;
         }
-        return mc.world.provider.getDimension();
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider);
     }
 
     private int getEffectiveRenderDimensionId() {

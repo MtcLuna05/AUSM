@@ -13,16 +13,30 @@ public final class CustomImageSamplerDeclarationTransformStage implements Shader
     }
 
     public static String applyTo(String source) {
+        String transformed = source;
+        transformed = removeSamplerDeclarationsIfNeeded(transformed, "voxel_sampler");
+        transformed = removeSamplerDeclarationsIfNeeded(transformed, "floodfill_sampler");
+        transformed = removeSamplerDeclarationsIfNeeded(transformed, "floodfill_sampler_copy");
+
         StringBuilder declarations = new StringBuilder();
-        appendMissingSampler(source, declarations, "voxel_sampler", "usampler3D");
-        appendMissingSampler(source, declarations, "floodfill_sampler", "sampler3D");
-        appendMissingSampler(source, declarations, "floodfill_sampler_copy", "sampler3D");
+        appendMissingSampler(transformed, declarations, "voxel_sampler", "usampler3D");
+        appendMissingSampler(transformed, declarations, "floodfill_sampler", "sampler3D");
+        appendMissingSampler(transformed, declarations, "floodfill_sampler_copy", "sampler3D");
 
         if (declarations.isEmpty()) {
-            return source;
+            return transformed;
         }
         MainMod.LOGGER.debug("[ShaderTransform] Injected custom image sampler declarations");
-        return insertAfterVersionAndExtensions(source, declarations.toString());
+        return insertAfterVersionAndExtensions(transformed, declarations.toString());
+    }
+
+    private static String removeSamplerDeclarationsIfNeeded(String source, String name) {
+        if (!containsWord(source, name)) {
+            return source;
+        }
+        return Pattern.compile("(?m)^\\s*uniform\\s+\\w+\\s+" + Pattern.quote(name) + "\\s*;\\s*\\R?")
+                .matcher(source)
+                .replaceAll("");
     }
 
     private static void appendMissingSampler(String source, StringBuilder declarations, String name, String type) {

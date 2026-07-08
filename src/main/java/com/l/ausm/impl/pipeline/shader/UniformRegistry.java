@@ -39,7 +39,7 @@ public class UniformRegistry {
         activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1) {
-                OpenGlHelper.glUniform1i(location, value);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(location, value);
             }
         }));
     }
@@ -130,7 +130,7 @@ public class UniformRegistry {
         activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1) {
-                OpenGlHelper.glUniformMatrix4(location, false, value);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glUniformMatrix4(location, false, value);
             }
         }));
     }

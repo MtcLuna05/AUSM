@@ -1,6 +1,7 @@
 package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.common.network.simpleimpl.IMessage;
 import net.minecraftforge.fml.common.network.simpleimpl.IMessageHandler;
@@ -30,17 +31,17 @@ public class BetterPortalsCreateWorldHandlerMixin {
         }
 
         cir.setReturnValue(null);
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc != null) {
-            mc.addScheduledTask(() -> ausm$retryCreateWorld(message, ctx, 1));
+            com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> ausm$retryCreateWorld(message, ctx, 1));
         }
     }
 
     private void ausm$retryCreateWorld(Object message, MessageContext ctx, int attempt) {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (!ausm$isReadyForCreateWorld(message)) {
             if (mc != null && attempt < MAX_CREATE_WORLD_RETRIES) {
-                mc.addScheduledTask(() -> ausm$retryCreateWorld(message, ctx, attempt + 1));
+                com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> ausm$retryCreateWorld(message, ctx, attempt + 1));
             } else {
                 MainMod.LOGGER.warn("[BetterPortalsCompat] Dropped CreateWorld packet after {} deferred attempts; client never became ready", attempt);
             }
@@ -57,16 +58,16 @@ public class BetterPortalsCreateWorldHandlerMixin {
     }
 
     private boolean ausm$isReadyForCreateWorld(Object message) {
-        Minecraft mc = Minecraft.getMinecraft();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         return message instanceof IMessage
                 && mc != null
-                && mc.world != null
-                && mc.player != null
-                && mc.getConnection() != null
-                && mc.getRenderViewEntity() != null
-                && mc.renderGlobal != null
-                && mc.entityRenderer != null
-                && mc.effectRenderer != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.call((mc), net.minecraft.client.network.NetHandlerPlayClient.class, null, new String[] {"func_147114_u", "getConnection"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), Object.class, null, "field_71452_i", "effectRenderer") != null
                 && ausm$invokeGetter(message, "getProviderID") != null
                 && ausm$invokeGetter(message, "getDifficulty") != null
                 && ausm$invokeGetter(message, "getGameType") != null

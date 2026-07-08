@@ -21,8 +21,8 @@ public class FramebufferMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/shader/Framebuffer;bindFramebufferTexture()V")
     )
     private void ausm$beforeBindFramebufferTexture(int width, int height, boolean disableBlend, CallbackInfo ci) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.world == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
         PipelineContext context = PipelineContext.getInstance();
@@ -31,6 +31,6 @@ public class FramebufferMixin {
         }
 
         context.prepareFramebufferPresentation();
-        GlStateManager.bindTexture(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
     }
 }

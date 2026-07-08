@@ -74,10 +74,10 @@ public abstract class ArchitectureCraftCustomBlockDispatcherMixin {
             contextState = state;
         }
         BlockRenderContext.setBlockEntityId(pipeline.blockEntityId(state, blockAccess, pos));
-        BlockRenderContext.setRenderType((short) (contextState != null ? contextState.getRenderType().ordinal() : -1));
+        BlockRenderContext.setRenderType((short) (contextState != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState) : -1));
         BlockRenderContext.setMetadata(pipeline.blockMetadata(state, blockAccess, pos));
         if (pos != null) {
-            BlockRenderContext.setLocalBlockPos(pos.getX(), pos.getY(), pos.getZ());
+            BlockRenderContext.setLocalBlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos));
         }
         BlockRenderContext.setBlockEmission(pipeline.blockRenderEmissionWithFramedInheritance(state, blockAccess, pos));
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, blockAccess, pos));
@@ -105,10 +105,10 @@ public abstract class ArchitectureCraftCustomBlockDispatcherMixin {
 
     @Unique
     private static String ausm$stateName(IBlockState state) {
-        if (state == null || state.getBlock() == null) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return String.valueOf(state);
         }
-        ResourceLocation name = state.getBlock().getRegistryName();
+        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state));
         return name != null ? name.toString() : state.toString();
     }
 }

@@ -5,6 +5,7 @@ import appeng.client.render.cablebus.FacadeBuilder;
 import appeng.client.render.cablebus.FacadeRenderState;
 import appeng.thirdparty.codechicken.lib.model.Quad;
 import com.l.ausm.impl.pipeline.compat.AppliedEnergisticsFacadeQuadMetadata;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.block.model.IBakedModel;
@@ -32,7 +33,7 @@ public class AppliedEnergisticsFacadeBuilderMixin {
     @Unique
     private static final ThreadLocal<BlockPos> ausm$currentFacadePos = new ThreadLocal<>();
 
-    @Shadow
+    @Shadow(remap = false)
     private static List<BakedQuad> gatherQuads(IBakedModel model, IBlockState state, long rand) {
         throw new AssertionError();
     }
@@ -42,8 +43,10 @@ public class AppliedEnergisticsFacadeBuilderMixin {
                                           List<BakedQuad> quads,
                                           Function<ResourceLocation, IBakedModel> modelLookup,
                                           CallbackInfo ci) {
-        ausm$currentFacadeWorld.set(renderState != null ? renderState.getWorld() : null);
-        ausm$currentFacadePos.set(renderState != null ? renderState.getPos() : null);
+        Object world = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(renderState, new String[] {"getWorld"}, new Class<?>[0]);
+        Object pos = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(renderState, new String[] {"getPos"}, new Class<?>[0]);
+        ausm$currentFacadeWorld.set(world instanceof IBlockAccess ? (IBlockAccess) world : null);
+        ausm$currentFacadePos.set(pos instanceof BlockPos ? (BlockPos) pos : null);
     }
 
     @Inject(method = "buildFacadeQuads", at = @At("RETURN"))

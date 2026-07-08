@@ -2,6 +2,7 @@ package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
@@ -27,13 +28,13 @@ public class BetterPortalsPortalBlockChangeMixin {
     private void ausm$capturePortalStateBeforeSetBlock(BlockPos pos, IBlockState newState, int flags,
                                                        CallbackInfoReturnable<Boolean> cir) {
         World world = (World) (Object) this;
-        if (!world.isRemote || !BetterPortalsCompat.isInstalled() || pos == null) {
+        if (!com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((world), false, "field_72995_K", "isRemote") || !BetterPortalsCompat.isInstalled() || pos == null) {
             ausm$previousPortalState = null;
             ausm$previousPortalPos = null;
             return;
         }
 
-        IBlockState oldState = world.getBlockState(pos);
+        IBlockState oldState = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos);
         if (!ausm$isPortalState(oldState) && !ausm$isPortalState(newState)) {
             ausm$previousPortalState = null;
             ausm$previousPortalPos = null;
@@ -41,7 +42,7 @@ public class BetterPortalsPortalBlockChangeMixin {
         }
 
         ausm$previousPortalState = oldState;
-        ausm$previousPortalPos = pos.toImmutable();
+        ausm$previousPortalPos = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos);
     }
 
     @Inject(
@@ -63,11 +64,11 @@ public class BetterPortalsPortalBlockChangeMixin {
             World world = (World) (Object) this;
             IBlockState oldState = ausm$previousPortalState;
             BlockPos changedPos = ausm$previousPortalPos;
-            Minecraft mc = Minecraft.getMinecraft();
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
             if (mc == null) {
                 return;
             }
-            mc.addScheduledTask(() -> PipelineContext.getInstance()
+            com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> PipelineContext.getInstance()
                     .queueBetterPortalsPortalBlockChanged(world, changedPos, oldState, newState));
         } finally {
             ausm$previousPortalState = null;
@@ -77,11 +78,11 @@ public class BetterPortalsPortalBlockChangeMixin {
 
     @Unique
     private boolean ausm$isPortalState(IBlockState state) {
-        if (state == null || state.getBlock() == null) {
+        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return false;
         }
 
-        Block block = state.getBlock();
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
         return BetterPortalsCompat.isBetterPortalsPortalBlock(block);
     }
 }

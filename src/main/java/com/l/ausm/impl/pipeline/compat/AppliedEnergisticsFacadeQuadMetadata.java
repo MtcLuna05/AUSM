@@ -1,6 +1,7 @@
 package com.l.ausm.impl.pipeline.compat;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.util.math.BlockPos;
@@ -37,7 +38,7 @@ public final class AppliedEnergisticsFacadeQuadMetadata {
         }
         METADATA.put(quad, new Metadata(
                 blockEntityId,
-                (short) contextState.getRenderType().ordinal(),
+                (short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState),
                 pipeline.blockMetadata(state, null, null),
                 emission,
                 null

@@ -31,11 +31,11 @@ public class ShaderProgram {
 
     public ShaderProgram(String name) {
         this.name = name;
-        this.programId = OpenGlHelper.glCreateProgram();
+        this.programId = com.l.ausm.impl.util.MinecraftReflectionCompat.glCreateProgram();
     }
 
     public void attachShader(int shaderId) {
-        OpenGlHelper.glAttachShader(programId, shaderId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glAttachShader(programId, shaderId);
     }
 
     public void setTessellated(boolean tessellated) {
@@ -66,11 +66,12 @@ public class ShaderProgram {
         GL20.glBindAttribLocation(programId, 1, "color");
         GL20.glBindAttribLocation(programId, 1, "vColor");
         GL20.glBindAttribLocation(programId, 2, "dhMaterialData");
+        GL20.glBindAttribLocation(programId, ExtendedVertexFormats.DH_MATERIAL_ID_ATTRIBUTE, "dhMaterialId");
         GL20.glBindAttribLocation(programId, 2, "irisMaterialData");
-        OpenGlHelper.glLinkProgram(programId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glLinkProgram(programId);
         
-        if (OpenGlHelper.glGetProgrami(programId, OpenGlHelper.GL_LINK_STATUS) == 0) {
-            String log = OpenGlHelper.glGetProgramInfoLog(programId, 32768);
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.glGetProgrami(programId, com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL20.GL_LINK_STATUS, "field_153207_o", "GL_LINK_STATUS")) == 0) {
+            String log = com.l.ausm.impl.util.MinecraftReflectionCompat.glGetProgramInfoLog(programId, 32768);
             MainMod.LOGGER.error("Failed to link shader program '{}': {}", name, log);
             return false;
         }
@@ -79,16 +80,16 @@ public class ShaderProgram {
     }
 
     public void bind() {
-        OpenGlHelper.glUseProgram(programId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(programId);
     }
 
     public void unbind() {
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
     }
 
     public void delete() {
         if (programId != -1) {
-            OpenGlHelper.glDeleteProgram(programId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteProgram(programId);
             programId = -1;
         }
         uniformLocations.clear();
@@ -111,7 +112,7 @@ public class ShaderProgram {
             return -1;
         }
 
-        int loc = OpenGlHelper.glGetUniformLocation(programId, uniformName);
+        int loc = com.l.ausm.impl.util.MinecraftReflectionCompat.glGetUniformLocation(programId, uniformName);
         uniformLocations.put(uniformName, loc);
         return loc;
     }

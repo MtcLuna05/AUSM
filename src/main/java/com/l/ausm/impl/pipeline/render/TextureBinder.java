@@ -327,7 +327,7 @@ public class TextureBinder {
     }
 
     public static void restoreDefaultTextureUnit() {
-        GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
     }
 

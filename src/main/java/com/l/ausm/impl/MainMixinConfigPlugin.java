@@ -144,9 +144,6 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".ScannableOverlayRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "li/cil/scannable/client/renderer/OverlayRenderer.class", false);
         }
-        if (mixinClassName.endsWith(".BlockcrafteryBakedModelEditableMixin")) {
-            return optionalTargetPresent(mixinClassName, "epicsquid/blockcraftery/model/BakedModelEditable.class", false);
-        }
         if (mixinClassName.endsWith(".RandomThingsLuminousBlockMixin")) {
             return optionalTargetPresent(mixinClassName, "lumien/randomthings/block/BlockBlockLuminousBase.class", true);
         }

@@ -1,6 +1,8 @@
 package com.l.ausm.impl.client.dynamic;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.ResourceLocation;
 
@@ -99,17 +101,18 @@ public final class DynamicLightConfig {
     }
 
     public int configuredLight(ItemStack stack) {
-        if (stack == null || stack.isEmpty() || stack.getItem() == null) {
+        Item item = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack);
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack) || item == null) {
             return 0;
         }
 
-        ResourceLocation name = stack.getItem().getRegistryName();
+        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.call((item), net.minecraft.util.ResourceLocation.class, null, new String[] {"getRegistryName"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
         if (name == null) {
             return 0;
         }
 
         String id = normalizeId(name.toString());
-        Integer exact = itemLights.get(id + "@" + stack.getMetadata());
+        Integer exact = itemLights.get(id + "@" + com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack));
         if (exact != null) {
             return exact;
         }

@@ -3,6 +3,7 @@ package com.l.ausm.impl.pipeline.compat;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.render.TextureBinder;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.multiplayer.WorldClient;
@@ -264,8 +265,8 @@ public final class BetterPortalsCompat {
             return;
         }
 
-        int dimensionId = world != null && world.provider != null
-                ? world.provider.getDimension()
+        int dimensionId = world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world))
                 : Integer.MIN_VALUE;
         mainViewSwapRecoveryFrames = Math.max(mainViewSwapRecoveryFrames, MAIN_VIEW_SWAP_RECOVERY_FRAMES);
         mainViewSwapRecoveryDimensionId = dimensionId;
@@ -380,8 +381,8 @@ public final class BetterPortalsCompat {
             return;
         }
         mainViewSwapRecoveryLogged = true;
-        int dimensionId = world != null && world.provider != null
-                ? world.provider.getDimension()
+        int dimensionId = world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world))
                 : mainViewSwapRecoveryDimensionId;
         MainMod.LOGGER.info("[BetterPortalsCompat] Main view swap recovery active: world={} frames={}",
                 dimensionId,
@@ -404,7 +405,7 @@ public final class BetterPortalsCompat {
             return false;
         }
 
-        Block block = state.getBlock();
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
         if (!isBetterPortalsPortalBlock(block)) {
             return false;
         }
@@ -523,9 +524,9 @@ public final class BetterPortalsCompat {
         }
         portalSurfaceCompositeLogged = true;
         MainMod.LOGGER.info("[BetterPortalsCompat] AUSM portal surface composite: framebuffer={} size={}x{} seeThroughPortals={}",
-                framebuffer.framebufferObject,
-                framebuffer.framebufferWidth,
-                framebuffer.framebufferHeight,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer),
                 isSeeThroughPortalsEnabled());
     }
 
@@ -534,25 +535,25 @@ public final class BetterPortalsCompat {
             return;
         }
 
-        OpenGlHelper.glUseProgram(0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.enableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         GL11.glEnable(GL11.GL_TEXTURE_2D);
-        GlStateManager.enableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GlStateManager.enableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
         GL11.glEnable(GL11.GL_ALPHA_TEST);
-        GlStateManager.alphaFunc(GL11.GL_GREATER, 0.1F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
         GL11.glAlphaFunc(GL11.GL_GREATER, 0.1F);
-        GlStateManager.disableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
         GL11.glDisable(GL11.GL_LIGHTING);
-        GlStateManager.disableColorMaterial();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
         GL11.glDisable(GL11.GL_COLOR_MATERIAL);
-        GlStateManager.disableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         GL11.glDisable(GL11.GL_BLEND);
         GL11.glColorMask(true, true, true, true);
         GL11.glStencilMask(0xFF);
@@ -845,7 +846,7 @@ public final class BetterPortalsCompat {
 
     private static int renderPassWorldDimension(Object pass) {
         WorldClient world = renderPassWorld(pass);
-        return world != null && world.provider != null ? world.provider.getDimension() : Integer.MIN_VALUE;
+        return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) : Integer.MIN_VALUE;
     }
 
     private static WorldClient renderPassWorld(Object pass) {
@@ -932,16 +933,16 @@ public final class BetterPortalsCompat {
         if (framebuffer == null) {
             return "null";
         }
-        return framebuffer.framebufferObject
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer)
                 + "("
-                + framebuffer.framebufferWidth
+                + com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer)
                 + "x"
-                + framebuffer.framebufferHeight
+                + com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer)
                 + ")";
     }
 
     private static int dimensionId(WorldClient world) {
-        return world != null && world.provider != null ? world.provider.getDimension() : Integer.MIN_VALUE;
+        return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) : Integer.MIN_VALUE;
     }
 
     private static String externalCaller() {
@@ -1215,11 +1216,11 @@ public final class BetterPortalsCompat {
         }
 
         private void restore() {
-            OpenGlHelper.glUseProgram(program);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(program);
             if (fullCapture) {
                 restoreTextureBindings(activeTexture, texture2dBindings, texture2dEnabled);
             } else if (isVanillaGlStateTextureUnit(activeTexture)) {
-                GlStateManager.setActiveTexture(activeTexture);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(activeTexture);
                 GL13.glActiveTexture(activeTexture);
             } else {
                 TextureBinder.restoreDefaultTextureUnit();
@@ -1227,7 +1228,7 @@ public final class BetterPortalsCompat {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFramebuffer);
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, drawFramebuffer);
             if (readFramebuffer == drawFramebuffer && readFramebuffer == framebuffer) {
-                OpenGlHelper.glBindFramebuffer(OpenGlHelper.GL_FRAMEBUFFER, framebuffer);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), framebuffer);
             }
             GL11.glDrawBuffer(drawBuffer);
             GL11.glReadBuffer(readBuffer);
@@ -1239,7 +1240,7 @@ public final class BetterPortalsCompat {
             setCapability(GL11.GL_ALPHA_TEST, alphaTest);
             GL11.glAlphaFunc(alphaFunc, alphaRef);
             setCapability(GL11.GL_BLEND, blend);
-            GlStateManager.tryBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
             setCapability(GL11.GL_CULL_FACE, cullFace);
             GL11.glCullFace(cullFaceMode);
             setCapability(GL11.GL_SCISSOR_TEST, scissorTest);
@@ -1297,7 +1298,7 @@ public final class BetterPortalsCompat {
                 }
             } finally {
                 if (isVanillaGlStateTextureUnit(activeTexture)) {
-                    GlStateManager.setActiveTexture(activeTexture);
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(activeTexture);
                     GL13.glActiveTexture(activeTexture);
                 } else {
                     TextureBinder.restoreDefaultTextureUnit();

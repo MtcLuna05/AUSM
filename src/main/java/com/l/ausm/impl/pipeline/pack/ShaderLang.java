@@ -53,11 +53,14 @@ public final class ShaderLang {
     }
 
     private static String currentLanguage() {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (mc == null || mc.gameSettings == null || mc.gameSettings.language == null || mc.gameSettings.language.isBlank()) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        String language = mc != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.field((com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)), String.class, "", "field_74363_ab", "language")
+                : "";
+        if (language == null || language.isBlank()) {
             return "en_US";
         }
-        return mc.gameSettings.language;
+        return language;
     }
 
     private static void loadFile(ShaderPack pack, String path, Map<String, String> translations) {

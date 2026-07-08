@@ -12,8 +12,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class AbyssalCraftNecroDataCapMessageMixin {
     @Inject(method = "process", at = @At("HEAD"), cancellable = true, remap = false)
     private void ausm$ignoreNecroDataWithoutPlayer(EntityPlayer player, Side side, CallbackInfo ci) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (player == null || mc == null || mc.player == null) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (player == null || mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             ci.cancel();
         }
     }

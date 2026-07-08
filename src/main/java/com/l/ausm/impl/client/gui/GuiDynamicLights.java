@@ -98,7 +98,7 @@ public class GuiDynamicLights extends GuiScreen {
 
         switch (button.id) {
             case ID_DONE:
-                this.mc.displayGuiScreen(parent);
+                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, parent);
                 break;
             case ID_TOGGLE:
                 setEnabled(!enabled());
@@ -137,7 +137,7 @@ public class GuiDynamicLights extends GuiScreen {
     @Override
     protected void keyTyped(char typedChar, int keyCode) throws IOException {
         if (keyCode == Keyboard.KEY_ESCAPE) {
-            this.mc.displayGuiScreen(GuiControlHints.isShiftDown() ? null : parent);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, GuiControlHints.isShiftDown() ? null : parent);
             return;
         }
         super.keyTyped(typedChar, keyCode);

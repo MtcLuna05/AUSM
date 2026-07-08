@@ -36,7 +36,7 @@ public class AppliedEnergisticsCableBusBakedModelMixin {
             return;
         }
         for (BakedQuad quad : quads) {
-            if (quad != null && quad.hasTintIndex()) {
+            if (quad != null && com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadHasTintIndex(quad)) {
                 AppliedEnergisticsFacadeQuadMetadata.markCableBusTint(quad, tintColors);
             }
         }
@@ -47,7 +47,8 @@ public class AppliedEnergisticsCableBusBakedModelMixin {
             return null;
         }
         try {
-            return extendedState.getValue(BlockCableBus.RENDER_STATE_PROPERTY);
+            Object value = com.l.ausm.impl.util.MinecraftReflectionCompat.stateValue(extendedState, BlockCableBus.RENDER_STATE_PROPERTY);
+            return value instanceof CableBusRenderState ? (CableBusRenderState) value : null;
         } catch (RuntimeException ignored) {
             return null;
         }

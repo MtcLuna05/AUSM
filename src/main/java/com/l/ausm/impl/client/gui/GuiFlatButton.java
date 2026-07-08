@@ -23,6 +23,6 @@ public class GuiFlatButton extends GuiButton {
         drawRect(x, y, x + width, y + height, background);
         drawRect(x, y, x + width, y + 1, topLine);
         drawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
-        drawCenteredString(mc.fontRenderer, displayString, x + width / 2, y + (height - 8) / 2, textColor);
+        drawCenteredString(com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc), displayString, x + width / 2, y + (height - 8) / 2, textColor);
     }
 }

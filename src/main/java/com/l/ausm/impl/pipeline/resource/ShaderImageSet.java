@@ -80,13 +80,13 @@ public final class ShaderImageSet {
             );
             int imageLocation = program.getUniformLocation(directive.name());
             if (imageLocation != -1) {
-                OpenGlHelper.glUniform1i(imageLocation, image.unit());
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(imageLocation, image.unit());
             }
             if (directive.samplerName() != null && !directive.samplerName().isBlank()) {
                 TextureBinder.bindTexture(image.textureTarget(), image.samplerUnit(), image.textureId());
                 int location = program.getUniformLocation(directive.samplerName());
                 if (location != -1) {
-                    OpenGlHelper.glUniform1i(location, image.samplerUnit());
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(location, image.samplerUnit());
                 }
             }
         }
@@ -107,13 +107,13 @@ public final class ShaderImageSet {
             );
             int imageLocation = program.getUniformLocation(directive.name());
             if (imageLocation != -1) {
-                OpenGlHelper.glUniform1i(imageLocation, image.unit());
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(imageLocation, image.unit());
             }
             if (directive.samplerName() != null && !directive.samplerName().isBlank()) {
                 TextureBinder.bindTexture(image.textureTarget(), image.samplerUnit(), 0);
                 int location = program.getUniformLocation(directive.samplerName());
                 if (location != -1) {
-                    OpenGlHelper.glUniform1i(location, image.samplerUnit());
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(location, image.samplerUnit());
                 }
             }
         }
