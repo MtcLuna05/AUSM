@@ -26,6 +26,7 @@ public final class BlockRenderContext {
     private static final ThreadLocal<Integer> CURRENT_BLOCK_ALPHA = ThreadLocal.withInitial(() -> -1);
     private static final ThreadLocal<Integer> CURRENT_CUSTOM_LIQUID_TINT = ThreadLocal.withInitial(() -> -1);
     private static final ThreadLocal<Boolean> CURRENT_CRYSTAL_ONLY_EMISSION = ThreadLocal.withInitial(() -> false);
+    private static final ThreadLocal<Boolean> CURRENT_BLOOM_ONLY_EMISSION = ThreadLocal.withInitial(() -> false);
     private static final ThreadLocal<Integer> CURRENT_QUAD_EMISSION_OVERRIDE = new ThreadLocal<>();
     private static final ThreadLocal<Integer> CURRENT_QUAD_BLOCK_ENTITY_ID_OVERRIDE = new ThreadLocal<>();
     private static final ThreadLocal<Short> CURRENT_QUAD_RENDER_TYPE_OVERRIDE = new ThreadLocal<>();
@@ -165,7 +166,15 @@ public final class BlockRenderContext {
     }
 
     public static int vanillaLightmapEmission() {
-        return CURRENT_CRYSTAL_ONLY_EMISSION.get() ? 0 : blockEmission();
+        return CURRENT_CRYSTAL_ONLY_EMISSION.get() || CURRENT_BLOOM_ONLY_EMISSION.get() ? 0 : blockEmission();
+    }
+
+    public static int emissiveColorBoostEmission() {
+        return CURRENT_BLOOM_ONLY_EMISSION.get() ? 0 : blockEmission();
+    }
+
+    public static void setBloomOnlyEmission(boolean bloomOnlyEmission) {
+        CURRENT_BLOOM_ONLY_EMISSION.set(bloomOnlyEmission);
     }
 
     public static void setCrystalOnlyEmission(boolean crystalOnlyEmission) {
@@ -319,6 +328,7 @@ public final class BlockRenderContext {
         CURRENT_BLOCK_ALPHA.remove();
         CURRENT_CUSTOM_LIQUID_TINT.remove();
         CURRENT_CRYSTAL_ONLY_EMISSION.remove();
+        CURRENT_BLOOM_ONLY_EMISSION.remove();
         clearQuadOverrides();
         SEPARATE_AO_ELIGIBLE.remove();
         CURRENT_QUAD_AO.remove();

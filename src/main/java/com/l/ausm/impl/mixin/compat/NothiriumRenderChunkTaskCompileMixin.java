@@ -38,6 +38,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.lang.reflect.Field;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(targets = "meldexun.nothirium.mc.renderer.chunk.RenderChunkTaskCompile", remap = false)
@@ -66,6 +68,12 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     @Unique
     private static final AtomicInteger AUSM_SHADERLESS_COMPILE_LIGHT_PROBES = new AtomicInteger();
 
+    @Unique
+    private static final ConcurrentMap<AusmIdentityKey<IBlockState>, Block> AUSM_STATE_BLOCKS = new ConcurrentHashMap<>();
+
+    @Unique
+    private static final ConcurrentMap<AusmIdentityKey<IBlockState>, ResourceLocation> AUSM_STATE_REGISTRY_NAMES = new ConcurrentHashMap<>();
+
     @Shadow(remap = false)
     private IBlockAccess chunkCache;
 
@@ -90,6 +98,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             remap = false
     )
     private void ausm$resetShaderlessBloomLayerSummaries(RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
+        PipelineContext.getInstance().beginFramedMaterialCompileCache();
         ausm$resetShaderlessBloomMetadata(regionBuffers);
     }
 
@@ -121,6 +130,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             }
         } finally {
             ausm$resetShaderlessBloomMetadata(regionBuffers);
+            PipelineContext.getInstance().endFramedMaterialCompileCache();
         }
     }
 
@@ -254,8 +264,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null) {
             blockEmission = Math.max(blockEmission, pipeline.framedBloomFallbackEmission(state, chunkCache, pos));
         }
-        blockEmission = Math.max(blockEmission, pipeline.shaderlessFramedBloomExtractionEmission(state, chunkCache, pos));
+        int framedShaderlessExtractionEmission = pipeline.shaderlessFramedBloomExtractionEmission(state, chunkCache, pos);
+        blockEmission = Math.max(blockEmission, framedShaderlessExtractionEmission);
         BlockRenderContext.setBlockEmission(blockEmission);
+        BlockRenderContext.setBloomOnlyEmission(framedShaderlessExtractionEmission > 0);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, chunkCache, pos));
         BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, chunkCache, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, chunkCache, pos));
@@ -311,10 +323,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
 
     @Unique
     private static boolean ausm$isAgricraftCropState(IBlockState state) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
+        if (state == null || ausm$block(state) == null) {
             return false;
         }
-        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state));
+        ResourceLocation name = ausm$registryName(state);
         if (name == null) {
             return false;
         }
@@ -807,12 +819,13 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
 
     @Unique
     private static boolean ausm$isBloomOnlyModelBlock(IBlockState state) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderType(state) == EnumBlockRenderType.INVISIBLE) {
+        Block block = ausm$block(state);
+        if (state == null || block == null || com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderType(state) == EnumBlockRenderType.INVISIBLE) {
             return false;
         }
 
         BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        if (bloomLayer == null || !ausm$canRenderInLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state), state, bloomLayer)) {
+        if (bloomLayer == null || !ausm$canRenderInLayer(block, state, bloomLayer)) {
             return false;
         }
 
@@ -820,7 +833,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             if (layer == null || AusmBloomLayer.isBloomLayer(layer)) {
                 continue;
             }
-            if (ausm$canRenderInLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state), state, layer)) {
+            if (ausm$canRenderInLayer(block, state, layer)) {
                 return false;
             }
         }
@@ -882,7 +895,8 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     @Unique
     private static BlockRenderLayer ausm$naturalRenderLayer(IBlockState state) {
         try {
-            return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRenderLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state)) : null;
+            Block block = ausm$block(state);
+            return block != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRenderLayer(block) : null;
         } catch (RuntimeException | LinkageError ignored) {
             return null;
         }
@@ -899,7 +913,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
 
     @Unique
     private static boolean ausm$canRenderStateInLayer(IBlockState state, BlockRenderLayer layer) {
-        return state != null && ausm$canRenderInLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state), state, layer);
+        return state != null && ausm$canRenderInLayer(ausm$block(state), state, layer);
     }
 
     @Unique
@@ -910,7 +924,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     @Unique
     private static boolean ausm$isEmissiveBloomFallbackSource(IBlockState state) {
         ResourceLocation name = ausm$registryName(state);
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderType(state) == EnumBlockRenderType.INVISIBLE) {
+        if (state == null || ausm$block(state) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderType(state) == EnumBlockRenderType.INVISIBLE) {
             return false;
         }
         if (PipelineContext.getInstance().isBlockcrafteryEditableState(state)) {
@@ -937,7 +951,66 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
 
     @Unique
     private static ResourceLocation ausm$registryName(IBlockState state) {
-        return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state)) : null;
+        if (state == null) {
+            return null;
+        }
+        AusmIdentityKey<IBlockState> key = new AusmIdentityKey<>(state);
+        ResourceLocation cached = AUSM_STATE_REGISTRY_NAMES.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        Block block = ausm$block(state);
+        ResourceLocation name = block != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block) : null;
+        if (name != null) {
+            ResourceLocation existing = AUSM_STATE_REGISTRY_NAMES.putIfAbsent(key, name);
+            return existing != null ? existing : name;
+        }
+        return null;
+    }
+
+    @Unique
+    private static Block ausm$block(IBlockState state) {
+        if (state == null) {
+            return null;
+        }
+        AusmIdentityKey<IBlockState> key = new AusmIdentityKey<>(state);
+        Block cached = AUSM_STATE_BLOCKS.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+        if (block != null) {
+            Block existing = AUSM_STATE_BLOCKS.putIfAbsent(key, block);
+            return existing != null ? existing : block;
+        }
+        return null;
+    }
+
+    @Unique
+    private static final class AusmIdentityKey<T> {
+        private final T value;
+        private final int hash;
+
+        private AusmIdentityKey(T value) {
+            this.value = value;
+            this.hash = System.identityHashCode(value);
+        }
+
+        @Override
+        public boolean equals(Object object) {
+            if (this == object) {
+                return true;
+            }
+            if (!(object instanceof AusmIdentityKey<?> other)) {
+                return false;
+            }
+            return value == other.value;
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
     }
 
     @Unique

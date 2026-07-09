@@ -23,13 +23,17 @@ public final class BloomMaskColor {
     }
 
     public static int colorForState(IBlockState state) {
+        int dyeColor = dyeColorForState(state);
+        if (dyeColor != -1) {
+            return dyeColor;
+        }
+
         int textureColor = textureColorForState(state);
         if (textureColor != -1) {
             return textureColor;
         }
 
-        int dyeColor = dyeColorForState(state);
-        return dyeColor != -1 ? dyeColor : packColor(DEFAULT_EMISSIVE_COLOR);
+        return packColor(DEFAULT_EMISSIVE_COLOR);
     }
 
     private static int dyeColorForState(IBlockState state) {

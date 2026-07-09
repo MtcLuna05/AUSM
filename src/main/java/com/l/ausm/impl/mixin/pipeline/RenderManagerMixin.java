@@ -19,7 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(RenderManager.class)
 public class RenderManagerMixin {
-    private static final int AUSM_MAX_BETWEENLANDS_RENDER_LOGS = 160;
+    private static final int AUSM_MAX_BETWEENLANDS_RENDER_LOGS = 0;
     private static int ausm$betweenlandsRenderLogCount;
 
     @Inject(
@@ -58,7 +58,11 @@ public class RenderManagerMixin {
             return;
         }
         boolean portalEntity = BetterPortalsCompat.isPortalEntity(entity);
-        if (portalEntity || context.shouldRenderEntityWithVanillaProgram(entity)) {
+        boolean vanillaProgramEntity = context.shouldRenderEntityWithVanillaProgram(entity);
+        if (vanillaProgramEntity) {
+            context.finishExternalWorldOverlayRender("Betweenlands entity");
+        }
+        if (portalEntity || vanillaProgramEntity) {
             context.restoreActiveWorldPassAfterExternalShader();
         }
         context.clearCurrentEntity();
@@ -110,6 +114,7 @@ public class RenderManagerMixin {
             return;
         }
         if (context.shouldRenderEntityWithVanillaProgram(entity)) {
+            context.finishExternalWorldOverlayRender("Betweenlands entity multipass");
             context.restoreActiveWorldPassAfterExternalShader();
         }
         context.endPass();

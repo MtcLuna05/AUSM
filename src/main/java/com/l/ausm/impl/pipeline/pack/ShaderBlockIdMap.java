@@ -148,6 +148,7 @@ public final class ShaderBlockIdMap {
         }
 
         addAstralCrystalCompatibility(stateRules);
+        addRandomThingsLuminousCompatibility(stateRules);
 
         // Seared furnace controllers emit colored light through AUSM's CPU voxel injection.
         // Do not alias the rendered block ID here, or shader packs treat the whole texture as emissive.
@@ -163,6 +164,37 @@ public final class ShaderBlockIdMap {
         addStateAlias(stateRules, "astralsorcery", "blockgemcrystals", "stage", "stage_2_sky", 10912);
         addStateAlias(stateRules, "astralsorcery", "blockgemcrystals", "stage", "stage_2_day", 10904);
         addStateAlias(stateRules, "astralsorcery", "blockgemcrystals", "stage", "stage_2_night", 10916);
+    }
+
+    private static void addRandomThingsLuminousCompatibility(List<StateRule> stateRules) {
+        addRandomThingsLuminousColor(stateRules, "red", 12270);
+        addRandomThingsLuminousColor(stateRules, "orange", 12271);
+        addRandomThingsLuminousColor(stateRules, "brown", 12271);
+        addRandomThingsLuminousColor(stateRules, "yellow", 12272);
+        addRandomThingsLuminousColor(stateRules, "lime", 12273);
+        addRandomThingsLuminousColor(stateRules, "green", 12274);
+        addRandomThingsLuminousColor(stateRules, "cyan", 12275);
+        addRandomThingsLuminousColor(stateRules, "light_blue", 12276);
+        addRandomThingsLuminousColor(stateRules, "blue", 12277);
+        addRandomThingsLuminousColor(stateRules, "purple", 12278);
+        addRandomThingsLuminousColor(stateRules, "magenta", 12279);
+        addRandomThingsLuminousColor(stateRules, "pink", 12280);
+        addRandomThingsLuminousColor(stateRules, "white", 12283);
+        addRandomThingsLuminousColor(stateRules, "silver", 12283);
+        addRandomThingsLuminousColor(stateRules, "light_gray", 12283);
+        addRandomThingsLuminousColor(stateRules, "gray", 12283);
+        addRandomThingsLuminousColor(stateRules, "black", 12283);
+    }
+
+    private static void addRandomThingsLuminousColor(List<StateRule> stateRules, String color, int id) {
+        addRandomThingsLuminousStateAlias(stateRules, "luminousblock", color, id);
+        addRandomThingsLuminousStateAlias(stateRules, "translucentluminousblock", color, id);
+        addRandomThingsLuminousStateAlias(stateRules, "luminousstainedbrick", color, id);
+    }
+
+    private static void addRandomThingsLuminousStateAlias(List<StateRule> stateRules, String path, String color, int id) {
+        addStateAlias(stateRules, "randomthings", path, "color", color, id);
+        addStateAlias(stateRules, "randomthings", path, "colour", color, id);
     }
 
     private static void addBlockAlias(Map<Block, Integer> blockIds, String namespace, String path, int id) {

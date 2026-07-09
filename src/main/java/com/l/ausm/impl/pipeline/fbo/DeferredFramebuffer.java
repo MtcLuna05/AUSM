@@ -501,6 +501,52 @@ public class DeferredFramebuffer {
         }
     }
 
+    public void copyReadAttachmentToReadAttachment(Attachment source, Attachment target) {
+        if (source == null || target == null || source == target || !hasColorAttachment(source) || !hasColorAttachment(target)) {
+            return;
+        }
+        copyReadAttachmentToWriteAttachment(source, target);
+        flip(target);
+    }
+
+    public void copyReadAttachmentToWriteAttachment(Attachment source, Attachment target) {
+        if (source == null || target == null || !hasColorAttachment(source) || !hasColorAttachment(target)) {
+            return;
+        }
+
+        int sourceWidth = getAttachmentWidth(source);
+        int sourceHeight = getAttachmentHeight(source);
+        int targetWidth = getAttachmentWidth(target);
+        int targetHeight = getAttachmentHeight(target);
+
+        bindFramebuffer(readFboId);
+        detachDepthTexture();
+        attachReadTextures(source);
+
+        bindFramebuffer(fullscreenFboId);
+        detachDepthTexture();
+        attachWriteTextures(target);
+
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, fullscreenFboId);
+        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        invalidateDrawBufferState(fullscreenFboId);
+
+        GL30.glBlitFramebuffer(
+                0,
+                0,
+                sourceWidth,
+                sourceHeight,
+                0,
+                0,
+                targetWidth,
+                targetHeight,
+                GL11.GL_COLOR_BUFFER_BIT,
+                sourceWidth == targetWidth && sourceHeight == targetHeight ? GL11.GL_NEAREST : GL11.GL_LINEAR
+        );
+    }
+
     public void flip(Attachment... attachments) {
         for (Attachment attachment : attachments) {
             if (hasColorAttachment(attachment)) {

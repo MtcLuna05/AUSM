@@ -32,9 +32,9 @@ import java.util.Map;
 
 @Mixin(targets = "meldexun.renderlib.renderer.entity.EntityRenderer", remap = false)
 public abstract class RenderLibBetweenlandsEntityRendererMixin {
-    private static final int AUSM_MAX_SETUP_LOGS = 160;
-    private static final int AUSM_MAX_MANUAL_RENDER_LOGS = 80;
-    private static final int AUSM_MAX_RENDER_LOOKUP_LOGS = 80;
+    private static final int AUSM_MAX_SETUP_LOGS = 0;
+    private static final int AUSM_MAX_MANUAL_RENDER_LOGS = 0;
+    private static final int AUSM_MAX_RENDER_LOOKUP_LOGS = 0;
     private static int ausm$setupLogCount;
     private static int ausm$manualRenderLogCount;
     private static int ausm$renderLookupLogCount;
@@ -152,9 +152,10 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
             return;
         }
         List<Entity> queuedEntities = renderList.getEntities();
+        boolean redrawQueuedEntities = PipelineContext.getInstance().isPipelineActive();
         int pass = net.minecraftforge.client.MinecraftForgeClient.getRenderPass();
         int loadedBetweenlands = 0;
-        int skippedQueued = 0;
+        int queuedRedrawn = 0;
         int skippedPass = 0;
         int candidates = 0;
         int rendererNull = 0;
@@ -170,8 +171,10 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
             }
             loadedBetweenlands++;
             if (queuedEntities.contains(entity)) {
-                skippedQueued++;
-                continue;
+                if (!redrawQueuedEntities) {
+                    continue;
+                }
+                queuedRedrawn++;
             }
             if (!com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, pass)) {
                 skippedPass++;
@@ -216,6 +219,7 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
             } finally {
                 if (!context.shouldBypassWorldPassRendering()) {
                     if (vanillaProgram) {
+                        context.finishExternalWorldOverlayRender("Betweenlands entity fallback");
                         context.restoreActiveWorldPassAfterExternalShader();
                     }
                     context.clearCurrentEntity();
@@ -225,12 +229,12 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
         }
         if (loadedBetweenlands > 0 && ausm$manualRenderLogCount++ < AUSM_MAX_MANUAL_RENDER_LOGS) {
             MainMod.LOGGER.info(
-                    "[AUSMBetweenlandsEntity] manual-render pass={} loaded={} queued={} candidates={} skippedQueued={} skippedPass={} rendererNull={} rendered={} firstCandidate={} firstSkippedPass={} firstRendererNull={} firstRendered={} sampleCandidates={}",
+                    "[AUSMBetweenlandsEntity] manual-render pass={} loaded={} queued={} candidates={} queuedRedrawn={} skippedPass={} rendererNull={} rendered={} firstCandidate={} firstSkippedPass={} firstRendererNull={} firstRendered={} sampleCandidates={}",
                     pass,
                     loadedBetweenlands,
                     queuedEntities.size(),
                     candidates,
-                    skippedQueued,
+                    queuedRedrawn,
                     skippedPass,
                     rendererNull,
                     rendered,

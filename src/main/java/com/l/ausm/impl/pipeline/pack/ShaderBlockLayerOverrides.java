@@ -1,5 +1,6 @@
 package com.l.ausm.impl.pipeline.pack;
 
+import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.BlockRenderLayer;
 
@@ -26,6 +27,9 @@ public final class ShaderBlockLayerOverrides {
     }
 
     public static BlockRenderLayer layerFor(IBlockState state) {
+        if (!PipelineContext.getInstance().shouldApplyShaderBlockLayerOverrides()) {
+            return null;
+        }
         net.minecraft.block.Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
         if (block == null) {
             return null;

@@ -76,7 +76,8 @@ public class BlockRendererDispatcherMixin {
         if (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null) {
             blockEmission = Math.max(blockEmission, pipeline.framedBloomFallbackEmission(state, blockAccess, pos));
         }
-        blockEmission = Math.max(blockEmission, pipeline.shaderlessFramedBloomExtractionEmission(state, blockAccess, pos));
+        int framedShaderlessExtractionEmission = pipeline.shaderlessFramedBloomExtractionEmission(state, blockAccess, pos);
+        blockEmission = Math.max(blockEmission, framedShaderlessExtractionEmission);
         BlockRenderContext.setBlockEntityId(blockEntityId);
         BlockRenderContext.setRenderType((short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState));
         BlockRenderContext.setMetadata(pipeline.blockMetadata(state, blockAccess, pos));
@@ -87,6 +88,7 @@ public class BlockRendererDispatcherMixin {
         BlockRenderContext.setPackedLightmap(packedLightmap);
         ausm$logShaderlessDispatchLightProbe(pipeline, state, contextState, blockAccess, pos, packedLightmap);
         BlockRenderContext.setBlockEmission(blockEmission);
+        BlockRenderContext.setBloomOnlyEmission(framedShaderlessExtractionEmission > 0);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, blockAccess, pos));
         BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, blockAccess, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, blockAccess, pos));

@@ -457,7 +457,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         if (BlockRenderContext.bloomMaskFallback()) {
             return;
         }
-        int blockEmission = BlockRenderContext.blockEmission();
+        int blockEmission = BlockRenderContext.emissiveColorBoostEmission();
         if (vertexData == null || vertexBase < 0) {
             return;
         }
@@ -852,7 +852,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         if (BlockRenderContext.bloomMaskFallback() || AusmBloomLayer.isBloomLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer())) {
             return;
         }
-        int blockEmission = BlockRenderContext.blockEmission();
+        int blockEmission = BlockRenderContext.emissiveColorBoostEmission();
         if (blockEmission <= 0 || vertexData == null || vertexBase < 0 || vertexBase + 3 >= vertexData.length) {
             return;
         }
@@ -867,7 +867,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         if (BlockRenderContext.bloomMaskFallback() || AusmBloomLayer.isBloomLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer())) {
             return;
         }
-        int blockEmission = BlockRenderContext.blockEmission();
+        int blockEmission = BlockRenderContext.emissiveColorBoostEmission();
         if (blockEmission <= 0 || field_179011_q == null || !ExtendedVertexFormats.hasColor(field_179011_q)) {
             return;
         }
@@ -878,9 +878,14 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
 
         int before = field_179001_a.getInt(colorOffset);
-        field_179001_a.put(colorOffset, (byte) ausm$brightenColorComponent(field_179001_a.get(colorOffset) & 0xFF, blockEmission));
-        field_179001_a.put(colorOffset + 1, (byte) ausm$brightenColorComponent(field_179001_a.get(colorOffset + 1) & 0xFF, blockEmission));
-        field_179001_a.put(colorOffset + 2, (byte) ausm$brightenColorComponent(field_179001_a.get(colorOffset + 2) & 0xFF, blockEmission));
+        int boosted = ausm$boostColorPreservingHue(
+                field_179001_a.get(colorOffset) & 0xFF,
+                field_179001_a.get(colorOffset + 1) & 0xFF,
+                field_179001_a.get(colorOffset + 2) & 0xFF,
+                blockEmission);
+        field_179001_a.put(colorOffset, (byte) ((boosted >> 16) & 0xFF));
+        field_179001_a.put(colorOffset + 1, (byte) ((boosted >> 8) & 0xFF));
+        field_179001_a.put(colorOffset + 2, (byte) (boosted & 0xFF));
         ausm$writeBlockAlpha(colorOffset);
         ausm$markShaderlessBloomMetadata();
         PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
@@ -902,24 +907,37 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     }
 
     private static int ausm$brightenColorRgbLittleEndian(int color, int blockEmission) {
-        int red = ausm$brightenColorComponent(color & 0xFF, blockEmission);
-        int green = ausm$brightenColorComponent((color >> 8) & 0xFF, blockEmission);
-        int blue = ausm$brightenColorComponent((color >> 16) & 0xFF, blockEmission);
+        int red = color & 0xFF;
+        int green = (color >> 8) & 0xFF;
+        int blue = (color >> 16) & 0xFF;
+        int boosted = ausm$boostColorPreservingHue(red, green, blue, blockEmission);
         int alpha = (color >>> 24) & 0xFF;
-        return (alpha << 24) | (blue << 16) | (green << 8) | red;
+        return (alpha << 24) | ((boosted & 0xFF) << 16) | (((boosted >> 8) & 0xFF) << 8) | ((boosted >> 16) & 0xFF);
     }
 
     private static int ausm$brightenColorRgbBigEndian(int color, int blockEmission) {
-        int red = ausm$brightenColorComponent((color >> 24) & 0xFF, blockEmission);
-        int green = ausm$brightenColorComponent((color >> 16) & 0xFF, blockEmission);
-        int blue = ausm$brightenColorComponent((color >> 8) & 0xFF, blockEmission);
+        int red = (color >> 24) & 0xFF;
+        int green = (color >> 16) & 0xFF;
+        int blue = (color >> 8) & 0xFF;
+        int boosted = ausm$boostColorPreservingHue(red, green, blue, blockEmission);
         int alpha = color & 0xFF;
-        return (red << 24) | (green << 16) | (blue << 8) | alpha;
+        return (((boosted >> 16) & 0xFF) << 24) | (((boosted >> 8) & 0xFF) << 16) | ((boosted & 0xFF) << 8) | alpha;
     }
 
-    private static int ausm$brightenColorComponent(int component, int blockEmission) {
+    private static int ausm$boostColorPreservingHue(int red, int green, int blue, int blockEmission) {
         float weight = Math.min(1.0f, Math.max(0.0f, blockEmission / 15.0f));
-        return Math.min(255, Math.round(component + (255 - component) * weight));
+        int max = Math.max(red, Math.max(green, blue));
+        if (max <= 0) {
+            return 0;
+        }
+        float scale = 255.0f / max;
+        int targetRed = Math.min(255, Math.round(red * scale));
+        int targetGreen = Math.min(255, Math.round(green * scale));
+        int targetBlue = Math.min(255, Math.round(blue * scale));
+        int boostedRed = Math.min(255, Math.round(red + (targetRed - red) * weight));
+        int boostedGreen = Math.min(255, Math.round(green + (targetGreen - green) * weight));
+        int boostedBlue = Math.min(255, Math.round(blue + (targetBlue - blue) * weight));
+        return (boostedRed << 16) | (boostedGreen << 8) | boostedBlue;
     }
 
     private static int ausm$emissiveLightmap(int packedLightmap, int blockEmission) {
@@ -1041,7 +1059,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             ausm$applyBloomMaskExistingVertex(vertexIndex);
         }
         SeparateAoColorWriter.rewriteExistingColor((BufferBuilder) (Object) this, redMultiplier, greenMultiplier, blueMultiplier, vertexIndex);
-        if (ausm$shouldApplyCompatibilityEmissiveBoost() && BlockRenderContext.blockEmission() > 0) {
+        if (ausm$shouldApplyCompatibilityEmissiveBoost() && BlockRenderContext.emissiveColorBoostEmission() > 0) {
             ausm$brightenExistingVertexColor(vertexIndex);
         }
         ausm$applyCustomLiquidTintExistingVertex(vertexIndex);
@@ -1064,11 +1082,16 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return;
         }
 
-        int blockEmission = BlockRenderContext.blockEmission();
+        int blockEmission = BlockRenderContext.emissiveColorBoostEmission();
         int before = field_179001_a.getInt(colorOffset);
-        field_179001_a.put(colorOffset, (byte) ausm$brightenColorComponent(field_179001_a.get(colorOffset) & 0xFF, blockEmission));
-        field_179001_a.put(colorOffset + 1, (byte) ausm$brightenColorComponent(field_179001_a.get(colorOffset + 1) & 0xFF, blockEmission));
-        field_179001_a.put(colorOffset + 2, (byte) ausm$brightenColorComponent(field_179001_a.get(colorOffset + 2) & 0xFF, blockEmission));
+        int boosted = ausm$boostColorPreservingHue(
+                field_179001_a.get(colorOffset) & 0xFF,
+                field_179001_a.get(colorOffset + 1) & 0xFF,
+                field_179001_a.get(colorOffset + 2) & 0xFF,
+                blockEmission);
+        field_179001_a.put(colorOffset, (byte) ((boosted >> 16) & 0xFF));
+        field_179001_a.put(colorOffset + 1, (byte) ((boosted >> 8) & 0xFF));
+        field_179001_a.put(colorOffset + 2, (byte) (boosted & 0xFF));
         ausm$writeBlockAlpha(colorOffset);
         ausm$markShaderlessBloomMetadata();
         PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());

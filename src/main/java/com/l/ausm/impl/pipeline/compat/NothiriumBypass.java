@@ -23,6 +23,7 @@ public final class NothiriumBypass {
     private static int rendererRecoveryLogs;
     private static int rendererSetupLogs;
     private static int rendererSetupFailureLogs;
+    private static int hybridMaintenanceLogs;
     private static long lastIsolatedMainSetupNanos;
     private static final int BLOCK_UPDATE_LOG_LIMIT = 0;
     private static final int RENDERER_RECOVERY_LOG_LIMIT = 0;
@@ -35,6 +36,37 @@ public final class NothiriumBypass {
     public static boolean shouldBypass() {
         try {
             return shouldUseVanillaRenderGlobalForCurrentPass();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    public static boolean shouldBypassSetupTerrain() {
+        try {
+            if (shouldUseVanillaRenderGlobalForCurrentPass()) {
+                return true;
+            }
+            if (!PipelineContext.getInstance().shouldUseNothiriumHybridVanillaMaintenance()) {
+                return false;
+            }
+            boolean setup = setupNothiriumRendererNow();
+            logHybridMaintenance("setupTerrain", setup);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    public static boolean shouldBypassChunkUpdates() {
+        try {
+            if (shouldUseVanillaRenderGlobalForCurrentPass()) {
+                return true;
+            }
+            boolean bypass = PipelineContext.getInstance().shouldUseNothiriumHybridVanillaMaintenance();
+            if (bypass) {
+                logHybridMaintenance("updateChunks", true);
+            }
+            return bypass;
         } catch (Throwable ignored) {
             return false;
         }
@@ -114,6 +146,21 @@ public final class NothiriumBypass {
             return true;
         } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
             logRendererSetup(false, error);
+            return false;
+        }
+    }
+
+    private static boolean setupNothiriumRendererNow() {
+        if (!resolveReflection() || setupMethod == null) {
+            return false;
+        }
+        if (!ensureRendererReady()) {
+            return false;
+        }
+        try {
+            setupMethod.invoke(null);
+            return true;
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
             return false;
         }
     }
@@ -351,6 +398,24 @@ public final class NothiriumBypass {
                 marked,
                 bypass,
                 PipelineContext.getInstance().isActive(),
+                BetterPortalsCompat.isRenderingRenderPass(),
+                BetterPortalsCompat.isRenderingNestedView()
+        );
+    }
+
+    private static void logHybridMaintenance(String stage, boolean setup) {
+        if (hybridMaintenanceLogs >= 8) {
+            return;
+        }
+        hybridMaintenanceLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMNothiriumHybrid] call={} stage={} setup={} reason='{}' active={} forceVanilla={} bpPass={} bpNested={}",
+                hybridMaintenanceLogs,
+                stage,
+                setup,
+                PipelineContext.getInstance().nothiriumHybridVanillaMaintenanceReason(),
+                PipelineContext.getInstance().isActive(),
+                PipelineContext.getInstance().shouldForceVanillaTerrainRenderer(),
                 BetterPortalsCompat.isRenderingRenderPass(),
                 BetterPortalsCompat.isRenderingNestedView()
         );

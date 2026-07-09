@@ -218,6 +218,8 @@ public class PipelineContext {
     private static final Pattern CONST_SETTING_PATTERN = Pattern.compile("^\\s*const\\s+\\w+\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*([^;\\s]+).*$");
     private static final Pattern DEFINE_SETTING_PATTERN = Pattern.compile("^\\s*#define\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s+([^/\\s]+))?.*$");
     private static final boolean ENABLE_CPU_LIGHT_INJECTION = true;
+    private static final ConcurrentMap<Block, Boolean> BLOCKCRAFTERY_EDITABLE_BLOCK_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Block, Boolean> ARCHITECTURECRAFT_SHAPE_BLOCK_CACHE = new ConcurrentHashMap<>();
     private static final boolean ENABLE_GENERIC_CPU_SHADER_BLOCK_LIGHT_INJECTION = false;
     private static final int MAX_SYNTHETIC_LIGHT_CANDIDATES = 2048;
     private static final int MAX_SYNTHETIC_LIGHT_RANGE_REFRESH_VOLUME = 4096;
@@ -254,7 +256,7 @@ public class PipelineContext {
     private static final int WORLD_LOAD_FORCE_LIGHT_RECALC_ATTEMPTS = 2;
     private static final int WORLD_LOAD_FORCE_LIGHT_RECALC_DELAY_FRAMES = 8;
     private static final int WORLD_LOAD_LIGHT_REFRESH_RADIUS = 16;
-    private static final int WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS = 4;
+    private static final int WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS = 1;
     private static final int WORLD_LOAD_TERRAIN_REFRESH_INITIAL_DELAY_FRAMES = 4;
     private static final int WORLD_LOAD_TERRAIN_REFRESH_REPEAT_DELAY_FRAMES = 6;
     private static final double CLIENT_TELEPORT_TERRAIN_REFRESH_DISTANCE_SQ = 64.0 * 64.0;
@@ -265,11 +267,14 @@ public class PipelineContext {
     private static final int MAX_CLIENT_CHUNK_RENDER_REFRESHES_PER_FRAME = 8;
     private static final int MAX_CLIENT_CHUNK_RENDER_REFRESH_SECTIONS_PER_FRAME = 32;
     private static final int CLIENT_CHUNK_RENDER_REFRESH_RECENT_TTL_FRAMES = 12;
+    private static final int CLIENT_CHUNK_RENDER_REFRESH_RECENT_PRUNE_INTERVAL_FRAMES = 4;
+    private static final int MAX_RECENT_CLIENT_CHUNK_RENDER_REFRESHES_PER_WORLD = 2048;
     private static final int MAX_STALE_CLIENT_CHUNK_REFRESHES_AGED_PER_FRAME = 32;
     private static final int CLIENT_CHUNK_RENDER_REFRESH_ATTEMPTS = 8;
     private static final int CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES = 1;
     private static final int CLIENT_CHUNK_RENDER_REFRESH_REPEAT_DELAY_FRAMES = 1;
     private static final int MAX_SHADERLESS_BLOOM_LOCAL_CHUNK_REFRESHES_PER_UPDATE = 16;
+    private static final String CLIENT_CHUNK_RENDER_REFRESH_REASON_BLOCK_UPDATE = "block-update";
     private static final String CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM = "shaderless-bloom";
     private static final int BETTER_PORTALS_VANILLA_RENDER_DISTANCE_CAP = 4;
     private static final int MAX_CHUNK_FADE_STATES = 8192;
@@ -281,7 +286,7 @@ public class PipelineContext {
     private static final int MAX_BETTER_PORTALS_PIPELINE_LOGS = 0;
     private static final int MAX_SHADERLESS_BLOOM_HOOK_LOGS = 0;
     private static final int MAX_VISIBLE_BLOOM_DIAG_LOGS = 0;
-    private static final int MAX_WORLD_LAYER_DIAG_LOGS = 0;
+    private static final int MAX_WORLD_LAYER_DIAG_LOGS = 32;
     private static final int MAX_EXTERNAL_OVERLAY_LOGS = 0;
     private static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 8;
     private static final int MAX_TERRAIN_HISTORY_CLEAR_LOGS = 8;
@@ -429,9 +434,17 @@ public class PipelineContext {
     private static final int MAX_HARDWARE_CAPABILITY_LOGS = 4;
     private static final int MAX_HARDWARE_TERRAIN_FALLBACK_LOGS = 12;
     private static final int HARDWARE_TERRAIN_FALLBACK_ZERO_FRAMES = 5;
-    private static final int HARDWARE_TERRAIN_FALLBACK_SPARSE_FRAMES = 2;
     private static final int HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS = 64;
     private static final int HARDWARE_TERRAIN_FALLBACK_REFRESH_COOLDOWN_FRAMES = 12;
+    private static final int NOTHIRIUM_HYBRID_VANILLA_MAINTENANCE_FRAMES = 240;
+    private static final int MAX_NOTHIRIUM_HYBRID_MAINTENANCE_LOGS = 8;
+    private static final int NOTHIRIUM_MAIN_VANILLA_DRAW_PATH_FRAMES = 240;
+    private static final int MAX_NOTHIRIUM_MAIN_VANILLA_DRAW_PATH_LOGS = 8;
+    private static final int MAX_SHADERED_NOTHIRIUM_GLOBAL_BYPASS_LOGS = 4;
+    private static final int MAX_POSITIVE_VANILLA_TERRAIN_PROBE_LOGS = 2;
+    private static final Attachment COMPOSITE_INVALID_FALLBACK_ATTACHMENT = Attachment.AUX6;
+    private static final int COMPOSITE_INVALID_FALLBACK_HOLD_FRAMES = 120;
+    private static final int MAX_COMPOSITE_INVALID_FALLBACK_LOGS = 8;
     private static final boolean ENABLE_CHUNK_FADE = false;
     private static final boolean ENABLE_SYNCHRONOUS_CENTER_DEPTH_READBACK = false;
     private static final long WORLD_TERRAIN_TRANSITION_DEBOUNCE_MS = 750L;
@@ -500,10 +513,13 @@ public class PipelineContext {
     private final Map<WorldClient, Map<Long, ClientChunkRenderRefresh>> pendingClientChunkRenderRefreshLookupByWorld = new IdentityHashMap<>();
     private final Map<WorldClient, LinkedHashSet<ClientChunkRenderRefresh>> pendingClientChunkRenderRefreshesByWorld = new IdentityHashMap<>();
     private final Map<WorldClient, Map<Long, Long>> recentlyCompletedClientChunkRenderRefreshes = new IdentityHashMap<>();
+    private long recentlyCompletedClientChunkRenderRefreshLastPruneFrame = Long.MIN_VALUE;
     private final ConcurrentMap<String, Boolean> bloomResourceGeometryStateCache = new ConcurrentHashMap<>();
     private final Set<String> bloomResourceGeometryScansInProgress = ConcurrentHashMap.newKeySet();
     private final Set<String> blockcrafteryTransparencyProbeKeys = ConcurrentHashMap.newKeySet();
     private final AtomicInteger blockcrafteryTransparencyProbeCount = new AtomicInteger();
+    private final ThreadLocal<Map<FramedMaterialKey, FramedMaterialState>> framedMaterialCompileCache = new ThreadLocal<>();
+    private final ThreadLocal<Map<FramedMaterialKey, IBlockState>> actualLightStateCompileCache = new ThreadLocal<>();
     private int pendingWorldLoadLightRecalculationAttempts = 0;
     private int pendingWorldLoadLightRecalculationDelay = 0;
     private int pendingWorldLoadLightRecalculationDimension = Integer.MIN_VALUE;
@@ -683,8 +699,24 @@ public class PipelineContext {
     private int sparseOpaqueTerrainFrames = 0;
     private boolean hardwareSafeVanillaTerrain = false;
     private String hardwareSafeVanillaTerrainReason = "";
+    private boolean softVanillaTerrainRenderer = false;
+    private String softVanillaTerrainRendererReason = "";
+    private boolean shaderedNothiriumGlobalBypass = false;
+    private String shaderedNothiriumGlobalBypassReason = "";
+    private int shaderedNothiriumGlobalBypassLogs = 0;
+    private World shaderedNothiriumGlobalBypassPrimedWorld = null;
+    private RenderGlobal shaderedNothiriumGlobalBypassPrimedRenderGlobal = null;
+    private int positiveVanillaTerrainProbeLogs = 0;
     private boolean zeroOpaqueTerrainRecoveryRequested = false;
     private int hardwareSafeVanillaTerrainRefreshCooldown = 0;
+    private int compositeInvalidFallbackFrames = 0;
+    private int compositeInvalidFallbackLogs = 0;
+    private int nothiriumHybridVanillaMaintenanceFrames = 0;
+    private int nothiriumHybridVanillaMaintenanceLogs = 0;
+    private String nothiriumHybridVanillaMaintenanceReason = "";
+    private int nothiriumMainVanillaDrawPathFrames = 0;
+    private int nothiriumMainVanillaDrawPathLogs = 0;
+    private String nothiriumMainVanillaDrawPathReason = "";
     private World lastHardwareSafeVanillaTerrainRefreshWorld = null;
     private int lastHardwareSafeVanillaTerrainRefreshChunkX = Integer.MIN_VALUE;
     private int lastHardwareSafeVanillaTerrainRefreshChunkZ = Integer.MIN_VALUE;
@@ -939,6 +971,16 @@ public class PipelineContext {
 
     public static PipelineContext getInstance() {
         return INSTANCE;
+    }
+
+    public void beginFramedMaterialCompileCache() {
+        framedMaterialCompileCache.set(new HashMap<>());
+        actualLightStateCompileCache.set(new HashMap<>());
+    }
+
+    public void endFramedMaterialCompileCache() {
+        framedMaterialCompileCache.remove();
+        actualLightStateCompileCache.remove();
     }
 
     private void registerBaseUniforms() {
@@ -3223,6 +3265,17 @@ public class PipelineContext {
         zeroOpaqueTerrainFrames = 0;
         sparseOpaqueTerrainFrames = 0;
         zeroOpaqueTerrainRecoveryRequested = false;
+        softVanillaTerrainRenderer = false;
+        softVanillaTerrainRendererReason = "";
+        shaderedNothiriumGlobalBypass = false;
+        shaderedNothiriumGlobalBypassReason = "";
+        shaderedNothiriumGlobalBypassPrimedWorld = null;
+        shaderedNothiriumGlobalBypassPrimedRenderGlobal = null;
+        positiveVanillaTerrainProbeLogs = 0;
+        nothiriumHybridVanillaMaintenanceFrames = 0;
+        nothiriumHybridVanillaMaintenanceReason = "";
+        nothiriumMainVanillaDrawPathFrames = 0;
+        nothiriumMainVanillaDrawPathReason = "";
         pipelineTerrainFormatSupported = detectPipelineTerrainFormatSupport();
         hardwareSafeVanillaTerrain = !pipelineTerrainFormatSupported;
         hardwareSafeVanillaTerrainReason = hardwareSafeVanillaTerrain ? "missing-pipeline-terrain-format" : "";
@@ -3237,9 +3290,28 @@ public class PipelineContext {
                 || hardwareSafeVanillaTerrainRefreshCooldown > 0
                 || zeroOpaqueTerrainFrames != 0
                 || sparseOpaqueTerrainFrames != 0
-                || zeroOpaqueTerrainRecoveryRequested;
+                || zeroOpaqueTerrainRecoveryRequested
+                || softVanillaTerrainRenderer
+                || !softVanillaTerrainRendererReason.isEmpty()
+                || shaderedNothiriumGlobalBypass
+                || !shaderedNothiriumGlobalBypassReason.isEmpty()
+                || nothiriumHybridVanillaMaintenanceFrames != 0
+                || !nothiriumHybridVanillaMaintenanceReason.isEmpty()
+                || nothiriumMainVanillaDrawPathFrames != 0
+                || !nothiriumMainVanillaDrawPathReason.isEmpty();
         hardwareSafeVanillaTerrain = false;
         hardwareSafeVanillaTerrainReason = "";
+        softVanillaTerrainRenderer = false;
+        softVanillaTerrainRendererReason = "";
+        shaderedNothiriumGlobalBypass = false;
+        shaderedNothiriumGlobalBypassReason = "";
+        shaderedNothiriumGlobalBypassPrimedWorld = null;
+        shaderedNothiriumGlobalBypassPrimedRenderGlobal = null;
+        positiveVanillaTerrainProbeLogs = 0;
+        nothiriumHybridVanillaMaintenanceFrames = 0;
+        nothiriumHybridVanillaMaintenanceReason = "";
+        nothiriumMainVanillaDrawPathFrames = 0;
+        nothiriumMainVanillaDrawPathReason = "";
         hardwareSafeVanillaTerrainRefreshCooldown = 0;
         zeroOpaqueTerrainFrames = 0;
         sparseOpaqueTerrainFrames = 0;
@@ -3383,9 +3455,6 @@ public class PipelineContext {
         }
 
         IBlockState pipelineState = actualLightState(state, blockAccess, pos);
-        if (isRandomThingsLuminousColoredLightDisabled(pipelineState)) {
-            return 0;
-        }
 
         ShaderBlockIdMap.BlockIdRules blockIds = shaderProperties.blockIds();
         if (!blockIds.isEmpty()) {
@@ -3411,11 +3480,92 @@ public class PipelineContext {
             return -1;
         }
         IBlockState pipelineState = actualLightState(state, blockAccess, pos);
+        if (shaderlessBloomExtractionActive && isDyeTintedLuminousBlock(pipelineState)) {
+            return randomThingsLuminousTintColor(pipelineState);
+        }
         int fallbackId = waterLikeFluidFallbackId(pipelineState);
         if (fallbackId < 32620) {
             return -1;
         }
         return BloomMaskColor.textureColorForState(pipelineState);
+    }
+
+    private static boolean isDyeTintedLuminousBlock(IBlockState state) {
+        if (isRandomThingsLuminousBlock(state)) {
+            return true;
+        }
+        ResourceLocation name = registryName(state);
+        String path = name != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name) != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).toLowerCase(java.util.Locale.ROOT)
+                : "";
+        return path.contains("luminous")
+                && (propertyValue(state, "color") != null
+                || propertyValue(state, "colour") != null
+                || blockMetadata(state) > 0);
+    }
+
+    private static int randomThingsLuminousTintColor(IBlockState state) {
+        String color = propertyValue(state, "color");
+        if (color == null) {
+            color = propertyValue(state, "colour");
+        }
+        int dyeColor = randomThingsDyeColor(color);
+        if (dyeColor != -1) {
+            return BloomMaskColor.packColor(dyeColor);
+        }
+        dyeColor = randomThingsDyeColor(blockMetadata(state));
+        return BloomMaskColor.packColor(dyeColor != -1 ? dyeColor : 0xFFFFFF);
+    }
+
+    private static int randomThingsDyeColor(String name) {
+        if (name == null || name.isEmpty()) {
+            return -1;
+        }
+        String key = name.toLowerCase(java.util.Locale.ROOT)
+                .replace("_", "")
+                .replace("-", "")
+                .replace(" ", "");
+        return switch (key) {
+            case "white" -> 0xFFFFFF;
+            case "orange" -> 0xD87F33;
+            case "magenta" -> 0xB24CD8;
+            case "lightblue" -> 0x6699D8;
+            case "yellow" -> 0xE5E533;
+            case "lime" -> 0x7FCC19;
+            case "pink" -> 0xF27FA5;
+            case "gray", "grey" -> 0x4C4C4C;
+            case "silver", "lightgray", "lightgrey" -> 0x999999;
+            case "cyan" -> 0x4C7F99;
+            case "purple" -> 0x7F3FB2;
+            case "blue" -> 0x334CB2;
+            case "brown" -> 0x664C33;
+            case "green" -> 0x667F33;
+            case "red" -> 0x993333;
+            case "black" -> 0x191919;
+            default -> -1;
+        };
+    }
+
+    private static int randomThingsDyeColor(int metadata) {
+        return switch (metadata & 15) {
+            case 0 -> 0xFFFFFF;
+            case 1 -> 0xD87F33;
+            case 2 -> 0xB24CD8;
+            case 3 -> 0x6699D8;
+            case 4 -> 0xE5E533;
+            case 5 -> 0x7FCC19;
+            case 6 -> 0xF27FA5;
+            case 7 -> 0x4C4C4C;
+            case 8 -> 0x999999;
+            case 9 -> 0x4C7F99;
+            case 10 -> 0x7F3FB2;
+            case 11 -> 0x334CB2;
+            case 12 -> 0x664C33;
+            case 13 -> 0x667F33;
+            case 14 -> 0x993333;
+            case 15 -> 0x191919;
+            default -> -1;
+        };
     }
 
     private void logWaterLikeMaterialProbe(IBlockState state, IBlockAccess blockAccess, BlockPos pos, int id, String source) {
@@ -4864,26 +5014,22 @@ public class PipelineContext {
             return new IBlockState[0];
         }
 
-        IBlockState blockcrafteryDecoratedState = blockcrafteryDecoratedState(state, blockAccess, pos);
-        IBlockState blockcrafteryState = actualState(
-                blockcrafteryDecoratedState,
-                blockcrafteryDecoratedBlockAccess(blockAccess),
-                pos
-        );
-        if (blockcrafteryState != null) {
-            return new IBlockState[]{blockcrafteryState};
-        }
-
-        IBlockState architectureBase = actualState(architectureCraftBaseState(state, blockAccess, pos), blockAccess, pos);
-        IBlockState architectureSecondary = actualState(architectureCraftSecondaryState(state, blockAccess, pos), blockAccess, pos);
-        if (architectureBase != null && architectureSecondary != null && architectureSecondary != architectureBase) {
-            return new IBlockState[]{architectureBase, architectureSecondary};
-        }
-        if (architectureBase != null) {
-            return new IBlockState[]{architectureBase};
-        }
-        if (architectureSecondary != null) {
-            return new IBlockState[]{architectureSecondary};
+        FramedMaterialState framedState = framedMaterialState(state, blockAccess, pos);
+        if (framedState != null) {
+            if (framedState.blockcrafteryActualState != null) {
+                return new IBlockState[]{framedState.blockcrafteryActualState};
+            }
+            IBlockState architectureBase = framedState.architectureBaseActualState;
+            IBlockState architectureSecondary = framedState.architectureSecondaryActualState;
+            if (architectureBase != null && architectureSecondary != null && architectureSecondary != architectureBase) {
+                return new IBlockState[]{architectureBase, architectureSecondary};
+            }
+            if (architectureBase != null) {
+                return new IBlockState[]{architectureBase};
+            }
+            if (architectureSecondary != null) {
+                return new IBlockState[]{architectureSecondary};
+            }
         }
 
         IBlockState pipelineState = actualLightState(state, blockAccess, pos);
@@ -5760,10 +5906,11 @@ public class PipelineContext {
     }
 
     private static ResourceLocation registryName(IBlockState state) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
+        if (state == null) {
             return null;
         }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state));
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+        return block != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block) : null;
     }
 
     private static String stateName(IBlockState state) {
@@ -5793,27 +5940,91 @@ public class PipelineContext {
         if (state == null) {
             return state;
         }
-        IBlockState decoratedState = blockcrafteryDecoratedState(state, blockAccess, pos);
-        if (decoratedState == null) {
-            decoratedState = architectureCraftBaseState(state, blockAccess, pos);
-        }
-        IBlockState renderState = decoratedState != null ? decoratedState : state;
         if (blockAccess == null || pos == null) {
-            return renderState;
+            FramedMaterialState framedState = framedMaterialState(state, null, null);
+            return framedState != null ? framedState.actualLightState : state;
         }
-        return actualState(renderState, blockAccess, pos);
+        Map<FramedMaterialKey, IBlockState> cache = actualLightStateCompileCache.get();
+        FramedMaterialKey key = cache != null ? new FramedMaterialKey(blockAccess, pos, state) : null;
+        if (cache != null && cache.containsKey(key)) {
+            return cache.get(key);
+        }
+        IBlockState resolved;
+        if (!isFramedMaterialCandidate(state)) {
+            resolved = actualState(state, blockAccess, pos);
+        } else {
+            FramedMaterialState framedState = framedMaterialState(state, blockAccess, pos);
+            resolved = framedState != null ? framedState.actualLightState : actualState(state, blockAccess, pos);
+        }
+        if (cache != null) {
+            cache.put(key, resolved);
+        }
+        return resolved;
+    }
+
+    private FramedMaterialState framedMaterialState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (state == null || !isFramedMaterialCandidate(state)) {
+            return null;
+        }
+        Map<FramedMaterialKey, FramedMaterialState> cache = framedMaterialCompileCache.get();
+        if (cache == null || blockAccess == null || pos == null) {
+            return computeFramedMaterialState(state, blockAccess, pos);
+        }
+        FramedMaterialKey key = new FramedMaterialKey(blockAccess, pos, state);
+        FramedMaterialState cached = cache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        FramedMaterialState computed = computeFramedMaterialState(state, blockAccess, pos);
+        cache.put(key, computed);
+        return computed;
+    }
+
+    private FramedMaterialState computeFramedMaterialState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        IBlockState blockcrafteryDecoratedState = blockcrafteryDecoratedState(state, blockAccess, pos);
+        IBlockState architectureBaseState = null;
+        IBlockState architectureSecondaryState = null;
+        if (blockcrafteryDecoratedState == null) {
+            architectureBaseState = architectureCraftBaseState(state, blockAccess, pos);
+            architectureSecondaryState = architectureCraftSecondaryState(state, blockAccess, pos);
+        }
+
+        IBlockState renderState = blockcrafteryDecoratedState != null
+                ? blockcrafteryDecoratedState
+                : architectureBaseState != null ? architectureBaseState : state;
+        IBlockState actualLightState = blockAccess != null && pos != null
+                ? actualState(renderState, blockAccess, pos)
+                : renderState;
+        IBlockState blockcrafteryActualState = blockcrafteryDecoratedState != null
+                ? actualState(blockcrafteryDecoratedState, blockcrafteryDecoratedBlockAccess(blockAccess), pos)
+                : null;
+        IBlockState architectureBaseActualState = architectureBaseState != null
+                ? actualState(architectureBaseState, blockAccess, pos)
+                : null;
+        IBlockState architectureSecondaryActualState = architectureSecondaryState != null
+                ? actualState(architectureSecondaryState, blockAccess, pos)
+                : null;
+
+        return new FramedMaterialState(
+                actualLightState,
+                blockcrafteryDecoratedState,
+                blockcrafteryActualState,
+                architectureBaseState,
+                architectureBaseActualState,
+                architectureSecondaryState,
+                architectureSecondaryActualState
+        );
+    }
+
+    private static boolean isFramedMaterialCandidate(IBlockState state) {
+        return isBlockcrafteryEditableBlock(state) || isArchitectureCraftShapeBlock(state);
     }
 
     private IBlockState actualState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
         if (state == null || blockAccess == null || pos == null) {
             return state;
         }
-        try {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.call((state), net.minecraft.block.state.IBlockState.class, (state), new String[] {"func_185899_b", "getActualState"},
-                new Class<?>[] {net.minecraft.world.IBlockAccess.class, net.minecraft.util.math.BlockPos.class}, (blockAccess), (pos));
-        } catch (RuntimeException ignored) {
-            return state;
-        }
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.actualState(state, blockAccess, pos);
     }
 
     private IBlockState blockcrafteryDecoratedState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -6100,21 +6311,38 @@ public class PipelineContext {
     }
 
     private static boolean isBlockcrafteryEditableBlock(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        return name != null
+        Block block = state != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) : null;
+        if (block == null) {
+            return false;
+        }
+        Boolean cached = BLOCKCRAFTERY_EDITABLE_BLOCK_CACHE.get(block);
+        if (cached != null) {
+            return cached;
+        }
+        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block);
+        boolean result = name != null
                 && "blockcraftery".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
                 && com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).startsWith("editable_");
+        Boolean existing = BLOCKCRAFTERY_EDITABLE_BLOCK_CACHE.putIfAbsent(block, result);
+        return existing != null ? existing : result;
     }
 
     private static boolean isArchitectureCraftShapeBlock(IBlockState state) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
+        Block block = state != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) : null;
+        if (block == null) {
             return false;
         }
-        ResourceLocation name = registryName(state);
-        if (name != null && "architecturecraft".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))) {
-            return true;
+        Boolean cached = ARCHITECTURECRAFT_SHAPE_BLOCK_CACHE.get(block);
+        if (cached != null) {
+            return cached;
         }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state).getClass().getName().startsWith(ARCHITECTURECRAFT_BLOCK_PACKAGE);
+        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block);
+        boolean result = name != null && "architecturecraft".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name));
+        if (!result) {
+            result = block.getClass().getName().startsWith(ARCHITECTURECRAFT_BLOCK_PACKAGE);
+        }
+        Boolean existing = ARCHITECTURECRAFT_SHAPE_BLOCK_CACHE.putIfAbsent(block, result);
+        return existing != null ? existing : result;
     }
 
     public boolean shouldSeparateBlockAo(IBlockState state) {
@@ -8624,6 +8852,7 @@ public class PipelineContext {
         preparePassesRenderedBeforeShadowThisFrame = false;
         preTranslucentDepthCopiedThisFrame = false;
         preHandDepthCopiedThisFrame = false;
+        activateShaderedNothiriumGlobalBypass("shader-world-frame");
         updateCameraPosition(mc);
         refreshHardwareSafeVanillaTerrainForCamera(mc);
         boolean resetTemporalHistory = shouldResetTemporalHistory(mc, paused, betterPortalsExternalTarget);
@@ -8655,6 +8884,18 @@ public class PipelineContext {
             resetShaderlessTerrainLayerCounts();
             if (vanillaParticleRecoveryFrames > 0) {
                 vanillaParticleRecoveryFrames--;
+            }
+            if (nothiriumHybridVanillaMaintenanceFrames > 0) {
+                nothiriumHybridVanillaMaintenanceFrames--;
+                if (nothiriumHybridVanillaMaintenanceFrames == 0) {
+                    nothiriumHybridVanillaMaintenanceReason = "";
+                }
+            }
+            if (nothiriumMainVanillaDrawPathFrames > 0) {
+                nothiriumMainVanillaDrawPathFrames--;
+                if (nothiriumMainVanillaDrawPathFrames == 0) {
+                    nothiriumMainVanillaDrawPathReason = "";
+                }
             }
         }
     }
@@ -12495,17 +12736,33 @@ public class PipelineContext {
     }
 
     private void logColorBufferProbe(String stage) {
+        logColorBufferProbe(stage, false);
+    }
+
+    private void logColorBufferProbe(String stage, boolean force) {
         if (!isPipelineActive || !pingPongManager.isInitialized()) {
             return;
         }
         boolean finalStage = stage != null && stage.contains("final");
-        if (finalStage) {
-            if (finalColorProbeLogs >= MAX_FINAL_COLOR_PROBE_LOGS) {
+        if (!force) {
+            if (finalStage) {
+                if (finalColorProbeLogs >= MAX_FINAL_COLOR_PROBE_LOGS) {
+                    return;
+                }
+                finalColorProbeLogs++;
+            } else {
+                if (terrainColorProbeLogs >= MAX_TERRAIN_COLOR_PROBE_LOGS) {
+                    return;
+                }
+                terrainColorProbeLogs++;
+            }
+        } else if (finalStage) {
+            if (finalColorProbeLogs >= MAX_FINAL_COLOR_PROBE_LOGS + MAX_POSITIVE_VANILLA_TERRAIN_PROBE_LOGS) {
                 return;
             }
             finalColorProbeLogs++;
         } else {
-            if (terrainColorProbeLogs >= MAX_TERRAIN_COLOR_PROBE_LOGS) {
+            if (terrainColorProbeLogs >= MAX_TERRAIN_COLOR_PROBE_LOGS + MAX_POSITIVE_VANILLA_TERRAIN_PROBE_LOGS) {
                 return;
             }
             terrainColorProbeLogs++;
@@ -12587,7 +12844,10 @@ public class PipelineContext {
         }
 
         try {
-            int nothiriumCount = hardwareSafeVanillaTerrain ? 0 : renderNothiriumTerrainLayer(layer, (float) partialTicks, viewEntity);
+            boolean mainVanillaDrawPath = shouldUseNothiriumMainVanillaDrawPath(layer);
+            int nothiriumCount = shouldForceVanillaTerrainRenderer() || mainVanillaDrawPath
+                    ? -1
+                    : renderNothiriumTerrainLayer(layer, (float) partialTicks, viewEntity);
             boolean forceVanillaAfterEmptyNothirium = nothiriumCount == 0;
             if (nothiriumCount > 0) {
                 markNothiriumPipelineTranslucentBridge(layer);
@@ -12598,33 +12858,51 @@ public class PipelineContext {
             }
 
             boolean forceVanillaFallback = isPipelineActive
-                    && (hardwareSafeVanillaTerrain || forceVanillaAfterEmptyNothirium || NothiriumBypass.shouldBypass());
+                    && (mainVanillaDrawPath || shouldForceVanillaTerrainRenderer() || forceVanillaAfterEmptyNothirium || NothiriumBypass.shouldBypass());
             if (forceVanillaFallback) {
-                ensureVanillaTerrainRenderer(renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()), true);
-                if (!prepareVanillaState) {
-                    rebindActiveTerrainPassForForcedVanillaFallback();
-                }
-                NothiriumBypass.pushForcedBypass();
+                int count = renderForcedVanillaTerrainLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
+                recordTerrainLayerCount(layer, count);
+                recordShaderlessTerrainLayerCount(layer, count);
+                probePositiveVanillaTerrainDraw(layer, count);
+                logWorldLayerDiag(mainVanillaDrawPath ? "vanilla-main-draw-path" : forceVanillaAfterEmptyNothirium ? "vanilla-after-empty-nothirium" : "vanilla-forced-bypass",
+                        layer, pass, count, viewEntity);
+                return count;
             }
             int count;
-            try {
-                count = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
-            } finally {
-                if (forceVanillaFallback) {
-                    NothiriumBypass.popForcedBypass();
-                }
-            }
+            count = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
             recordTerrainLayerCount(layer, count);
             recordShaderlessTerrainLayerCount(layer, count);
-            logWorldLayerDiag(forceVanillaFallback
-                    ? (forceVanillaAfterEmptyNothirium ? "vanilla-after-empty-nothirium" : "vanilla-forced-bypass")
-                    : "vanilla", layer, pass, count, viewEntity);
+            logWorldLayerDiag("vanilla", layer, pass, count, viewEntity);
             return count;
         } finally {
             if (prepareVanillaState) {
                 finishShaderlessBlockLayerState(layer);
             }
         }
+    }
+
+    private int renderForcedVanillaTerrainLayer(RenderGlobal renderGlobal, BlockRenderLayer layer, double partialTicks,
+                                                int pass, Entity viewEntity) {
+        ensureVanillaTerrainRenderer(renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()), false);
+        rebindActiveTerrainPassForForcedVanillaFallback();
+        NothiriumBypass.pushForcedBypass();
+        try {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
+        } finally {
+            NothiriumBypass.popForcedBypass();
+        }
+    }
+
+    private void probePositiveVanillaTerrainDraw(BlockRenderLayer layer, int count) {
+        if (!shaderedNothiriumGlobalBypass
+                || count <= 0
+                || positiveVanillaTerrainProbeLogs >= MAX_POSITIVE_VANILLA_TERRAIN_PROBE_LOGS
+                || layer == null
+                || layer == BlockRenderLayer.TRANSLUCENT) {
+            return;
+        }
+        positiveVanillaTerrainProbeLogs++;
+        logColorBufferProbe("after-positive-vanilla-" + layer, true);
     }
 
     private void rebindActiveTerrainPassForForcedVanillaFallback() {
@@ -12645,7 +12923,7 @@ public class PipelineContext {
         if (!isPipelineActive && !"skip-null-render-global".equals(stage)) {
             return;
         }
-        if (!stage.startsWith("vanilla") && !"skip-all-rendering".equals(stage)) {
+        if (!stage.startsWith("vanilla") && !"nothirium".equals(stage) && !"skip-all-rendering".equals(stage)) {
             return;
         }
         worldLayerDiagLogs++;
@@ -12872,16 +13150,23 @@ public class PipelineContext {
                         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
                         logHardwareTerrainFallback(
                                 "zero-opaque-rebuild",
-                                "rebuilding stale shader terrain before hardware fallback"
+                                "rebuilding stale shader terrain while keeping shader terrain path"
                         );
                         if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null) {
                             rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "zero-opaque-recovery");
                         }
                         rebuildTerrainRenderers(true, true);
                         scheduleWorldTerrainRefresh(true, true, 0);
+                        startNothiriumHybridVanillaMaintenance("zero opaque shader terrain before rebuild");
+                        startNothiriumMainVanillaDrawPath("zero opaque shader terrain before rebuild");
                         return;
                     }
-                    activateHardwareSafeVanillaTerrain("zero opaque shader terrain for " + zeroOpaqueTerrainFrames + " consecutive frames");
+                    logHardwareTerrainFallback(
+                            "zero-opaque-after-rebuild",
+                            "shader terrain still produced zero opaque draws after rebuild; keeping Nothirium shader path active"
+                    );
+                    startNothiriumHybridVanillaMaintenance("zero opaque shader terrain after rebuild");
+                    startNothiriumMainVanillaDrawPath("zero opaque shader terrain after rebuild");
                 }
             } else {
                 logHardwareTerrainFallback("zero-opaque-no-loaded-terrain", "world=" + describeWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) : null));
@@ -12892,7 +13177,6 @@ public class PipelineContext {
                 && terrainOpaqueDrawCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
                 && hasLoadedTerrainNearPlayer()) {
             sparseOpaqueTerrainFrames++;
-            requestPersistentHistoryClear("sparse-opaque-terrain");
             logHardwareTerrainFallback(
                     "sparse-opaque-frame",
                     "frames=" + sparseOpaqueTerrainFrames
@@ -12902,14 +13186,159 @@ public class PipelineContext {
                             + ", phase=" + getPhase()
                             + ", bypass=" + NothiriumBypass.shouldBypass()
             );
-            if (sparseOpaqueTerrainFrames >= HARDWARE_TERRAIN_FALLBACK_SPARSE_FRAMES) {
-                activateHardwareSafeVanillaTerrain(
-                        "sparse Nothirium shader terrain for " + sparseOpaqueTerrainFrames
-                                + " consecutive frames: opaque draws=" + terrainOpaqueDrawCount
+            // Sparse counts can be normal immediately after a shader toggle or chunk rebuild.
+            // Forcing the vanilla renderer here is expensive and still failed to restore chunks
+            // in v377, so keep the shader path active and let the color/composite probes decide
+            // whether geometry is missing or only lost during presentation.
+            if (sparseOpaqueTerrainFrames >= 2) {
+                startNothiriumHybridVanillaMaintenance(
+                        "sparse Nothirium shader terrain: opaque draws=" + terrainOpaqueDrawCount
+                );
+                startNothiriumMainVanillaDrawPath(
+                        "sparse Nothirium shader terrain: opaque draws=" + terrainOpaqueDrawCount
                 );
             }
         } else if (layer == BlockRenderLayer.CUTOUT && terrainOpaqueLayerCount >= 3) {
             sparseOpaqueTerrainFrames = 0;
+        }
+    }
+
+    public boolean shouldUseNothiriumHybridVanillaMaintenance() {
+        return isPipelineActive
+                && worldFrameActive
+                && !renderingShadowMap
+                && !renderingGuiScreen()
+                && !hardwareSafeVanillaTerrain
+                && !softVanillaTerrainRenderer
+                && nothiriumHybridVanillaMaintenanceFrames > 0;
+    }
+
+    public String nothiriumHybridVanillaMaintenanceReason() {
+        return nothiriumHybridVanillaMaintenanceReason;
+    }
+
+    private void startNothiriumHybridVanillaMaintenance(String reason) {
+        if (!isPipelineActive || renderingShadowMap || hardwareSafeVanillaTerrain || softVanillaTerrainRenderer) {
+            return;
+        }
+        int previous = nothiriumHybridVanillaMaintenanceFrames;
+        nothiriumHybridVanillaMaintenanceFrames = Math.max(
+                nothiriumHybridVanillaMaintenanceFrames,
+                NOTHIRIUM_HYBRID_VANILLA_MAINTENANCE_FRAMES
+        );
+        nothiriumHybridVanillaMaintenanceReason = reason != null ? reason : "";
+        if (previous > 0 || nothiriumHybridVanillaMaintenanceLogs >= MAX_NOTHIRIUM_HYBRID_MAINTENANCE_LOGS) {
+            return;
+        }
+        nothiriumHybridVanillaMaintenanceLogs++;
+        MainMod.LOGGER.warn(
+                "[AUSMNothiriumHybrid] stage=activate-maintenance frames={} reason='{}' frame={} world={} gl={}",
+                nothiriumHybridVanillaMaintenanceFrames,
+                nothiriumHybridVanillaMaintenanceReason,
+                pipelineFrameId,
+                describeWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) : null),
+                glStateSummary()
+        );
+    }
+
+    private boolean shouldUseNothiriumMainVanillaDrawPath(BlockRenderLayer layer) {
+        if (!isPipelineActive
+                || !worldFrameActive
+                || renderingShadowMap
+                || renderingGuiScreen()
+                || hardwareSafeVanillaTerrain
+                || softVanillaTerrainRenderer
+                || nothiriumMainVanillaDrawPathFrames <= 0
+                || layer == null
+                || isRenderingBetterPortalsRenderPass()) {
+            return false;
+        }
+        WorldRenderingPhase phase = getPhase();
+        return phase == WorldRenderingPhase.TERRAIN_SOLID
+                || phase == WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED
+                || phase == WorldRenderingPhase.TERRAIN_CUTOUT
+                || phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT;
+    }
+
+    private void startNothiriumMainVanillaDrawPath(String reason) {
+        if (!isPipelineActive || renderingShadowMap || hardwareSafeVanillaTerrain || softVanillaTerrainRenderer) {
+            return;
+        }
+        int previous = nothiriumMainVanillaDrawPathFrames;
+        nothiriumMainVanillaDrawPathFrames = Math.max(
+                nothiriumMainVanillaDrawPathFrames,
+                NOTHIRIUM_MAIN_VANILLA_DRAW_PATH_FRAMES
+        );
+        nothiriumMainVanillaDrawPathReason = reason != null ? reason : "";
+        if (previous <= 0) {
+            primeNothiriumMainVanillaDrawPath(nothiriumMainVanillaDrawPathReason);
+        }
+        if (previous > 0 || nothiriumMainVanillaDrawPathLogs >= MAX_NOTHIRIUM_MAIN_VANILLA_DRAW_PATH_LOGS) {
+            return;
+        }
+        nothiriumMainVanillaDrawPathLogs++;
+        MainMod.LOGGER.warn(
+                "[AUSMNothiriumMainDrawPath] stage=activate-vanilla-draw frames={} reason='{}' frame={} world={} gl={}",
+                nothiriumMainVanillaDrawPathFrames,
+                nothiriumMainVanillaDrawPathReason,
+                pipelineFrameId,
+                describeWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) : null),
+                glStateSummary()
+        );
+    }
+
+    private void primeNothiriumMainVanillaDrawPath(String reason) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
+            ensureVanillaTerrainRenderer();
+            return;
+        }
+        rebuildMainWorldVanillaViewFrustum(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
+                "nothirium-main-vanilla-draw"
+        );
+        ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
+        NothiriumBypass.markAllChanged();
+        scheduleWorldTerrainRefresh(true, true, 0);
+        scheduleInactiveVanillaRecoveryFrame();
+        logHardwareTerrainFallback("prime-main-vanilla-draw", reason);
+    }
+
+    private void activateShaderedNothiriumGlobalBypass(String reason) {
+        if (!isPipelineActive || hardwareSafeVanillaTerrain) {
+            return;
+        }
+        boolean changed = !shaderedNothiriumGlobalBypass;
+        shaderedNothiriumGlobalBypass = true;
+        shaderedNothiriumGlobalBypassReason = reason != null ? reason : "";
+        nothiriumHybridVanillaMaintenanceFrames = 0;
+        nothiriumHybridVanillaMaintenanceReason = "";
+        nothiriumMainVanillaDrawPathFrames = 0;
+        nothiriumMainVanillaDrawPathReason = "";
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        RenderGlobal renderGlobal = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) : null;
+        boolean needsPrime = changed
+                || shaderedNothiriumGlobalBypassPrimedWorld != world
+                || shaderedNothiriumGlobalBypassPrimedRenderGlobal != renderGlobal;
+        if (needsPrime && mc != null && world != null && renderGlobal != null) {
+            ensureVanillaTerrainRenderer(world, true);
+            NothiriumBypass.markAllChanged();
+            scheduleWorldTerrainRefresh(true, true, 0);
+            shaderedNothiriumGlobalBypassPrimedWorld = world;
+            shaderedNothiriumGlobalBypassPrimedRenderGlobal = renderGlobal;
+            positiveVanillaTerrainProbeLogs = 0;
+        }
+        if (changed && shaderedNothiriumGlobalBypassLogs < MAX_SHADERED_NOTHIRIUM_GLOBAL_BYPASS_LOGS) {
+            shaderedNothiriumGlobalBypassLogs++;
+            MainMod.LOGGER.warn(
+                    "[AUSMNothiriumGlobalBypass] stage=activate-shadered reason='{}' frame={} world={} gl={}",
+                    shaderedNothiriumGlobalBypassReason,
+                    pipelineFrameId,
+                    describeWorld(world),
+                    glStateSummary()
+            );
         }
     }
 
@@ -13008,6 +13437,22 @@ public class PipelineContext {
         scheduleInactiveVanillaRecoveryFrame();
     }
 
+    private void activateSoftVanillaTerrainRenderer(String reason) {
+        if (softVanillaTerrainRenderer) {
+            return;
+        }
+        softVanillaTerrainRenderer = true;
+        softVanillaTerrainRendererReason = reason;
+        ensureVanillaTerrainRenderer();
+        NothiriumBypass.markAllChanged();
+        scheduleWorldTerrainRefresh(true, true, 0);
+        scheduleInactiveVanillaRecoveryFrame();
+        logHardwareTerrainFallback(
+                "activate-soft-vanilla",
+                reason + ", shaderBlockLayerOverrides=true"
+        );
+    }
+
     private void refreshHardwareSafeVanillaTerrainForCamera(Minecraft mc) {
         if (!isPipelineActive || !hardwareSafeVanillaTerrain || mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             lastHardwareSafeVanillaTerrainRefreshWorld = null;
@@ -13087,7 +13532,9 @@ public class PipelineContext {
                 stage,
                 isPipelineActive,
                 hardwareSafeVanillaTerrain,
-                hardwareSafeVanillaTerrainReason,
+                hardwareSafeVanillaTerrainReason
+                        + (softVanillaTerrainRenderer ? ", softVanilla='" + softVanillaTerrainRendererReason + "'" : "")
+                        + (shaderedNothiriumGlobalBypass ? ", shaderedNothiriumBypass='" + shaderedNothiriumGlobalBypassReason + "'" : ""),
                 detail,
                 pipelineFrameId,
                 worldFrameActive,
@@ -13328,13 +13775,31 @@ public class PipelineContext {
             return;
         }
 
+        Attachment presentationAttachment = fallbackColorAttachment();
+        if (compositeInvalidFallbackFrames > 0) {
+            compositeInvalidFallbackFrames--;
+            blitReadBufferToPresentationTarget(readBuffer, target, mc,
+                    "choose-composite-invalid-cached-pre-composite-blit", false, true, true);
+            return;
+        }
+
+        pingPongManager.copyReadAttachmentToReadAttachment(presentationAttachment, COMPOSITE_INVALID_FALLBACK_ATTACHMENT);
+
         runFullscreenPasses(ProgramArrayId.COMPOSITE);
         logBetterPortalsPipeline("after-composite");
+        logColorBufferProbe("after-composite");
         logShaderedVoidSkyTargetProbe("after-composite-before-final", target);
         readBuffer = pingPongManager.getReadBuffer();
         if (readBuffer == null) {
             logBetterPortalsPipeline("abort-null-read-after-composite");
             resetPipelineState(target);
+            return;
+        }
+        if (deferredBufferLooksFlatWhiteOrClear(readBuffer, presentationAttachment)) {
+            compositeInvalidFallbackFrames = COMPOSITE_INVALID_FALLBACK_HOLD_FRAMES;
+            logCompositeInvalidFallback(readBuffer, presentationAttachment);
+            blitReadBufferAttachmentToPresentationTarget(readBuffer, COMPOSITE_INVALID_FALLBACK_ATTACHMENT, target, mc,
+                    "choose-composite-invalid-preserved-pre-composite-blit", false, true, true);
             return;
         }
         runComputePrograms(finalComputePrograms, RenderPass.FINAL);
@@ -13361,12 +13826,24 @@ public class PipelineContext {
                                                     boolean externalTarget,
                                                     boolean clearPresentation,
                                                     boolean probeTarget) {
+        blitReadBufferAttachmentToPresentationTarget(readBuffer, fallbackColorAttachment(), target, mc, reason, externalTarget,
+                clearPresentation, probeTarget);
+    }
+
+    private void blitReadBufferAttachmentToPresentationTarget(DeferredFramebuffer readBuffer,
+                                                    Attachment sourceAttachment,
+                                                    Framebuffer target,
+                                                    Minecraft mc,
+                                                    String reason,
+                                                    boolean externalTarget,
+                                                    boolean clearPresentation,
+                                                    boolean probeTarget) {
         logBetterPortalsPipeline(reason);
         if (clearPresentation) {
             clearPresentationTarget(target, reason);
         }
         readBuffer.blitTo(
-                fallbackColorAttachment(),
+                sourceAttachment,
                 com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target),
                 com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target),
                 com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target)
@@ -13378,6 +13855,116 @@ public class PipelineContext {
             logShaderedVoidSkyTargetProbe("after-" + reason, target);
         }
         finishWorldFramebuffer(target, externalTarget);
+    }
+
+    private boolean deferredBufferHasSceneContent(DeferredFramebuffer framebuffer, Attachment attachment) {
+        if (framebuffer == null || !framebuffer.isUsable() || attachment == null) {
+            return false;
+        }
+        int width = Math.max(1, framebuffer.getAttachmentWidth(attachment));
+        int height = Math.max(1, framebuffer.getAttachmentHeight(attachment));
+        for (int[] point : compositeFallbackProbePoints(width, height)) {
+            float[] color = safeReadDeferredColor(framebuffer, attachment, point[0], point[1]);
+            if (!isFiniteColor(color) || isClearColor(color)) {
+                continue;
+            }
+            float depth = safeReadDeferredDepth(framebuffer, point[0], point[1], width, height);
+            if (depth < 0.99999f || !isFlatWhiteColor(color)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean deferredBufferLooksFlatWhiteOrClear(DeferredFramebuffer framebuffer, Attachment attachment) {
+        if (framebuffer == null || !framebuffer.isUsable() || attachment == null) {
+            return false;
+        }
+        int width = Math.max(1, framebuffer.getAttachmentWidth(attachment));
+        int height = Math.max(1, framebuffer.getAttachmentHeight(attachment));
+        int total = 0;
+        int flat = 0;
+        int clearDepth = 0;
+        for (int[] point : compositeFallbackProbePoints(width, height)) {
+            total++;
+            float[] color = safeReadDeferredColor(framebuffer, attachment, point[0], point[1]);
+            if (!isFiniteColor(color)) {
+                continue;
+            }
+            if (isFlatWhiteColor(color) || isClearColor(color)) {
+                flat++;
+            }
+            float depth = safeReadDeferredDepth(framebuffer, point[0], point[1], width, height);
+            if (depth >= 0.99999f || !Float.isFinite(depth)) {
+                clearDepth++;
+            }
+        }
+        return total > 0 && flat == total && clearDepth >= Math.max(1, total - 1);
+    }
+
+    private int[][] compositeFallbackProbePoints(int width, int height) {
+        int maxX = Math.max(0, width - 1);
+        int maxY = Math.max(0, height - 1);
+        return new int[][] {
+                {width / 2, height / 2},
+                {width / 4, height / 2},
+                {(width * 3) / 4, height / 2},
+                {width / 2, height / 4},
+                {width / 2, (height * 3) / 4},
+                {Math.min(maxX, width / 3), Math.min(maxY, height / 3)}
+        };
+    }
+
+    private float[] safeReadDeferredColor(DeferredFramebuffer framebuffer, Attachment attachment, int x, int y) {
+        try {
+            return framebuffer.readColorAt(attachment, x, y);
+        } catch (RuntimeException | LinkageError e) {
+            return new float[] {Float.NaN, Float.NaN, Float.NaN, Float.NaN};
+        }
+    }
+
+    private float safeReadDeferredDepth(DeferredFramebuffer framebuffer, int x, int y, int colorWidth, int colorHeight) {
+        try {
+            int depthX = Math.max(0, Math.min(framebuffer.getWidth() - 1,
+                    Math.round(x * (framebuffer.getWidth() - 1) / (float) Math.max(1, colorWidth - 1))));
+            int depthY = Math.max(0, Math.min(framebuffer.getHeight() - 1,
+                    Math.round(y * (framebuffer.getHeight() - 1) / (float) Math.max(1, colorHeight - 1))));
+            return framebuffer.readDepthAtPixel(depthX, depthY);
+        } catch (RuntimeException | LinkageError e) {
+            return Float.NaN;
+        }
+    }
+
+    private boolean isFiniteColor(float[] color) {
+        return color != null
+                && color.length >= 4
+                && Float.isFinite(color[0])
+                && Float.isFinite(color[1])
+                && Float.isFinite(color[2])
+                && Float.isFinite(color[3]);
+    }
+
+    private boolean isFlatWhiteColor(float[] color) {
+        return color[0] >= 0.985f && color[1] >= 0.985f && color[2] >= 0.985f && color[3] >= 0.985f;
+    }
+
+    private boolean isClearColor(float[] color) {
+        return color[3] <= 0.001f
+                || (Math.max(color[0], Math.max(color[1], color[2])) <= 0.001f && color[3] >= 0.999f);
+    }
+
+    private void logCompositeInvalidFallback(DeferredFramebuffer framebuffer, Attachment attachment) {
+        if (compositeInvalidFallbackLogs++ >= MAX_COMPOSITE_INVALID_FALLBACK_LOGS) {
+            return;
+        }
+        MainMod.LOGGER.info(
+                "[AUSMCompositeFallback] reason=flat-white-or-clear-after-composite holdFrames={} source={} preserved={} color={} depth={}",
+                COMPOSITE_INVALID_FALLBACK_HOLD_FRAMES,
+                attachment,
+                COMPOSITE_INVALID_FALLBACK_ATTACHMENT,
+                deferredFramebufferColorSamples(framebuffer, attachment),
+                framebuffer != null ? framebufferIdDepthSamples(framebuffer.getFramebufferId(), framebuffer.getWidth(), framebuffer.getHeight(), GL30.GL_COLOR_ATTACHMENT0) : "none"
+        );
     }
 
     private void finishWorldFramebuffer(Framebuffer target, boolean externalTarget) {
@@ -13554,6 +14141,7 @@ public class PipelineContext {
         List<Attachment> drawBuffers = program.drawBuffers();
         Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
 
+        pingPongManager.copyReadToWrite(drawBufferArray);
         pingPongManager.bindForFullscreenWrite(drawBufferArray);
         generateReadMipmaps(program.directives());
 
@@ -13728,6 +14316,7 @@ public class PipelineContext {
         List<Attachment> drawBuffers = program.drawBuffers();
         Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
 
+        pingPongManager.copyReadToWrite(drawBufferArray);
         pingPongManager.bindForFullscreenWrite(drawBufferArray);
         generateReadMipmaps(program);
 
@@ -14097,6 +14686,15 @@ public class PipelineContext {
         terrainOpaqueLayerCount = 0;
         terrainOpaqueDrawCount = 0;
         sparseOpaqueTerrainFrames = 0;
+        shaderedNothiriumGlobalBypass = false;
+        shaderedNothiriumGlobalBypassReason = "";
+        shaderedNothiriumGlobalBypassPrimedWorld = null;
+        shaderedNothiriumGlobalBypassPrimedRenderGlobal = null;
+        positiveVanillaTerrainProbeLogs = 0;
+        nothiriumMainVanillaDrawPathFrames = 0;
+        nothiriumMainVanillaDrawPathReason = "";
+        nothiriumHybridVanillaMaintenanceFrames = 0;
+        nothiriumHybridVanillaMaintenanceReason = "";
         hardwareSafeVanillaTerrainRefreshCooldown = 0;
         lastHardwareSafeVanillaTerrainRefreshWorld = null;
         lastHardwareSafeVanillaTerrainRefreshChunkX = Integer.MIN_VALUE;
@@ -14140,7 +14738,14 @@ public class PipelineContext {
     }
 
     public boolean shouldForceVanillaTerrainRenderer() {
-        return isPipelineActive && hardwareSafeVanillaTerrain;
+        return isPipelineActive && (hardwareSafeVanillaTerrain || softVanillaTerrainRenderer || shaderedNothiriumGlobalBypass);
+    }
+
+    public boolean shouldApplyShaderBlockLayerOverrides() {
+        return isPipelineActive
+                && !hardwareSafeVanillaTerrain
+                && !shouldSkipAllMainGbufferRendering()
+                && hasUsableShaderTerrainProgram();
     }
 
     public boolean isRenderingBetterPortalsExternalWorldFrame() {
@@ -15752,6 +16357,22 @@ public class PipelineContext {
         queueShaderlessBloomClientChunkRefresh(world, sectionX, sectionZ);
     }
 
+    public void handleClientBlockRenderUpdate(World world, BlockPos pos) {
+        if (!(world instanceof WorldClient worldClient) || pos == null) {
+            return;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != world) {
+            return;
+        }
+        queueClientChunkRenderRefresh(
+                worldClient,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) >> 4,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) >> 4,
+                CLIENT_CHUNK_RENDER_REFRESH_REASON_BLOCK_UPDATE
+        );
+    }
+
     public void handleShaderlessBloomRenderUpdateRange(World world, int minX, int minY, int minZ,
                                                        int maxX, int maxY, int maxZ) {
         if (world == null) {
@@ -16948,7 +17569,14 @@ public class PipelineContext {
             if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null) {
                 resizeFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), true);
             }
+            activateShaderedNothiriumGlobalBypass(activeStateChanged ? "shader-pipeline-active" : "shader-pipeline-refresh");
         } else {
+            shaderedNothiriumGlobalBypass = false;
+            shaderedNothiriumGlobalBypassReason = "";
+            nothiriumMainVanillaDrawPathFrames = 0;
+            nothiriumMainVanillaDrawPathReason = "";
+            nothiriumHybridVanillaMaintenanceFrames = 0;
+            nothiriumHybridVanillaMaintenanceReason = "";
             clearPendingShaderChunkRefreshes();
             clearShaderlessBloomMetadata();
             shaderlessBloomVertexFormatRefreshRequested = false;
@@ -17221,6 +17849,7 @@ public class PipelineContext {
         synchronized (pendingClientChunkRenderRefreshes) {
             long chunkKey = clientChunkRenderRefreshChunkKey(chunkX, chunkZ);
             if ("chunk-data".equals(normalizedReason)
+                    || CLIENT_CHUNK_RENDER_REFRESH_REASON_BLOCK_UPDATE.equals(normalizedReason)
                     || CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(normalizedReason)) {
                 forgetRecentlyCompletedClientChunkRenderRefreshLocked(world, chunkKey);
             } else if (isRecentlyCompletedClientChunkRenderRefreshLocked(world, chunkKey)) {
@@ -17254,6 +17883,7 @@ public class PipelineContext {
         }
         existing.attemptsRemaining = Math.max(existing.attemptsRemaining, CLIENT_CHUNK_RENDER_REFRESH_ATTEMPTS);
         if ("chunk-data".equals(reason)
+                || CLIENT_CHUNK_RENDER_REFRESH_REASON_BLOCK_UPDATE.equals(reason)
                 || CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(reason)) {
             existing.reason = reason;
             existing.delayFrames = Math.min(existing.delayFrames, clientChunkRenderRefreshInitialDelay(reason));
@@ -17263,7 +17893,8 @@ public class PipelineContext {
     }
 
     private int clientChunkRenderRefreshInitialDelay(String reason) {
-        if (CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(reason)) {
+        if (CLIENT_CHUNK_RENDER_REFRESH_REASON_BLOCK_UPDATE.equals(reason)
+                || CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(reason)) {
             return 0;
         }
         return CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES;
@@ -17285,6 +17916,7 @@ public class PipelineContext {
             pendingClientChunkRenderRefreshLookupByWorld.clear();
             pendingClientChunkRenderRefreshesByWorld.clear();
             recentlyCompletedClientChunkRenderRefreshes.clear();
+            recentlyCompletedClientChunkRenderRefreshLastPruneFrame = Long.MIN_VALUE;
         }
     }
 
@@ -17520,11 +18152,13 @@ public class PipelineContext {
             return;
         }
         synchronized (pendingClientChunkRenderRefreshes) {
-            recentlyCompletedClientChunkRenderRefreshes
-                    .computeIfAbsent(world, ignored -> new HashMap<>())
-                    .put(clientChunkRenderRefreshChunkKey(chunkX, chunkZ),
-                            pipelineFrameId + CLIENT_CHUNK_RENDER_REFRESH_RECENT_TTL_FRAMES);
-            pruneRecentlyCompletedClientChunkRenderRefreshesLocked();
+            Map<Long, Long> worldRefreshes = recentlyCompletedClientChunkRenderRefreshes
+                    .computeIfAbsent(world, ignored -> new LinkedHashMap<>());
+            worldRefreshes.put(
+                    clientChunkRenderRefreshChunkKey(chunkX, chunkZ),
+                    pipelineFrameId + CLIENT_CHUNK_RENDER_REFRESH_RECENT_TTL_FRAMES
+            );
+            trimRecentlyCompletedClientChunkRenderRefreshesLocked(worldRefreshes);
         }
     }
 
@@ -17540,6 +18174,11 @@ public class PipelineContext {
     }
 
     private void pruneRecentlyCompletedClientChunkRenderRefreshesLocked() {
+        if (recentlyCompletedClientChunkRenderRefreshLastPruneFrame != Long.MIN_VALUE
+                && pipelineFrameId - recentlyCompletedClientChunkRenderRefreshLastPruneFrame < CLIENT_CHUNK_RENDER_REFRESH_RECENT_PRUNE_INTERVAL_FRAMES) {
+            return;
+        }
+        recentlyCompletedClientChunkRenderRefreshLastPruneFrame = pipelineFrameId;
         Iterator<Map.Entry<WorldClient, Map<Long, Long>>> worldIterator =
                 recentlyCompletedClientChunkRenderRefreshes.entrySet().iterator();
         while (worldIterator.hasNext()) {
@@ -17555,6 +18194,17 @@ public class PipelineContext {
         }
     }
 
+    private void trimRecentlyCompletedClientChunkRenderRefreshesLocked(Map<Long, Long> worldRefreshes) {
+        if (worldRefreshes == null || worldRefreshes.size() <= MAX_RECENT_CLIENT_CHUNK_RENDER_REFRESHES_PER_WORLD) {
+            return;
+        }
+        Iterator<Long> iterator = worldRefreshes.keySet().iterator();
+        while (worldRefreshes.size() > MAX_RECENT_CLIENT_CHUNK_RENDER_REFRESHES_PER_WORLD && iterator.hasNext()) {
+            iterator.next();
+            iterator.remove();
+        }
+    }
+
     private boolean shouldQueueClientChunkRenderRefresh(WorldClient world, String reason) {
         if ("chunk-data".equals(reason)) {
             return true;
@@ -17562,6 +18212,10 @@ public class PipelineContext {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return false;
+        }
+        if (CLIENT_CHUNK_RENDER_REFRESH_REASON_BLOCK_UPDATE.equals(reason)) {
+            return world == com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)
+                    && (isPipelineActive || pendingWorldTerrainRefreshAttempts > 0 || NothiriumBypass.shouldBypass());
         }
         if (CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(reason)) {
             return world == com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
@@ -18765,6 +19419,50 @@ public class PipelineContext {
             result = 31 * result + chunkZ;
             return result;
         }
+    }
+
+    private static final class FramedMaterialKey {
+        private final IBlockAccess blockAccess;
+        private final IBlockState state;
+        private final long pos;
+        private final int hash;
+
+        private FramedMaterialKey(IBlockAccess blockAccess, BlockPos pos, IBlockState state) {
+            this.blockAccess = blockAccess;
+            this.state = state;
+            this.pos = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToLong(pos);
+            int result = System.identityHashCode(blockAccess);
+            result = 31 * result + System.identityHashCode(state);
+            result = 31 * result + Long.hashCode(this.pos);
+            this.hash = result;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof FramedMaterialKey key)) {
+                return false;
+            }
+            return blockAccess == key.blockAccess && state == key.state && pos == key.pos;
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+    }
+
+    private record FramedMaterialState(
+            IBlockState actualLightState,
+            IBlockState blockcrafteryDecoratedState,
+            IBlockState blockcrafteryActualState,
+            IBlockState architectureBaseState,
+            IBlockState architectureBaseActualState,
+            IBlockState architectureSecondaryState,
+            IBlockState architectureSecondaryActualState
+    ) {
     }
 
     private static final class ClientChunkRenderRefresh {

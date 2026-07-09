@@ -133,6 +133,12 @@ public class PingPongManager {
         }
     }
 
+    public void copyReadAttachmentToReadAttachment(Attachment source, Attachment target) {
+        if (framebuffer != null) {
+            framebuffer.copyReadAttachmentToReadAttachment(source, target);
+        }
+    }
+
     public void bindForGbuffers(Attachment... drawTargets) {
         framebuffer.bindForGbuffers(drawTargets);
     }

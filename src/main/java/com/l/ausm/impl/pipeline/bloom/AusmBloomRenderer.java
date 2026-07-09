@@ -398,7 +398,8 @@ public final class AusmBloomRenderer {
             bindTextureUniform(compositeProgram, "preHandDepth", preHandDepthTexture, 1);
             bindTextureUniform(compositeProgram, "postHandDepth", postHandDepthTexture, 2);
         }
-        setUniform1f(compositeProgram, "strength", strength);
+        setUniform1f(compositeProgram, "strength", strength * configuredBloomIntensity());
+        setUniform1f(compositeProgram, "bloomChroma", configuredBloomChroma());
         setUniform1i(compositeProgram, "useHandMask", useHandMask ? 1 : 0);
         drawFullscreenQuad();
     }
@@ -682,6 +683,16 @@ public final class AusmBloomRenderer {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    private static float configuredBloomChroma() {
+        com.l.ausm.impl.client.ClientSettingsConfig config = MainMod.getClientSettingsConfig();
+        return config != null ? config.shaderlessBloomChroma() : 1.0F;
+    }
+
+    private static float configuredBloomIntensity() {
+        com.l.ausm.impl.client.ClientSettingsConfig config = MainMod.getClientSettingsConfig();
+        return config != null ? config.shaderlessBloomIntensity() : 0.85F;
     }
 
     private static void bindBlockAtlasOnDefaultTextureUnit() {
@@ -1023,7 +1034,9 @@ public final class AusmBloomRenderer {
                     discard;
                 }
                 float emissionMask = smoothstep(0.04, 0.45, vertexEmission);
-                vec3 bloom = albedo.rgb * (1.15 + vertexEmission * 4.25) * emissionMask;
+                vec3 dyeColor = clamp(albedo.rgb, 0.0, 1.0);
+                float emissionScale = (0.45 + vertexEmission * 0.55) * emissionMask;
+                vec3 bloom = dyeColor * emissionScale;
                 gl_FragColor = vec4(bloom, albedo.a * emissionMask);
             }
             """;
@@ -1071,6 +1084,7 @@ public final class AusmBloomRenderer {
             uniform sampler2D preHandDepth;
             uniform sampler2D postHandDepth;
             uniform float strength;
+            uniform float bloomChroma;
             uniform int useHandMask;
             varying vec2 textureCoords;
             void main() {
@@ -1082,6 +1096,8 @@ public final class AusmBloomRenderer {
                     }
                 }
                 vec3 source = texture2D(bloom, textureCoords).rgb;
+                float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));
+                source = max(mix(vec3(luminance), source, clamp(bloomChroma, 0.0, 2.0)), vec3(0.0));
                 gl_FragColor = vec4(source * strength, 1.0);
             }
             """;

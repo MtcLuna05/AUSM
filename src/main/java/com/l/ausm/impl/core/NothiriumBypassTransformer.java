@@ -14,6 +14,8 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import java.util.HashSet;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -29,6 +31,7 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
     private static final String TARGET = "meldexun.nothirium.mc.mixin.MixinRenderGlobal";
     private static final String BYPASS_OWNER = "com/l/ausm/impl/pipeline/compat/NothiriumBypass";
     private static final String MARK_BLOCKS_FOR_UPDATE = "markBlocksForUpdate(IIIIIIZLorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V";
+    private static final Map<String, String> HANDLER_BYPASS_METHODS = new HashMap<>();
     private static final Set<String> VOID_HANDLERS = new HashSet<>();
 
     static {
@@ -40,6 +43,22 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         VOID_HANDLERS.add("renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable;)V");
         VOID_HANDLERS.add("updateChunks(JLorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V");
         VOID_HANDLERS.add("hasNoChunkUpdates(Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable;)V");
+
+        for (String signature : VOID_HANDLERS) {
+            HANDLER_BYPASS_METHODS.put(signature, "shouldBypass");
+        }
+        HANDLER_BYPASS_METHODS.put(
+                "setupTerrain(Lnet/minecraft/entity/Entity;DLnet/minecraft/client/renderer/culling/ICamera;IZLorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V",
+                "shouldBypassSetupTerrain"
+        );
+        HANDLER_BYPASS_METHODS.put(
+                "updateChunks(JLorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V",
+                "shouldBypassChunkUpdates"
+        );
+        HANDLER_BYPASS_METHODS.put(
+                "hasNoChunkUpdates(Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable;)V",
+                "shouldBypassChunkUpdates"
+        );
     }
 
     @Override
@@ -62,7 +81,7 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
                 insertBlockUpdateBypassGuard(method);
                 changed = true;
             } else if (VOID_HANDLERS.contains(signature)) {
-                insertBypassGuard(method, "shouldBypass");
+                insertBypassGuard(method, HANDLER_BYPASS_METHODS.getOrDefault(signature, "shouldBypass"));
                 changed = true;
             }
         }

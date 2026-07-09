@@ -97,6 +97,7 @@ import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -108,6 +109,14 @@ public final class MinecraftReflectionCompat {
     private static final Set<MethodKey> MISSING_METHODS = ConcurrentHashMap.newKeySet();
     private static final ConcurrentMap<FieldKey, Field> FIELD_CACHE = new ConcurrentHashMap<>();
     private static final Set<FieldKey> MISSING_FIELDS = ConcurrentHashMap.newKeySet();
+    private static final ConcurrentMap<StateValueMethodKey, Method> STATE_VALUE_METHOD_CACHE = new ConcurrentHashMap<>();
+    private static final Set<StateValueMethodKey> MISSING_STATE_VALUE_METHODS = ConcurrentHashMap.newKeySet();
+    private static final ConcurrentMap<IdentityKey<IBlockState>, Block> STATE_BLOCK_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<IdentityKey<IBlockState>, Map<IProperty<?>, Comparable<?>>> STATE_PROPERTIES_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<IProperty<?>, String> PROPERTY_NAME_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Block, ResourceLocation> BLOCK_REGISTRY_NAME_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<ResourceLocation, String> RESOURCE_NAMESPACE_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<ResourceLocation, String> RESOURCE_PATH_CACHE = new ConcurrentHashMap<>();
     public static final Class<?>[] NO_PARAMETERS = new Class<?>[0];
     private static final MethodHandle CURRENT_RENDER_LAYER_HANDLE = staticMethodHandle(
             net.minecraftforge.client.MinecraftForgeClient.class,
@@ -118,6 +127,11 @@ public final class MinecraftReflectionCompat {
             IBlockState.class,
             new String[] {"func_177230_c", "getBlock"},
             NO_PARAMETERS
+    );
+    private static final MethodHandle STATE_ACTUAL_STATE_HANDLE = methodHandle(
+            IBlockState.class,
+            new String[] {"func_185899_b", "getActualState"},
+            new Class<?>[] {IBlockAccess.class, BlockPos.class}
     );
 
     private MinecraftReflectionCompat() {
@@ -607,35 +621,78 @@ public final class MinecraftReflectionCompat {
         if (state == null || property == null) {
             return null;
         }
+        Method method = findStateValueMethod(state.getClass(), property.getClass());
+        if (method == null) {
+            return null;
+        }
+        try {
+            return method.invoke(state, property);
+        } catch (ReflectiveOperationException | IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private static Method findStateValueMethod(Class<?> stateClass, Class<?> propertyClass) {
+        StateValueMethodKey key = new StateValueMethodKey(stateClass, propertyClass);
+        Method cached = STATE_VALUE_METHOD_CACHE.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        if (MISSING_STATE_VALUE_METHODS.contains(key)) {
+            return null;
+        }
         for (String name : new String[] {"func_177229_b", "getValue"}) {
-            for (Method method : state.getClass().getMethods()) {
-                Class<?>[] parameters = method.getParameterTypes();
-                if (!method.getName().equals(name) || parameters.length != 1 || !parameters[0].isInstance(property)) {
-                    continue;
-                }
-                try {
-                    method.setAccessible(true);
-                    return method.invoke(state, property);
-                } catch (ReflectiveOperationException ignored) {
-                }
+            Method method = findCompatibleDeclaredMethod(stateClass, name, propertyClass, new HashSet<>());
+            if (method != null) {
+                method.setAccessible(true);
+                Method existing = STATE_VALUE_METHOD_CACHE.putIfAbsent(key, method);
+                return existing != null ? existing : method;
             }
         }
+        MISSING_STATE_VALUE_METHODS.add(key);
         return null;
     }
 
     @SuppressWarnings("unchecked")
     public static Map<IProperty<?>, Comparable<?>> stateProperties(IBlockState state) {
+        if (state == null) {
+            return Collections.emptyMap();
+        }
+        IdentityKey<IBlockState> key = new IdentityKey<>(state);
+        Map<IProperty<?>, Comparable<?>> cached = STATE_PROPERTIES_CACHE.get(key);
+        if (cached != null) {
+            return cached;
+        }
         Object value = invoke(state, new String[] {"func_177228_b", "getProperties"}, NO_PARAMETERS);
-        return value instanceof Map<?, ?> ? (Map<IProperty<?>, Comparable<?>>) value : Collections.emptyMap();
+        Map<IProperty<?>, Comparable<?>> properties = value instanceof Map<?, ?>
+                ? (Map<IProperty<?>, Comparable<?>>) value
+                : Collections.emptyMap();
+        Map<IProperty<?>, Comparable<?>> existing = STATE_PROPERTIES_CACHE.putIfAbsent(key, properties);
+        return existing != null ? existing : properties;
     }
 
     public static Comparable<?> statePropertyValue(IBlockState state, IProperty<?> property) {
-        Object value = invoke(state, new String[] {"func_177229_b", "getValue"}, new Class<?>[] {IProperty.class}, property);
+        if (state == null || property == null) {
+            return null;
+        }
+        Object value = stateProperties(state).get(property);
         return value instanceof Comparable<?> ? (Comparable<?>) value : null;
     }
 
     public static String propertyName(IProperty<?> property) {
-        return call(property, String.class, null, new String[] {"func_177701_a", "getName"}, NO_PARAMETERS);
+        if (property == null) {
+            return null;
+        }
+        String cached = PROPERTY_NAME_CACHE.get(property);
+        if (cached != null) {
+            return cached;
+        }
+        String name = call(property, String.class, null, new String[] {"func_177701_a", "getName"}, NO_PARAMETERS);
+        if (name != null) {
+            String existing = PROPERTY_NAME_CACHE.putIfAbsent(property, name);
+            return existing != null ? existing : name;
+        }
+        return null;
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -651,13 +708,44 @@ public final class MinecraftReflectionCompat {
         if (state == null) {
             return null;
         }
+        IdentityKey<IBlockState> key = new IdentityKey<>(state);
+        Block cached = STATE_BLOCK_CACHE.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        Block block = null;
         if (BLOCK_FROM_STATE_HANDLE != null) {
             try {
-                return (Block) BLOCK_FROM_STATE_HANDLE.invokeExact(state);
+                block = (Block) BLOCK_FROM_STATE_HANDLE.invokeExact(state);
             } catch (Throwable ignored) {
             }
         }
-        return call(state, Block.class, null, new String[] {"func_177230_c", "getBlock"}, NO_PARAMETERS);
+        if (block == null) {
+            block = call(state, Block.class, null, new String[] {"func_177230_c", "getBlock"}, NO_PARAMETERS);
+        }
+        if (block != null) {
+            Block existing = STATE_BLOCK_CACHE.putIfAbsent(key, block);
+            return existing != null ? existing : block;
+        }
+        return null;
+    }
+
+    public static IBlockState actualState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (state == null || blockAccess == null || pos == null) {
+            return state;
+        }
+        if (STATE_ACTUAL_STATE_HANDLE != null) {
+            try {
+                return (IBlockState) STATE_ACTUAL_STATE_HANDLE.invokeExact(state, blockAccess, pos);
+            } catch (Throwable ignored) {
+            }
+        }
+        try {
+            return call(state, IBlockState.class, state, new String[] {"func_185899_b", "getActualState"},
+                    new Class<?>[] {IBlockAccess.class, BlockPos.class}, blockAccess, pos);
+        } catch (RuntimeException ignored) {
+            return state;
+        }
     }
 
     public static BlockRenderLayer blockRenderLayer(Block block) {
@@ -670,15 +758,45 @@ public final class MinecraftReflectionCompat {
     }
 
     public static ResourceLocation blockRegistryName(Block block) {
-        return call(block, ResourceLocation.class, null, new String[] {"getRegistryName"}, NO_PARAMETERS);
+        if (block == null) {
+            return null;
+        }
+        ResourceLocation cached = BLOCK_REGISTRY_NAME_CACHE.get(block);
+        if (cached != null) {
+            return cached;
+        }
+        ResourceLocation name = call(block, ResourceLocation.class, null, new String[] {"getRegistryName"}, NO_PARAMETERS);
+        if (name != null) {
+            ResourceLocation existing = BLOCK_REGISTRY_NAME_CACHE.putIfAbsent(block, name);
+            return existing != null ? existing : name;
+        }
+        return null;
     }
 
     public static String resourceNamespace(ResourceLocation location) {
-        return call(location, String.class, "", new String[] {"func_110624_b", "getResourceDomain", "getNamespace"}, NO_PARAMETERS);
+        if (location == null) {
+            return "";
+        }
+        String cached = RESOURCE_NAMESPACE_CACHE.get(location);
+        if (cached != null) {
+            return cached;
+        }
+        String namespace = call(location, String.class, "", new String[] {"func_110624_b", "getResourceDomain", "getNamespace"}, NO_PARAMETERS);
+        String existing = RESOURCE_NAMESPACE_CACHE.putIfAbsent(location, namespace);
+        return existing != null ? existing : namespace;
     }
 
     public static String resourcePath(ResourceLocation location) {
-        return call(location, String.class, "", new String[] {"func_110623_a", "getResourcePath", "getPath"}, NO_PARAMETERS);
+        if (location == null) {
+            return "";
+        }
+        String cached = RESOURCE_PATH_CACHE.get(location);
+        if (cached != null) {
+            return cached;
+        }
+        String path = call(location, String.class, "", new String[] {"func_110623_a", "getResourcePath", "getPath"}, NO_PARAMETERS);
+        String existing = RESOURCE_PATH_CACHE.putIfAbsent(location, path);
+        return existing != null ? existing : path;
     }
 
     @SuppressWarnings("unchecked")
@@ -1665,6 +1783,12 @@ public final class MinecraftReflectionCompat {
         if (MISSING_METHODS.contains(key)) {
             return null;
         }
+        Method declared = findExactDeclaredMethod(owner, name, parameterTypes, new HashSet<>());
+        if (declared != null) {
+            declared.setAccessible(true);
+            Method existing = METHOD_CACHE.putIfAbsent(key, declared);
+            return existing != null ? existing : declared;
+        }
         try {
             Method method = owner.getMethod(name, parameterTypes);
             method.setAccessible(true);
@@ -1674,6 +1798,85 @@ public final class MinecraftReflectionCompat {
             MISSING_METHODS.add(key);
             return null;
         }
+    }
+
+    private static Method findExactDeclaredMethod(Class<?> owner, String name, Class<?>[] parameterTypes, Set<Class<?>> visited) {
+        if (owner == null) {
+            return null;
+        }
+        Class<?>[] parameters = parameterTypes != null ? parameterTypes : NO_PARAMETERS;
+        for (Class<?> current = owner; current != null; current = current.getSuperclass()) {
+            if (!visited.add(current)) {
+                continue;
+            }
+            try {
+                return current.getDeclaredMethod(name, parameters);
+            } catch (NoSuchMethodException | SecurityException ignored) {
+            }
+            Method interfaceMethod = findExactInterfaceMethod(current, name, parameters, visited);
+            if (interfaceMethod != null) {
+                return interfaceMethod;
+            }
+        }
+        return null;
+    }
+
+    private static Method findExactInterfaceMethod(Class<?> owner, String name, Class<?>[] parameterTypes, Set<Class<?>> visited) {
+        for (Class<?> interfaceClass : owner.getInterfaces()) {
+            if (!visited.add(interfaceClass)) {
+                continue;
+            }
+            try {
+                return interfaceClass.getDeclaredMethod(name, parameterTypes);
+            } catch (NoSuchMethodException | SecurityException ignored) {
+            }
+            Method nested = findExactInterfaceMethod(interfaceClass, name, parameterTypes, visited);
+            if (nested != null) {
+                return nested;
+            }
+        }
+        return null;
+    }
+
+    private static Method findCompatibleDeclaredMethod(Class<?> owner, String name, Class<?> propertyClass, Set<Class<?>> visited) {
+        if (owner == null || propertyClass == null) {
+            return null;
+        }
+        for (Class<?> current = owner; current != null; current = current.getSuperclass()) {
+            if (!visited.add(current)) {
+                continue;
+            }
+            for (Method method : current.getDeclaredMethods()) {
+                Class<?>[] parameters = method.getParameterTypes();
+                if (method.getName().equals(name) && parameters.length == 1 && parameters[0].isAssignableFrom(propertyClass)) {
+                    return method;
+                }
+            }
+            Method interfaceMethod = findCompatibleInterfaceMethod(current, name, propertyClass, visited);
+            if (interfaceMethod != null) {
+                return interfaceMethod;
+            }
+        }
+        return null;
+    }
+
+    private static Method findCompatibleInterfaceMethod(Class<?> owner, String name, Class<?> propertyClass, Set<Class<?>> visited) {
+        for (Class<?> interfaceClass : owner.getInterfaces()) {
+            if (!visited.add(interfaceClass)) {
+                continue;
+            }
+            for (Method method : interfaceClass.getDeclaredMethods()) {
+                Class<?>[] parameters = method.getParameterTypes();
+                if (method.getName().equals(name) && parameters.length == 1 && parameters[0].isAssignableFrom(propertyClass)) {
+                    return method;
+                }
+            }
+            Method nested = findCompatibleInterfaceMethod(interfaceClass, name, propertyClass, visited);
+            if (nested != null) {
+                return nested;
+            }
+        }
+        return null;
     }
 
     private static MethodHandle methodHandle(Class<?> owner, String[] names, Class<?>[] parameterTypes) {
@@ -1794,6 +1997,63 @@ public final class MinecraftReflectionCompat {
             return owner == other.owner
                     && (name == null ? other.name == null : name.equals(other.name))
                     && Arrays.equals(parameterTypes, other.parameterTypes);
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+    }
+
+    private static final class StateValueMethodKey {
+        private final Class<?> stateClass;
+        private final Class<?> propertyClass;
+        private final int hash;
+
+        private StateValueMethodKey(Class<?> stateClass, Class<?> propertyClass) {
+            this.stateClass = stateClass;
+            this.propertyClass = propertyClass;
+            int result = System.identityHashCode(stateClass);
+            result = 31 * result + System.identityHashCode(propertyClass);
+            this.hash = result;
+        }
+
+        @Override
+        public boolean equals(Object object) {
+            if (this == object) {
+                return true;
+            }
+            if (!(object instanceof StateValueMethodKey)) {
+                return false;
+            }
+            StateValueMethodKey other = (StateValueMethodKey) object;
+            return stateClass == other.stateClass && propertyClass == other.propertyClass;
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+    }
+
+    private static final class IdentityKey<T> {
+        private final T value;
+        private final int hash;
+
+        private IdentityKey(T value) {
+            this.value = value;
+            this.hash = System.identityHashCode(value);
+        }
+
+        @Override
+        public boolean equals(Object object) {
+            if (this == object) {
+                return true;
+            }
+            if (!(object instanceof IdentityKey<?> other)) {
+                return false;
+            }
+            return value == other.value;
         }
 
         @Override

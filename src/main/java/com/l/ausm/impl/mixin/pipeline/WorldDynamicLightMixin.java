@@ -84,7 +84,10 @@ public class WorldDynamicLightMixin {
     private void ausm$invalidateShaderlessBloomMetadataOnBlockUpdate(BlockPos pos, IBlockState oldState,
                                                                      IBlockState newState, int flags,
                                                                      CallbackInfo ci) {
-        PipelineContext.getInstance().handleShaderlessBloomBlockUpdate((World) (Object) this, pos, oldState, newState, flags);
+        PipelineContext context = PipelineContext.getInstance();
+        World world = (World) (Object) this;
+        context.handleClientBlockRenderUpdate(world, pos);
+        context.handleShaderlessBloomBlockUpdate(world, pos, oldState, newState, flags);
     }
 
     @Inject(method = "markBlockRangeForRenderUpdate(IIIIII)V", at = @At("HEAD"), require = 0)
