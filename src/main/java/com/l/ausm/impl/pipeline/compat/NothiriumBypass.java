@@ -150,6 +150,10 @@ public final class NothiriumBypass {
         }
     }
 
+    public static boolean setupForShaderedMainTerrainBridge() {
+        return setupNothiriumRendererNow();
+    }
+
     private static boolean setupNothiriumRendererNow() {
         if (!resolveReflection() || setupMethod == null) {
             return false;

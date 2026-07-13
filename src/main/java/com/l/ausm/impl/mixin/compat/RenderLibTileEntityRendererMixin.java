@@ -28,7 +28,7 @@ public class RenderLibTileEntityRendererMixin {
                 && phase != WorldRenderingPhase.BLOCK_ENTITIES_TRANSLUCENT;
         AUSM$blockEntityBatchStack.get().push(shouldBind);
         if (shouldBind) {
-            context.beginPhase(WorldRenderingPhase.BLOCK_ENTITIES);
+            context.beginPhase(context.blockEntityPhaseForCurrentForgePass());
         }
     }
 

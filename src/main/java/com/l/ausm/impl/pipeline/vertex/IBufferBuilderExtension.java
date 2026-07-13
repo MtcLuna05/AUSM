@@ -13,6 +13,9 @@ public interface IBufferBuilderExtension {
 
     void ausm$forceResetDrawingState();
 
+    default void ausm$truncateVertexCount(int vertexCount) {
+    }
+
     default boolean ausm$isDrawing() {
         return false;
     }

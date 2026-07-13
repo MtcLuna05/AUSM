@@ -3,21 +3,17 @@ package com.l.ausm.impl.mixin.compat;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
-import com.l.ausm.impl.pipeline.compat.BloomMaskColor;
 import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
 import com.l.ausm.impl.pipeline.compat.NothiriumPipelineCompat;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import net.minecraft.block.Block;
-import net.minecraft.block.properties.IProperty;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BlockRendererDispatcher;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.RegionRenderCacheBuilder;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.client.renderer.texture.TextureMap;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraft.util.EnumBlockRenderType;
@@ -38,8 +34,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.lang.reflect.Field;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.IdentityHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(targets = "meldexun.nothirium.mc.renderer.chunk.RenderChunkTaskCompile", remap = false)
@@ -63,16 +58,27 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private static final AtomicInteger AUSM_EMISSIVE_FALLBACK_LOGS = new AtomicInteger();
 
     @Unique
-    private static final int AUSM_SHADERLESS_COMPILE_LIGHT_PROBE_LIMIT = 160;
+    private static final int AUSM_SHADERLESS_COMPILE_LIGHT_PROBE_LIMIT = 0;
+
+    @Unique
+    private static final int AUSM_NOTHIRIUM_LAYER_COMPILE_LOG_LIMIT = 12;
+
+    @Unique
+    private static final AtomicInteger AUSM_NOTHIRIUM_LAYER_COMPILE_LOGS = new AtomicInteger();
 
     @Unique
     private static final AtomicInteger AUSM_SHADERLESS_COMPILE_LIGHT_PROBES = new AtomicInteger();
 
     @Unique
-    private static final ConcurrentMap<AusmIdentityKey<IBlockState>, Block> AUSM_STATE_BLOCKS = new ConcurrentHashMap<>();
+    private static final int AUSM_THREAD_CACHE_LIMIT = 4096;
 
     @Unique
-    private static final ConcurrentMap<AusmIdentityKey<IBlockState>, ResourceLocation> AUSM_STATE_REGISTRY_NAMES = new ConcurrentHashMap<>();
+    private static final ThreadLocal<IdentityHashMap<IBlockState, Block>> AUSM_STATE_BLOCKS =
+            ThreadLocal.withInitial(IdentityHashMap::new);
+
+    @Unique
+    private static final ThreadLocal<IdentityHashMap<IBlockState, ResourceLocation>> AUSM_STATE_REGISTRY_NAMES =
+            ThreadLocal.withInitial(IdentityHashMap::new);
 
     @Shadow(remap = false)
     private IBlockAccess chunkCache;
@@ -98,6 +104,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             remap = false
     )
     private void ausm$resetShaderlessBloomLayerSummaries(RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
+        ausm$clearThreadCaches();
         PipelineContext.getInstance().beginFramedMaterialCompileCache();
         ausm$resetShaderlessBloomMetadata(regionBuffers);
     }
@@ -131,7 +138,42 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         } finally {
             ausm$resetShaderlessBloomMetadata(regionBuffers);
             PipelineContext.getInstance().endFramedMaterialCompileCache();
+            ausm$clearThreadCaches();
         }
+    }
+
+    @Inject(
+            method = "compileSection(Lnet/minecraft/client/renderer/RegionRenderCacheBuilder;)Lmeldexun/nothirium/api/renderer/chunk/RenderChunkTaskResult;",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lmeldexun/nothirium/api/renderer/chunk/IRenderChunkDispatcher;runOnRenderThread(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;",
+                    remap = false
+            ),
+            remap = false
+    )
+    private void ausm$logNothiriumLayerCompileBuffers(RegionRenderCacheBuilder regionBuffers,
+                                                      CallbackInfoReturnable<?> cir) {
+        int index = AUSM_NOTHIRIUM_LAYER_COMPILE_LOGS.incrementAndGet();
+        if (index > AUSM_NOTHIRIUM_LAYER_COMPILE_LOG_LIMIT) {
+            return;
+        }
+        Object renderChunk = ausm$renderChunk();
+        String chunk = "n/a";
+        if (renderChunk instanceof meldexun.nothirium.mc.renderer.chunk.RenderChunk nothiriumChunk) {
+            chunk = nothiriumChunk.getX() + "," + nothiriumChunk.getY() + "," + nothiriumChunk.getZ();
+        }
+        MainMod.LOGGER.info(
+                "[AUSMNothiriumLayerCompile] call={} chunk={} solid={} cutoutMipped={} cutout={} translucent={} currentLayer={} pipelineActive={} formatMode={}",
+                index,
+                chunk,
+                ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.SOLID),
+                ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.CUTOUT_MIPPED),
+                ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.CUTOUT),
+                ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.TRANSLUCENT),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
+                PipelineContext.getInstance().isPipelineActive(),
+                NothiriumPipelineCompat.shouldUsePipelineBlockFormat()
+        );
     }
 
     @Unique
@@ -197,6 +239,12 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (ausm$canRenderInLayer(block, state, layer)) {
             return true;
         }
+        if (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null
+                && PipelineContext.getInstance().isFramedBlockDiagnosticTarget(state)
+                && layer != null
+                && !AusmBloomLayer.isBloomLayer(layer)) {
+            return true;
+        }
         return ausm$isEmissiveBloomFallbackTarget(state) && layer == ausm$bloomFallbackLayer(state);
     }
 
@@ -206,17 +254,27 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         ausm$fireCutoutFallbackStart = -1;
         ausm$emissiveFallbackStart = -1;
         PipelineContext pipeline = PipelineContext.getInstance();
+        if (pipeline.shouldForceVanillaTerrainRenderer()) {
+            return;
+        }
         IBlockState effectiveState = pipeline.effectiveBlockRenderState(state, chunkCache, pos);
         IBlockState inheritedBloomState = pipeline.inheritedBloomRenderState(state, chunkCache, pos);
         boolean originalFire = ausm$isFireFallbackTarget(state);
         boolean effectiveFire = ausm$isFireFallbackTarget(effectiveState);
         BufferBuilder buffer = regionBuffers != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, BlockRenderLayer.CUTOUT) : null;
         boolean framedState = pipeline.isFramedBlockDiagnosticTarget(state);
+        boolean forcedFramedBloom = framedState
+                && pipeline.framedBloomFallbackEmission(state, chunkCache, pos) > 0;
         IBlockState emissiveState = ausm$isEmissiveBloomFallbackTarget(inheritedBloomState)
                 ? inheritedBloomState
-                : framedState ? null : ausm$isEmissiveBloomFallbackTarget(effectiveState) ? effectiveState : state;
-        if (!framedState && ausm$isEmissiveBloomFallbackTarget(emissiveState) && regionBuffers != null) {
-            BufferBuilder emissiveBuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, ausm$bloomFallbackLayer(emissiveState));
+                : forcedFramedBloom ? state : framedState ? null : ausm$isEmissiveBloomFallbackTarget(effectiveState) ? effectiveState : state;
+        boolean emissiveTarget = forcedFramedBloom || ausm$isEmissiveBloomFallbackTarget(emissiveState);
+        if (emissiveTarget && regionBuffers != null) {
+            IBlockState fallbackRenderState = pipeline.inheritedBloomGeometryRenderState(state, emissiveState);
+            BlockRenderLayer emissiveLayer = framedState
+                    ? ausm$framedGeometryLayer(fallbackRenderState, emissiveState)
+                    : ausm$bloomFallbackLayer(emissiveState);
+            BufferBuilder emissiveBuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, emissiveLayer);
             if (emissiveBuffer != null) {
                 ausm$emissiveFallbackStart = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(emissiveBuffer);
             }
@@ -241,6 +299,28 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private void ausm$setPipelineBlockContext(IBlockState state, BlockPos pos, VisibilityGraph visibilityGraph,
                                               RegionRenderCacheBuilder bufferBuilder, CallbackInfo ci) {
         PipelineContext pipeline = PipelineContext.getInstance();
+        if (pipeline.shouldForceVanillaTerrainRenderer()) {
+            BlockRenderContext.setBlockEntityId(0);
+            BlockRenderContext.setRenderType((short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(state));
+            BlockRenderContext.setMetadata(0);
+            BlockRenderContext.setLocalBlockPos(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos)
+            );
+            BlockRenderContext.setWorldBlockContext(chunkCache, pos);
+            BlockRenderContext.setAgricraftCrop(false);
+            BlockRenderContext.setPackedLightmap(0);
+            BlockRenderContext.setBlockEmission(0);
+            BlockRenderContext.setBloomOnlyEmission(false);
+            BlockRenderContext.setBlockAlpha(-1);
+            BlockRenderContext.setCustomLiquidTint(-1);
+            BlockRenderContext.setCrystalOnlyEmission(false);
+            BlockRenderContext.setSeparateAoEligible(false);
+            ausm$framedDiagnosticStart = -1;
+            ausm$framedDiagnosticLayer = null;
+            return;
+        }
         IBlockState contextState = pipeline.effectiveBlockRenderState(state, chunkCache, pos);
         if (contextState == null) {
             contextState = state;
@@ -514,7 +594,12 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                 return false;
             }
 
-            BlockRenderLayer bufferLayer = framedState ? bloomLayer : ausm$bloomFallbackLayer(fallbackSourceState);
+            boolean textureBloomSource = PipelineContext.getInstance().stateUsesTextureBloomSource(fallbackSourceState);
+            boolean solidBloomMaskFallback = framedState && !textureBloomSource;
+            BlockRenderLayer renderLayer = framedState
+                    ? ausm$framedGeometryLayer(fallbackRenderState, fallbackSourceState)
+                    : bloomLayer;
+            BlockRenderLayer bufferLayer = framedState ? renderLayer : ausm$bloomFallbackLayer(fallbackSourceState);
             BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, bufferLayer);
             if (buffer == null) {
                 ausm$logEmissiveFallback("skip-missing-buffer", renderState, fallbackRenderState,
@@ -524,12 +609,12 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
 
             int start = ausm$emissiveFallbackStart;
             int normalDelta = start >= 0 ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer) - start : 0;
-            boolean textureBloomSource = PipelineContext.getInstance().stateUsesTextureBloomSource(fallbackSourceState);
-            boolean solidBloomMaskFallback = framedState && !textureBloomSource;
-            BlockRenderLayer renderLayer = framedState && !textureBloomSource
-                    ? ausm$framedGeometryLayer(fallbackRenderState, fallbackSourceState)
-                    : bloomLayer;
-            if (normalDelta > 0) {
+            if (normalDelta > 0 && solidBloomMaskFallback) {
+                ((IBufferBuilderExtension) buffer).ausm$truncateVertexCount(start);
+                ausm$logEmissiveFallback("replace-normal-geometry", renderState, fallbackRenderState, pos,
+                        fallbackSourceState, bufferLayer, renderLayer, normalDelta, false, 0, buffer, regionBuffers);
+                normalDelta = 0;
+            } else if (normalDelta > 0) {
                 ausm$logEmissiveFallback("normal-or-dispatcher-present", renderState, fallbackRenderState, pos,
                         fallbackSourceState, bufferLayer, renderLayer, normalDelta, false, 0, buffer, regionBuffers);
                 return true;
@@ -576,8 +661,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         try {
             BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.set(Boolean.TRUE);
             if (bloomMaskFallback) {
-                float[] uv = ausm$bloomMaskUv();
-                BlockRenderContext.setBloomMaskFallback(true, uv[0], uv[1], BloomMaskColor.colorForState(maskColorState));
+                BlockRenderContext.setBloomMaskFallback(true);
             }
             com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(layer);
             BlockRendererDispatcher dispatcher = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRendererDispatcher(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
@@ -587,84 +671,6 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             BlockRenderContext.clearBloomMaskFallback();
             BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.remove();
         }
-    }
-
-    @Unique
-    private static float[] ausm$bloomMaskUv() {
-        try {
-            TextureMap textureMap = com.l.ausm.impl.util.MinecraftReflectionCompat.call((com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()), net.minecraft.client.renderer.texture.TextureMap.class, null, new String[] {"func_147117_R", "getTextureMapBlocks"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
-            TextureAtlasSprite sprite = com.l.ausm.impl.util.MinecraftReflectionCompat.call((textureMap), net.minecraft.client.renderer.texture.TextureAtlasSprite.class, null, new String[] {"func_110572_b", "getAtlasSprite"},
-                new Class<?>[] {String.class}, ("minecraft:blocks/quartz_block_top"));
-            String spriteName = com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite);
-            if (spriteName != null && !spriteName.contains("missingno")) {
-                return new float[] {
-                        (com.l.ausm.impl.util.MinecraftReflectionCompat.spriteMinU(sprite) + com.l.ausm.impl.util.MinecraftReflectionCompat.spriteMaxU(sprite)) * 0.5f,
-                        (com.l.ausm.impl.util.MinecraftReflectionCompat.spriteMinV(sprite) + com.l.ausm.impl.util.MinecraftReflectionCompat.spriteMaxV(sprite)) * 0.5f
-                };
-            }
-        } catch (RuntimeException ignored) {
-            // Fallback UV is still safer than rendering a framed block's missing texture into bloom.
-        }
-        return new float[] {0.5f, 0.5f};
-    }
-
-    @Unique
-    private static int ausm$bloomMaskColor(IBlockState sourceState) {
-        if (sourceState == null) {
-            return -1;
-        }
-        String color = ausm$statePropertyValue(sourceState, "color");
-        if (color == null) {
-            color = ausm$statePropertyValue(sourceState, "colour");
-        }
-        if (color == null) {
-            return -1;
-        }
-        return ausm$dyeMaskColor(color);
-    }
-
-    @Unique
-    private static String ausm$statePropertyValue(IBlockState state, String propertyName) {
-        try {
-            for (IProperty<?> property : com.l.ausm.impl.util.MinecraftReflectionCompat.stateProperties(state).keySet()) {
-                if (property != null && propertyName.equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.propertyName(property))) {
-                    Object value = com.l.ausm.impl.util.MinecraftReflectionCompat.statePropertyValue(state, property);
-                    return value != null ? value.toString().toLowerCase(java.util.Locale.ROOT) : null;
-                }
-            }
-        } catch (RuntimeException ignored) {
-        }
-        return null;
-    }
-
-    @Unique
-    private static int ausm$dyeMaskColor(String color) {
-        String normalized = color == null ? "" : color.toLowerCase(java.util.Locale.ROOT);
-        return switch (normalized) {
-            case "red" -> ausm$packColor(0xFFDADA);
-            case "orange", "brown" -> ausm$packColor(0xFFE2C8);
-            case "yellow" -> ausm$packColor(0xFFFFC8);
-            case "lime" -> ausm$packColor(0xDAFFDA);
-            case "green" -> ausm$packColor(0xD0FFD0);
-            case "cyan" -> ausm$packColor(0xD0FFFF);
-            case "light_blue", "lightblue" -> ausm$packColor(0xD8ECFF);
-            case "blue" -> ausm$packColor(0xDADAFF);
-            case "purple" -> ausm$packColor(0xE8D8FF);
-            case "magenta" -> ausm$packColor(0xFFD8FF);
-            case "pink" -> ausm$packColor(0xFFE0F0);
-            case "black", "gray", "grey", "silver", "light_gray", "light_grey", "white" -> -1;
-            default -> -1;
-        };
-    }
-
-    @Unique
-    private static int ausm$packColor(int rgb) {
-        int red = (rgb >> 16) & 0xFF;
-        int green = (rgb >> 8) & 0xFF;
-        int blue = rgb & 0xFF;
-        return java.nio.ByteOrder.nativeOrder() == java.nio.ByteOrder.LITTLE_ENDIAN
-                ? (0xFF << 24) | (blue << 16) | (green << 8) | red
-                : (red << 24) | (green << 16) | (blue << 8) | 0xFF;
     }
 
     @Unique
@@ -719,6 +725,14 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                 + ", pipeline=" + ExtendedVertexFormats.isPipelineBlock(format)
                 + ", stride=" + (format != null ? ExtendedVertexFormats.size(format) : -1)
                 + "}";
+    }
+
+    @Unique
+    private static String ausm$layerCompileBufferDetails(RegionRenderCacheBuilder regionBuffers, BlockRenderLayer layer) {
+        BufferBuilder buffer = regionBuffers != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, layer)
+                : null;
+        return ausm$bufferDetails(buffer);
     }
 
     @Unique
@@ -846,7 +860,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             return BlockRenderLayer.SOLID;
         }
         ResourceLocation name = ausm$registryName(state);
-        String path = name != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).toLowerCase(java.util.Locale.ROOT) : "";
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
         if (path.contains("fire") || com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsFire(state)) {
             return BlockRenderLayer.CUTOUT;
         }
@@ -873,7 +887,6 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         ResourceLocation name = ausm$registryName(state);
         return name != null
                 && "randomthings".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name) != null
                 && ausm$isRandomThingsLuminousPath(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name));
     }
 
@@ -933,11 +946,17 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (PipelineContext.getInstance().stateHasShaderlessBloomSource(state)) {
             return true;
         }
-        if (name == null || com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name) == null) {
+        if (name == null) {
             return false;
         }
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).toLowerCase(java.util.Locale.ROOT);
-        return "lumenized".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)) || path.contains("lumenized");
+        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
+        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name);
+        return "lumenized".equals(namespace)
+                || ausm$isRandomThingsLuminousState(state)
+                || path.contains("lumenized")
+                || path.contains("luminous")
+                || path.contains("emissive")
+                || path.contains("bloom");
     }
 
     @Unique
@@ -954,16 +973,19 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (state == null) {
             return null;
         }
-        AusmIdentityKey<IBlockState> key = new AusmIdentityKey<>(state);
-        ResourceLocation cached = AUSM_STATE_REGISTRY_NAMES.get(key);
+        IdentityHashMap<IBlockState, ResourceLocation> cache = AUSM_STATE_REGISTRY_NAMES.get();
+        ResourceLocation cached = cache.get(state);
         if (cached != null) {
             return cached;
         }
         Block block = ausm$block(state);
         ResourceLocation name = block != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block) : null;
         if (name != null) {
-            ResourceLocation existing = AUSM_STATE_REGISTRY_NAMES.putIfAbsent(key, name);
-            return existing != null ? existing : name;
+            if (cache.size() > AUSM_THREAD_CACHE_LIMIT) {
+                cache.clear();
+            }
+            cache.put(state, name);
+            return name;
         }
         return null;
     }
@@ -973,50 +995,33 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (state == null) {
             return null;
         }
-        AusmIdentityKey<IBlockState> key = new AusmIdentityKey<>(state);
-        Block cached = AUSM_STATE_BLOCKS.get(key);
+        IdentityHashMap<IBlockState, Block> cache = AUSM_STATE_BLOCKS.get();
+        Block cached = cache.get(state);
         if (cached != null) {
             return cached;
         }
         Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
         if (block != null) {
-            Block existing = AUSM_STATE_BLOCKS.putIfAbsent(key, block);
-            return existing != null ? existing : block;
+            if (cache.size() > AUSM_THREAD_CACHE_LIMIT) {
+                cache.clear();
+            }
+            cache.put(state, block);
+            return block;
         }
         return null;
     }
 
     @Unique
-    private static final class AusmIdentityKey<T> {
-        private final T value;
-        private final int hash;
-
-        private AusmIdentityKey(T value) {
-            this.value = value;
-            this.hash = System.identityHashCode(value);
-        }
-
-        @Override
-        public boolean equals(Object object) {
-            if (this == object) {
-                return true;
-            }
-            if (!(object instanceof AusmIdentityKey<?> other)) {
-                return false;
-            }
-            return value == other.value;
-        }
-
-        @Override
-        public int hashCode() {
-            return hash;
-        }
+    private static void ausm$clearThreadCaches() {
+        AUSM_STATE_BLOCKS.get().clear();
+        AUSM_STATE_REGISTRY_NAMES.get().clear();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.clearHotThreadCaches();
     }
 
     @Unique
     private static String ausm$stateName(IBlockState state) {
         ResourceLocation name = ausm$registryName(state);
-        return name != null ? name.toString() : String.valueOf(state);
+        return name != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceString(name) : String.valueOf(state);
     }
 
     @Unique

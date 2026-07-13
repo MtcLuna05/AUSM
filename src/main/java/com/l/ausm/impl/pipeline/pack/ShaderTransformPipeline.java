@@ -14,9 +14,13 @@ import java.util.List;
 public final class ShaderTransformPipeline {
     private static final List<ShaderTransformStage> STAGES = List.of(
             new FragmentOutputTransformStage(),
+            new VoidNoiseDisableTransformStage(),
+            new FinalDitherNeutralizeTransformStage(),
             new AusmOfficialSkyDomeTransformStage(),
             new LegacySamplerAliasTransformStage(),
             new GbuffersBuiltinTransformStage(),
+            new BloomOnlyMaskDiscardTransformStage(),
+            new NothiriumChunkOffsetTransformStage(),
             new FadeVariableTransformStage(),
             new EntityAdvancedMaterialFallbackTransformStage(),
             new FullscreenBuiltinTransformStage(),

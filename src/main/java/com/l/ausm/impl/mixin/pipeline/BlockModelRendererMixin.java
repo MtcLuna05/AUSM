@@ -29,13 +29,6 @@ public class BlockModelRendererMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/BufferBuilder;putColorMultiplier(FFFI)V")
     )
     private void ausm$separateAoAfterColorMultiplier(BufferBuilder bufferBuilder, float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex) {
-        int emission = BlockRenderContext.blockEmission();
-        if (emission > 0) {
-            float emissiveWeight = Math.min(1.0f, emission / 15.0f);
-            redMultiplier = brightenAoMultiplier(redMultiplier, emissiveWeight);
-            greenMultiplier = brightenAoMultiplier(greenMultiplier, emissiveWeight);
-            blueMultiplier = brightenAoMultiplier(blueMultiplier, emissiveWeight);
-        }
         com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((bufferBuilder), new String[] {"func_178978_a", "putColorMultiplier"},
                 new Class<?>[] {float.class, float.class, float.class, int.class}, (redMultiplier), (greenMultiplier), (blueMultiplier), (vertexIndex));;
         if (vertexIndex == 1) {
@@ -96,16 +89,9 @@ public class BlockModelRendererMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraftforge/client/model/pipeline/LightUtil;diffuseLight(Lnet/minecraft/util/EnumFacing;)F")
     )
     private float ausm$disableDirectionalShading(EnumFacing side) {
-        if (BlockRenderContext.blockEmission() > 0) {
-            return 1.0f;
-        }
         if (PipelineContext.getInstance().shouldDisableDirectionalShading()) {
             return 1.0f;
         }
         return LightUtil.diffuseLight(side);
-    }
-
-    private static float brightenAoMultiplier(float multiplier, float weight) {
-        return multiplier + (1.0f - multiplier) * weight;
     }
 }

@@ -160,13 +160,21 @@ public final class ShaderImageSet {
 
         ShaderImageDirective directive = image.directive();
         int pixelFormat = ShaderTextureLoader.pixelFormat(directive.format());
-        int pixelType = ShaderTextureLoader.pixelType(directive.pixelType());
-        if (pixelFormat != org.lwjgl.opengl.GL30.GL_RED_INTEGER || pixelType != GL11.GL_UNSIGNED_INT) {
+        int pixelType = compatiblePixelType(image.internalFormat(), pixelFormat, ShaderTextureLoader.pixelType(directive.pixelType()));
+        if (pixelFormat != org.lwjgl.opengl.GL30.GL_RED_INTEGER) {
             return false;
         }
 
         singleUintPixel.clear();
-        singleUintPixel.putInt(value).flip();
+        switch (pixelType) {
+            case GL11.GL_UNSIGNED_BYTE, GL11.GL_BYTE -> singleUintPixel.put((byte) value);
+            case GL11.GL_UNSIGNED_SHORT, GL11.GL_SHORT -> singleUintPixel.putShort((short) value);
+            case GL11.GL_UNSIGNED_INT, GL11.GL_INT -> singleUintPixel.putInt(value);
+            default -> {
+                return false;
+            }
+        }
+        singleUintPixel.flip();
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GL11.glBindTexture(image.textureTarget(), image.textureId());
         GL12.glTexSubImage3D(image.textureTarget(), 0, x, y, z, 1, 1, 1, pixelFormat, pixelType, singleUintPixel);
@@ -207,7 +215,7 @@ public final class ShaderImageSet {
         }
 
         int pixelFormat = ShaderTextureLoader.pixelFormat(directive.format());
-        int pixelType = ShaderTextureLoader.pixelType(directive.pixelType());
+        int pixelType = compatiblePixelType(image.internalFormat(), pixelFormat, ShaderTextureLoader.pixelType(directive.pixelType()));
         if (GLContext.getCapabilities().OpenGL44) {
             ZERO_CLEAR_VALUE.clear();
             GL44.glClearTexImage(image.textureId(), 0, pixelFormat, pixelType, ZERO_CLEAR_VALUE);
@@ -267,7 +275,7 @@ public final class ShaderImageSet {
         int target = ShaderTextureLoader.textureTarget(directive.target());
         int internalFormat = ShaderTextureLoader.internalFormat(directive.internalFormat());
         int pixelFormat = ShaderTextureLoader.pixelFormat(directive.format());
-        int pixelType = ShaderTextureLoader.pixelType(directive.pixelType());
+        int pixelType = compatiblePixelType(internalFormat, pixelFormat, ShaderTextureLoader.pixelType(directive.pixelType()));
         if (target == 0 || internalFormat == 0 || pixelFormat == 0 || pixelType == 0) {
             MainMod.LOGGER.warn("[ShaderImages] Ignoring image with unsupported format: {}", directive);
             return null;
@@ -308,6 +316,8 @@ public final class ShaderImageSet {
         int error = GL11.glGetError();
         if (error != GL11.GL_NO_ERROR) {
             MainMod.LOGGER.warn("[ShaderImages] GL error allocating image '{}': 0x{}", directive.name(), Integer.toHexString(error));
+            GL11.glDeleteTextures(textureId);
+            return null;
         }
         LoadedImage image = new LoadedImage(
                 directive,
@@ -325,6 +335,39 @@ public final class ShaderImageSet {
             clearImage(image, true);
         }
         return image;
+    }
+
+    private static int compatiblePixelType(int internalFormat, int pixelFormat, int requestedPixelType) {
+        if (!ShaderTextureLoader.isIntegerPixelFormat(pixelFormat)) {
+            return requestedPixelType;
+        }
+        return switch (internalFormat) {
+            case org.lwjgl.opengl.GL30.GL_R8UI,
+                 org.lwjgl.opengl.GL30.GL_RG8UI,
+                 org.lwjgl.opengl.GL30.GL_RGB8UI,
+                 org.lwjgl.opengl.GL30.GL_RGBA8UI -> GL11.GL_UNSIGNED_BYTE;
+            case org.lwjgl.opengl.GL30.GL_R8I,
+                 org.lwjgl.opengl.GL30.GL_RG8I,
+                 org.lwjgl.opengl.GL30.GL_RGB8I,
+                 org.lwjgl.opengl.GL30.GL_RGBA8I -> GL11.GL_BYTE;
+            case org.lwjgl.opengl.GL30.GL_R16UI,
+                 org.lwjgl.opengl.GL30.GL_RG16UI,
+                 org.lwjgl.opengl.GL30.GL_RGB16UI,
+                 org.lwjgl.opengl.GL30.GL_RGBA16UI -> GL11.GL_UNSIGNED_SHORT;
+            case org.lwjgl.opengl.GL30.GL_R16I,
+                 org.lwjgl.opengl.GL30.GL_RG16I,
+                 org.lwjgl.opengl.GL30.GL_RGB16I,
+                 org.lwjgl.opengl.GL30.GL_RGBA16I -> GL11.GL_SHORT;
+            case org.lwjgl.opengl.GL30.GL_R32UI,
+                 org.lwjgl.opengl.GL30.GL_RG32UI,
+                 org.lwjgl.opengl.GL30.GL_RGB32UI,
+                 org.lwjgl.opengl.GL30.GL_RGBA32UI -> GL11.GL_UNSIGNED_INT;
+            case org.lwjgl.opengl.GL30.GL_R32I,
+                 org.lwjgl.opengl.GL30.GL_RG32I,
+                 org.lwjgl.opengl.GL30.GL_RGB32I,
+                 org.lwjgl.opengl.GL30.GL_RGBA32I -> GL11.GL_INT;
+            default -> requestedPixelType;
+        };
     }
 
     private static ByteBuffer retainedClearBuffer(int pixelFormat, int pixelType, int width, int height, int depth) {

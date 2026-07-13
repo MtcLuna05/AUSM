@@ -200,6 +200,7 @@ public class ShaderCompiler {
                 MainMod.LOGGER.error("[ShaderCompiler] File was empty or null: {}", resourcePath);
                 return -1;
             }
+            source = ShaderTransformPipeline.transform(source, shaderType, pass);
             if (shouldDumpDebugSource(resourcePath)) {
                 ShaderSourceDumper.dumpDebugSource(debugDumpName(resourcePath, shaderType), source);
             }
@@ -231,7 +232,8 @@ public class ShaderCompiler {
                 && (resourcePath.contains("gbuffers_skybasic")
                 || resourcePath.contains("gbuffers_skytextured")
                 || resourcePath.contains("gbuffers_hand")
-                || resourcePath.contains("composite1"));
+                || resourcePath.contains("composite1")
+                || resourcePath.contains("final"));
     }
 
     private static String debugDumpName(String resourcePath, int shaderType) {

@@ -60,6 +60,7 @@ public class ShaderProgram {
         GL20.glBindAttribLocation(programId, ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE, "mc_midTexCoord");
         GL20.glBindAttribLocation(programId, ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE, "at_tangent");
         GL20.glBindAttribLocation(programId, ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE, "at_midBlock");
+        GL20.glBindAttribLocation(programId, 4, "a_Offset");
         GL20.glBindAttribLocation(programId, 0, "Position");
         GL20.glBindAttribLocation(programId, 1, "UV0");
         GL20.glBindAttribLocation(programId, 0, "vPosition");

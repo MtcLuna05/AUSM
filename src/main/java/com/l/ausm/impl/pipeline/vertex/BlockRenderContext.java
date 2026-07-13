@@ -8,6 +8,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
 
 public final class BlockRenderContext {
+    public static final int BLOOM_ONLY_MASK_EMISSION = 16;
 
     private static final ThreadLocal<Integer> CURRENT_BLOCK_ENTITY_ID = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<Short> CURRENT_RENDER_TYPE = ThreadLocal.withInitial(() -> (short) -1);
@@ -34,8 +35,6 @@ public final class BlockRenderContext {
     private static final ThreadLocal<Boolean> SEPARATE_AO_ELIGIBLE = ThreadLocal.withInitial(() -> false);
     private static final ThreadLocal<float[]> CURRENT_QUAD_AO = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> BLOOM_MASK_FALLBACK = ThreadLocal.withInitial(() -> false);
-    private static final ThreadLocal<float[]> BLOOM_MASK_UV = ThreadLocal.withInitial(() -> new float[] {0.5f, 0.5f});
-    private static final ThreadLocal<Integer> BLOOM_MASK_COLOR = ThreadLocal.withInitial(() -> -1);
     private static final ThreadLocal<String> CURRENT_DEBUG_KIND = ThreadLocal.withInitial(() -> "unknown");
     private static final ThreadLocal<String> CURRENT_DEBUG_STATE = ThreadLocal.withInitial(() -> "unknown");
     private static final ThreadLocal<String> CURRENT_DEBUG_EFFECTIVE_STATE = ThreadLocal.withInitial(() -> "unknown");
@@ -169,10 +168,6 @@ public final class BlockRenderContext {
         return CURRENT_CRYSTAL_ONLY_EMISSION.get() || CURRENT_BLOOM_ONLY_EMISSION.get() ? 0 : blockEmission();
     }
 
-    public static int emissiveColorBoostEmission() {
-        return CURRENT_BLOOM_ONLY_EMISSION.get() ? 0 : blockEmission();
-    }
-
     public static void setBloomOnlyEmission(boolean bloomOnlyEmission) {
         CURRENT_BLOOM_ONLY_EMISSION.set(bloomOnlyEmission);
     }
@@ -221,10 +216,11 @@ public final class BlockRenderContext {
     }
 
     private static int packMidBlock(float x, float y, float z) {
+        int emission = bloomMaskFallback() ? BLOOM_ONLY_MASK_EMISSION : blockEmission();
         return ((int) (x * 64.0f) & 0xFF)
                 | (((int) (y * 64.0f) & 0xFF) << 8)
                 | (((int) (z * 64.0f) & 0xFF) << 16)
-                | ((blockEmission() & 0xFF) << 24);
+                | ((emission & 0xFF) << 24);
     }
 
     private static boolean isAstralCrystalSprite(String spriteName) {
@@ -264,32 +260,16 @@ public final class BlockRenderContext {
         CURRENT_QUAD_AO.remove();
     }
 
-    public static void setBloomMaskFallback(boolean enabled, float u, float v, int color) {
+    public static void setBloomMaskFallback(boolean enabled) {
         BLOOM_MASK_FALLBACK.set(enabled);
-        BLOOM_MASK_UV.set(new float[] {u, v});
-        BLOOM_MASK_COLOR.set(color);
     }
 
     public static boolean bloomMaskFallback() {
         return BLOOM_MASK_FALLBACK.get();
     }
 
-    public static float bloomMaskU() {
-        return BLOOM_MASK_UV.get()[0];
-    }
-
-    public static float bloomMaskV() {
-        return BLOOM_MASK_UV.get()[1];
-    }
-
-    public static int bloomMaskColor() {
-        return BLOOM_MASK_COLOR.get();
-    }
-
     public static void clearBloomMaskFallback() {
         BLOOM_MASK_FALLBACK.remove();
-        BLOOM_MASK_UV.remove();
-        BLOOM_MASK_COLOR.remove();
     }
 
     public static void setDebugBlock(String kind, String state, String effectiveState) {
@@ -333,8 +313,6 @@ public final class BlockRenderContext {
         SEPARATE_AO_ELIGIBLE.remove();
         CURRENT_QUAD_AO.remove();
         BLOOM_MASK_FALLBACK.remove();
-        BLOOM_MASK_UV.remove();
-        BLOOM_MASK_COLOR.remove();
         CURRENT_DEBUG_KIND.remove();
         CURRENT_DEBUG_STATE.remove();
         CURRENT_DEBUG_EFFECTIVE_STATE.remove();

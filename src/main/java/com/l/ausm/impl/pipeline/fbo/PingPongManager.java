@@ -65,6 +65,12 @@ public class PingPongManager {
         }
     }
 
+    public void restorePreTranslucentDepthToCurrentDepth() {
+        if (framebuffer != null) {
+            framebuffer.restoreDepthSnapshotToCurrentDepth(DeferredFramebuffer.DEPTHTEX1_SNAPSHOT);
+        }
+    }
+
     public void resize(int width, int height) {
         initialize(width, height, currentSettings);
     }
@@ -137,6 +143,14 @@ public class PingPongManager {
         if (framebuffer != null) {
             framebuffer.copyReadAttachmentToReadAttachment(source, target);
         }
+    }
+
+    public boolean snapshotReadAttachmentToRecoveryColor(Attachment source) {
+        return framebuffer != null && framebuffer.snapshotReadAttachmentToRecoveryColor(source);
+    }
+
+    public boolean restoreRecoveryColorToReadAttachment(Attachment target) {
+        return framebuffer != null && framebuffer.restoreRecoveryColorToReadAttachment(target);
     }
 
     public void bindForGbuffers(Attachment... drawTargets) {

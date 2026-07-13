@@ -11,14 +11,11 @@ import java.util.Properties;
 
 public final class ClientSettingsConfig {
     private static final String PORTAL_SHADERS_KEY = "portalShaders";
-    private static final String SHADERLESS_BLOOM_CHROMA_KEY = "shaderlessBloomChroma";
     private static final String SHADERLESS_BLOOM_INTENSITY_KEY = "shaderlessBloomIntensity";
-    private static final float DEFAULT_SHADERLESS_BLOOM_CHROMA = 1.0F;
     private static final float DEFAULT_SHADERLESS_BLOOM_INTENSITY = 0.85F;
 
     private final Path configFile;
     private volatile boolean portalShaders = true;
-    private volatile float shaderlessBloomChroma = DEFAULT_SHADERLESS_BLOOM_CHROMA;
     private volatile float shaderlessBloomIntensity = DEFAULT_SHADERLESS_BLOOM_INTENSITY;
 
     public ClientSettingsConfig(Path minecraftRunDir) {
@@ -38,17 +35,9 @@ public final class ClientSettingsConfig {
         }
 
         boolean shouldWriteMissingDefaults = !properties.containsKey(PORTAL_SHADERS_KEY)
-                || !properties.containsKey(SHADERLESS_BLOOM_CHROMA_KEY)
                 || !properties.containsKey(SHADERLESS_BLOOM_INTENSITY_KEY);
 
         portalShaders = Boolean.parseBoolean(properties.getProperty(PORTAL_SHADERS_KEY, "true").trim());
-        shaderlessBloomChroma = parseFloat(
-                properties,
-                SHADERLESS_BLOOM_CHROMA_KEY,
-                DEFAULT_SHADERLESS_BLOOM_CHROMA,
-                0.0F,
-                2.0F
-        );
         shaderlessBloomIntensity = parseFloat(
                 properties,
                 SHADERLESS_BLOOM_INTENSITY_KEY,
@@ -57,9 +46,8 @@ public final class ClientSettingsConfig {
                 3.0F
         );
         MainMod.LOGGER.info(
-                "[ClientSettings] Loaded config: portalShaders={} shaderlessBloomChroma={} shaderlessBloomIntensity={}",
+                "[ClientSettings] Loaded config: portalShaders={} shaderlessBloomIntensity={}",
                 portalShaders,
-                shaderlessBloomChroma,
                 shaderlessBloomIntensity
         );
         if (shouldWriteMissingDefaults) {
@@ -76,19 +64,6 @@ public final class ClientSettingsConfig {
             return;
         }
         portalShaders = enabled;
-        save();
-    }
-
-    public float shaderlessBloomChroma() {
-        return shaderlessBloomChroma;
-    }
-
-    public void setShaderlessBloomChroma(float value) {
-        float clamped = clamp(value, 0.0F, 2.0F);
-        if (Float.compare(shaderlessBloomChroma, clamped) == 0) {
-            return;
-        }
-        shaderlessBloomChroma = clamped;
         save();
     }
 
@@ -112,7 +87,6 @@ public final class ClientSettingsConfig {
     private void save() {
         Properties properties = new Properties();
         properties.setProperty(PORTAL_SHADERS_KEY, Boolean.toString(portalShaders));
-        properties.setProperty(SHADERLESS_BLOOM_CHROMA_KEY, Float.toString(shaderlessBloomChroma));
         properties.setProperty(SHADERLESS_BLOOM_INTENSITY_KEY, Float.toString(shaderlessBloomIntensity));
 
         try {
@@ -132,9 +106,7 @@ public final class ClientSettingsConfig {
                     # AUSM client settings.
                     # If false, Better Portals child views render with the vanilla/shaderless renderer.
                     portalShaders=true
-                    # Shaderless emissive bloom color saturation. 1.0 keeps the dye color; 0.0 is grayscale; values above 1.0 oversaturate.
-                    shaderlessBloomChroma=1.0
-                    # Shaderless emissive bloom multiplier. 0.85 keeps pale dyes from clamping to white; increase for brighter bloom.
+                    # Shaderless emissive bloom multiplier.
                     shaderlessBloomIntensity=0.85
                     """;
             Files.writeString(configFile, text);

@@ -8,13 +8,13 @@ import net.minecraft.client.renderer.texture.DynamicTexture;
  * <p>Minecraft 1.12 keeps its fixed-function lightmap on texture unit 1. Iris
  * exposes a shader lightmap on unit 2, backed by modern Minecraft's lightmap
  * contents. The 1.12 lightmap is consistently darker in shaderpacks that sample
- * the sky column directly, so AUSM keeps vanilla's texture untouched and uploads
- * a compatibility copy for shader sampling.</p>
+ * the sky column directly. Keep the copy available for shader sampling, but do
+ * not brighten it here; shaderpacks already apply their own exposure curves.</p>
  */
 public final class IrisLightmapTexture {
     private static final int SIZE = 16;
-    private static final float CURVE_EXPONENT = 0.65F;
-    private static final float CURVE_BLEND = 0.70F;
+    private static final float CURVE_EXPONENT = 1.0F;
+    private static final float CURVE_BLEND = 0.0F;
 
     private final DynamicTexture texture = new DynamicTexture(SIZE, SIZE);
     private final int[] pixels = com.l.ausm.impl.util.MinecraftReflectionCompat.dynamicTextureData(texture);

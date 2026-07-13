@@ -55,7 +55,13 @@ public class MinecraftMixin {
         if (com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
-        PipelineContext.getInstance().prepareFramebufferPresentation();
+        PipelineContext context = PipelineContext.getInstance();
+        Framebuffer framebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        int width = com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc);
+        int height = com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc);
+        context.logFramebufferPresentationBoundary("runGameLoop-before-prepare", framebuffer, width, height, true);
+        context.prepareFramebufferPresentation();
+        context.logFramebufferPresentationBoundary("runGameLoop-after-prepare-before-vanilla", framebuffer, width, height, true);
     }
 
     @Inject(method = "runGameLoop", at = @At("HEAD"))
@@ -87,8 +93,13 @@ public class MinecraftMixin {
         if (com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
+        Framebuffer framebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        int width = com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc);
+        int height = com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc);
+        context.logFramebufferPresentationBoundary("runGameLoop-after-vanilla-before-direct", framebuffer, width, height, true);
         if (context.shouldDirectPresentFramebuffer()) {
-            context.presentFramebufferDirectly(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
+            context.presentFramebufferDirectly(framebuffer, width, height);
+            context.logFramebufferPresentationBoundary("runGameLoop-after-direct", framebuffer, width, height, true);
             if (com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null) {
                 context.beginDeferredIngameHud();
                 com.l.ausm.impl.util.MinecraftReflectionCompat.renderGameOverlay(

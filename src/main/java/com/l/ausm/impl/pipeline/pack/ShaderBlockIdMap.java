@@ -21,6 +21,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Deque;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -534,19 +535,95 @@ public final class ShaderBlockIdMap {
         return value.chars().allMatch(Character::isDigit);
     }
 
-    public record BlockIdRules(Map<Block, Integer> blockIds, List<StateRule> stateRules,
-                               Map<Block, BlockRenderLayer> layerOverrides) {
+    public static final class BlockIdRules {
+        private static final int THREAD_STATE_ID_CACHE_LIMIT = 4096;
+
+        private final Map<Block, Integer> blockIds;
+        private final List<StateRule> stateRules;
+        private final Map<Block, BlockRenderLayer> layerOverrides;
+        private final Map<Block, List<StateRule>> stateRulesByBlock;
+        private final ThreadLocal<IdentityHashMap<IBlockState, Integer>> threadStateIdCache =
+                ThreadLocal.withInitial(IdentityHashMap::new);
+
+        public BlockIdRules(Map<Block, Integer> blockIds, List<StateRule> stateRules,
+                            Map<Block, BlockRenderLayer> layerOverrides) {
+            this.blockIds = blockIds;
+            this.stateRules = stateRules;
+            this.layerOverrides = layerOverrides;
+            this.stateRulesByBlock = indexStateRulesByBlock(stateRules);
+        }
+
+        public Map<Block, Integer> blockIds() {
+            return blockIds;
+        }
+
+        public List<StateRule> stateRules() {
+            return stateRules;
+        }
+
+        public Map<Block, BlockRenderLayer> layerOverrides() {
+            return layerOverrides;
+        }
+
         public boolean isEmpty() {
             return blockIds.isEmpty() && stateRules.isEmpty();
         }
 
         public int idFor(IBlockState state) {
-            for (StateRule rule : stateRules) {
-                if (rule.matches(state)) {
-                    return rule.id();
+            if (state == null) {
+                return 0;
+            }
+
+            IdentityHashMap<IBlockState, Integer> cache = threadStateIdCache.get();
+            Integer cached = cache.get(state);
+            if (cached != null) {
+                return cached;
+            }
+
+            int id = resolveId(state);
+            if (cache.size() > THREAD_STATE_ID_CACHE_LIMIT) {
+                cache.clear();
+            }
+            cache.put(state, id);
+            return id;
+        }
+
+        private int resolveId(IBlockState state) {
+            Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+            if (block == null) {
+                return 0;
+            }
+
+            List<StateRule> rules = stateRulesByBlock.get(block);
+            if (rules != null) {
+                for (StateRule rule : rules) {
+                    if (rule.matchesKnownBlockState(state)) {
+                        return rule.id();
+                    }
                 }
             }
-            return blockIds.getOrDefault(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state), 0);
+            return blockIds.getOrDefault(block, 0);
+        }
+
+        private static Map<Block, List<StateRule>> indexStateRulesByBlock(List<StateRule> rules) {
+            if (rules == null || rules.isEmpty()) {
+                return Map.of();
+            }
+            Map<Block, List<StateRule>> grouped = new LinkedHashMap<>();
+            for (StateRule rule : rules) {
+                if (rule == null || rule.block() == null) {
+                    continue;
+                }
+                grouped.computeIfAbsent(rule.block(), ignored -> new ArrayList<>()).add(rule);
+            }
+            if (grouped.isEmpty()) {
+                return Map.of();
+            }
+            Map<Block, List<StateRule>> immutable = new LinkedHashMap<>();
+            for (Map.Entry<Block, List<StateRule>> entry : grouped.entrySet()) {
+                immutable.put(entry.getKey(), List.copyOf(entry.getValue()));
+            }
+            return Map.copyOf(immutable);
         }
     }
 
@@ -554,6 +631,15 @@ public final class ShaderBlockIdMap {
         @SuppressWarnings({"rawtypes", "unchecked"})
         public boolean matches(IBlockState state) {
             if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != block) {
+                return false;
+            }
+
+            return matchesKnownBlockState(state);
+        }
+
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        private boolean matchesKnownBlockState(IBlockState state) {
+            if (state == null) {
                 return false;
             }
 

@@ -414,19 +414,38 @@ public record ShaderProperties(
     }
 
     private static RenderPass resolveProgramName(String programName) {
-        int slash = programName.lastIndexOf('/');
-        if (slash >= 0 && slash < programName.length() - 1) {
-            programName = programName.substring(slash + 1);
-        }
-        return RenderPass.fromName(programName);
+        ProgramId programId = resolveProgramId(programName);
+        return programId == null ? null : RenderPass.fromProgramId(programId);
     }
 
     private static ProgramId resolveProgramId(String programName) {
+        programName = normalizeProgramName(programName);
+        ProgramId programId = ProgramId.fromSourceName(programName);
+        if (programId != null) {
+            return programId;
+        }
+        String indexedName = normalizeCompactIndexedProgramName(programName);
+        return indexedName.equals(programName) ? null : ProgramId.fromSourceName(indexedName);
+    }
+
+    private static String normalizeProgramName(String programName) {
         int slash = programName.lastIndexOf('/');
         if (slash >= 0 && slash < programName.length() - 1) {
-            programName = programName.substring(slash + 1);
+            return programName.substring(slash + 1);
         }
-        return ProgramId.fromSourceName(programName);
+        return programName;
+    }
+
+    private static String normalizeCompactIndexedProgramName(String programName) {
+        for (String prefix : List.of("deferred", "composite")) {
+            if (programName.startsWith(prefix) && programName.length() > prefix.length()) {
+                String suffix = programName.substring(prefix.length());
+                if (suffix.chars().allMatch(Character::isDigit)) {
+                    return prefix + "_" + suffix;
+                }
+            }
+        }
+        return programName;
     }
 
     private static void adaptProgramDrawBuffers(Map<ProgramId, List<Attachment>> source, Map<RenderPass, List<Attachment>> target) {

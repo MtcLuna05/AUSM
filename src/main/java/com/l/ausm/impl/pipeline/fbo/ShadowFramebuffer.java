@@ -34,6 +34,7 @@ public final class ShadowFramebuffer {
     private int fboId = -1;
     private int depthTextureId = -1;
     private int depthSnapshotTextureId = -1;
+    private int rawDepthTextureId = -1;
     private final int[] colorTextureIds;
     private final int resolution;
     private final ShaderRenderTargetSettings settings;
@@ -70,6 +71,7 @@ public final class ShadowFramebuffer {
 
         depthTextureId = allocateDepthTexture(0);
         depthSnapshotTextureId = allocateDepthTexture(1);
+        rawDepthTextureId = allocateRawDepthTexture();
         for (int i = 0; i < colorTextureIds.length; i++) {
             colorTextureIds[i] = allocateColorTexture(i);
         }
@@ -116,6 +118,29 @@ public final class ShadowFramebuffer {
                 settings.shadowHardwareFiltering() ? GL14.GL_COMPARE_R_TO_TEXTURE : GL11.GL_NONE
         );
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_DEPTH_TEXTURE_MODE, GL11.GL_LUMINANCE);
+        applyDepthTextureSwizzle();
+        GL11.glTexImage2D(
+                GL11.GL_TEXTURE_2D,
+                0,
+                GL14.GL_DEPTH_COMPONENT32,
+                resolution,
+                resolution,
+                0,
+                GL11.GL_DEPTH_COMPONENT,
+                GL11.GL_FLOAT,
+                (FloatBuffer) null
+        );
+        return textureId;
+    }
+
+    private int allocateRawDepthTexture() {
+        int textureId = GL11.glGenTextures();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(textureId);
+        applyDepthTextureFilters(0);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_MODE, GL11.GL_NONE);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_DEPTH_TEXTURE_MODE, GL11.GL_LUMINANCE);
         applyDepthTextureSwizzle();
         GL11.glTexImage2D(
@@ -313,8 +338,11 @@ public final class ShadowFramebuffer {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, depthSnapshotTextureId);
         GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, resolution, resolution);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, rawDepthTextureId);
+        GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, resolution, resolution);
         generateDepthMipmap(0, depthTextureId);
         generateDepthMipmap(1, depthSnapshotTextureId);
+        generateDepthMipmap(0, rawDepthTextureId);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
         previous.restore();
     }
@@ -469,6 +497,10 @@ public final class ShadowFramebuffer {
         return depthSnapshotTextureId;
     }
 
+    public int rawDepthTextureId() {
+        return rawDepthTextureId;
+    }
+
     public int colorTextureId() {
         return colorTextureId(0);
     }
@@ -496,6 +528,10 @@ public final class ShadowFramebuffer {
         if (depthSnapshotTextureId != -1) {
             GL11.glDeleteTextures(depthSnapshotTextureId);
             depthSnapshotTextureId = -1;
+        }
+        if (rawDepthTextureId != -1) {
+            GL11.glDeleteTextures(rawDepthTextureId);
+            rawDepthTextureId = -1;
         }
         for (int i = 0; i < colorTextureIds.length; i++) {
             if (colorTextureIds[i] != -1) {

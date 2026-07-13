@@ -58,6 +58,7 @@ public class GuiScreenMixin {
             return true;
         } else {
             context.freshSkyProbe("gui-bg-active-before-framebuffer", "screen=" + getClass().getName());
+            context.prepareGuiWorldBackgroundFromRecoveredSource();
             context.prepareGuiFramebuffer();
             context.freshSkyProbe("gui-bg-active-after-framebuffer", "screen=" + getClass().getName());
         }

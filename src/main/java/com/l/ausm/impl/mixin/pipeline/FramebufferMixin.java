@@ -30,7 +30,17 @@ public class FramebufferMixin {
             return;
         }
 
+        context.logFramebufferPresentationBoundary("framebufferExt-before-prepare",
+                (Framebuffer) (Object) this,
+                width,
+                height,
+                true);
         context.prepareFramebufferPresentation();
+        context.logFramebufferPresentationBoundary("framebufferExt-after-prepare-before-bind-texture",
+                (Framebuffer) (Object) this,
+                width,
+                height,
+                true);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
     }
 }

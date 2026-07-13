@@ -19,13 +19,6 @@ public final class SeparateAoColorWriter {
     }
 
     public static void rewriteExistingColor(BufferBuilder bufferBuilder, float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex) {
-        if (BlockRenderContext.blockEmission() > 0) {
-            if (vertexIndex == 1) {
-                BlockRenderContext.clearQuadAo();
-            }
-            return;
-        }
-
         VertexFormat vertexFormat = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder);
         if (!ExtendedVertexFormats.isPipelineBlock(vertexFormat)
                 || !PipelineContext.getInstance().shouldSeparateAo()
@@ -65,11 +58,6 @@ public final class SeparateAoColorWriter {
     }
 
     public static void rewriteForgeQuadData(BufferBuilder bufferBuilder, int[] quadData) {
-        if (BlockRenderContext.blockEmission() > 0) {
-            BlockRenderContext.clearQuadAo();
-            return;
-        }
-
         VertexFormat vertexFormat = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder);
         if (!ExtendedVertexFormats.isPipelineBlock(vertexFormat)
                 || !PipelineContext.getInstance().shouldSeparateAo()

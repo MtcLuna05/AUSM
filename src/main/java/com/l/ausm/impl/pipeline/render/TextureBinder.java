@@ -52,7 +52,9 @@ public class TextureBinder {
     private static int fallbackNormalTexture = -1;
     private static int fallbackSpecularTexture = -1;
     private static int neutralShadowDepthTexture = -1;
+    private static int neutralShadowRawDepthTexture = -1;
     private static int neutralShadowColorTexture = -1;
+    private static int rawDepthSampler = -1;
     private static int shadowDepthSampler = -1;
     private static int shadowDepthHardwareSampler = -1;
     private static int maxCombinedTextureUnits = -1;
@@ -113,9 +115,14 @@ public class TextureBinder {
     }
 
     public static void bindShadowTextures() {
+        bindShadowTextures(null);
+    }
+
+    public static void bindShadowTextures(RenderPass pass) {
         PipelineContext context = PipelineContext.getInstance();
+        boolean rawShadowTex0 = pass == RenderPass.COMPOSITE1;
         if (context.shouldUseNeutralShadowTextures()) {
-            bindNeutralShadowTextures(context.shouldUseShadowHardwareFiltering());
+            bindNeutralShadowTextures(context.shouldUseShadowHardwareFiltering(), rawShadowTex0);
             return;
         }
 
@@ -125,7 +132,16 @@ public class TextureBinder {
             return;
         }
 
-        bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture, true);
+        if (rawShadowTex0) {
+            int rawShadowDepthTexture = context.getRawShadowDepthTexture();
+            if (rawShadowDepthTexture != -1) {
+                bindRawDepthTexture(SHADOWTEX0_TEXTURE_UNIT, rawShadowDepthTexture);
+            } else {
+                bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture, true);
+            }
+        } else {
+            bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture, true);
+        }
         bindShadowDepthTexture(SHADOWTEX1_TEXTURE_UNIT, shadowDepthSnapshotTexture, true);
         if (supportsSamplerObjects()) {
             bindShadowDepthTexture(SHADOWTEX0_HW_TEXTURE_UNIT, shadowDepthTexture, true);
@@ -298,6 +314,17 @@ public class TextureBinder {
         }
     }
 
+    private static void bindRawDepthTexture(int textureUnitIndex, int textureId) {
+        if (!isValidTextureUnit(textureUnitIndex)) {
+            return;
+        }
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnitIndex);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
+        if (supportsSamplerObjects()) {
+            GL33.glBindSampler(textureUnitIndex, rawDepthSampler());
+        }
+    }
+
     public static void unbindAllTextureTargets() {
         int maxUnits = maxCombinedTextureUnits();
         for (int unit = 0; unit < maxUnits; unit++) {
@@ -367,10 +394,14 @@ public class TextureBinder {
         return fallbackSpecularTexture;
     }
 
-    private static void bindNeutralShadowTextures(boolean hardwareFiltering) {
+    private static void bindNeutralShadowTextures(boolean hardwareFiltering, boolean rawShadowTex0) {
         int depthTexture = neutralShadowDepthTexture(hardwareFiltering);
         int colorTexture = neutralShadowColorTexture();
-        bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, depthTexture, true);
+        if (rawShadowTex0) {
+            bindRawDepthTexture(SHADOWTEX0_TEXTURE_UNIT, neutralShadowRawDepthTexture());
+        } else {
+            bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, depthTexture, true);
+        }
         bindShadowDepthTexture(SHADOWTEX1_TEXTURE_UNIT, depthTexture, true);
         if (supportsSamplerObjects()) {
             bindShadowDepthTexture(SHADOWTEX0_HW_TEXTURE_UNIT, depthTexture, true);
@@ -417,6 +448,35 @@ public class TextureBinder {
         return neutralShadowDepthTexture;
     }
 
+    private static int neutralShadowRawDepthTexture() {
+        if (neutralShadowRawDepthTexture == -1) {
+            neutralShadowRawDepthTexture = GL11.glGenTextures();
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowRawDepthTexture);
+            FloatBuffer depth = org.lwjgl.BufferUtils.createFloatBuffer(1);
+            depth.put(1.0f).flip();
+            GL11.glTexImage2D(
+                    GL11.GL_TEXTURE_2D,
+                    0,
+                    GL14.GL_DEPTH_COMPONENT32,
+                    1,
+                    1,
+                    0,
+                    GL11.GL_DEPTH_COMPONENT,
+                    GL11.GL_FLOAT,
+                    depth
+            );
+        } else {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowRawDepthTexture);
+        }
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_MODE, GL11.GL_NONE);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_DEPTH_TEXTURE_MODE, GL11.GL_LUMINANCE);
+        return neutralShadowRawDepthTexture;
+    }
+
     public static boolean supportsSamplerObjects() {
         return GLContext.getCapabilities().OpenGL33;
     }
@@ -433,6 +493,18 @@ public class TextureBinder {
             shadowDepthHardwareSampler = createShadowDepthSampler(true);
         }
         return shadowDepthHardwareSampler;
+    }
+
+    private static int rawDepthSampler() {
+        if (rawDepthSampler == -1) {
+            rawDepthSampler = GL33.glGenSamplers();
+            GL33.glSamplerParameteri(rawDepthSampler, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GL33.glSamplerParameteri(rawDepthSampler, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            GL33.glSamplerParameteri(rawDepthSampler, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+            GL33.glSamplerParameteri(rawDepthSampler, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+            GL33.glSamplerParameteri(rawDepthSampler, GL14.GL_TEXTURE_COMPARE_MODE, GL11.GL_NONE);
+        }
+        return rawDepthSampler;
     }
 
     private static int createShadowDepthSampler(boolean hardwareFiltering) {

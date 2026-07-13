@@ -99,43 +99,113 @@ public class ExtendedVertexFormats {
     }
 
     public static int size(VertexFormat format) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177338_f", "getSize"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
+        if (format == null) {
+            return -1;
+        }
+        try {
+            return format.getSize();
+        } catch (Throwable ignored) {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177338_f", "getSize"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
+        }
     }
 
     public static int integerSize(VertexFormat format) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_181719_f", "getIntegerSize"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
+        if (format == null) {
+            return -1;
+        }
+        try {
+            return format.getIntegerSize();
+        } catch (Throwable ignored) {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_181719_f", "getIntegerSize"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
+        }
     }
 
     public static int elementCount(VertexFormat format) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177345_h", "getElementCount"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
+        if (format == null) {
+            return -1;
+        }
+        try {
+            return format.getElementCount();
+        } catch (Throwable ignored) {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177345_h", "getElementCount"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
+        }
     }
 
     public static VertexFormatElement element(VertexFormat format, int index) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.call(format, VertexFormatElement.class, null, new String[] {"func_177348_c", "getElement"}, new Class<?>[] {int.class}, index);
+        if (format == null) {
+            return null;
+        }
+        try {
+            return format.getElement(index);
+        } catch (Throwable ignored) {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.call(format, VertexFormatElement.class, null, new String[] {"func_177348_c", "getElement"}, new Class<?>[] {int.class}, index);
+        }
     }
 
     public static int offset(VertexFormat format, int index) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_181720_d", "getOffset"}, new Class<?>[] {int.class}, -1, (index));
+        if (format == null) {
+            return -1;
+        }
+        try {
+            return format.getOffset(index);
+        } catch (Throwable ignored) {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_181720_d", "getOffset"}, new Class<?>[] {int.class}, -1, (index));
+        }
     }
 
     public static boolean hasColor(VertexFormat format) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((format), new String[] {"func_177346_d", "hasColor"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
+        if (format == null) {
+            return false;
+        }
+        try {
+            return format.hasColor();
+        } catch (Throwable ignored) {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((format), new String[] {"func_177346_d", "hasColor"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
+        }
     }
 
     public static int colorOffset(VertexFormat format) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177340_e", "getColorOffset"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
+        if (format == null) {
+            return -1;
+        }
+        try {
+            return format.getColorOffset();
+        } catch (Throwable ignored) {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177340_e", "getColorOffset"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
+        }
     }
 
     public static boolean hasNormal(VertexFormat format) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((format), new String[] {"func_177350_b", "hasNormal"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
+        if (format == null) {
+            return false;
+        }
+        try {
+            return format.hasNormal();
+        } catch (Throwable ignored) {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((format), new String[] {"func_177350_b", "hasNormal"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
+        }
     }
 
     public static boolean hasUvOffset(VertexFormat format, int id) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((format), new String[] {"func_177347_a", "hasUvOffset"}, new Class<?>[] {int.class}, false, (id));
+        if (format == null) {
+            return false;
+        }
+        try {
+            return format.hasUvOffset(id);
+        } catch (Throwable ignored) {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((format), new String[] {"func_177347_a", "hasUvOffset"}, new Class<?>[] {int.class}, false, (id));
+        }
     }
 
     public static int uvOffsetById(VertexFormat format, int id) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177344_b", "getUvOffsetById"}, new Class<?>[] {int.class}, -1, (id));
+        if (format == null) {
+            return -1;
+        }
+        try {
+            return format.getUvOffsetById(id);
+        } catch (Throwable ignored) {
+            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177344_b", "getUvOffsetById"}, new Class<?>[] {int.class}, -1, (id));
+        }
     }
 
     private static void addElement(VertexFormat format, VertexFormatElement element) {

@@ -44,6 +44,10 @@ public class DeferredFramebuffer {
     private int depthCopyFboId = -1;
     private int depthTextureId = -1;
     private final int[] depthSnapshotTextureIds = {-1, -1};
+    private int recoveryColorTextureId = -1;
+    private int recoveryColorWidth;
+    private int recoveryColorHeight;
+    private boolean recoveryColorValid;
     private int width;
     private int height;
 
@@ -547,6 +551,124 @@ public class DeferredFramebuffer {
         );
     }
 
+    public boolean snapshotReadAttachmentToRecoveryColor(Attachment source) {
+        if (source == null || !hasColorAttachment(source)) {
+            recoveryColorValid = false;
+            return false;
+        }
+
+        int sourceWidth = getAttachmentWidth(source);
+        int sourceHeight = getAttachmentHeight(source);
+        ensureRecoveryColorTexture(sourceWidth, sourceHeight);
+        if (recoveryColorTextureId == -1) {
+            recoveryColorValid = false;
+            return false;
+        }
+
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        try {
+            bindFramebuffer(readFboId);
+            detachDepthTexture();
+            attachReadTextures(source);
+
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
+            GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(recoveryColorTextureId);
+            GL11.glCopyTexSubImage2D(
+                    GL11.GL_TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Math.min(sourceWidth, recoveryColorWidth),
+                    Math.min(sourceHeight, recoveryColorHeight)
+            );
+            recoveryColorValid = true;
+            return true;
+        } finally {
+            restoreFramebufferBindings(previousReadFramebuffer, previousDrawFramebuffer, previousReadBuffer, previousDrawBuffer);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(previousTexture);
+        }
+    }
+
+    public boolean restoreRecoveryColorToReadAttachment(Attachment target) {
+        if (!recoveryColorValid || target == null || !hasColorAttachment(target) || recoveryColorTextureId == -1) {
+            return false;
+        }
+
+        int targetWidth = getAttachmentWidth(target);
+        int targetHeight = getAttachmentHeight(target);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        try {
+            bindFramebuffer(readFboId);
+            detachDepthTexture();
+            attachFramebufferColorTexture(0, recoveryColorTextureId);
+
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
+            GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(getWriteTexture(target));
+            GL11.glCopyTexSubImage2D(
+                    GL11.GL_TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Math.min(recoveryColorWidth, targetWidth),
+                    Math.min(recoveryColorHeight, targetHeight)
+            );
+            flip(target);
+            return true;
+        } finally {
+            restoreFramebufferBindings(previousReadFramebuffer, previousDrawFramebuffer, previousReadBuffer, previousDrawBuffer);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(previousTexture);
+        }
+    }
+
+    public boolean hasRecoveryColorSnapshot() {
+        return recoveryColorValid && recoveryColorTextureId != -1;
+    }
+
+    public void clearRecoveryColorSnapshot() {
+        recoveryColorValid = false;
+    }
+
+    public int getRecoveryColorWidth() {
+        return recoveryColorWidth;
+    }
+
+    public int getRecoveryColorHeight() {
+        return recoveryColorHeight;
+    }
+
+    public float[] readRecoveryColorAt(int x, int y) {
+        return readColorAtTexture(recoveryColorTextureId, Math.max(1, recoveryColorWidth), Math.max(1, recoveryColorHeight), x, y);
+    }
+
+    private void ensureRecoveryColorTexture(int textureWidth, int textureHeight) {
+        int safeWidth = Math.max(1, textureWidth);
+        int safeHeight = Math.max(1, textureHeight);
+        if (recoveryColorTextureId != -1 && recoveryColorWidth == safeWidth && recoveryColorHeight == safeHeight) {
+            return;
+        }
+        if (recoveryColorTextureId != -1) {
+            GL11.glDeleteTextures(recoveryColorTextureId);
+        }
+        recoveryColorTextureId = allocateColorTexture(ColorBufferFormat.RGBA8, safeWidth, safeHeight);
+        recoveryColorWidth = safeWidth;
+        recoveryColorHeight = safeHeight;
+        recoveryColorValid = false;
+    }
+
     public void flip(Attachment... attachments) {
         for (Attachment attachment : attachments) {
             if (hasColorAttachment(attachment)) {
@@ -675,38 +797,41 @@ public class DeferredFramebuffer {
 
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
 
-        bindFramebuffer(readFboId);
-        attachDepthTexture();
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
-        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, depthCopyFboId);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
-                GL30.GL_DRAW_FRAMEBUFFER,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
-                GL11.GL_TEXTURE_2D,
-                depthSnapshotTextureIds[index],
-                0
-        );
-        GL11.glReadBuffer(GL11.GL_NONE);
-        GL11.glDrawBuffer(GL11.GL_NONE);
-        invalidateDrawBufferState(depthCopyFboId);
-        GL30.glBlitFramebuffer(
-                0,
-                0,
-                width,
-                height,
-                0,
-                0,
-                width,
-                height,
-                GL11.GL_DEPTH_BUFFER_BIT,
-                GL11.GL_NEAREST
-        );
-
-        bindFramebuffer(readFboId);
-        attachDepthTexture();
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+        try {
+            bindFramebuffer(readFboId);
+            attachDepthTexture();
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, depthCopyFboId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
+                    GL30.GL_DRAW_FRAMEBUFFER,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
+                    GL11.GL_TEXTURE_2D,
+                    depthSnapshotTextureIds[index],
+                    0
+            );
+            GL11.glReadBuffer(GL11.GL_NONE);
+            GL11.glDrawBuffer(GL11.GL_NONE);
+            invalidateDrawBufferState(depthCopyFboId);
+            GL30.glBlitFramebuffer(
+                    0,
+                    0,
+                    width,
+                    height,
+                    0,
+                    0,
+                    width,
+                    height,
+                    GL11.GL_DEPTH_BUFFER_BIT,
+                    GL11.GL_NEAREST
+            );
+        } finally {
+            bindFramebuffer(readFboId);
+            attachDepthTexture();
+            restoreFramebufferBindings(previousReadFramebuffer, previousDrawFramebuffer, previousReadBuffer, previousDrawBuffer);
+        }
     }
 
     public void copyDepthSnapshot(int sourceIndex, int targetIndex) {
@@ -722,65 +847,139 @@ public class DeferredFramebuffer {
 
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
 
-        bindFramebuffer(readFboId);
-        attachFramebufferDepthTexture(depthSnapshotTextureIds[sourceIndex]);
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
-        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, depthCopyFboId);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
-                GL30.GL_DRAW_FRAMEBUFFER,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
-                GL11.GL_TEXTURE_2D,
-                depthSnapshotTextureIds[targetIndex],
-                0
-        );
-        GL11.glReadBuffer(GL11.GL_NONE);
-        GL11.glDrawBuffer(GL11.GL_NONE);
-        invalidateDrawBufferState(depthCopyFboId);
-        GL30.glBlitFramebuffer(
-                0,
-                0,
-                width,
-                height,
-                0,
-                0,
-                width,
-                height,
-                GL11.GL_DEPTH_BUFFER_BIT,
-                GL11.GL_NEAREST
-        );
+        try {
+            bindFramebuffer(readFboId);
+            attachFramebufferDepthTexture(depthSnapshotTextureIds[sourceIndex]);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, depthCopyFboId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
+                    GL30.GL_DRAW_FRAMEBUFFER,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
+                    GL11.GL_TEXTURE_2D,
+                    depthSnapshotTextureIds[targetIndex],
+                    0
+            );
+            GL11.glReadBuffer(GL11.GL_NONE);
+            GL11.glDrawBuffer(GL11.GL_NONE);
+            invalidateDrawBufferState(depthCopyFboId);
+            GL30.glBlitFramebuffer(
+                    0,
+                    0,
+                    width,
+                    height,
+                    0,
+                    0,
+                    width,
+                    height,
+                    GL11.GL_DEPTH_BUFFER_BIT,
+                    GL11.GL_NEAREST
+            );
+        } finally {
+            bindFramebuffer(readFboId);
+            attachDepthTexture();
+            restoreFramebufferBindings(previousReadFramebuffer, previousDrawFramebuffer, previousReadBuffer, previousDrawBuffer);
+        }
+    }
 
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+    public void restoreDepthSnapshotToCurrentDepth(int sourceIndex) {
+        if (sourceIndex < 0
+                || sourceIndex >= depthSnapshotTextureIds.length
+                || depthSnapshotTextureIds[sourceIndex] == -1
+                || depthTextureId == -1) {
+            return;
+        }
+
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+
+        try {
+            bindFramebuffer(readFboId);
+            attachFramebufferDepthTexture(depthSnapshotTextureIds[sourceIndex]);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, depthCopyFboId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
+                    GL30.GL_DRAW_FRAMEBUFFER,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
+                    GL11.GL_TEXTURE_2D,
+                    depthTextureId,
+                    0
+            );
+            GL11.glReadBuffer(GL11.GL_NONE);
+            GL11.glDrawBuffer(GL11.GL_NONE);
+            invalidateDrawBufferState(depthCopyFboId);
+            GL30.glBlitFramebuffer(
+                    0,
+                    0,
+                    width,
+                    height,
+                    0,
+                    0,
+                    width,
+                    height,
+                    GL11.GL_DEPTH_BUFFER_BIT,
+                    GL11.GL_NEAREST
+            );
+        } finally {
+            bindFramebuffer(readFboId);
+            attachDepthTexture();
+            restoreFramebufferBindings(previousReadFramebuffer, previousDrawFramebuffer, previousReadBuffer, previousDrawBuffer);
+        }
     }
 
     public float readCenterDepth() {
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-
-        bindFramebuffer(readFboId);
-        attachDepthTexture();
-        float depth = readDepthAt(width / 2, height / 2);
-
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-        return depth;
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        try {
+            bindFramebuffer(readFboId);
+            attachDepthTexture();
+            return readDepthAt(width / 2, height / 2);
+        } finally {
+            restoreFramebufferBindings(previousReadFramebuffer, previousDrawFramebuffer, previousReadBuffer, previousDrawBuffer);
+        }
     }
 
     public float readDepthAtPixel(int x, int y) {
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        try {
+            bindFramebuffer(readFboId);
+            attachDepthTexture();
+            return readDepthAt(
+                    Math.max(0, Math.min(width - 1, x)),
+                    Math.max(0, Math.min(height - 1, y))
+            );
+        } finally {
+            restoreFramebufferBindings(previousReadFramebuffer, previousDrawFramebuffer, previousReadBuffer, previousDrawBuffer);
+        }
+    }
 
-        bindFramebuffer(readFboId);
-        attachDepthTexture();
-        float depth = readDepthAt(
-                Math.max(0, Math.min(width - 1, x)),
-                Math.max(0, Math.min(height - 1, y))
-        );
-
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-        return depth;
+    public float readDepthSamplerAtPixel(int index, int x, int y) {
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        try {
+            bindFramebuffer(readFboId);
+            attachFramebufferDepthTexture(getDepthSamplerTexture(index));
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
+            return readDepthAt(
+                    Math.max(0, Math.min(width - 1, x)),
+                    Math.max(0, Math.min(height - 1, y))
+            );
+        } finally {
+            bindFramebuffer(readFboId);
+            attachDepthTexture();
+            restoreFramebufferBindings(previousReadFramebuffer, previousDrawFramebuffer, previousReadBuffer, previousDrawBuffer);
+        }
     }
 
     public float[] readCenterColor(Attachment attachment) {
@@ -802,39 +1001,71 @@ public class DeferredFramebuffer {
 
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        try {
+            bindFramebuffer(readFboId);
+            detachDepthTexture();
+            attachFramebufferColorTexture(0, textureId);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
+            GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
 
-        bindFramebuffer(readFboId);
-        detachDepthTexture();
-        attachFramebufferColorTexture(0, textureId);
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
-        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
-
-        colorReadBuffer.clear();
-        GL11.glReadPixels(
-                Math.max(0, Math.min(attachmentWidth - 1, x)),
-                Math.max(0, Math.min(attachmentHeight - 1, y)),
-                1,
-                1,
-                GL11.GL_RGBA,
-                GL11.GL_FLOAT,
-                colorReadBuffer
-        );
-        float[] color = {
-                colorReadBuffer.get(0),
-                colorReadBuffer.get(1),
-                colorReadBuffer.get(2),
-                colorReadBuffer.get(3)
-        };
-
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-        return color;
+            colorReadBuffer.clear();
+            GL11.glReadPixels(
+                    Math.max(0, Math.min(attachmentWidth - 1, x)),
+                    Math.max(0, Math.min(attachmentHeight - 1, y)),
+                    1,
+                    1,
+                    GL11.GL_RGBA,
+                    GL11.GL_FLOAT,
+                    colorReadBuffer
+            );
+            return new float[] {
+                    colorReadBuffer.get(0),
+                    colorReadBuffer.get(1),
+                    colorReadBuffer.get(2),
+                    colorReadBuffer.get(3)
+            };
+        } finally {
+            restoreFramebufferBindings(previousReadFramebuffer, previousDrawFramebuffer, previousReadBuffer, previousDrawBuffer);
+        }
     }
 
     private float readDepthAt(int x, int y) {
         depthReadBuffer.clear();
         GL11.glReadPixels(x, y, 1, 1, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, depthReadBuffer);
         return depthReadBuffer.get(0);
+    }
+
+    private void restoreFramebufferBindings(int readFramebuffer, int drawFramebuffer, int readBuffer, int drawBuffer) {
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFramebuffer);
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, drawFramebuffer);
+        GL11.glReadBuffer(safeReadBuffer(readFramebuffer, readBuffer));
+        GL11.glDrawBuffer(safeDrawBuffer(drawFramebuffer, drawBuffer));
+    }
+
+    private int safeReadBuffer(int framebuffer, int buffer) {
+        if (buffer == GL11.GL_NONE) {
+            return GL11.GL_NONE;
+        }
+        if (framebuffer == 0) {
+            return buffer == GL11.GL_FRONT || buffer == GL11.GL_BACK ? buffer : GL11.GL_BACK;
+        }
+        return isColorAttachmentBuffer(buffer) ? buffer : GL30.GL_COLOR_ATTACHMENT0;
+    }
+
+    private int safeDrawBuffer(int framebuffer, int buffer) {
+        if (buffer == GL11.GL_NONE) {
+            return GL11.GL_NONE;
+        }
+        if (framebuffer == 0) {
+            return buffer == GL11.GL_FRONT || buffer == GL11.GL_BACK ? buffer : GL11.GL_BACK;
+        }
+        return isColorAttachmentBuffer(buffer) ? buffer : GL30.GL_COLOR_ATTACHMENT0;
+    }
+
+    private boolean isColorAttachmentBuffer(int buffer) {
+        return buffer >= GL30.GL_COLOR_ATTACHMENT0 && buffer < GL30.GL_COLOR_ATTACHMENT0 + maxDrawBufferSlots();
     }
 
     public void generateMipmaps(Set<Attachment> attachments) {
@@ -907,6 +1138,11 @@ public class DeferredFramebuffer {
         if (depthTextureId > -1) {
             GL11.glDeleteTextures(depthTextureId);
             depthTextureId = -1;
+        }
+        if (recoveryColorTextureId > -1) {
+            GL11.glDeleteTextures(recoveryColorTextureId);
+            recoveryColorTextureId = -1;
+            recoveryColorValid = false;
         }
         for (int i = 0; i < depthSnapshotTextureIds.length; i++) {
             if (depthSnapshotTextureIds[i] > -1) {

@@ -27,6 +27,7 @@ public final class AusmBloomLayer {
     private static boolean loggedLumenizedInitFailure;
     private static boolean loggedNothiriumPatchFailure;
     private static boolean loggedNativeLayerDisabledForNothirium;
+    private static volatile Boolean nothiriumLoaded;
 
     private AusmBloomLayer() {
     }
@@ -70,7 +71,7 @@ public final class AusmBloomLayer {
     }
 
     public static boolean shouldUseNativeHook() {
-        if (Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
+        if (isNothiriumLoaded()) {
             sanitizeNothiriumLayerArrays();
             if (!loggedNativeLayerDisabledForNothirium) {
                 loggedNativeLayerDisabledForNothirium = true;
@@ -82,11 +83,21 @@ public final class AusmBloomLayer {
     }
 
     public static boolean shouldUseShaderlessNativeHook() {
-        if (Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
+        if (isNothiriumLoaded()) {
             sanitizeNothiriumLayerArrays();
             return false;
         }
         return shouldUseNativeHook();
+    }
+
+    private static boolean isNothiriumLoaded() {
+        Boolean cached = nothiriumLoaded;
+        if (cached != null) {
+            return cached;
+        }
+        boolean loaded = Loader.isModLoaded(NOTHIRIUM_MOD_ID);
+        nothiriumLoaded = loaded;
+        return loaded;
     }
 
     private static BlockRenderLayer existingLayer() {
@@ -111,7 +122,7 @@ public final class AusmBloomLayer {
     }
 
     private static void sanitizeNothiriumLayerArrays() {
-        if (nothiriumLayerPatched || !Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
+        if (nothiriumLayerPatched || !isNothiriumLoaded()) {
             return;
         }
 

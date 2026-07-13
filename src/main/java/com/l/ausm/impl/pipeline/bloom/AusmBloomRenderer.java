@@ -5,6 +5,7 @@ import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.NothiriumBypass;
 import com.l.ausm.impl.pipeline.fbo.DeferredFramebuffer;
+import com.l.ausm.impl.pipeline.pack.ShaderPack;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -23,8 +24,11 @@ import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.nio.IntBuffer;
 import java.util.Collection;
 import java.util.List;
@@ -399,7 +403,6 @@ public final class AusmBloomRenderer {
             bindTextureUniform(compositeProgram, "postHandDepth", postHandDepthTexture, 2);
         }
         setUniform1f(compositeProgram, "strength", strength * configuredBloomIntensity());
-        setUniform1f(compositeProgram, "bloomChroma", configuredBloomChroma());
         setUniform1i(compositeProgram, "useHandMask", useHandMask ? 1 : 0);
         drawFullscreenQuad();
     }
@@ -558,28 +561,28 @@ public final class AusmBloomRenderer {
 
     private int copyProgram() {
         if (copyProgram == -1) {
-            copyProgram = createProgram("copy", COPY_FRAGMENT_SHADER);
+            copyProgram = createProgram("copy", bloomFragmentSource("copy", COPY_FRAGMENT_SHADER));
         }
         return copyProgram;
     }
 
     private int thresholdProgram() {
         if (thresholdProgram == -1) {
-            thresholdProgram = createProgram("threshold", THRESHOLD_FRAGMENT_SHADER);
+            thresholdProgram = createProgram("threshold", bloomFragmentSource("threshold", THRESHOLD_FRAGMENT_SHADER));
         }
         return thresholdProgram;
     }
 
     private int blurProgram() {
         if (blurProgram == -1) {
-            blurProgram = createProgram("blur", BLUR_FRAGMENT_SHADER);
+            blurProgram = createProgram("blur", bloomFragmentSource("blur", BLUR_FRAGMENT_SHADER));
         }
         return blurProgram;
     }
 
     private int compositeProgram() {
         if (compositeProgram == -1) {
-            compositeProgram = createProgram("composite", COMPOSITE_FRAGMENT_SHADER);
+            compositeProgram = createProgram("composite", bloomFragmentSource("composite", COMPOSITE_FRAGMENT_SHADER));
         }
         return compositeProgram;
     }
@@ -588,8 +591,8 @@ public final class AusmBloomRenderer {
         if (emissiveExtractProgram == -1) {
             emissiveExtractProgram = createProgram(
                     "shaderless-emissive-extract",
-                    EMISSIVE_EXTRACT_VERTEX_SHADER,
-                    EMISSIVE_EXTRACT_FRAGMENT_SHADER,
+                    bloomVertexSource("emissive_extract", EMISSIVE_EXTRACT_VERTEX_SHADER),
+                    bloomFragmentSource("emissive_extract", EMISSIVE_EXTRACT_FRAGMENT_SHADER),
                     true
             );
         }
@@ -597,7 +600,32 @@ public final class AusmBloomRenderer {
     }
 
     private int createProgram(String name, String fragmentSource) {
-        return createProgram(name, VERTEX_SHADER, fragmentSource, false);
+        return createProgram(name, bloomVertexSource("fullscreen", VERTEX_SHADER), fragmentSource, false);
+    }
+
+    private String bloomVertexSource(String name, String fallback) {
+        return bloomShaderSource("shaders/ausm/bloom/" + name + ".vsh", fallback);
+    }
+
+    private String bloomFragmentSource(String name, String fallback) {
+        return bloomShaderSource("shaders/ausm/bloom/" + name + ".fsh", fallback);
+    }
+
+    private String bloomShaderSource(String path, String fallback) {
+        ShaderPack pack = MainMod.getShaderPackManager().getCurrentPack();
+        if (pack == null || !pack.hasResource(path)) {
+            return fallback;
+        }
+        try (InputStream stream = pack.getResourceAsStream(path)) {
+            if (stream == null) {
+                return fallback;
+            }
+            MainMod.LOGGER.info("[AUSMBloom] Using shaderpack override for internal bloom shader {}", path);
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            MainMod.LOGGER.warn("[AUSMBloom] Failed to load shaderpack override for {}; using built-in source", path, e);
+            return fallback;
+        }
     }
 
     private int createProgram(String name, String vertexSource, String fragmentSource, boolean bindPipelineAttributes) {
@@ -683,11 +711,6 @@ public final class AusmBloomRenderer {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-    }
-
-    private static float configuredBloomChroma() {
-        com.l.ausm.impl.client.ClientSettingsConfig config = MainMod.getClientSettingsConfig();
-        return config != null ? config.shaderlessBloomChroma() : 1.0F;
     }
 
     private static float configuredBloomIntensity() {
@@ -1009,13 +1032,15 @@ public final class AusmBloomRenderer {
             varying vec2 textureCoords;
             varying vec4 vertexColor;
             varying float vertexEmission;
+            varying float specialBloomBoost;
             void main() {
                 gl_Position = ftransform();
                 textureCoords = gl_MultiTexCoord0.st;
                 vertexColor = gl_Color;
                 float rawEmission = at_midBlock.w;
-                float metadataEmission = rawEmission >= 0.5 && rawEmission <= 15.5 ? rawEmission / 15.0 : 0.0;
+                float metadataEmission = rawEmission > 15.5 ? 0.16 : rawEmission >= 0.5 ? rawEmission / 15.0 : 0.0;
                 vertexEmission = max(metadataEmission, forceEmission);
+                specialBloomBoost = rawEmission > 15.5 ? 4.70 : 1.0;
             }
             """;
 
@@ -1025,6 +1050,7 @@ public final class AusmBloomRenderer {
             varying vec2 textureCoords;
             varying vec4 vertexColor;
             varying float vertexEmission;
+            varying float specialBloomBoost;
             void main() {
                 if (vertexEmission <= 0.0) {
                     discard;
@@ -1035,7 +1061,7 @@ public final class AusmBloomRenderer {
                 }
                 float emissionMask = smoothstep(0.04, 0.45, vertexEmission);
                 vec3 dyeColor = clamp(albedo.rgb, 0.0, 1.0);
-                float emissionScale = (0.45 + vertexEmission * 0.55) * emissionMask;
+                float emissionScale = (0.45 + vertexEmission * 0.55) * emissionMask * specialBloomBoost;
                 vec3 bloom = dyeColor * emissionScale;
                 gl_FragColor = vec4(bloom, albedo.a * emissionMask);
             }
@@ -1084,7 +1110,6 @@ public final class AusmBloomRenderer {
             uniform sampler2D preHandDepth;
             uniform sampler2D postHandDepth;
             uniform float strength;
-            uniform float bloomChroma;
             uniform int useHandMask;
             varying vec2 textureCoords;
             void main() {
@@ -1096,9 +1121,7 @@ public final class AusmBloomRenderer {
                     }
                 }
                 vec3 source = texture2D(bloom, textureCoords).rgb;
-                float luminance = dot(source, vec3(0.2126, 0.7152, 0.0722));
-                source = max(mix(vec3(luminance), source, clamp(bloomChroma, 0.0, 2.0)), vec3(0.0));
-                gl_FragColor = vec4(source * strength, 1.0);
+                gl_FragColor = vec4(source * strength, 0.0);
             }
             """;
 }

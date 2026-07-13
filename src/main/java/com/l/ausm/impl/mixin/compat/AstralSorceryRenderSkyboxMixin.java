@@ -23,7 +23,7 @@ public class AstralSorceryRenderSkyboxMixin {
             remap = false
     )
     private boolean ausm$scopeFullAstralSky(List<Integer> whitelist, Object dimension) {
-        if (dimension instanceof Number && ((Number) dimension).intValue() == SIMPLE_VOID_WORLD_DIMENSION_ID) {
+        if (dimension instanceof Number && ausm$usesSimpleVoidOwnedSky(((Number) dimension).intValue())) {
             return false;
         }
         return whitelist != null && whitelist.contains(dimension);
@@ -40,17 +40,22 @@ public class AstralSorceryRenderSkyboxMixin {
     )
     private void ausm$replaceWeakSimpleVoidSkyRenderer(IRenderHandler renderer, float partialTicks,
                                                        WorldClient world, Minecraft minecraft) {
-        if (ausm$isSimpleVoidWorld(world)) {
+        if (ausm$usesSimpleVoidOwnedSky(world)) {
             PipelineContext.getInstance().renderOwnedSkyBackingBeforeSky(partialTicks);
             return;
         }
         renderer.render(partialTicks, world, minecraft);
     }
 
-    private static boolean ausm$isSimpleVoidWorld(WorldClient world) {
-        return world != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) == SIMPLE_VOID_WORLD_DIMENSION_ID;
+    private static boolean ausm$usesSimpleVoidOwnedSky(WorldClient world) {
+        if (world == null || com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) == null) {
+            return false;
+        }
+        return ausm$usesSimpleVoidOwnedSky(com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)));
+    }
+
+    private static boolean ausm$usesSimpleVoidOwnedSky(int dimensionId) {
+        return dimensionId == SIMPLE_VOID_WORLD_DIMENSION_ID;
     }
 }

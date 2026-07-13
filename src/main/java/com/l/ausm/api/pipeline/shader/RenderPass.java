@@ -70,6 +70,14 @@ public enum RenderPass {
 
     FINAL(ProgramId.FINAL, ProgramStage.FINAL, null);
 
+    private static final RenderPass[] BY_PROGRAM_ID = new RenderPass[ProgramId.values().length];
+
+    static {
+        for (RenderPass pass : values()) {
+            BY_PROGRAM_ID[pass.programId.ordinal()] = pass;
+        }
+    }
+
     private final ProgramId programId;
     private final ProgramStage stage;
     private final RenderPass fallback;
@@ -108,16 +116,17 @@ public enum RenderPass {
     }
 
     public static RenderPass fromProgramId(ProgramId programId) {
+        if (programId == null) {
+            return null;
+        }
         if (programId == ProgramId.TERRAIN_CUTOUT) {
             return GBUFFERS_TERRAIN_CUTOUT;
         }
         if (programId == ProgramId.TERRAIN_CUTOUT_MIPPED) {
             return GBUFFERS_TERRAIN_CUTOUT_MIP;
         }
-        return Arrays.stream(values())
-                .filter(pass -> pass.programId == programId)
-                .findFirst()
-                .orElse(null);
+        int ordinal = programId.ordinal();
+        return ordinal >= 0 && ordinal < BY_PROGRAM_ID.length ? BY_PROGRAM_ID[ordinal] : null;
     }
 
     public static final RenderPass[] DEFERRED_PASSES = Arrays.stream(values())

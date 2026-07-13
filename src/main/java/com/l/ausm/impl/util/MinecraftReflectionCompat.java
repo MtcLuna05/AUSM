@@ -98,7 +98,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -114,10 +116,21 @@ public final class MinecraftReflectionCompat {
     private static final ConcurrentMap<IdentityKey<IBlockState>, Block> STATE_BLOCK_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<IdentityKey<IBlockState>, Map<IProperty<?>, Comparable<?>>> STATE_PROPERTIES_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<IProperty<?>, String> PROPERTY_NAME_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<PropertyValueNameKey, String> PROPERTY_VALUE_NAME_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<Block, ResourceLocation> BLOCK_REGISTRY_NAME_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<ResourceLocation, String> RESOURCE_NAMESPACE_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<ResourceLocation, String> RESOURCE_PATH_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<ResourceLocation, String> RESOURCE_STRING_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<ResourceLocation, String> RESOURCE_PATH_LOWER_CACHE = new ConcurrentHashMap<>();
+    private static final int HOT_IDENTITY_CACHE_LIMIT = 4096;
+    private static final ThreadLocal<IdentityHashMap<IBlockState, Block>> THREAD_STATE_BLOCK_CACHE =
+            ThreadLocal.withInitial(IdentityHashMap::new);
+    private static final ThreadLocal<IdentityHashMap<IBlockState, String>> THREAD_STATE_STRING_CACHE =
+            ThreadLocal.withInitial(IdentityHashMap::new);
     public static final Class<?>[] NO_PARAMETERS = new Class<?>[0];
+    private static final Field VEC_X_FIELD = firstField(Vec3d.class, "field_72450_a", "x");
+    private static final Field VEC_Y_FIELD = firstField(Vec3d.class, "field_72448_b", "y");
+    private static final Field VEC_Z_FIELD = firstField(Vec3d.class, "field_72449_c", "z");
     private static final MethodHandle CURRENT_RENDER_LAYER_HANDLE = staticMethodHandle(
             net.minecraftforge.client.MinecraftForgeClient.class,
             new String[] {"getRenderLayer"},
@@ -138,6 +151,10 @@ public final class MinecraftReflectionCompat {
     }
 
     public static Minecraft minecraft() {
+        try {
+            return Minecraft.getMinecraft();
+        } catch (Throwable ignored) {
+        }
         return callStatic(Minecraft.class, Minecraft.class, null, new String[] {"func_71410_x", "getMinecraft"}, NO_PARAMETERS);
     }
 
@@ -192,13 +209,35 @@ public final class MinecraftReflectionCompat {
     }
 
     public static boolean worldIsBlockLoaded(World world, BlockPos pos) {
-        return callBoolean(world, new String[] {"func_175667_e", "isBlockLoaded"},
-                new Class<?>[] {BlockPos.class}, false, pos);
+        if (world == null || pos == null) {
+            return false;
+        }
+        try {
+            return world.isBlockLoaded(pos);
+        } catch (Throwable ignored) {
+            return callBoolean(world, new String[] {"func_175667_e", "isBlockLoaded"},
+                    new Class<?>[] {BlockPos.class}, false, pos);
+        }
     }
 
     public static boolean worldIsBlockLoaded(World world, BlockPos pos, boolean allowEmpty) {
-        return callBoolean(world, new String[] {"func_175668_a", "isBlockLoaded"},
-                new Class<?>[] {BlockPos.class, boolean.class}, false, pos, allowEmpty);
+        if (world == null || pos == null) {
+            return false;
+        }
+        try {
+            return world.isBlockLoaded(pos, allowEmpty);
+        } catch (Throwable ignored) {
+            return callBoolean(world, new String[] {"func_175668_a", "isBlockLoaded"},
+                    new Class<?>[] {BlockPos.class, boolean.class}, false, pos, allowEmpty);
+        }
+    }
+
+    public static boolean worldCanSeeSky(World world, BlockPos pos) {
+        if (world == null || pos == null) {
+            return false;
+        }
+        return callBoolean(world, new String[] {"func_175678_i", "canSeeSky"},
+                new Class<?>[] {BlockPos.class}, false, pos);
     }
 
     public static long worldTime(World world) {
@@ -225,6 +264,35 @@ public final class MinecraftReflectionCompat {
                 new Class<?>[] {BlockPos.class, int.class}, 0, pos, lightValue);
     }
 
+    public static IBlockState blockAccessBlockState(IBlockAccess access, BlockPos pos) {
+        return call(access, IBlockState.class, airDefaultState(), new String[] {"func_180495_p", "getBlockState"},
+                new Class<?>[] {BlockPos.class}, pos);
+    }
+
+    public static boolean blockAccessIsAirBlock(IBlockAccess access, BlockPos pos) {
+        return callBoolean(access, new String[] {"func_175623_d", "isAirBlock"},
+                new Class<?>[] {BlockPos.class}, false, pos);
+    }
+
+    public static Biome blockAccessBiome(IBlockAccess access, BlockPos pos) {
+        return call(access, Biome.class, null, new String[] {"func_180494_b", "getBiome"},
+                new Class<?>[] {BlockPos.class}, pos);
+    }
+
+    public static int blockAccessStrongPower(IBlockAccess access, BlockPos pos, EnumFacing direction) {
+        return callInt(access, new String[] {"func_175627_a", "getStrongPower"},
+                new Class<?>[] {BlockPos.class, EnumFacing.class}, 0, pos, direction);
+    }
+
+    public static boolean blockAccessIsSideSolid(IBlockAccess access, BlockPos pos, EnumFacing side, boolean fallback) {
+        return callBoolean(access, new String[] {"isSideSolid"},
+                new Class<?>[] {BlockPos.class, EnumFacing.class, boolean.class}, fallback, pos, side, fallback);
+    }
+
+    public static WorldType blockAccessWorldType(IBlockAccess access) {
+        return call(access, WorldType.class, WorldType.DEFAULT, new String[] {"func_175624_G", "getWorldType"}, NO_PARAMETERS);
+    }
+
     public static int worldLightFor(World world, EnumSkyBlock skyBlock, BlockPos pos) {
         return callInt(world, new String[] {"func_175642_b", "getLightFor"},
                 new Class<?>[] {EnumSkyBlock.class, BlockPos.class}, 0, skyBlock, pos);
@@ -245,29 +313,28 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int blockPosX(BlockPos pos) {
-        return intValue(invoke(pos, new String[] {"func_177958_n", "getX"}, NO_PARAMETERS),
-                intValue(getField(pos, "field_177997_b", "field_177962_a", "x"), 0));
+        return pos != null ? pos.getX() : 0;
     }
 
     public static int blockPosY(BlockPos pos) {
-        return intValue(invoke(pos, new String[] {"func_177956_o", "getY"}, NO_PARAMETERS),
-                intValue(getField(pos, "field_177998_c", "field_177960_b", "y"), 0));
+        return pos != null ? pos.getY() : 0;
     }
 
     public static int blockPosZ(BlockPos pos) {
-        return intValue(invoke(pos, new String[] {"func_177952_p", "getZ"}, NO_PARAMETERS),
-                intValue(getField(pos, "field_177996_d", "field_177961_c", "z"), 0));
+        return pos != null ? pos.getZ() : 0;
     }
 
     public static BlockPos blockPosToImmutable(BlockPos pos) {
-        Object value = invoke(pos, new String[] {"func_185334_h", "toImmutable"}, NO_PARAMETERS);
-        return value instanceof BlockPos ? (BlockPos) value : new BlockPos(blockPosX(pos), blockPosY(pos), blockPosZ(pos));
+        return pos != null ? pos.toImmutable() : BlockPos.ORIGIN;
     }
 
     public static long blockPosToLong(BlockPos pos) {
-        Object value = invoke(pos, new String[] {"func_177986_g", "toLong"}, NO_PARAMETERS);
-        if (value instanceof Number) {
-            return ((Number) value).longValue();
+        if (pos == null) {
+            return 0L;
+        }
+        try {
+            return pos.toLong();
+        } catch (Throwable ignored) {
         }
         return ((long) blockPosX(pos) & 0x3FFFFFFL) << 38
                 | ((long) blockPosZ(pos) & 0x3FFFFFFL) << 12
@@ -275,6 +342,13 @@ public final class MinecraftReflectionCompat {
     }
 
     public static BlockPos blockPosUp(BlockPos pos) {
+        if (pos == null) {
+            return BlockPos.ORIGIN.up();
+        }
+        try {
+            return pos.up();
+        } catch (Throwable ignored) {
+        }
         Object value = invoke(pos, new String[] {"func_177984_a", "up"}, NO_PARAMETERS);
         return value instanceof BlockPos ? (BlockPos) value : new BlockPos(blockPosX(pos), blockPosY(pos) + 1, blockPosZ(pos));
     }
@@ -431,15 +505,28 @@ public final class MinecraftReflectionCompat {
     }
 
     public static double vecX(Vec3d vec) {
-        return fieldDouble(vec, 0.0D, "field_72450_a", "x");
+        return vecField(vec, VEC_X_FIELD, 0.0D, "field_72450_a", "x");
     }
 
     public static double vecY(Vec3d vec) {
-        return fieldDouble(vec, 0.0D, "field_72448_b", "y");
+        return vecField(vec, VEC_Y_FIELD, 0.0D, "field_72448_b", "y");
     }
 
     public static double vecZ(Vec3d vec) {
-        return fieldDouble(vec, 0.0D, "field_72449_c", "z");
+        return vecField(vec, VEC_Z_FIELD, 0.0D, "field_72449_c", "z");
+    }
+
+    private static double vecField(Vec3d vec, Field field, double fallback, String srgName, String mcpName) {
+        if (vec == null) {
+            return fallback;
+        }
+        if (field != null) {
+            try {
+                return field.getDouble(vec);
+            } catch (IllegalAccessException ignored) {
+            }
+        }
+        return fieldDouble(vec, fallback, srgName, mcpName);
     }
 
     public static Vec3d vecAdd(Vec3d vec, Vec3d other) {
@@ -560,20 +647,37 @@ public final class MinecraftReflectionCompat {
         return call(block, IBlockState.class, null, new String[] {"func_176223_P", "getDefaultState"}, NO_PARAMETERS);
     }
 
+    public static IBlockState airDefaultState() {
+        Block air = field(Blocks.class, Block.class, null, "field_150350_a", "AIR");
+        return air != null ? blockDefaultState(air) : null;
+    }
+
+    public static int blockMetaFromState(Block block, IBlockState state) {
+        if (block == null || state == null) {
+            return 0;
+        }
+        try {
+            return block.getMetaFromState(state);
+        } catch (Throwable ignored) {
+        }
+        return callInt(block, new String[] {"func_176201_c", "getMetaFromState"},
+                new Class<?>[] {IBlockState.class}, 0, state);
+    }
+
     public static Material stateMaterial(IBlockState state) {
-        return call(state, Material.class, null, new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS);
+        return state != null ? state.getMaterial() : null;
     }
 
     public static boolean stateMaterialIsFire(IBlockState state) {
-        return stateMaterial(state) == field(Material.class, Material.class, null, "field_151581_o", "FIRE");
+        return stateMaterial(state) == Material.FIRE;
     }
 
     public static boolean stateMaterialIsWater(IBlockState state) {
-        return stateMaterial(state) == field(Material.class, Material.class, null, "field_151586_h", "WATER");
+        return stateMaterial(state) == Material.WATER;
     }
 
     public static EnumBlockRenderType stateRenderType(IBlockState state) {
-        return call(state, EnumBlockRenderType.class, null, new String[] {"func_185901_i", "getRenderType"}, NO_PARAMETERS);
+        return state != null ? state.getRenderType() : null;
     }
 
     public static int stateRenderTypeOrdinal(IBlockState state) {
@@ -582,10 +686,26 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int stateLightValue(IBlockState state) {
+        if (state == null) {
+            return 0;
+        }
+        try {
+            return state.getLightValue();
+        } catch (Throwable ignored) {
+        }
         return callInt(state, new String[] {"func_185906_d", "getLightValue"}, NO_PARAMETERS, 0);
     }
 
     public static int stateLightValue(IBlockState state, IBlockAccess access, BlockPos pos) {
+        if (state == null) {
+            return 0;
+        }
+        if (access != null && pos != null) {
+            try {
+                return state.getLightValue(access, pos);
+            } catch (Throwable ignored) {
+            }
+        }
         Object value = access != null && pos != null
                 ? invoke(state, new String[] {"func_185906_d", "getLightValue"},
                 new Class<?>[] {IBlockAccess.class, BlockPos.class}, access, pos)
@@ -594,11 +714,18 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int statePackedLightmapCoords(IBlockState state, IBlockAccess access, BlockPos pos) {
-        Object value = access != null && pos != null
-                ? invoke(state, new String[] {"func_185889_a", "getPackedLightmapCoords"},
-                new Class<?>[] {IBlockAccess.class, BlockPos.class}, access, pos)
-                : null;
-        return value instanceof Number ? ((Number) value).intValue() : blockAccessCombinedLight(access, pos, 0);
+        if (state != null && access != null && pos != null) {
+            try {
+                return state.getPackedLightmapCoords(access, pos);
+            } catch (Throwable ignored) {
+                Object value = invoke(state, new String[] {"func_185889_a", "getPackedLightmapCoords"},
+                        new Class<?>[] {IBlockAccess.class, BlockPos.class}, access, pos);
+                if (value instanceof Number) {
+                    return ((Number) value).intValue();
+                }
+            }
+        }
+        return blockAccessCombinedLight(access, pos, 0);
     }
 
     public static BlockRenderLayer currentRenderLayer() {
@@ -610,6 +737,11 @@ public final class MinecraftReflectionCompat {
         }
         return callStatic(net.minecraftforge.client.MinecraftForgeClient.class, BlockRenderLayer.class, null,
                 new String[] {"getRenderLayer"}, NO_PARAMETERS);
+    }
+
+    public static int forgeRenderPass() {
+        return intValue(invokeStatic(net.minecraftforge.client.MinecraftForgeClient.class,
+                new String[] {"getRenderPass"}, NO_PARAMETERS), 0);
     }
 
     public static void setCurrentRenderLayer(BlockRenderLayer layer) {
@@ -700,23 +832,36 @@ public final class MinecraftReflectionCompat {
         if (property == null || value == null) {
             return null;
         }
+        PropertyValueNameKey key = new PropertyValueNameKey(property, value);
+        String cached = PROPERTY_VALUE_NAME_CACHE.get(key);
+        if (cached != null) {
+            return cached;
+        }
         Object name = invoke(property, new String[] {"func_177702_a", "getName"}, new Class<?>[] {Comparable.class}, value);
-        return name instanceof String ? (String) name : String.valueOf(value);
+        String valueName = name instanceof String ? (String) name : String.valueOf(value);
+        String existing = PROPERTY_VALUE_NAME_CACHE.putIfAbsent(key, valueName);
+        return existing != null ? existing : valueName;
     }
 
     public static Block blockFromState(IBlockState state) {
         if (state == null) {
             return null;
         }
+        IdentityHashMap<IBlockState, Block> hotCache = THREAD_STATE_BLOCK_CACHE.get();
+        Block hotCached = hotCache.get(state);
+        if (hotCached != null) {
+            return hotCached;
+        }
         IdentityKey<IBlockState> key = new IdentityKey<>(state);
         Block cached = STATE_BLOCK_CACHE.get(key);
         if (cached != null) {
+            putThreadStateBlock(state, cached);
             return cached;
         }
         Block block = null;
         if (BLOCK_FROM_STATE_HANDLE != null) {
             try {
-                block = (Block) BLOCK_FROM_STATE_HANDLE.invokeExact(state);
+                block = (Block) BLOCK_FROM_STATE_HANDLE.invoke(state);
             } catch (Throwable ignored) {
             }
         }
@@ -725,9 +870,41 @@ public final class MinecraftReflectionCompat {
         }
         if (block != null) {
             Block existing = STATE_BLOCK_CACHE.putIfAbsent(key, block);
-            return existing != null ? existing : block;
+            Block resolved = existing != null ? existing : block;
+            putThreadStateBlock(state, resolved);
+            return resolved;
         }
         return null;
+    }
+
+    private static void putThreadStateBlock(IBlockState state, Block block) {
+        IdentityHashMap<IBlockState, Block> hotCache = THREAD_STATE_BLOCK_CACHE.get();
+        if (hotCache.size() > HOT_IDENTITY_CACHE_LIMIT) {
+            hotCache.clear();
+        }
+        hotCache.put(state, block);
+    }
+
+    public static void clearHotThreadCaches() {
+        THREAD_STATE_BLOCK_CACHE.get().clear();
+        THREAD_STATE_STRING_CACHE.get().clear();
+    }
+
+    public static String stateString(IBlockState state) {
+        if (state == null) {
+            return "null";
+        }
+        IdentityHashMap<IBlockState, String> hotCache = THREAD_STATE_STRING_CACHE.get();
+        String cached = hotCache.get(state);
+        if (cached != null) {
+            return cached;
+        }
+        String value = String.valueOf(state);
+        if (hotCache.size() > HOT_IDENTITY_CACHE_LIMIT) {
+            hotCache.clear();
+        }
+        hotCache.put(state, value);
+        return value;
     }
 
     public static IBlockState actualState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -736,7 +913,7 @@ public final class MinecraftReflectionCompat {
         }
         if (STATE_ACTUAL_STATE_HANDLE != null) {
             try {
-                return (IBlockState) STATE_ACTUAL_STATE_HANDLE.invokeExact(state, blockAccess, pos);
+                return (IBlockState) STATE_ACTUAL_STATE_HANDLE.invoke(state, blockAccess, pos);
             } catch (Throwable ignored) {
             }
         }
@@ -753,8 +930,15 @@ public final class MinecraftReflectionCompat {
     }
 
     public static boolean blockCanRenderInLayer(Block block, IBlockState state, BlockRenderLayer layer) {
-        Object value = invoke(block, new String[] {"canRenderInLayer"}, new Class<?>[] {IBlockState.class, BlockRenderLayer.class}, state, layer);
-        return value instanceof Boolean ? (Boolean) value : layer == blockRenderLayer(block);
+        if (block == null) {
+            return false;
+        }
+        try {
+            return block.canRenderInLayer(state, layer);
+        } catch (Throwable ignored) {
+            Object value = invoke(block, new String[] {"canRenderInLayer"}, new Class<?>[] {IBlockState.class, BlockRenderLayer.class}, state, layer);
+            return value instanceof Boolean ? (Boolean) value : layer == blockRenderLayer(block);
+        }
     }
 
     public static ResourceLocation blockRegistryName(Block block) {
@@ -765,7 +949,14 @@ public final class MinecraftReflectionCompat {
         if (cached != null) {
             return cached;
         }
-        ResourceLocation name = call(block, ResourceLocation.class, null, new String[] {"getRegistryName"}, NO_PARAMETERS);
+        ResourceLocation name = null;
+        try {
+            name = block.getRegistryName();
+        } catch (Throwable ignored) {
+        }
+        if (name == null) {
+            name = call(block, ResourceLocation.class, null, new String[] {"getRegistryName"}, NO_PARAMETERS);
+        }
         if (name != null) {
             ResourceLocation existing = BLOCK_REGISTRY_NAME_CACHE.putIfAbsent(block, name);
             return existing != null ? existing : name;
@@ -781,7 +972,12 @@ public final class MinecraftReflectionCompat {
         if (cached != null) {
             return cached;
         }
-        String namespace = call(location, String.class, "", new String[] {"func_110624_b", "getResourceDomain", "getNamespace"}, NO_PARAMETERS);
+        String namespace;
+        try {
+            namespace = location.getNamespace();
+        } catch (Throwable ignored) {
+            namespace = call(location, String.class, "", new String[] {"func_110624_b", "getResourceDomain", "getNamespace"}, NO_PARAMETERS);
+        }
         String existing = RESOURCE_NAMESPACE_CACHE.putIfAbsent(location, namespace);
         return existing != null ? existing : namespace;
     }
@@ -794,9 +990,40 @@ public final class MinecraftReflectionCompat {
         if (cached != null) {
             return cached;
         }
-        String path = call(location, String.class, "", new String[] {"func_110623_a", "getResourcePath", "getPath"}, NO_PARAMETERS);
+        String path;
+        try {
+            path = location.getPath();
+        } catch (Throwable ignored) {
+            path = call(location, String.class, "", new String[] {"func_110623_a", "getResourcePath", "getPath"}, NO_PARAMETERS);
+        }
         String existing = RESOURCE_PATH_CACHE.putIfAbsent(location, path);
         return existing != null ? existing : path;
+    }
+
+    public static String resourcePathLower(ResourceLocation location) {
+        if (location == null) {
+            return "";
+        }
+        String cached = RESOURCE_PATH_LOWER_CACHE.get(location);
+        if (cached != null) {
+            return cached;
+        }
+        String lower = resourcePath(location).toLowerCase(Locale.ROOT);
+        String existing = RESOURCE_PATH_LOWER_CACHE.putIfAbsent(location, lower);
+        return existing != null ? existing : lower;
+    }
+
+    public static String resourceString(ResourceLocation location) {
+        if (location == null) {
+            return "";
+        }
+        String cached = RESOURCE_STRING_CACHE.get(location);
+        if (cached != null) {
+            return cached;
+        }
+        String value = location.toString();
+        String existing = RESOURCE_STRING_CACHE.putIfAbsent(location, value);
+        return existing != null ? existing : value;
     }
 
     @SuppressWarnings("unchecked")
@@ -917,6 +1144,10 @@ public final class MinecraftReflectionCompat {
 
     public static boolean isGamePaused(Minecraft minecraft) {
         return booleanValue(invoke(minecraft, new String[] {"func_147113_T", "isGamePaused"}, NO_PARAMETERS));
+    }
+
+    public static boolean guiScreenDoesPauseGame(GuiScreen screen) {
+        return callBoolean(screen, new String[] {"func_73868_f", "doesGuiPauseGame"}, NO_PARAMETERS, false);
     }
 
     public static TextureManager textureManager(Minecraft minecraft) {
@@ -1969,6 +2200,16 @@ public final class MinecraftReflectionCompat {
         return null;
     }
 
+    private static Field firstField(Class<?> owner, String... names) {
+        for (String name : names) {
+            Field field = findField(owner, name);
+            if (field != null) {
+                return field;
+            }
+        }
+        return null;
+    }
+
     private static final class MethodKey {
         private final Class<?> owner;
         private final String name;
@@ -2028,6 +2269,31 @@ public final class MinecraftReflectionCompat {
             }
             StateValueMethodKey other = (StateValueMethodKey) object;
             return stateClass == other.stateClass && propertyClass == other.propertyClass;
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+    }
+
+    private static final class PropertyValueNameKey {
+        private final IProperty<?> property;
+        private final Comparable<?> value;
+        private final int hash;
+
+        private PropertyValueNameKey(IProperty<?> property, Comparable<?> value) {
+            this.property = property;
+            this.value = value;
+            this.hash = 31 * System.identityHashCode(property) + System.identityHashCode(value);
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            return this == obj
+                    || obj instanceof PropertyValueNameKey other
+                    && property == other.property
+                    && value == other.value;
         }
 
         @Override

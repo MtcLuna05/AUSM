@@ -55,6 +55,7 @@
     "pipeline.FramebufferMixin",
     "pipeline.GuiIngameForgeMixin",
     "pipeline.GuiIngameMixin",
+    "pipeline.GuiScreenMixin",
     "pipeline.ItemRendererMixin",
     "pipeline.LayerArmorBaseMixin",
     "pipeline.LayerSpiderEyesMixin",
