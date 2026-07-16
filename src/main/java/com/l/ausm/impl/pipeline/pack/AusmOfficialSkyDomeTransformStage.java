@@ -64,9 +64,7 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                 uniform int ausmGuiScreen;
                 uniform float viewWidth;
                 uniform float viewHeight;
-                uniform int moonPhase;
                 uniform vec3 sunPosition;
-                uniform vec3 moonPosition;
                 uniform vec3 upPosition;
                 uniform mat4 gbufferProjectionInverse;
 
@@ -216,9 +214,7 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
         appendUniformIfMissing(preamble, source, "int", "ausmGuiScreen");
         appendUniformIfMissing(preamble, source, "float", "viewWidth");
         appendUniformIfMissing(preamble, source, "float", "viewHeight");
-        appendUniformIfMissing(preamble, source, "int", "moonPhase");
         appendUniformIfMissing(preamble, source, "vec3", "sunPosition");
-        appendUniformIfMissing(preamble, source, "vec3", "moonPosition");
         appendUniformIfMissing(preamble, source, "vec3", "upPosition");
         appendUniformIfMissing(preamble, source, "mat4", "gbufferProjectionInverse");
         if (!OFFICIAL_FINAL_COLOR_DECLARATION.matcher(source).find()) {
@@ -252,17 +248,8 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                 #ifndef AUSM_VOID_CELESTIALS
                 #define AUSM_VOID_CELESTIALS 0
                 #endif
-                #ifndef AUSM_VOID_CUSTOM_MOON
-                #define AUSM_VOID_CUSTOM_MOON 0
-                #endif
                 #ifndef AUSM_VOID_CELESTIAL_BRIGHTNESS
                 #define AUSM_VOID_CELESTIAL_BRIGHTNESS 100
-                #endif
-                #ifndef AUSM_VOID_MOON_BRIGHTNESS
-                #define AUSM_VOID_MOON_BRIGHTNESS 100
-                #endif
-                #ifndef AUSM_VOID_CRATER_CONTRAST
-                #define AUSM_VOID_CRATER_CONTRAST 100
                 #endif
 
                 float ausmOfficialMax0(float value) {
@@ -288,51 +275,12 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     return ausmOfficial01(abs(sdotu) * 6.0 + 0.35);
                 }
 
-                float ausmOfficialMoonRing(vec2 delta, float innerA, float innerB, float outerA, float outerB) {
-                    float d2 = dot(delta, delta);
-                    return (1.0 - smoothstep(outerA, outerB, d2)) * smoothstep(innerA, innerB, d2);
-                }
-
-                float ausmOfficialUvCircle(vec2 uv, vec2 center, float radius, float feather) {
-                    float aspect = max(viewWidth, 1.0) / max(viewHeight, 1.0);
-                    vec2 delta = vec2((uv.x - center.x) * aspect, uv.y - center.y);
-                    return 1.0 - smoothstep(radius, radius + feather, length(delta));
-                }
-
-                vec3 ausmOfficialApplyVoidTestCelestialCircles(vec3 sky, vec2 uv) {
-                    float sunMask = ausmOfficialUvCircle(uv, vec2(0.50, 0.56), 0.135, 0.018);
-                    float moonMask = ausmOfficialUvCircle(uv, vec2(0.22, 0.76), 0.040, 0.008);
-                    float nightFactor = ausmOfficialNightFactor();
-                    float dayFactor = 1.0 - ausmOfficial01(nightFactor);
-                    sky = mix(sky, vec3(64.0, 9.0, 0.0), sunMask * smoothstep(0.20, 0.55, dayFactor));
-                    sky = mix(sky, vec3(7.0, 7.6, 10.0), moonMask * smoothstep(0.20, 0.55, nightFactor));
-                    return sky;
-                }
-
-                vec3 ausmOfficialMoonColor(vec2 localCoord) {
-                #if AUSM_VOID_CUSTOM_MOON == 0
-                    return vec3(0.62, 0.66, 0.78) * (AUSM_VOID_MOON_BRIGHTNESS * 0.01);
-                #else
-                    float surface = 0.0;
-                    float craters = ausmOfficialMoonRing(localCoord - vec2(-1.45, 0.88), 0.10, 0.30, 0.36, 0.88);
-                    craters += ausmOfficialMoonRing(localCoord - vec2(1.18, -0.56), 0.055, 0.20, 0.22, 0.56);
-                    craters += ausmOfficialMoonRing(localCoord - vec2(0.10, 1.72), 0.035, 0.12, 0.14, 0.34);
-                    craters = ausmOfficial01(craters * (AUSM_VOID_CRATER_CONTRAST * 0.01));
-
-                    vec3 moonColor = mix(vec3(0.46, 0.48, 0.58), vec3(0.18, 0.19, 0.27), surface);
-                    moonColor *= 1.0 - 0.68 * craters;
-                    moonColor += vec3(0.060, 0.066, 0.082) * (1.0 - surface) + vec3(0.050, 0.054, 0.070) * craters * (1.0 - surface);
-                    return moonColor * (AUSM_VOID_MOON_BRIGHTNESS * 0.01);
-                #endif
-                }
-
                 vec3 ausmOfficialApplyVoidCelestials(vec3 sky, vec2 uv) {
                 #if AUSM_VOID_CELESTIALS == 0
                     return sky;
                 #else
                     vec3 viewDir = ausmOfficialViewDir(uv);
                     vec3 sunVec = ausmOfficialSafeNormalize(sunPosition, vec3(0.0, 1.0, 0.0));
-                    vec3 moonVec = ausmOfficialSafeNormalize(moonPosition, -sunVec);
                     vec3 upVec = ausmOfficialSafeNormalize(upPosition, vec3(0.0, 1.0, 0.0));
                     float sdotu = dot(sunVec, upVec);
                     float rain2 = ausmOfficialPow2(ausmOfficial01(rainFactor));
@@ -340,15 +288,12 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                 #if SUN_MOON_STYLE == 2
                     float sunSizeFactor1 = 0.9975;
                     float sunSizeFactor2 = 400.0;
-                    float moonPhaseFactor = 2.45;
                 #elif SUN_MOON_STYLE >= 3
                     float sunSizeFactor1 = 0.9983;
                     float sunSizeFactor2 = 588.235;
-                    float moonPhaseFactor = 2.2;
                 #else
                     float sunSizeFactor1 = 0.9966;
                     float sunSizeFactor2 = 294.0;
-                    float moonPhaseFactor = 2.1;
                 #endif
 
                     float vdotSun = dot(viewDir, sunVec);
@@ -359,36 +304,6 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                         sky = mix(sky, vec3(0.9, 0.5, 0.3) * 25.0 * (AUSM_VOID_CELESTIAL_BRIGHTNESS * 0.01), ausmOfficial01(mixer));
                     }
 
-                    float vdotMoon = dot(viewDir, moonVec);
-                    if (vdotMoon > sunSizeFactor1) {
-                        float mixer = ausmOfficialMax0(sqrt(sunSizeFactor2 * (vdotMoon - sunSizeFactor1)) - 0.25) * 1.33333;
-                        mixer *= 1.0 - rain2;
-                        mixer *= ausmOfficialHorizonFactor(-sdotu);
-
-                        vec3 tangent = ausmOfficialSafeNormalize(cross(upVec, moonVec), vec3(1.0, 0.0, 0.0));
-                        vec3 bitangent = cross(moonVec, tangent);
-                        vec2 moonLocal = vec2(dot(viewDir, tangent), dot(viewDir, bitangent)) * 82.0;
-                        vec3 moonColor = ausmOfficialMoonColor(moonLocal);
-
-                        float phaseMask = 1.0;
-                        if (moonPhase >= 1) {
-                            float phaseSide = moonPhase > 4 ? -1.0 : 1.0;
-                            float phaseWidth = moonPhase == 4 ? 0.0 : (abs(float(moonPhase) - 4.0) / 4.0);
-                            phaseMask = 1.0 - ausmOfficial01((phaseSide * moonLocal.x * 0.32 + phaseWidth) * moonPhaseFactor);
-                            phaseMask = ausmOfficialPow2(phaseMask);
-                            moonColor *= moonPhase == 4 ? 5.6 : 4.8;
-                        } else {
-                            moonColor *= 4.0;
-                        }
-
-                        float visibleMoonPhase = smoothstep(0.38, 0.50, phaseMask);
-                        visibleMoonPhase *= visibleMoonPhase;
-                        float darkMoonPhase = 0.08 * (1.0 - visibleMoonPhase);
-                        vec3 darkMoonColor = vec3(0.034, 0.040, 0.058) * (0.88 + 0.12 * ausmOfficialMax0(phaseMask));
-                        moonColor = mix(darkMoonColor, moonColor, visibleMoonPhase);
-                        mixer *= max(visibleMoonPhase, darkMoonPhase);
-                        sky = mix(sky, moonColor * (AUSM_VOID_CELESTIAL_BRIGHTNESS * 0.01), ausmOfficial01(mixer));
-                    }
                     return sky;
                 #endif
                 }

@@ -55,8 +55,8 @@ public class RenderSkyMixin {
             ci.cancel();
             return;
         }
-        PipelineContext.getInstance().renderOwnedSkyBackingBeforeSky(partialTicks);
         PipelineContext.getInstance().beginPhase(WorldRenderingPhase.SKY);
+        PipelineContext.getInstance().renderOwnedSkyBackingBeforeSky(partialTicks);
     }
 
     @Inject(method = "renderSky(FI)V", at = @At("RETURN"))

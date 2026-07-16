@@ -307,8 +307,6 @@ public class PipelineContext {
     private static final int MAX_GUI_RECOVERED_BACKGROUND_LOGS = 12;
     private static final int MAX_PRE_FINAL_DIRECT_PRESENT_LOGS = 0;
     private static final int MAX_PRESENTATION_BOUNDARY_LOGS = 0;
-    private static final int MAX_GUI_SCREEN_PROBE_LOGS = 64;
-    private static final int MAX_HUD_PROBE_LOGS = 64;
     private static final int MAX_TERRAIN_GRID_PROBE_LOGS = 0;
     private static final int TERRAIN_GRID_PROBE_COLUMNS = 5;
     private static final int TERRAIN_GRID_PROBE_ROWS = 5;
@@ -571,6 +569,8 @@ public class PipelineContext {
     private final AtomicInteger blockcrafteryTransparencyProbeCount = new AtomicInteger();
     private final ThreadLocal<Map<FramedMaterialKey, FramedMaterialState>> framedMaterialCompileCache = new ThreadLocal<>();
     private final ThreadLocal<Map<FramedMaterialKey, IBlockState>> actualLightStateCompileCache = new ThreadLocal<>();
+    private final ThreadLocal<BlockcrafteryDecoratedBlockAccess> blockcrafteryBlockAccessCache =
+            ThreadLocal.withInitial(() -> new BlockcrafteryDecoratedBlockAccess(null));
     private int pendingWorldLoadLightRecalculationAttempts = 0;
     private int pendingWorldLoadLightRecalculationDelay = 0;
     private int pendingWorldLoadLightRecalculationDimension = Integer.MIN_VALUE;
@@ -733,6 +733,8 @@ public class PipelineContext {
     private long cpuLightTileEntitySnapshotFrame = Long.MIN_VALUE;
     private List<TileEntity> cpuLightTileEntitySnapshot = java.util.Collections.emptyList();
     private int cpuLightTileEntityScanCursor = 0;
+    private final int[] cpuLightProjectRedVoxelIds = new int[8];
+    private final Set<Long> cpuLightWrittenVoxels = new HashSet<>();
     private World shadowBlockEntityBoundsCacheWorld = null;
     private final Map<TileEntity, ShadowBlockEntityBounds> shadowBlockEntityBoundsCache = new IdentityHashMap<>();
     private World cpuLightBlockScanWorld = null;
@@ -905,8 +907,6 @@ public class PipelineContext {
     private int directColorPresentLogs = 0;
     private int directWindowPresentLogs = 0;
     private int presentationBoundaryLogs = 0;
-    private int guiScreenProbeLogs = 0;
-    private int hudProbeLogs = 0;
     private int skyDomeProbeLogs = 0;
     private int skyDomeGuiProbeLogs = 0;
     private int skyDomePauseProbeLogs = 0;
@@ -6273,7 +6273,7 @@ public class PipelineContext {
                 ? actualState(renderState, blockAccess, pos)
                 : renderState;
         IBlockState blockcrafteryActualState = blockcrafteryDecoratedState != null
-                ? actualState(blockcrafteryDecoratedState, blockcrafteryDecoratedBlockAccess(blockAccess), pos)
+                ? blockcrafteryActualState(blockcrafteryDecoratedState, blockAccess, pos)
                 : null;
         IBlockState architectureBaseActualState = architectureBaseState != null
                 ? actualState(architectureBaseState, blockAccess, pos)
@@ -6322,8 +6322,18 @@ public class PipelineContext {
         return null;
     }
 
-    private IBlockAccess blockcrafteryDecoratedBlockAccess(IBlockAccess blockAccess) {
-        return blockAccess != null ? new BlockcrafteryDecoratedBlockAccess(blockAccess) : null;
+    private IBlockState blockcrafteryActualState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        if (blockAccess == null) {
+            return state;
+        }
+        BlockcrafteryDecoratedBlockAccess wrapped = blockcrafteryBlockAccessCache.get();
+        IBlockAccess previous = wrapped.delegate;
+        wrapped.delegate = blockAccess;
+        try {
+            return actualState(state, wrapped, pos);
+        } finally {
+            wrapped.delegate = previous;
+        }
     }
 
     private IBlockState blockcrafteryTileDecoratedState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -6390,7 +6400,7 @@ public class PipelineContext {
     }
 
     private final class BlockcrafteryDecoratedBlockAccess implements IBlockAccess {
-        private final IBlockAccess delegate;
+        private IBlockAccess delegate;
 
         private BlockcrafteryDecoratedBlockAccess(IBlockAccess delegate) {
             this.delegate = delegate;
@@ -8938,6 +8948,7 @@ public class PipelineContext {
         TextureBinder.restoreDefaultTextureUnit();
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
+        GL11.glFrontFace(GL11.GL_CW);
         if (!shaderlessBloomExtractionActive) {
             unbindShaderStorageBuffers();
         }
@@ -9012,6 +9023,7 @@ public class PipelineContext {
         com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
+        GL11.glFrontFace(GL11.GL_CW);
         unbindShaderImages();
         unbindShaderStorageBuffers();
         resetIndexedBlendState();
@@ -9079,6 +9091,7 @@ public class PipelineContext {
         com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
+        GL11.glFrontFace(GL11.GL_CW);
         unbindShaderImages();
         unbindShaderStorageBuffers();
         resetIndexedBlendState();
@@ -12078,8 +12091,9 @@ public class PipelineContext {
         int cameraFloorY = (int) Math.floor(cameraPositionUnshifted[1]);
         int cameraFloorZ = (int) Math.floor(cameraPositionUnshifted[2]);
         int injected = 0;
-        int[] projectRedVoxelIds = new int[8];
-        Set<Long> writtenVoxels = new HashSet<>();
+        int[] projectRedVoxelIds = cpuLightProjectRedVoxelIds;
+        Set<Long> writtenVoxels = cpuLightWrittenVoxels;
+        writtenVoxels.clear();
 
         List<TileEntity> loadedTileEntities = cpuLightTileEntitySnapshot(world);
         int tileEntityCount = loadedTileEntities.size();
@@ -12095,7 +12109,7 @@ public class PipelineContext {
                 cpuLightTileEntityScanCursor = 0;
             }
             TileEntity tileEntity = loadedTileEntities.get(cpuLightTileEntityScanCursor++);
-            if (tileEntity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((tileEntity), new String[] {"func_145837_r", "isInvalid"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
+            if (tileEntity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityInvalid(tileEntity)) {
                 continue;
             }
 
@@ -12945,11 +12959,12 @@ public class PipelineContext {
 
         int rendered = 0;
         for (TileEntity tileEntity : tileEntities) {
-            if (!shouldRenderBlockEntityInShadowMap(world, tileEntity, shadowCamera, cameraX, cameraY, cameraZ, maxDistanceSquared)) {
+            BlockPos pos = com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity);
+            if (!shouldRenderBlockEntityInShadowMap(
+                    world, tileEntity, pos, shadowCamera, cameraX, cameraY, cameraZ, maxDistanceSquared)) {
                 continue;
             }
 
-            BlockPos pos = com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity);
             com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityRendererRender(
                     dispatcher,
                     tileEntity,
@@ -12965,14 +12980,14 @@ public class PipelineContext {
         return rendered;
     }
 
-    private boolean shouldRenderBlockEntityInShadowMap(World world, TileEntity tileEntity, ICamera shadowCamera,
+    private boolean shouldRenderBlockEntityInShadowMap(World world, TileEntity tileEntity, BlockPos pos, ICamera shadowCamera,
                                                        double cameraX, double cameraY, double cameraZ,
                                                        double maxDistanceSquared) {
-        if (world == null || tileEntity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((tileEntity), new String[] {"func_145837_r", "isInvalid"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
+        if (world == null || tileEntity == null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityInvalid(tileEntity)) {
             return false;
         }
 
-        BlockPos pos = com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity);
         if (pos == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos, false)) {
             return false;
         }
@@ -18990,6 +19005,21 @@ public class PipelineContext {
     }
 
     public boolean shouldRenderShaderlessBloomChunkLayer(BlockRenderLayer layer, int chunkBlockX, int chunkBlockY, int chunkBlockZ) {
+        return shouldRenderShaderlessBloomChunkLayer(
+                layer,
+                chunkBlockX,
+                chunkBlockY,
+                chunkBlockZ,
+                shaderlessBloomExtractionDimensionId()
+        );
+    }
+
+    public int shaderlessBloomExtractionDimensionId() {
+        return shaderlessBloomExtractionActive ? currentClientDimensionId() : Integer.MIN_VALUE;
+    }
+
+    public boolean shouldRenderShaderlessBloomChunkLayer(BlockRenderLayer layer, int chunkBlockX, int chunkBlockY,
+                                                          int chunkBlockZ, int dimension) {
         if (!shaderlessBloomExtractionActive) {
             return true;
         }
@@ -19000,7 +19030,7 @@ public class PipelineContext {
             return true;
         }
         long key = shaderlessBloomMetadataKey(
-                currentClientDimensionId(),
+                dimension,
                 chunkBlockX >> 4,
                 chunkBlockY >> 4,
                 chunkBlockZ >> 4,
@@ -19503,7 +19533,6 @@ public class PipelineContext {
 
         boolean outermostGui = guiRenderDepth == 0;
         guiRenderDepth++;
-        logHudProbe("gui-begin-before-world-restore");
         if (outermostGui) {
             Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
             Framebuffer target = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) : null;
@@ -19511,9 +19540,7 @@ public class PipelineContext {
                 refreshMinecraftFramebufferFromDirectPresentationTexture(target, true);
             }
         }
-        logHudProbe("gui-begin-after-world-restore");
         prepareGuiRendering();
-        logHudProbe("gui-begin-after-state");
     }
 
     public void beginGuiScreenRendering() {
@@ -19526,31 +19553,21 @@ public class PipelineContext {
         renderingGui = true;
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         Framebuffer target = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) : null;
-        logGuiScreenProbe("screen-begin-before-world-restore");
         if (target != null && !preserveCompletedGui) {
             refreshMinecraftFramebufferFromDirectPresentationTexture(target, true);
         }
-        logGuiScreenProbe("screen-begin-after-world-restore");
         bindGuiTarget();
         prepareGuiState();
-        logGuiScreenProbe("screen-begin-after-state");
     }
 
     public void finishGuiScreenRendering() {
-        logGuiScreenProbe("screen-finish-before-state");
         finishGuiRendering();
-        logGuiScreenProbe("screen-finish-after-state");
-    }
-
-    public void logGuiScreenBackgroundSuppressed() {
-        logGuiScreenProbe("screen-background-suppressed");
     }
 
     public void finishGuiRendering() {
         if (!isPipelineActive || externalWorldFramebufferTarget != null || isRenderingBetterPortalsNestedView()) {
             return;
         }
-        logHudProbe("gui-finish-before-state");
         boolean completedGui = guiRenderDepth > 0;
         if (completedGui) {
             guiRenderDepth--;
@@ -19563,7 +19580,6 @@ public class PipelineContext {
             restoreGuiSafeRenderState("gui-finish");
             drainPausedPostRenderGlErrors("gui-finish");
         }
-        logHudProbe("gui-finish-after-state");
     }
 
     private void bindGuiTarget() {
@@ -19856,7 +19872,6 @@ public class PipelineContext {
             return;
         }
 
-        logHudProbe("direct-present-before");
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
@@ -19887,10 +19902,6 @@ public class PipelineContext {
                 GL11.GL_COLOR_BUFFER_BIT,
                 GL11.GL_NEAREST
         );
-        logHudProbe("direct-present-after-blit");
-        if (screenOpen) {
-            logGuiScreenProbe("screen-direct-presented");
-        }
         logDirectWindowPresent(target, width, height, false);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
@@ -19909,90 +19920,6 @@ public class PipelineContext {
             GL11.glDisable(GL11.GL_SCISSOR_TEST);
         }
         TextureBinder.restoreDefaultTextureUnit();
-    }
-
-    private void logGuiScreenProbe(String stage) {
-        if (!isPipelineActive || guiScreenProbeLogs >= MAX_GUI_SCREEN_PROBE_LOGS) {
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null) {
-            return;
-        }
-        guiScreenProbeLogs++;
-        int width = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc));
-        int height = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
-        Framebuffer target = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
-        String snapshotColor = directPresentationValid && directPresentationFbo > 0
-                ? framebufferIdColorSamples(directPresentationFbo,
-                Math.max(1, directPresentationWidth),
-                Math.max(1, directPresentationHeight),
-                GL30.GL_COLOR_ATTACHMENT0)
-                : "unavailable";
-        MainMod.LOGGER.info(
-                "[AUSMGuiScreenProbe] call={} stage={} screen={} depth={} renderingGui={} worldFrame={} target={} targetColor={} snapshotValid={} snapshotFrame={} frame={} snapshotColor={} backColor={} drawFbo={} readFbo={} drawBuf={} readBuf={} gl={} glErrors={}",
-                guiScreenProbeLogs,
-                stage,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc).getClass().getName(),
-                guiRenderDepth,
-                renderingGui,
-                worldFrameActive,
-                describeFramebufferTargetDetailed(target),
-                framebufferSamples(target),
-                directPresentationValid,
-                directPresentationFrame,
-                pipelineFrameId,
-                snapshotColor,
-                framebufferIdColorSamples(0, width, height, GL11.GL_BACK),
-                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
-                GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
-                GL11.glGetInteger(GL11.GL_DRAW_BUFFER),
-                GL11.glGetInteger(GL11.GL_READ_BUFFER),
-                glStateSummary(),
-                drainGlErrorsForProbe()
-        );
-    }
-
-    public void logHudProbe(String stage) {
-        if (!isPipelineActive || hudProbeLogs >= MAX_HUD_PROBE_LOGS) {
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null) {
-            return;
-        }
-        hudProbeLogs++;
-        int width = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc));
-        int height = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
-        Framebuffer target = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
-        String snapshotColor = directPresentationValid && directPresentationFbo > 0
-                ? framebufferIdColorSamples(directPresentationFbo,
-                Math.max(1, directPresentationWidth),
-                Math.max(1, directPresentationHeight),
-                GL30.GL_COLOR_ATTACHMENT0)
-                : "unavailable";
-        MainMod.LOGGER.info(
-                "[AUSMHudProbe] call={} stage={} depth={} renderingGui={} worldFrame={} guiContentFrame={} frame={} target={} targetColor={} snapshotValid={} snapshotFrame={} snapshotColor={} backColor={} drawFbo={} readFbo={} drawBuf={} readBuf={} gl={} glErrors={}",
-                hudProbeLogs,
-                stage,
-                guiRenderDepth,
-                renderingGui,
-                worldFrameActive,
-                guiTargetContentFrame,
-                pipelineFrameId,
-                describeFramebufferTargetDetailed(target),
-                framebufferSamples(target),
-                directPresentationValid,
-                directPresentationFrame,
-                snapshotColor,
-                framebufferIdColorSamples(0, width, height, GL11.GL_BACK),
-                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
-                GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
-                GL11.glGetInteger(GL11.GL_DRAW_BUFFER),
-                GL11.glGetInteger(GL11.GL_READ_BUFFER),
-                glStateSummary(),
-                drainGlErrorsForProbe()
-        );
     }
 
     private boolean refreshMinecraftFramebufferFromDirectRecoveredWindowSource(Framebuffer target) {
@@ -22258,7 +22185,7 @@ public class PipelineContext {
 
     private static void restoreVanillaClientRenderState() {
         GL11.glFrontFace(GL11.GL_CCW);
-        GL11.glCullFace(GL11.GL_BACK);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateCullFaceBack();
         GL11.glDepthRange(0.0D, 1.0D);
         GL11.glClearDepth(1.0D);
         GL11.glPolygonMode(GL11.GL_FRONT_AND_BACK, GL11.GL_FILL);

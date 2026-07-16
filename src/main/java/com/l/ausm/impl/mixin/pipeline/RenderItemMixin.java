@@ -62,7 +62,7 @@ public class RenderItemMixin {
         ProjectRedHaloRenderer.auditRenderItem(stack, "renderItem_model", model != null ? model.getClass().getName() : null);
         PipelineContext context = PipelineContext.getInstance();
         if (context.isRenderingGuiScreen()) {
-            AUSM$guiItemStateStack.get().push(false);
+            AUSM$guiItemStateStack.get().push(context.beginGuiItemStateScope());
             AUSM$renderedItemStack.get().push(false);
             AUSM$itemPhaseStack.get().push(false);
             return;

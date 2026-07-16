@@ -73,9 +73,7 @@ public class EntityRendererMixin {
             return;
         }
 
-        PipelineContext.getInstance().logHudProbe("overlay-redirect-before");
         com.l.ausm.impl.util.MinecraftReflectionCompat.renderGameOverlay(guiIngame, partialTicks);
-        PipelineContext.getInstance().logHudProbe("overlay-redirect-after");
     }
 
     @Inject(

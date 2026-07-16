@@ -43,7 +43,6 @@ public class GuiScreenMixin {
         if (!context.isActive()) {
             return false;
         }
-        context.logGuiScreenBackgroundSuppressed();
         return true;
     }
 

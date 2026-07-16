@@ -83,6 +83,7 @@ import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 import net.minecraft.block.properties.IProperty;
 import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
@@ -110,6 +111,8 @@ import java.util.concurrent.ConcurrentMap;
 public final class MinecraftReflectionCompat {
     private static final ConcurrentMap<MethodKey, Method> METHOD_CACHE = new ConcurrentHashMap<>();
     private static final Set<MethodKey> MISSING_METHODS = ConcurrentHashMap.newKeySet();
+    private static final ThreadLocal<MethodLookupCache> THREAD_METHOD_LOOKUP_CACHE =
+            ThreadLocal.withInitial(MethodLookupCache::new);
     private static final ConcurrentMap<FieldKey, Field> FIELD_CACHE = new ConcurrentHashMap<>();
     private static final Set<FieldKey> MISSING_FIELDS = ConcurrentHashMap.newKeySet();
     private static final ConcurrentMap<StateValueMethodKey, Method> STATE_VALUE_METHOD_CACHE = new ConcurrentHashMap<>();
@@ -129,6 +132,23 @@ public final class MinecraftReflectionCompat {
     private static final ThreadLocal<IdentityHashMap<IBlockState, String>> THREAD_STATE_STRING_CACHE =
             ThreadLocal.withInitial(IdentityHashMap::new);
     public static final Class<?>[] NO_PARAMETERS = new Class<?>[0];
+    private static final String[] PROVIDER_DIMENSION_NAMES = {"getDimension"};
+    private static final String[] PROVIDER_DIMENSION_TYPE_NAMES = {"func_186058_p", "getDimensionType"};
+    private static final String[] ITEM_STACK_ITEM_NAMES = {"func_77973_b", "getItem"};
+    private static final String[] BLOCK_RENDER_LAYER_NAMES = {"func_180664_k", "getRenderLayer"};
+    private static final String[] RENDER_PARTIAL_TICKS_NAMES = {"func_184121_ak", "getRenderPartialTicks"};
+    private static final String[] GL_UNIFORM_1I_NAMES = {"func_153163_f", "glUniform1i"};
+    private static final String[] GL_DISABLE_LIGHTING_NAMES = {"func_179140_f", "disableLighting"};
+    private static final String[] BUFFER_VERTEX_FORMAT_NAMES = {"func_178973_g", "getVertexFormat"};
+    private static final String[] TILE_ENTITY_POS_NAMES = {"func_174877_v", "getPos"};
+    private static final String[] TILE_ENTITY_INVALID_NAMES = {"func_145837_r", "isInvalid"};
+    private static final String[] TILE_ENTITY_RENDER_NAMES = {"func_192854_a", "render"};
+    private static final String[] CAMERA_FRUSTUM_NAMES = {"func_78546_a", "isBoundingBoxInFrustum"};
+    private static final Class<?>[] INT_INT_PARAMETERS = {int.class, int.class};
+    private static final Class<?>[] TILE_ENTITY_RENDER_PARAMETERS = {
+            TileEntity.class, double.class, double.class, double.class, float.class, int.class, float.class
+    };
+    private static final Class<?>[] AXIS_ALIGNED_BB_PARAMETERS = {net.minecraft.util.math.AxisAlignedBB.class};
     private static final Field VEC_X_FIELD = firstField(Vec3d.class, "field_72450_a", "x");
     private static final Field VEC_Y_FIELD = firstField(Vec3d.class, "field_72448_b", "y");
     private static final Field VEC_Z_FIELD = firstField(Vec3d.class, "field_72449_c", "z");
@@ -172,11 +192,11 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int providerDimension(WorldProvider provider) {
-        int direct = callInt(provider, new String[] {"getDimension"}, NO_PARAMETERS, Integer.MIN_VALUE);
+        int direct = callInt(provider, PROVIDER_DIMENSION_NAMES, NO_PARAMETERS, Integer.MIN_VALUE);
         if (direct != Integer.MIN_VALUE) {
             return direct;
         }
-        Object dimensionType = invoke(provider, new String[] {"func_186058_p", "getDimensionType"}, NO_PARAMETERS);
+        Object dimensionType = invoke(provider, PROVIDER_DIMENSION_TYPE_NAMES, NO_PARAMETERS);
         int dimensionTypeId = dimensionTypeId(dimensionType);
         if (dimensionTypeId != Integer.MIN_VALUE) {
             return dimensionTypeId;
@@ -627,7 +647,7 @@ public final class MinecraftReflectionCompat {
     }
 
     public static Item itemStackItem(ItemStack stack) {
-        return call(stack, Item.class, null, new String[] {"func_77973_b", "getItem"}, NO_PARAMETERS);
+        return call(stack, Item.class, null, ITEM_STACK_ITEM_NAMES, NO_PARAMETERS);
     }
 
     public static int itemId(Item item) {
@@ -927,7 +947,7 @@ public final class MinecraftReflectionCompat {
     }
 
     public static BlockRenderLayer blockRenderLayer(Block block) {
-        return call(block, BlockRenderLayer.class, null, new String[] {"func_180664_k", "getRenderLayer"}, NO_PARAMETERS);
+        return call(block, BlockRenderLayer.class, null, BLOCK_RENDER_LAYER_NAMES, NO_PARAMETERS);
     }
 
     public static boolean blockCanRenderInLayer(Block block, IBlockState state, BlockRenderLayer layer) {
@@ -1125,7 +1145,7 @@ public final class MinecraftReflectionCompat {
     }
 
     public static float renderPartialTicks(Minecraft minecraft) {
-        return callFloat(minecraft, new String[] {"func_184121_ak", "getRenderPartialTicks"}, NO_PARAMETERS, 0.0F);
+        return callFloat(minecraft, RENDER_PARTIAL_TICKS_NAMES, NO_PARAMETERS, 0.0F);
     }
 
     @SuppressWarnings("unchecked")
@@ -1387,14 +1407,12 @@ public final class MinecraftReflectionCompat {
     public static void tileEntityRendererRender(net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher dispatcher,
                                                 TileEntity tileEntity, double x, double y, double z,
                                                 float partialTicks, int destroyStage, float alpha) {
-        invoke(dispatcher, new String[] {"func_192854_a", "render"},
-                new Class<?>[] {TileEntity.class, double.class, double.class, double.class, float.class, int.class, float.class},
+        invoke(dispatcher, TILE_ENTITY_RENDER_NAMES, TILE_ENTITY_RENDER_PARAMETERS,
                 tileEntity, x, y, z, partialTicks, destroyStage, alpha);
     }
 
     public static boolean cameraIsBoundingBoxInFrustum(ICamera camera, net.minecraft.util.math.AxisAlignedBB box) {
-        return callBoolean(camera, new String[] {"func_78546_a", "isBoundingBoxInFrustum"},
-                new Class<?>[] {net.minecraft.util.math.AxisAlignedBB.class}, true, box);
+        return callBoolean(camera, CAMERA_FRUSTUM_NAMES, AXIS_ALIGNED_BB_PARAMETERS, true, box);
     }
 
     public static ITextureObject texture(TextureManager textureManager, ResourceLocation location) {
@@ -1529,8 +1547,7 @@ public final class MinecraftReflectionCompat {
     }
 
     public static void glUniform1i(int location, int value) {
-        invoke(OpenGlHelper.class, new String[] {"func_153163_f", "glUniform1i"},
-                new Class<?>[] {int.class, int.class}, location, value);
+        invoke(OpenGlHelper.class, GL_UNIFORM_1I_NAMES, INT_INT_PARAMETERS, location, value);
     }
 
     public static void glUniformMatrix4(int location, boolean transpose, FloatBuffer value) {
@@ -1604,7 +1621,7 @@ public final class MinecraftReflectionCompat {
     }
 
     public static void glStateDisableLighting() {
-        invoke(GlStateManager.class, new String[] {"func_179140_f", "disableLighting"}, NO_PARAMETERS);
+        invoke(GlStateManager.class, GL_DISABLE_LIGHTING_NAMES, NO_PARAMETERS);
     }
 
     public static void glStateDisableColorMaterial() {
@@ -1619,8 +1636,63 @@ public final class MinecraftReflectionCompat {
         invoke(GlStateManager.class, new String[] {"func_179129_p", "disableCull"}, NO_PARAMETERS);
     }
 
+    public static void glStateCullFaceBack() {
+        if (!CullFaceBackCall.invoke()) {
+            GL11.glCullFace(GL11.GL_BACK);
+        }
+    }
+
     public static void glStateBindTexture(int texture) {
         invoke(GlStateManager.class, new String[] {"func_179144_i", "bindTexture"}, new Class<?>[] {int.class}, texture);
+    }
+
+    private static final class CullFaceBackCall {
+        private static final Method METHOD = findMethod();
+        private static final Object BACK = findBackValue(METHOD);
+
+        private static boolean invoke() {
+            if (METHOD == null || BACK == null) {
+                return false;
+            }
+            try {
+                METHOD.invoke(null, BACK);
+                return true;
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                return false;
+            }
+        }
+
+        private static Method findMethod() {
+            for (String name : new String[] {"func_187407_a", "cullFace"}) {
+                for (Method method : GlStateManager.class.getDeclaredMethods()) {
+                    Class<?>[] parameters = method.getParameterTypes();
+                    if (method.getName().equals(name) && parameters.length == 1 && parameters[0].isEnum()) {
+                        try {
+                            method.setAccessible(true);
+                            return method;
+                        } catch (RuntimeException ignored) {
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        private static Object findBackValue(Method method) {
+            if (method == null) {
+                return null;
+            }
+            Object[] values = method.getParameterTypes()[0].getEnumConstants();
+            if (values == null) {
+                return null;
+            }
+            for (Object value : values) {
+                if (value instanceof Enum<?> && "BACK".equals(((Enum<?>) value).name())) {
+                    return value;
+                }
+            }
+            return null;
+        }
     }
 
     public static void glStateViewport(int x, int y, int width, int height) {
@@ -1768,8 +1840,12 @@ public final class MinecraftReflectionCompat {
     }
 
     public static BlockPos tileEntityPos(TileEntity tileEntity) {
-        Object value = invoke(tileEntity, new String[] {"func_174877_v", "getPos"}, NO_PARAMETERS);
+        Object value = invoke(tileEntity, TILE_ENTITY_POS_NAMES, NO_PARAMETERS);
         return value instanceof BlockPos ? (BlockPos) value : null;
+    }
+
+    public static boolean tileEntityInvalid(TileEntity tileEntity) {
+        return callBoolean(tileEntity, TILE_ENTITY_INVALID_NAMES, NO_PARAMETERS, false);
     }
 
     public static BufferBuilder regionBufferForLayer(RegionRenderCacheBuilder builder, BlockRenderLayer layer) {
@@ -1833,7 +1909,7 @@ public final class MinecraftReflectionCompat {
     }
 
     public static VertexFormat bufferVertexFormat(BufferBuilder buffer) {
-        Object value = invoke(buffer, new String[] {"func_178973_g", "getVertexFormat"}, NO_PARAMETERS);
+        Object value = invoke(buffer, BUFFER_VERTEX_FORMAT_NAMES, NO_PARAMETERS);
         return value instanceof VertexFormat ? (VertexFormat) value : null;
     }
 
@@ -2026,27 +2102,40 @@ public final class MinecraftReflectionCompat {
     }
 
     private static Method findMethod(Class<?> owner, String name, Class<?>[] parameterTypes) {
-        MethodKey key = new MethodKey(owner, name, parameterTypes);
+        Class<?>[] parameters = parameterTypes != null ? parameterTypes : NO_PARAMETERS;
+        MethodLookupCache localCache = THREAD_METHOD_LOOKUP_CACHE.get();
+        Method local = localCache.lookup(owner, name, parameters);
+        if (localCache.hit) {
+            return local;
+        }
+        MethodKey key = new MethodKey(owner, name, parameters);
         Method cached = METHOD_CACHE.get(key);
         if (cached != null) {
+            localCache.store(owner, name, parameters, cached);
             return cached;
         }
         if (MISSING_METHODS.contains(key)) {
+            localCache.store(owner, name, parameters, null);
             return null;
         }
         Method declared = findExactDeclaredMethod(owner, name, parameterTypes, new HashSet<>());
         if (declared != null) {
             declared.setAccessible(true);
             Method existing = METHOD_CACHE.putIfAbsent(key, declared);
-            return existing != null ? existing : declared;
+            Method resolved = existing != null ? existing : declared;
+            localCache.store(owner, name, parameters, resolved);
+            return resolved;
         }
         try {
-            Method method = owner.getMethod(name, parameterTypes);
+            Method method = owner.getMethod(name, parameters);
             method.setAccessible(true);
             Method existing = METHOD_CACHE.putIfAbsent(key, method);
-            return existing != null ? existing : method;
+            Method resolved = existing != null ? existing : method;
+            localCache.store(owner, name, parameters, resolved);
+            return resolved;
         } catch (ReflectiveOperationException | SecurityException ignored) {
             MISSING_METHODS.add(key);
+            localCache.store(owner, name, parameters, null);
             return null;
         }
     }
@@ -2263,6 +2352,55 @@ public final class MinecraftReflectionCompat {
         @Override
         public int hashCode() {
             return hash;
+        }
+    }
+
+    private static final class MethodLookupCache {
+        private static final int SIZE = 64;
+        private final MethodLookupEntry[] entries = new MethodLookupEntry[SIZE];
+        private boolean hit;
+
+        private MethodLookupCache() {
+            for (int i = 0; i < entries.length; i++) {
+                entries[i] = new MethodLookupEntry();
+            }
+        }
+
+        private Method lookup(Class<?> owner, String name, Class<?>[] parameterTypes) {
+            MethodLookupEntry entry = entries[index(owner, name, parameterTypes)];
+            hit = entry.matches(owner, name, parameterTypes);
+            return hit ? entry.method : null;
+        }
+
+        private void store(Class<?> owner, String name, Class<?>[] parameterTypes, Method method) {
+            entries[index(owner, name, parameterTypes)].set(owner, name, parameterTypes, method);
+        }
+
+        private static int index(Class<?> owner, String name, Class<?>[] parameterTypes) {
+            int hash = System.identityHashCode(owner);
+            hash = 31 * hash + (name != null ? name.hashCode() : 0);
+            hash = 31 * hash + Arrays.hashCode(parameterTypes);
+            return hash & (SIZE - 1);
+        }
+    }
+
+    private static final class MethodLookupEntry {
+        private Class<?> owner;
+        private String name;
+        private Class<?>[] parameterTypes;
+        private Method method;
+
+        private boolean matches(Class<?> owner, String name, Class<?>[] parameterTypes) {
+            return this.owner == owner
+                    && (this.name == name || this.name != null && this.name.equals(name))
+                    && Arrays.equals(this.parameterTypes, parameterTypes);
+        }
+
+        private void set(Class<?> owner, String name, Class<?>[] parameterTypes, Method method) {
+            this.owner = owner;
+            this.name = name;
+            this.parameterTypes = parameterTypes;
+            this.method = method;
         }
     }
 

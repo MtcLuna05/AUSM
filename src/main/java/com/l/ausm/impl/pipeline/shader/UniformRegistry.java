@@ -26,6 +26,9 @@ public class UniformRegistry {
 
     private final Map<String, UniformBinding<?>> bindings = new HashMap<>();
     private final Map<ShaderProgram, List<ResolvedUniformBinding>> activeBindingsByProgram = new IdentityHashMap<>();
+    private final Map<String, float[]> scalarValueCache = new HashMap<>();
+    private final Map<String, String[]> vectorScalarKeyCache = new HashMap<>();
+    private final Map<String, String[]> matrixScalarKeyCache = new HashMap<>();
 
     // Pre-allocated buffers to avoid memory allocations every frame
     private static final IntBuffer INT_BUFFER_2 = BufferUtils.createIntBuffer(2);
@@ -198,7 +201,7 @@ public class UniformRegistry {
         for (UniformBinding<?> binding : bindings.values()) {
             Object value = binding.value();
             if (value instanceof Number number) {
-                values.put(binding.name, new float[]{number.floatValue()});
+                putScalarValue(values, binding.name, number.floatValue());
             } else if (value instanceof float[] vector) {
                 addVectorScalarValues(values, binding.name, vector);
             } else if (value instanceof int[] vector) {
@@ -210,29 +213,37 @@ public class UniformRegistry {
         return values;
     }
 
-    private static void addVectorScalarValues(Map<String, float[]> values, String name, float[] vector) {
-        values.put(name, vector.clone());
+    private void addVectorScalarValues(Map<String, float[]> values, String name, float[] vector) {
+        float[] cachedVector = cachedScalarValues(name, vector.length);
+        System.arraycopy(vector, 0, cachedVector, 0, vector.length);
+        values.put(name, cachedVector);
         int count = Math.min(vector.length, 4);
         for (int i = 0; i < count; i++) {
             addVectorComponent(values, name, i, vector[i]);
         }
     }
 
-    private static void addVectorScalarValues(Map<String, float[]> values, String name, int[] vector) {
-        float[] floatVector = new float[vector.length];
+    private void addVectorScalarValues(Map<String, float[]> values, String name, int[] vector) {
+        float[] floatVector = cachedScalarValues(name, vector.length);
         for (int i = 0; i < vector.length; i++) {
             floatVector[i] = vector[i];
         }
-        addVectorScalarValues(values, name, floatVector);
+        values.put(name, floatVector);
+        int count = Math.min(vector.length, 4);
+        for (int i = 0; i < count; i++) {
+            addVectorComponent(values, name, i, vector[i]);
+        }
     }
 
-    private static void addVectorComponent(Map<String, float[]> values, String name, int index, float value) {
-        values.put(name + "." + index, new float[]{value});
-        values.put(name + "." + "xyzw".charAt(index), new float[]{value});
-        values.put(name + "." + "rgba".charAt(index), new float[]{value});
+    private void addVectorComponent(Map<String, float[]> values, String name, int index, float value) {
+        String[] keys = cachedVectorScalarKeys(name);
+        int offset = index * 3;
+        putScalarValue(values, keys[offset], value);
+        putScalarValue(values, keys[offset + 1], value);
+        putScalarValue(values, keys[offset + 2], value);
     }
 
-    private static void addMatrixScalarValues(Map<String, float[]> values, String name, FloatBuffer matrix) {
+    private void addMatrixScalarValues(Map<String, float[]> values, String name, FloatBuffer matrix) {
         int dimension;
         if (matrix.limit() >= 16) {
             dimension = 4;
@@ -242,11 +253,59 @@ public class UniformRegistry {
             return;
         }
 
+        String[] keys = cachedMatrixScalarKeys(name, dimension);
         for (int row = 0; row < dimension; row++) {
             for (int column = 0; column < dimension; column++) {
-                values.put(name + "." + row + "." + column, new float[]{matrix.get(column * dimension + row)});
+                putScalarValue(values, keys[row * dimension + column],
+                        matrix.get(column * dimension + row));
             }
         }
+    }
+
+    private String[] cachedVectorScalarKeys(String name) {
+        String[] keys = vectorScalarKeyCache.get(name);
+        if (keys != null) {
+            return keys;
+        }
+        keys = new String[12];
+        for (int i = 0; i < 4; i++) {
+            int offset = i * 3;
+            keys[offset] = name + "." + i;
+            keys[offset + 1] = name + "." + "xyzw".charAt(i);
+            keys[offset + 2] = name + "." + "rgba".charAt(i);
+        }
+        vectorScalarKeyCache.put(name, keys);
+        return keys;
+    }
+
+    private String[] cachedMatrixScalarKeys(String name, int dimension) {
+        String[] keys = matrixScalarKeyCache.get(name);
+        if (keys != null && keys.length == dimension * dimension) {
+            return keys;
+        }
+        keys = new String[dimension * dimension];
+        for (int row = 0; row < dimension; row++) {
+            for (int column = 0; column < dimension; column++) {
+                keys[row * dimension + column] = name + "." + row + "." + column;
+            }
+        }
+        matrixScalarKeyCache.put(name, keys);
+        return keys;
+    }
+
+    private void putScalarValue(Map<String, float[]> values, String name, float value) {
+        float[] scalar = cachedScalarValues(name, 1);
+        scalar[0] = value;
+        values.put(name, scalar);
+    }
+
+    private float[] cachedScalarValues(String name, int length) {
+        float[] cached = scalarValueCache.get(name);
+        if (cached == null || cached.length != length) {
+            cached = new float[length];
+            scalarValueCache.put(name, cached);
+        }
+        return cached;
     }
 
     /**
@@ -297,7 +356,7 @@ public class UniformRegistry {
                 return;
             }
             binding.uploadValue(location, value);
-            lastUploadedValue = snapshotValue(value);
+            lastUploadedValue = snapshotValue(value, lastUploadedValue);
             hasUploadedValue = true;
         }
 
@@ -321,15 +380,25 @@ public class UniformRegistry {
             return previous.equals(value);
         }
 
-        private static Object snapshotValue(Object value) {
+        private static Object snapshotValue(Object value, Object previous) {
             if (value instanceof float[] vector) {
-                return vector.clone();
+                float[] snapshot = previous instanceof float[] floats && floats.length == vector.length
+                        ? floats
+                        : new float[vector.length];
+                System.arraycopy(vector, 0, snapshot, 0, vector.length);
+                return snapshot;
             }
             if (value instanceof int[] vector) {
-                return vector.clone();
+                int[] snapshot = previous instanceof int[] ints && ints.length == vector.length
+                        ? ints
+                        : new int[vector.length];
+                System.arraycopy(vector, 0, snapshot, 0, vector.length);
+                return snapshot;
             }
             if (value instanceof FloatBuffer matrix) {
-                float[] snapshot = new float[matrix.limit()];
+                float[] snapshot = previous instanceof float[] floats && floats.length == matrix.limit()
+                        ? floats
+                        : new float[matrix.limit()];
                 for (int i = 0; i < snapshot.length; i++) {
                     snapshot[i] = matrix.get(i);
                 }

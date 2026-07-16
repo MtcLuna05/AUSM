@@ -23,6 +23,9 @@ import org.lwjgl.BufferUtils;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -166,8 +169,8 @@ public final class NothiriumShadowRenderer {
                     continue;
                 }
 
-                int sectionX = ((Integer) reflection.getX.invoke(chunk)) >> 4;
-                int sectionZ = ((Integer) reflection.getZ.invoke(chunk)) >> 4;
+                int sectionX = reflection.getX(chunk) >> 4;
+                int sectionZ = reflection.getZ(chunk) >> 4;
                 if (sectionX != chunkX || sectionZ != chunkZ) {
                     continue;
                 }
@@ -599,9 +602,9 @@ public final class NothiriumShadowRenderer {
                 continue;
             }
 
-            int chunkX = (Integer) reflection.getX.invoke(chunk);
-            int chunkY = (Integer) reflection.getY.invoke(chunk);
-            int chunkZ = (Integer) reflection.getZ.invoke(chunk);
+            int chunkX = reflection.getX(chunk);
+            int chunkY = reflection.getY(chunk);
+            int chunkZ = reflection.getZ(chunk);
             double dx = chunkX + 8.0D - cameraX;
             double dy = chunkY + 8.0D - cameraY;
             double dz = chunkZ + 8.0D - cameraZ;
@@ -624,9 +627,9 @@ public final class NothiriumShadowRenderer {
                 continue;
             }
 
-            int chunkX = (Integer) reflection.getX.invoke(chunk);
-            int chunkY = (Integer) reflection.getY.invoke(chunk);
-            int chunkZ = (Integer) reflection.getZ.invoke(chunk);
+            int chunkX = reflection.getX(chunk);
+            int chunkY = reflection.getY(chunk);
+            int chunkZ = reflection.getZ(chunk);
             double dx = chunkX + 8.0D - cameraX;
             double dy = chunkY + 8.0D - cameraY;
             double dz = chunkZ + 8.0D - cameraZ;
@@ -664,9 +667,9 @@ public final class NothiriumShadowRenderer {
                 continue;
             }
 
-            int chunkX = (Integer) reflection.getX.invoke(chunk);
-            int chunkY = (Integer) reflection.getY.invoke(chunk);
-            int chunkZ = (Integer) reflection.getZ.invoke(chunk);
+            int chunkX = reflection.getX(chunk);
+            int chunkY = reflection.getY(chunk);
+            int chunkZ = reflection.getZ(chunk);
             double dx = chunkX + 8.0D - cameraX;
             double dy = chunkY + 8.0D - cameraY;
             double dz = chunkZ + 8.0D - cameraZ;
@@ -692,12 +695,12 @@ public final class NothiriumShadowRenderer {
         if (part == null || !(Boolean) reflection.isValid.invoke(part)) {
             return false;
         }
-        int count = (Integer) reflection.getCount.invoke(part);
-        int vbo = (Integer) reflection.getVbo.invoke(part);
+        int count = reflection.getCount(part);
+        int vbo = reflection.getVbo(part);
         if (count <= 0 || vbo <= 0) {
             return false;
         }
-        int size = (Integer) reflection.getSize.invoke(part);
+        int size = reflection.getSize(part);
         int stride = vertexStride(size, count);
         return stride > 0 && (!requirePipelineStride || isPipelineBlockStride(stride));
     }
@@ -720,9 +723,9 @@ public final class NothiriumShadowRenderer {
                 continue;
             }
 
-            int chunkX = (Integer) reflection.getX.invoke(chunk);
-            int chunkY = (Integer) reflection.getY.invoke(chunk);
-            int chunkZ = (Integer) reflection.getZ.invoke(chunk);
+            int chunkX = reflection.getX(chunk);
+            int chunkY = reflection.getY(chunk);
+            int chunkZ = reflection.getZ(chunk);
             stats.captureFirstChunk(chunkX, chunkY, chunkZ);
             if (maxDistanceSquared >= 0.0D) {
                 double dx = chunkX + 8.0D - cameraX;
@@ -787,9 +790,9 @@ public final class NothiriumShadowRenderer {
                 continue;
             }
 
-            int chunkX = (Integer) reflection.getX.invoke(chunk);
-            int chunkY = (Integer) reflection.getY.invoke(chunk);
-            int chunkZ = (Integer) reflection.getZ.invoke(chunk);
+            int chunkX = reflection.getX(chunk);
+            int chunkY = reflection.getY(chunk);
+            int chunkZ = reflection.getZ(chunk);
             stats.captureFirstChunk(chunkX, chunkY, chunkZ);
             if (maxDistanceSquared >= 0.0D) {
                 double dx = chunkX + 8.0D - cameraX;
@@ -809,8 +812,8 @@ public final class NothiriumShadowRenderer {
             if (part != null) {
                 invalidPart = !((Boolean) reflection.isValid.invoke(part));
                 if (!invalidPart) {
-                    emptyPart = ((Integer) reflection.getCount.invoke(part)) <= 0
-                            || ((Integer) reflection.getVbo.invoke(part)) <= 0;
+                    emptyPart = reflection.getCount(part) <= 0
+                            || reflection.getVbo(part) <= 0;
                 }
             }
             if (!missingPart && !invalidPart && !emptyPart) {
@@ -963,6 +966,7 @@ public final class NothiriumShadowRenderer {
         double maxDistanceSquared = maxDistance >= 0.0D ? maxDistance * maxDistance : -1.0D;
         PipelineContext context = PipelineContext.getInstance();
         boolean disableCullForMainTerrain = context.shouldDisableNothiriumChunkCulling(layer);
+        int shaderlessBloomDimension = context.shaderlessBloomExtractionDimensionId();
         boolean previousCull = false;
         int previousMatrixMode = -1;
 
@@ -981,9 +985,9 @@ public final class NothiriumShadowRenderer {
                     continue;
                 }
 
-                int chunkX = (Integer) reflection.getX.invoke(chunk);
-                int chunkY = (Integer) reflection.getY.invoke(chunk);
-                int chunkZ = (Integer) reflection.getZ.invoke(chunk);
+                int chunkX = reflection.getX(chunk);
+                int chunkY = reflection.getY(chunk);
+                int chunkZ = reflection.getZ(chunk);
                 stats.captureFirstChunk(chunkX, chunkY, chunkZ);
                 if (collectState) {
                     stats.captureState(reflection, chunk, chunkX, chunkY, chunkZ);
@@ -998,7 +1002,8 @@ public final class NothiriumShadowRenderer {
                     }
                 }
                 stats.withinDistance++;
-                if (!context.shouldRenderShaderlessBloomChunkLayer(layer, chunkX, chunkY, chunkZ)) {
+                if (!context.shouldRenderShaderlessBloomChunkLayer(
+                        layer, chunkX, chunkY, chunkZ, shaderlessBloomDimension)) {
                     continue;
                 }
 
@@ -1014,22 +1019,22 @@ public final class NothiriumShadowRenderer {
                 }
                 stats.validPart++;
 
-                int count = (Integer) reflection.getCount.invoke(part);
+                int count = reflection.getCount(part);
                 if (count <= 0) {
                     stats.emptyCount++;
                     continue;
                 }
                 stats.positiveCount++;
 
-                int vbo = (Integer) reflection.getVbo.invoke(part);
+                int vbo = reflection.getVbo(part);
                 if (vbo <= 0) {
                     stats.badVbo++;
                     continue;
                 }
                 stats.positiveVbo++;
 
-                int offset = (Integer) reflection.getOffset.invoke(part);
-                int size = (Integer) reflection.getSize.invoke(part);
+                int offset = reflection.getOffset(part);
+                int size = reflection.getSize(part);
                 int stride = vertexStride(size, count);
                 if (stride <= 0) {
                     stats.badStride++;
@@ -1052,7 +1057,7 @@ public final class NothiriumShadowRenderer {
                     previousVboSize = GL15.glGetBufferParameteri(GL15.GL_ARRAY_BUFFER, GL15.GL_BUFFER_SIZE);
                 }
 
-                int first = (Integer) reflection.getFirst.invoke(part);
+                int first = reflection.getFirst(part);
                 stats.captureFirstPart(vbo, first, count, offset, size, stride, previousVboSize);
                 if (!validDrawRange(offset, size, previousVboSize)) {
                     stats.invalidRange++;
@@ -2149,11 +2154,11 @@ public final class NothiriumShadowRenderer {
         private final Method renderedSections;
         private final Method renderedSectionsAll;
         private final Method getVboPart;
-        private final Method getVbo;
-        private final Method getFirst;
-        private final Method getCount;
-        private final Method getOffset;
-        private final Method getSize;
+        private final MethodHandle getVbo;
+        private final MethodHandle getFirst;
+        private final MethodHandle getCount;
+        private final MethodHandle getOffset;
+        private final MethodHandle getSize;
         private final Method isValid;
         private final Method isDirty;
         private final Method isEmpty;
@@ -2161,9 +2166,9 @@ public final class NothiriumShadowRenderer {
         private final Method releaseBuffers;
         private final Method canCompile;
         private final Method compileAsync;
-        private final Method getX;
-        private final Method getY;
-        private final Method getZ;
+        private final MethodHandle getX;
+        private final MethodHandle getY;
+        private final MethodHandle getZ;
         private final Field chunks;
         private final Field providerChunks;
         private final Field dispatcherQueue;
@@ -2179,10 +2184,10 @@ public final class NothiriumShadowRenderer {
 
         private Reflection(Method getRenderer, Method getProvider, Method getTaskDispatcher, Method dispatcherUpdate,
                            Method render, Method enumMapGet, Method renderedChunks, Method renderedSections,
-                           Method renderedSectionsAll, Method getVboPart, Method getVbo, Method getFirst,
-                           Method getCount, Method getOffset, Method getSize, Method isValid, Method isDirty,
+                           Method renderedSectionsAll, Method getVboPart, MethodHandle getVbo, MethodHandle getFirst,
+                           MethodHandle getCount, MethodHandle getOffset, MethodHandle getSize, Method isValid, Method isDirty,
                            Method isEmpty, Method markDirty, Method releaseBuffers, Method canCompile,
-                           Method compileAsync, Method getX, Method getY, Method getZ, Field chunks,
+                           Method compileAsync, MethodHandle getX, MethodHandle getY, MethodHandle getZ, Field chunks,
                            Field providerChunks, Field dispatcherQueue, Field lastCompileTask,
                            Field lastCompileTaskResult, Field lastTimeRecorded, Field lastTimeEnqueued, Field nonemptyVboParts,
                            Object solid, Object cutout, Object cutoutMipped, Object translucent) {
@@ -2223,6 +2228,54 @@ public final class NothiriumShadowRenderer {
             this.cutout = cutout;
             this.cutoutMipped = cutoutMipped;
             this.translucent = translucent;
+        }
+
+        private int getX(Object chunk) throws ReflectiveOperationException {
+            return invokeInt(getX, chunk);
+        }
+
+        private int getY(Object chunk) throws ReflectiveOperationException {
+            return invokeInt(getY, chunk);
+        }
+
+        private int getZ(Object chunk) throws ReflectiveOperationException {
+            return invokeInt(getZ, chunk);
+        }
+
+        private int getVbo(Object part) throws ReflectiveOperationException {
+            return invokeInt(getVbo, part);
+        }
+
+        private int getFirst(Object part) throws ReflectiveOperationException {
+            return invokeInt(getFirst, part);
+        }
+
+        private int getCount(Object part) throws ReflectiveOperationException {
+            return invokeInt(getCount, part);
+        }
+
+        private int getOffset(Object part) throws ReflectiveOperationException {
+            return invokeInt(getOffset, part);
+        }
+
+        private int getSize(Object part) throws ReflectiveOperationException {
+            return invokeInt(getSize, part);
+        }
+
+        private static int invokeInt(MethodHandle getter, Object target) throws ReflectiveOperationException {
+            try {
+                return (int) getter.invokeExact(target);
+            } catch (RuntimeException | Error exception) {
+                throw exception;
+            } catch (Throwable throwable) {
+                throw new ReflectiveOperationException(throwable);
+            }
+        }
+
+        private static MethodHandle intGetter(Method method) throws IllegalAccessException {
+            return MethodHandles.publicLookup()
+                    .unreflect(method)
+                    .asType(MethodType.methodType(int.class, Object.class));
         }
 
         private static Reflection load() {
@@ -2295,11 +2348,11 @@ public final class NothiriumShadowRenderer {
                         renderedSections,
                         renderedSectionsAll,
                         getVboPart,
-                        getVbo,
-                        getFirst,
-                        getCount,
-                        getOffset,
-                        getSize,
+                        intGetter(getVbo),
+                        intGetter(getFirst),
+                        intGetter(getCount),
+                        intGetter(getOffset),
+                        intGetter(getSize),
                         isValid,
                         isDirty,
                         isEmpty,
@@ -2307,9 +2360,9 @@ public final class NothiriumShadowRenderer {
                         releaseBuffers,
                         canCompile,
                         compileAsync,
-                        getX,
-                        getY,
-                        getZ,
+                        intGetter(getX),
+                        intGetter(getY),
+                        intGetter(getZ),
                         chunks,
                         providerChunks,
                         dispatcherQueue,
