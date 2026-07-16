@@ -14,6 +14,7 @@
     "compat.AstralSorceryEffectHandlerMixin",
     "compat.AstralSorceryRenderSkyboxMixin",
     "compat.AstralSorcerySkyboxMixin",
+    "compat.BotaniaSkyblockSkyRendererMixin",
     "compat.ArchitectureCraftCustomBlockDispatcherMixin",
     "compat.ArchitectureCraftRenderTargetWorldMixin",
     "compat.ProjectRedRenderHaloMixin",

@@ -64,9 +64,12 @@ public final class NothiriumShadowRenderer {
     private static final int MAX_CHUNK_REFRESH_COMPILES = 16;
     private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 0;
     private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 0;
-    private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 8;
-    private static final int MAX_VISIBLE_NON_SOLID_TERRAIN_FAILURE_LOGS = 16;
+    private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 0;
+    private static final int MAX_VISIBLE_NON_SOLID_TERRAIN_FAILURE_LOGS = 0;
     private static final int MAX_VISIBLE_TERRAIN_DRAW_PROBE_LOGS = 0;
+    private static final int MAX_NATIVE_DRAW_AUDIT_LOGS = 0;
+    private static final int MAX_PROVIDER_DRAW_AUDIT_LOGS = 0;
+    private static final int MAX_EMPTY_LIST_AUDIT_LOGS = 0;
     private static final int NOTHIRIUM_OFFSET_ATTRIBUTE = 4;
     private static final long MAIN_TERRAIN_COMPILE_RETRY_DELAY_MS = 80L;
     private static final long MAIN_TERRAIN_COMPILE_TRACK_TTL_MS = 2000L;
@@ -935,7 +938,7 @@ public final class NothiriumShadowRenderer {
     }
 
     private void auditNativeDraw(BlockRenderLayer layer, Object renderer, int count) {
-        if (nativeDrawAuditAttempts >= 8) {
+        if (nativeDrawAuditAttempts >= MAX_NATIVE_DRAW_AUDIT_LOGS) {
             return;
         }
         nativeDrawAuditAttempts++;
@@ -1818,6 +1821,9 @@ public final class NothiriumShadowRenderer {
     }
 
     private void auditDrawStats(String source, BlockRenderLayer layer, DrawStats stats) {
+        if (MAX_PROVIDER_DRAW_AUDIT_LOGS <= 0) {
+            return;
+        }
         if (source.equals("provider")) {
             if (stats.drawn > 0) {
                 if (providerSuccessAuditLogged) {
@@ -1873,6 +1879,9 @@ public final class NothiriumShadowRenderer {
     }
 
     private void auditEmpty(BlockRenderLayer layer, Object renderer, Object pass, List<?> chunks) {
+        if (MAX_EMPTY_LIST_AUDIT_LOGS <= 0) {
+            return;
+        }
         if (emptyAuditLogged) {
             return;
         }

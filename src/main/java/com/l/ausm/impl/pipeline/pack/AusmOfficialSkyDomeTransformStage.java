@@ -156,7 +156,7 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                 bool ausmOfficialShouldRepairSkyPixel(float depth, vec3 color, vec2 uv) {
                     float maxChannel = max(max(color.r, color.g), color.b);
                     float minChannel = min(min(color.r, color.g), color.b);
-                    if (ausmSimpleVoidWorld > 0) {
+                    if (ausmSkyboxRepair > 0) {
                         bool missingSkyColor = maxChannel < 0.006 || minChannel > 0.985;
                         return depth > 0.999 && missingSkyColor && !ausmOfficialHasNearbySceneGeometry(uv);
                     }
@@ -182,13 +182,17 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
 	                    vec4 color = texture2D(colortex0, uv);
 	                    float depth = ausmOfficialSceneDepth(uv);
 	                    bool ausmOfficialSkyPixel = depth > 0.999 && !ausmOfficialHasNearbySceneGeometry(uv);
-	                    if (ausmOfficialShouldRepairSkyPixel(depth, color.rgb, uv) && ausmSimpleVoidWorld > 0) {
+	                    if (ausmOfficialShouldRepairSkyPixel(depth, color.rgb, uv) && ausmSkyboxRepair > 0) {
 	                        color.rgb = ausmOfficialSkyColor(uv);
 	                    } else if (depth > 0.999 && ausmSkyboxRepair > 0) {
 	                        float repairAmount = ausmOfficialSkyRepairAmount(uv, color.rgb);
 	                        color.rgb = mix(color.rgb, ausmOfficialSkyColor(uv), repairAmount);
                     }
-	                    if (ausmSimpleVoidWorld > 0 && ausmOfficialSkyPixel) {
+	                    if (ausmSkyboxRepair > 0) {
+	                        gl_FragData[0] = vec4(color.rgb, 1.0);
+	                        return;
+	                    }
+	                    if (ausmSkyboxRepair > 0 && ausmOfficialSkyPixel) {
 	                        color.rgb = ausmOfficialApplyVoidCelestials(color.rgb, uv);
 	                    }
                     gl_FragData[0] = vec4(color.rgb, 1.0);
@@ -483,7 +487,7 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                 bool ausmOfficialShouldRepairSkyPixel(float depth, vec3 color, vec2 uv) {
                     float maxChannel = max(max(color.r, color.g), color.b);
                     float minChannel = min(min(color.r, color.g), color.b);
-                    if (ausmSimpleVoidWorld > 0) {
+                    if (ausmSkyboxRepair > 0) {
                         bool missingSkyColor = maxChannel < 0.006 || minChannel > 0.985;
                         return depth > 0.999 && missingSkyColor && !ausmOfficialHasNearbySceneGeometry(uv);
                     }
@@ -509,22 +513,26 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     vec4 ausmOfficialSourceColor = texture2D(colortex0, uv);
                     ausmOfficialFinalColor = ausmOfficialSourceColor;
 		                    ausmOriginalFinalMain();
-                    if (ausmSimpleVoidWorld > 0) {
-                        float ausmOfficialSourceMax = max(max(ausmOfficialSourceColor.r, ausmOfficialSourceColor.g), ausmOfficialSourceColor.b);
+	                    if (ausmSkyboxRepair > 0) {
+	                        float ausmOfficialSourceMax = max(max(ausmOfficialSourceColor.r, ausmOfficialSourceColor.g), ausmOfficialSourceColor.b);
                         float ausmOfficialFinalMax = max(max(ausmOfficialFinalColor.r, ausmOfficialFinalColor.g), ausmOfficialFinalColor.b);
                         if (ausmOfficialSourceMax > 0.005 && ausmOfficialFinalMax <= 0.001) {
                             ausmOfficialFinalColor.rgb = ausmOfficialSourceColor.rgb;
-                        }
-                    }
+	                        }
+	                    }
+	                    if (ausmSkyboxRepair > 0) {
+	                        gl_FragData[0] = vec4(ausmOfficialFinalColor.rgb, 1.0);
+	                        return;
+	                    }
 		                    float depth = ausmOfficialSceneDepth(uv);
 		                    bool ausmOfficialSkyPixel = depth > 0.999 && !ausmOfficialHasNearbySceneGeometry(uv);
-		                    if (ausmOfficialShouldRepairSkyPixel(depth, ausmOfficialFinalColor.rgb, uv) && ausmSimpleVoidWorld > 0) {
+	                    if (ausmOfficialShouldRepairSkyPixel(depth, ausmOfficialFinalColor.rgb, uv) && ausmSkyboxRepair > 0) {
 	                        ausmOfficialFinalColor.rgb = ausmOfficialSkyColor(uv);
 	                    } else if (depth > 0.999 && ausmSkyboxRepair > 0) {
 	                        float repairAmount = ausmOfficialSkyRepairAmount(uv, ausmOfficialFinalColor.rgb);
 	                        ausmOfficialFinalColor.rgb = mix(ausmOfficialFinalColor.rgb, ausmOfficialSkyColor(uv), repairAmount);
                     }
-	                    if (ausmSimpleVoidWorld > 0 && ausmOfficialSkyPixel) {
+	                    if (ausmSkyboxRepair > 0 && ausmOfficialSkyPixel) {
 	                        ausmOfficialFinalColor.rgb = ausmOfficialApplyVoidCelestials(ausmOfficialFinalColor.rgb, uv);
 	                    }
                     gl_FragData[0] = vec4(ausmOfficialFinalColor.rgb, 1.0);

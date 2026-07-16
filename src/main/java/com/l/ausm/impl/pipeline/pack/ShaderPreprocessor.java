@@ -493,7 +493,8 @@ public class ShaderPreprocessor {
             return true;
         }
         return switch (name) {
-            case "PREPARE", "SHADOW", "DEFERRED", "COMPOSITE", "FINAL" -> true;
+            case "PREPARE", "SHADOW", "DEFERRED", "COMPOSITE", "FINAL",
+                    "AUSM_SIMPLE_VOID_WORLD" -> true;
             default -> false;
         };
     }

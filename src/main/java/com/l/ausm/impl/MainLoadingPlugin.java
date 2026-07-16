@@ -32,7 +32,8 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
             "com/elytradev/architecture/client/render/CustomBlockDispatcher.class",
             "com/elytradev/architecture/client/render/target/RenderTargetWorld.class",
             "com/elytradev/architecture/client/render/RenderingManager.class",
-            "lumien/custommainmenu/gui/GuiCustom.class"
+            "lumien/custommainmenu/gui/GuiCustom.class",
+            "vazkii/botania/client/render/world/SkyblockSkyRenderer.class"
     };
     private static final Set<String> EXPOSED_COMPAT_JARS = new HashSet<>();
 

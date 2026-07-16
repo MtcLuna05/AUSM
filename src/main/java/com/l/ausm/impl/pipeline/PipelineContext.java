@@ -236,6 +236,7 @@ public class PipelineContext {
     private static final int BIOME_SOUL_SAND_VALLEY_ID = 100_004;
     private static final int BIOME_PALE_GARDEN_ID = 100_005;
     private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
+    private static final String CUSTOM_VOID_WORLD_OPTION = "AUSM_CUSTOM_VOID_WORLD";
     private static final ResourceLocation BOTANIA_VOID_SKYBOX_TEXTURE = new ResourceLocation("botania", "textures/misc/skybox.png");
     private static final ResourceLocation BOTANIA_VOID_RAINBOW_TEXTURE = new ResourceLocation("botania", "textures/misc/rainbow.png");
     private static final ResourceLocation[] BOTANIA_VOID_PLANET_TEXTURES = new ResourceLocation[] {
@@ -289,7 +290,7 @@ public class PipelineContext {
     private static final int MAX_VISIBLE_BLOOM_DIAG_LOGS = 0;
     private static final int MAX_WORLD_LAYER_DIAG_LOGS = 0;
     private static final int MAX_EXTERNAL_OVERLAY_LOGS = 0;
-    private static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 8;
+    private static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 0;
     private static final int MAX_TERRAIN_HISTORY_CLEAR_LOGS = 8;
     private static final int MAX_RENDER_GLOBAL_LOAD_RENDERER_LOGS = 0;
     private static final int MAX_DISTANT_HORIZONS_DIAGNOSTIC_LOGS = 0;
@@ -301,9 +302,9 @@ public class PipelineContext {
     private static final int MAX_DIRECT_COLOR_PRESENT_LOGS = 0;
     private static final int MAX_DIRECT_WINDOW_PRESENT_LOGS = 0;
     private static final int MAX_DIRECT_RECOVERED_WINDOW_REFRESH_LOGS = 0;
-    private static final int MAX_DIRECT_PRESENTATION_TEXTURE_REFRESH_LOGS = 0;
-    private static final int MAX_DIRECT_PRESENTATION_SNAPSHOT_LOGS = 0;
-    private static final int MAX_GUI_RECOVERED_BACKGROUND_LOGS = 0;
+    private static final int MAX_DIRECT_PRESENTATION_TEXTURE_REFRESH_LOGS = 12;
+    private static final int MAX_DIRECT_PRESENTATION_SNAPSHOT_LOGS = 8;
+    private static final int MAX_GUI_RECOVERED_BACKGROUND_LOGS = 12;
     private static final int MAX_PRE_FINAL_DIRECT_PRESENT_LOGS = 0;
     private static final int MAX_PRESENTATION_BOUNDARY_LOGS = 0;
     private static final int MAX_TERRAIN_GRID_PROBE_LOGS = 0;
@@ -461,8 +462,8 @@ public class PipelineContext {
     private static final int NOTHIRIUM_SPARSE_MAIN_REPAIR_COOLDOWN_FRAMES = 8;
     private static final int NOTHIRIUM_NON_SOLID_PROVIDER_DRAW_FRAMES = 16;
     private static final int NOTHIRIUM_SPARSE_MAIN_PROVIDER_DRAW_FRAMES = 120;
-    private static final int NOTHIRIUM_SPARSE_MAIN_PROVIDER_SOLID_MAX_CHUNKS = 96;
-    private static final int NOTHIRIUM_SPARSE_MAIN_PROVIDER_CUTOUT_MAX_CHUNKS = 48;
+    private static final int NOTHIRIUM_SPARSE_MAIN_PROVIDER_SOLID_MAX_CHUNKS = 128;
+    private static final int NOTHIRIUM_SPARSE_MAIN_PROVIDER_CUTOUT_MAX_CHUNKS = 96;
     private static final double NOTHIRIUM_SPARSE_MAIN_PROVIDER_SOLID_DISTANCE = 160.0D;
     private static final double NOTHIRIUM_SPARSE_MAIN_PROVIDER_CUTOUT_DISTANCE = 128.0D;
     private static final int NOTHIRIUM_HYBRID_VANILLA_MAINTENANCE_FRAMES = 240;
@@ -1210,7 +1211,7 @@ public class PipelineContext {
         uniformRegistry.registerFloat("ausmAstralSolarEclipse", () -> currentAstralSolarEclipseFactor);
         uniformRegistry.registerVec4("ausmVoidSkyParams", () -> new float[]{1.0f, 1.0f, 1.0f, 1.0f});
         uniformRegistry.registerInt("ausmSimpleVoidWorld", () -> isSimpleVoidWorld(renderWorld(mc)) ? 1 : 0);
-        uniformRegistry.registerInt("ausmSkyboxRepair", () -> isSimpleVoidWorld(renderWorld(mc)) ? 1 : 0);
+        uniformRegistry.registerInt("ausmSkyboxRepair", () -> isCustomVoidWorldSkyEnabled(renderWorld(mc)) ? 1 : 0);
         uniformRegistry.registerFloat("dayMoment", () -> dayMoment(mc));
         uniformRegistry.registerFloat("timeAngle", () -> dayMoment(mc));
         uniformRegistry.registerFloat("timeBrightness", () -> Math.max((float) Math.sin(dayMoment(mc) * Math.PI * 2.0), 0.0f));
@@ -6684,11 +6685,21 @@ public class PipelineContext {
     }
 
     public boolean shouldSuppressVanillaSunGeometry() {
-        return isPipelineActive && !shaderProperties.renderSettings().sun();
+        return false;
     }
 
     public boolean shouldSuppressVanillaMoonGeometry() {
-        return isPipelineActive && !shaderProperties.renderSettings().moon();
+        return false;
+    }
+
+    private boolean shouldSuppressShaderedVoidCelestialGeometry() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        return isPipelineActive
+                && world != null
+                && isCustomVoidWorldSkyEnabled(world)
+                && !isRenderingBetterPortalsNestedView()
+                && !isRenderingBetterPortalsRenderPass();
     }
 
     public boolean shouldSuppressVanillaStarsGeometry() {
@@ -6699,7 +6710,9 @@ public class PipelineContext {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return world != null
-                && (isSimpleVoidWorld(world) || shouldUseShaderedF1LowerSkyRepair(mc, world))
+                && ((isCustomVoidWorldSkyEnabled(world)
+                    || (isSimpleVoidWorld(world) && !isPipelineActive))
+                || shouldUseShaderedF1LowerSkyRepair(mc, world))
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
     }
@@ -6712,7 +6725,6 @@ public class PipelineContext {
     private boolean shouldUseShaderlessOwnedSky(Minecraft mc) {
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return !isPipelineActive
-                && !areShaderpacksEnabled()
                 && world != null
                 && shouldUseOwnedSkyOverrideWorld(world)
                 && !isRenderingBetterPortalsNestedView()
@@ -6721,6 +6733,16 @@ public class PipelineContext {
 
     public boolean shouldSuppressShaderlessOwnedSkyBaseGeometry() {
         return shouldSuppressShaderlessSimpleVoidSkyBaseGeometry();
+    }
+
+    public boolean shouldSuppressBotaniaVoidSkyBaseGeometry() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        return world != null
+                && isSimpleVoidWorld(world)
+                && (shouldUseShaderlessOwnedSky(mc) || isPipelineActive)
+                && !isRenderingBetterPortalsNestedView()
+                && !isRenderingBetterPortalsRenderPass();
     }
 
     public boolean shouldSuppressVanillaSunsetGeometry() {
@@ -6766,11 +6788,7 @@ public class PipelineContext {
     }
 
     public boolean shouldSuppressShaderedAstralLowerSky() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        return isPipelineActive
-                && world != null
-                && (isSimpleVoidWorld(world) || shouldUseShaderedF1LowerSkyRepair(mc, world));
+        return shouldSuppressShaderedSimpleVoidSkyBaseGeometry();
     }
 
     public boolean shouldSuppressAstralUpperSkyGeometry() {
@@ -6785,6 +6803,16 @@ public class PipelineContext {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return shouldUseShaderlessOwnedSky(mc) && isSimpleVoidWorld(world);
+    }
+
+    private boolean shouldSuppressShaderedSimpleVoidSkyBaseGeometry() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        return isPipelineActive
+                && world != null
+                && isCustomVoidWorldSkyEnabled(world)
+                && !isRenderingBetterPortalsNestedView()
+                && !isRenderingBetterPortalsRenderPass();
     }
 
     public boolean shouldForceShaderlessAstralVoidLowerSky(WorldClient world) {
@@ -7594,7 +7622,6 @@ public class PipelineContext {
     private boolean shouldDrawSparseNothiriumMainLayerFromProvider(BlockRenderLayer layer, int visibleCount) {
         return visibleCount >= 0
                 && visibleCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
-                && pipelineFrameId <= nothiriumSparseMainProviderDrawUntilFrame
                 && isNothiriumSparseMainProviderDrawPass(layer);
     }
 
@@ -7789,8 +7816,7 @@ public class PipelineContext {
     private boolean shouldDrawEmptyNothiriumNonSolidLayerFromProvider(BlockRenderLayer layer, int visibleCount) {
         return visibleCount == 0
                 && isNothiriumNonSolidTerrainLayer(layer)
-                && isNothiriumNonSolidMainTerrainPass(layer)
-                && pipelineFrameId <= nothiriumNonSolidProviderDrawUntilFrame(layer);
+                && isNothiriumNonSolidMainTerrainPass(layer);
     }
 
     private long nothiriumNonSolidProviderDrawUntilFrame(BlockRenderLayer layer) {
@@ -7826,10 +7852,10 @@ public class PipelineContext {
 
     private int nothiriumNonSolidProviderDrawMaxChunks(BlockRenderLayer layer) {
         if (layer == BlockRenderLayer.TRANSLUCENT) {
-            return 32;
+            return 96;
         }
         if (layer == BlockRenderLayer.CUTOUT_MIPPED || layer == BlockRenderLayer.CUTOUT) {
-            return 48;
+            return 96;
         }
         return 0;
     }
@@ -10075,8 +10101,6 @@ public class PipelineContext {
         float yaw = interpolateAngle(com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationYaw(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(viewEntity), currentWorldPartialTicks);
         float pitch = com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationPitch(viewEntity) + (com.l.ausm.impl.util.MinecraftReflectionCompat.rotationPitch(viewEntity) - com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationPitch(viewEntity)) * currentWorldPartialTicks;
         float velocity = cameraVelocityMagnitude();
-        float horizontalVelocity = cameraHorizontalVelocityMagnitude();
-        float verticalVelocity = Math.abs(cameraPosition[1] - previousCameraPosition[1]);
 
         if (!temporalHistoryInitialized) {
             resetTemporalHistoryTracking(dimensionId, yaw, pitch);
@@ -10111,12 +10135,6 @@ public class PipelineContext {
         }
         if (recoveryDimensionId == Integer.MIN_VALUE) {
             mainViewSwapTemporalResetDimensionId = Integer.MIN_VALUE;
-        }
-        if (horizontalVelocity > TEMPORAL_HISTORY_CAMERA_DELTA_RESET
-                || verticalVelocity > TEMPORAL_HISTORY_VERTICAL_CAMERA_DELTA_RESET) {
-            resetTemporalHistoryTracking(dimensionId, yaw, pitch);
-            temporalHistoryResetReason = "camera-delta";
-            return true;
         }
         if (accumulatedTemporalYaw > TEMPORAL_HISTORY_ACCUMULATED_YAW_RESET
                 || accumulatedTemporalPitch > TEMPORAL_HISTORY_ACCUMULATED_PITCH_RESET) {
@@ -12554,7 +12572,7 @@ public class PipelineContext {
             if (nothiriumShadowInvalidFrames >= NOTHIRIUM_SHADOW_SUPPRESS_AFTER_INVALID_FRAMES) {
                 nothiriumShadowInvalidFrames = 0;
                 nothiriumShadowSuppressedFrames = Math.max(nothiriumShadowSuppressedFrames, NOTHIRIUM_SHADOW_SUPPRESS_FRAMES);
-                if (nothiriumShadowSuppressionLogs < 8) {
+                if (nothiriumShadowSuppressionLogs < 0) {
                     nothiriumShadowSuppressionLogs++;
                     MainMod.LOGGER.info(
                             "[ShadowHealth] Suppressing Nothirium shadow terrain after repeated invalid output. nonClear={}/{} terrainDraws={} blockEntities={} suppressFrames={} dim={}",
@@ -12572,7 +12590,7 @@ public class PipelineContext {
             nothiriumShadowSuppressedFrames = 0;
         }
 
-        if (!shadowHealthLogged && shadowHealthLogAttempts < 6) {
+        if (!shadowHealthLogged && shadowHealthLogAttempts < 0) {
             shadowHealthLogAttempts++;
             shadowHealthLogged = populated && shadowMapUsable;
             MainMod.LOGGER.info(
@@ -12600,7 +12618,7 @@ public class PipelineContext {
         }
         if (stats.nonClear() > 0
                 && (sparseNothiriumShadow || unstableSparseShadow)
-                && shadowMapSuppressedLogs < 16) {
+                && shadowMapSuppressedLogs < 0) {
             shadowMapSuppressedLogs++;
             MainMod.LOGGER.info(
                     "[ShadowHealth] Sparse Nothirium shadow map observed; keeping real shadow textures bound. reason={} dim={} nonClear={}/{} minNonClear={} terrainDraws={} minTerrainDraws={} stableFrames={}/{} verticalDelta={} upwardThreshold={} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
@@ -12622,7 +12640,7 @@ public class PipelineContext {
                     blockEntityCount
             );
         }
-        if (drawPopulated && !shadowMapUsable && shadowMapInvalidLogs < 8) {
+        if (drawPopulated && !shadowMapUsable && shadowMapInvalidLogs < 0) {
             shadowMapInvalidLogs++;
             MainMod.LOGGER.info(
                     "[ShadowHealth] Shadow map draw produced clear/sparse depth; keeping real shadow textures bound. nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
@@ -13081,7 +13099,17 @@ public class PipelineContext {
     }
 
     private static double centeredRemainder(double value, double interval) {
-        return value % interval - interval * 0.5;
+        if (!Double.isFinite(value) || !Double.isFinite(interval) || interval <= 0.0D) {
+            return 0.0D;
+        }
+        double remainder = value % interval;
+        if (remainder > interval * 0.5D) {
+            remainder -= interval;
+        }
+        if (remainder < -interval * 0.5D) {
+            remainder += interval;
+        }
+        return remainder;
     }
 
     public void bindWorldFramebuffer() {
@@ -19001,6 +19029,13 @@ public class PipelineContext {
                 && com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider) == SIMPLE_VOID_WORLD_DIMENSION_ID;
     }
 
+    public boolean isCustomVoidWorldSkyEnabled(World world) {
+        return isPipelineActive
+                && isSimpleVoidWorld(world)
+                && shaderProperties != null
+                && optionBoolean(shaderProperties, CUSTOM_VOID_WORLD_OPTION, false);
+    }
+
     public boolean shouldUseOwnedSkyOverrideWorld(World world) {
         return isSimpleVoidWorld(world) || isOverworldShaderEnvironment(world);
     }
@@ -19391,6 +19426,11 @@ public class PipelineContext {
         }
 
         renderingGui = true;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Framebuffer target = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) : null;
+        if (target != null) {
+            refreshMinecraftFramebufferFromDirectPresentationTexture(target, true);
+        }
         bindGuiTarget();
         prepareGuiState();
     }
@@ -19603,7 +19643,6 @@ public class PipelineContext {
             directPresentationValid = true;
             directPresentationFrame = pipelineFrameId;
             directPresentationReason = reason;
-            logDirectPresentationSnapshot(reason, target);
         } catch (RuntimeException | LinkageError e) {
             directPresentationValid = false;
         } finally {
@@ -19712,7 +19751,6 @@ public class PipelineContext {
             );
             com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, targetWidth, targetHeight);
-            logDirectPresentationTextureRefresh(target, targetWidth, targetHeight, allowStaleForGui);
             return true;
         } catch (RuntimeException | LinkageError e) {
             return false;
@@ -19815,7 +19853,10 @@ public class PipelineContext {
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
         GL11.glColorMask(true, true, true, false);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, width, height);
-        refreshedRecoveredSource = refreshMinecraftFramebufferFromDirectRecoveredWindowSource(target);
+        boolean screenOpen = com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null;
+        if (!screenOpen) {
+            refreshedRecoveredSource = refreshMinecraftFramebufferFromDirectRecoveredWindowSource(target);
+        }
         GL11.glColorMask(true, true, true, false);
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, 0);
@@ -20525,8 +20566,7 @@ public class PipelineContext {
     }
 
     public boolean shouldUseNeutralShadowTextures() {
-        return isBetterPortalsExternalWorldTarget()
-                || (isPipelineActive && shadowFramebuffer != null && shadowMapPopulated && !shadowMapUsable);
+        return isBetterPortalsExternalWorldTarget();
     }
 
     public boolean shouldUseShadowHardwareFiltering() {

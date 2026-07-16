@@ -61,7 +61,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private static final int AUSM_SHADERLESS_COMPILE_LIGHT_PROBE_LIMIT = 0;
 
     @Unique
-    private static final int AUSM_NOTHIRIUM_LAYER_COMPILE_LOG_LIMIT = 12;
+    private static final int AUSM_NOTHIRIUM_LAYER_COMPILE_LOG_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_NOTHIRIUM_LAYER_COMPILE_LOGS = new AtomicInteger();

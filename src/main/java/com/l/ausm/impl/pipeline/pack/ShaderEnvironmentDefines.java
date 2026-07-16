@@ -8,6 +8,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class ShaderEnvironmentDefines {
+    private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
+
     private ShaderEnvironmentDefines() {
     }
 
@@ -48,7 +50,12 @@ public final class ShaderEnvironmentDefines {
         addDistantHorizonsDefines(defines);
         addSupportedFeatureDefines(defines, directives);
 
-        switch (ShaderDimensionContext.currentDimensionId()) {
+        int dimensionId = ShaderDimensionContext.currentDimensionId();
+        if (dimensionId == SIMPLE_VOID_WORLD_DIMENSION_ID) {
+            defines.put("AUSM_SIMPLE_VOID_WORLD", "1");
+        }
+
+        switch (dimensionId) {
             case -1 -> defines.put("NETHER", "1");
             case 1 -> defines.put("THE_END", "1");
             default -> defines.put("OVERWORLD", "1");

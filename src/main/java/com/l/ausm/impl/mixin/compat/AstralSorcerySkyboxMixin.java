@@ -11,11 +11,13 @@ import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.lwjgl.opengl.GL11;
 
 @Mixin(targets = "hellfirepvp.astralsorcery.client.sky.RenderAstralSkybox", remap = false)
 public class AstralSorcerySkyboxMixin {
-    private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
     private static boolean logged;
+    private static boolean ausm$loggedShaderlessSkyRepair;
+    private boolean ausm$sunsetPhaseActive;
 
     @Redirect(
             method = "renderSky",
@@ -86,6 +88,11 @@ public class AstralSorcerySkyboxMixin {
     private void ausm$beginAstralSolarEclipseSun(@Coerce Object skyHandler, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         context.beginPhase(WorldRenderingPhase.ASTRAL_SOLAR_ECLIPSE);
+        if (context.shouldSuppressVanillaSunGeometry()) {
+            ausm$logSuppression();
+            context.endPass();
+            ci.cancel();
+        }
     }
 
     @Inject(method = "renderSolarEclipseSun", at = @At("RETURN"), remap = false)
@@ -113,6 +120,14 @@ public class AstralSorcerySkyboxMixin {
     private void ausm$beginAstralStars(World world, float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         context.beginPhase(WorldRenderingPhase.ASTRAL_STARS);
+        if (context.shouldSuppressShaderlessOwnedSkyBaseGeometry()) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+                    GL11.GL_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        }
     }
 
     @Inject(method = "renderStars(Lnet/minecraft/world/World;F)V", at = @At("RETURN"), remap = false)
@@ -195,16 +210,28 @@ public class AstralSorcerySkyboxMixin {
                 new Class<?>[] {float.class}, 0.0F, (partialTicks));
     }
 
-    @Inject(method = "renderSunsetToBackground", at = @At("HEAD"), remap = false)
+    @Inject(method = "renderSunsetToBackground", at = @At("HEAD"), cancellable = true, remap = false)
     private void ausm$beginAstralSunset(float[] colors, float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        ausm$sunsetPhaseActive = false;
+        if (context.shouldSuppressShaderlessOwnedSkyBaseGeometry()) {
+            if (!ausm$loggedShaderlessSkyRepair) {
+                ausm$loggedShaderlessSkyRepair = true;
+                MainMod.LOGGER.info("[AUSMVoidSkyProbe] Suppressed shaderless Astral sunset fan and normalized additive star state.");
+            }
+            ci.cancel();
+            return;
+        }
         context.beginPhase(WorldRenderingPhase.SUNSET);
+        ausm$sunsetPhaseActive = true;
     }
 
     @Inject(method = "renderSunsetToBackground", at = @At("RETURN"), remap = false)
     private void ausm$endAstralSunset(float[] colors, float partialTicks, CallbackInfo ci) {
-        PipelineContext context = PipelineContext.getInstance();
-        context.endPass();
+        if (ausm$sunsetPhaseActive) {
+            ausm$sunsetPhaseActive = false;
+            PipelineContext.getInstance().endPass();
+        }
     }
 
     private static void ausm$logSuppression() {
@@ -214,14 +241,18 @@ public class AstralSorcerySkyboxMixin {
         }
     }
 
+    private static boolean ausm$usesCustomVoidSky(World world) {
+        return PipelineContext.getInstance().isCustomVoidWorldSkyEnabled(world);
+    }
+
     private static boolean ausm$isSimpleVoidWorld(World world) {
-        return world != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) == SIMPLE_VOID_WORLD_DIMENSION_ID;
+        net.minecraft.world.WorldProvider provider = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
+        return provider != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider) == 43;
     }
 
     private static long ausm$starRenderTime(World world) {
-        if (!ausm$isSimpleVoidWorld(world)) {
+        if (!ausm$usesCustomVoidSky(world)) {
             Object time = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
                     world,
                     new String[] {"func_72820_D", "getWorldTime"},
@@ -233,7 +264,7 @@ public class AstralSorcerySkyboxMixin {
     }
 
     private static float ausm$voidWorldAstralNightVisibility(World world) {
-        return ausm$isSimpleVoidWorld(world) ? 1.0F : ausm$smoothstep(0.08F, 0.35F, ausm$voidWorldAstralNightFactor(world));
+        return ausm$usesCustomVoidSky(world) ? 1.0F : ausm$smoothstep(0.08F, 0.35F, ausm$voidWorldAstralNightFactor(world));
     }
 
     private static float ausm$voidWorldAstralStarBrightnessInput(World world) {
