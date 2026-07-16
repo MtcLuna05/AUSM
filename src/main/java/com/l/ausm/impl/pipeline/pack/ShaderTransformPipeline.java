@@ -21,6 +21,7 @@ public final class ShaderTransformPipeline {
             new GbuffersBuiltinTransformStage(),
             new BloomOnlyMaskDiscardTransformStage(),
             new NothiriumChunkOffsetTransformStage(),
+            new ModdedFluidCompatibilityTransformStage(),
             new FadeVariableTransformStage(),
             new EntityAdvancedMaterialFallbackTransformStage(),
             new FullscreenBuiltinTransformStage(),

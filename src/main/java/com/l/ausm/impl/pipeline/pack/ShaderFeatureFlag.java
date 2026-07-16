@@ -21,7 +21,7 @@ enum ShaderFeatureFlag {
     COMPUTE_SHADERS(true, true, "OpenGL 4.3 or ARB_compute_shader is required"),
     TESSELLATION_SHADERS(true, true, "OpenGL 4.0 or ARB_tessellation_shader is required"),
     ENTITY_TRANSLUCENT(true, false, "entity translucent shader passes are implemented"),
-    REVERSED_CULLING(true, false, "shadow.culling=reversed is implemented"),
+    REVERSED_CULLING(false, false, "general reversed-culling support is not implemented"),
     BLOCK_EMISSION_ATTRIBUTE(true, false, "block emission is available in at_midBlock.w"),
     CAN_DISABLE_WEATHER(true, false, "weather render toggles are implemented"),
     SSBO(true, true, "OpenGL 4.3 or ARB_shader_storage_buffer_object is required"),

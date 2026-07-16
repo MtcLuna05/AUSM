@@ -157,6 +157,10 @@ public class PingPongManager {
         framebuffer.bindForGbuffers(drawTargets);
     }
 
+    public void forceGbufferDrawBuffers(Attachment... drawTargets) {
+        framebuffer.forceGbufferDrawBuffers(drawTargets);
+    }
+
     public int width() {
         return framebuffer != null ? framebuffer.getWidth() : 0;
     }

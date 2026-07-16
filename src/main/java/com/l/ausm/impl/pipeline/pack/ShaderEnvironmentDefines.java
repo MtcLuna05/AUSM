@@ -154,12 +154,9 @@ public final class ShaderEnvironmentDefines {
     }
 
     private static void addDistantHorizonsDefines(Map<String, String> defines) {
-        boolean installed = distantHorizonsInstalled();
-        defines.put("DISTANT_HORIZON", installed ? "1" : "0");
-        if (installed) {
-            // Shader packs commonly gate DH declarations with #ifdef DISTANT_HORIZONS.
-            defines.put("DISTANT_HORIZONS", "1");
-        }
+        // Mod presence is not a shader-pipeline capability. AUSM's direct DH
+        // programs/MRT path is disabled, so ordinary programs cannot use it.
+        defines.put("DISTANT_HORIZON", "0");
     }
 
     private static boolean isFeatureAvailable(ShaderFeatureFlag flag) {

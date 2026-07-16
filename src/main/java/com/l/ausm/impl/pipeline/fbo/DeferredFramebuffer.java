@@ -198,6 +198,11 @@ public class DeferredFramebuffer {
         GL11.glViewport(0, 0, width, height);
     }
 
+    public void forceGbufferDrawBuffers(Attachment... drawTargets) {
+        invalidateDrawBufferState(fboId);
+        bindForGbuffers(drawTargets);
+    }
+
     public void bindAsExternalTarget(Attachment attachment, boolean setViewport) {
         bindPipelineFramebuffer(fboId, true, true, attachment);
         if (setViewport) {

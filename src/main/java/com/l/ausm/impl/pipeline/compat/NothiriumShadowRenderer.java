@@ -66,10 +66,10 @@ public final class NothiriumShadowRenderer {
     private static final int MAX_PENDING_SHADOW_COMPILES = 64;
     private static final int MAX_CHUNK_REFRESH_COMPILES = 16;
     private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 0;
-    private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 0;
-    private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 0;
-    private static final int MAX_VISIBLE_NON_SOLID_TERRAIN_FAILURE_LOGS = 0;
-    private static final int MAX_VISIBLE_TERRAIN_DRAW_PROBE_LOGS = 0;
+    private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 16;
+    private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 16;
+    private static final int MAX_VISIBLE_NON_SOLID_TERRAIN_FAILURE_LOGS = 16;
+    private static final int MAX_VISIBLE_TERRAIN_DRAW_PROBE_LOGS = 12;
     private static final int MAX_NATIVE_DRAW_AUDIT_LOGS = 0;
     private static final int MAX_PROVIDER_DRAW_AUDIT_LOGS = 0;
     private static final int MAX_EMPTY_LIST_AUDIT_LOGS = 0;
@@ -107,6 +107,11 @@ public final class NothiriumShadowRenderer {
 
     public static boolean isAvailable() {
         return reflection() != null;
+    }
+
+    public void resetPipelineProgramState() {
+        chunkOffsetUniformLocations.clear();
+        mainTerrainCompileAttempts.clear();
     }
 
     public void drainUploads() {
@@ -931,6 +936,9 @@ public final class NothiriumShadowRenderer {
             throws ReflectiveOperationException {
         LayerGlState layerState = LayerGlState.prepare(layer);
         try {
+            if (layer == BlockRenderLayer.TRANSLUCENT) {
+                PipelineContext.getInstance().restoreActiveGbufferRenderState();
+            }
             return drawChunks(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, collectState,
                     fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
         } finally {
@@ -1196,9 +1204,9 @@ public final class NothiriumShadowRenderer {
                                                      int vbo, int first, int count, int offset, int size,
                                                      int stride, int vboSize, boolean pipelineStride) {
         PipelineContext context = PipelineContext.getInstance();
-        if (!context.shouldDisableNothiriumChunkCulling(layer)
+        if (layer != BlockRenderLayer.TRANSLUCENT
+                || !context.shouldDisableNothiriumChunkCulling(layer)
                 || visibleTerrainDrawProbeAttempts >= MAX_VISIBLE_TERRAIN_DRAW_PROBE_LOGS
-                || layer == BlockRenderLayer.TRANSLUCENT
                 || count <= 0
                 || stride <= 0
                 || offset < 0) {
@@ -1433,6 +1441,16 @@ public final class NothiriumShadowRenderer {
                     .append('/')
                     .append(visibleTerrainVertexProbe.get(ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET + 2));
         }
+        if (stride >= ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET + 8) {
+            builder.append(",mcEntity=")
+                    .append(visibleTerrainVertexProbe.getShort(ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET) & 0xFFFF)
+                    .append('/')
+                    .append(visibleTerrainVertexProbe.getShort(ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET + 2) & 0xFFFF)
+                    .append('/')
+                    .append(visibleTerrainVertexProbe.getShort(ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET + 4) & 0xFFFF)
+                    .append('/')
+                    .append(visibleTerrainVertexProbe.getShort(ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET + 6) & 0xFFFF);
+        }
         if (stride >= ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET + 4) {
             builder.append(",midBlock=")
                     .append(visibleTerrainVertexProbe.get(ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET))
@@ -1639,8 +1657,39 @@ public final class NothiriumShadowRenderer {
 
     private void auditVisibleTranslucentLayer(BlockRenderLayer layer, DrawStats stats,
                                              int fallbackBlockEntityId, short fallbackRenderType, String stage) {
-        // Probe disabled.
-}
+        if (layer != BlockRenderLayer.TRANSLUCENT
+                || visibleTranslucentAuditAttempts >= MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS) {
+            return;
+        }
+
+        visibleTranslucentAuditAttempts++;
+        MainMod.LOGGER.info(
+                "[AUSMNothiriumTranslucent] call={} stage={} total={} null={} within={} distCull={} missingPart={} part={} invalidPart={} valid={} emptyCount={} count={} badVbo={} vbo={} badStride={} unsupportedStride={} rangeSkip={} drawn={} fallbackBlock={} fallbackRenderType={} firstChunk={} firstPart={} gl={}",
+                visibleTranslucentAuditAttempts,
+                stage,
+                stats.total,
+                stats.nullChunks,
+                stats.withinDistance,
+                stats.distanceCulled,
+                stats.missingPart,
+                stats.partPresent,
+                stats.invalidPart,
+                stats.validPart,
+                stats.emptyCount,
+                stats.positiveCount,
+                stats.badVbo,
+                stats.positiveVbo,
+                stats.badStride,
+                stats.unsupportedStride,
+                stats.invalidRange,
+                stats.drawn,
+                fallbackBlockEntityId,
+                fallbackRenderType,
+                stats.firstChunk,
+                stats.firstPart,
+                glStateSummary()
+        );
+    }
 
     private static void resetClientArrayState() {
         GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);

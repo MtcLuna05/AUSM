@@ -10,7 +10,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(GuiInventory.class)
 public class GuiInventoryMixin {
-    @Inject(method = "drawEntityOnScreen", at = @At("HEAD"))
+    @Inject(
+            method = "func_147046_a(IIIFFLnet/minecraft/entity/EntityLivingBase;)V",
+            at = @At("HEAD"),
+            remap = false,
+            require = 1
+    )
     private static void ausm$beforeInventoryEntityPreview(int posX, int posY, int scale,
                                                           float mouseX, float mouseY,
                                                           EntityLivingBase entity,
@@ -18,7 +23,12 @@ public class GuiInventoryMixin {
         PipelineContext.getInstance().prepareGuiEntityPreviewRenderState();
     }
 
-    @Inject(method = "drawEntityOnScreen", at = @At("RETURN"))
+    @Inject(
+            method = "func_147046_a(IIIFFLnet/minecraft/entity/EntityLivingBase;)V",
+            at = @At("RETURN"),
+            remap = false,
+            require = 1
+    )
     private static void ausm$afterInventoryEntityPreview(int posX, int posY, int scale,
                                                          float mouseX, float mouseY,
                                                          EntityLivingBase entity,

@@ -231,6 +231,7 @@ public class ShaderCompiler {
         return resourcePath != null
                 && (resourcePath.contains("gbuffers_skybasic")
                 || resourcePath.contains("gbuffers_skytextured")
+                || resourcePath.contains("gbuffers_water")
                 || resourcePath.contains("gbuffers_hand")
                 || resourcePath.contains("composite1")
                 || resourcePath.contains("final"));

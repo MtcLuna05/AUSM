@@ -146,6 +146,7 @@ public class ShaderPreprocessor {
         versionLine = ensureStageMinimumVersion(versionLine, shaderType);
         int glslVersion = parseGlslVersion(versionLine);
         ShaderOptions sourceOptions = removeFunctionCollidingOptions(options, rawLines);
+        ShaderOptions preludeOptions = removeSourceDeclaredOptions(sourceOptions, rawLines);
 
         StringBuilder finalSource = new StringBuilder();
         for (String line : rawLines) {
@@ -166,7 +167,7 @@ public class ShaderPreprocessor {
         for (String extensionLine : extensionLines) {
             out.append(extensionLine).append("\n");
         }
-        out.append(getOptiFineEnvironmentDefines(sourceOptions, glslVersion, directives)).append("\n");
+        out.append(getOptiFineEnvironmentDefines(preludeOptions, glslVersion, directives)).append("\n");
         out.append(getRenderStageDefines()).append("\n");
         out.append(getProgramDefines(pass, programName)).append("\n");
         out.append(getOptiFineMetadataDefines()).append("\n");
@@ -201,6 +202,39 @@ public class ShaderPreprocessor {
                 continue;
             }
             filtered.put(option.name(), option);
+        }
+        return removed ? new ShaderOptions(filtered) : options;
+    }
+
+    private static ShaderOptions removeSourceDeclaredOptions(ShaderOptions options, List<String> rawLines) {
+        if (options == null || options.all().isEmpty()) {
+            return options;
+        }
+
+        Set<String> declaredNames = new HashSet<>();
+        for (String line : rawLines) {
+            Matcher define = DEFINE_PATTERN.matcher(line);
+            if (define.matches()) {
+                declaredNames.add(define.group(1));
+                continue;
+            }
+            Matcher constant = CONST_PATTERN.matcher(line);
+            if (constant.matches()) {
+                declaredNames.add(constant.group(2));
+            }
+        }
+        if (declaredNames.isEmpty()) {
+            return options;
+        }
+
+        Map<String, ShaderOption> filtered = new LinkedHashMap<>();
+        boolean removed = false;
+        for (ShaderOption option : options.all().values()) {
+            if (declaredNames.contains(option.name())) {
+                removed = true;
+            } else {
+                filtered.put(option.name(), option);
+            }
         }
         return removed ? new ShaderOptions(filtered) : options;
     }
@@ -363,8 +397,7 @@ public class ShaderPreprocessor {
     }
 
     private static void appendDistantHorizonsPassDefines(StringBuilder defines, RenderPass pass) {
-        if ((pass == RenderPass.DH_TERRAIN || pass == RenderPass.DH_WATER)
-                && !ShaderEnvironmentDefines.distantHorizonsInstalled()) {
+        if (pass == RenderPass.DH_TERRAIN || pass == RenderPass.DH_WATER) {
             appendProgramDefine(defines, "DISTANT_HORIZONS 1");
         }
     }
@@ -462,7 +495,13 @@ public class ShaderPreprocessor {
                 return line;
             }
 
-            return "// AUSM option overridden by prelude: #define " + option.name();
+            String indent = line.substring(0, line.indexOf(line.trim()));
+            if (option.toggle()) {
+                return option.asBoolean()
+                        ? indent + "#define " + option.name()
+                        : indent + "// AUSM option disabled: #define " + option.name();
+            }
+            return indent + "#define " + option.name() + " " + option.value();
         }
 
         matcher = CONST_PATTERN.matcher(line);
@@ -475,7 +514,11 @@ public class ShaderPreprocessor {
             return line;
         }
 
-        return "// AUSM option overridden by prelude: const " + option.name();
+        return matcher.group(1)
+                + option.name()
+                + matcher.group(3)
+                + option.value()
+                + matcher.group(5);
     }
 
     private static boolean isGeneratedPreludeDefine(String name) {

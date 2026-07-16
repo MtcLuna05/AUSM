@@ -32,6 +32,12 @@ public class RenderItemMixin {
     private static final ThreadLocal<Deque<Boolean>> AUSM$guiItemStateStack = ThreadLocal.withInitial(ArrayDeque::new);
 
     @Unique
+    private static final ThreadLocal<Deque<Boolean>> AUSM$guiBuiltInStateStack = ThreadLocal.withInitial(ArrayDeque::new);
+
+    @Unique
+    private static final ThreadLocal<Deque<Boolean>> AUSM$guiForgeLitStateStack = ThreadLocal.withInitial(ArrayDeque::new);
+
+    @Unique
     private static final ThreadLocal<Deque<Boolean>> AUSM$renderedItemStack = ThreadLocal.withInitial(ArrayDeque::new);
 
     @Unique
@@ -62,7 +68,9 @@ public class RenderItemMixin {
         ProjectRedHaloRenderer.auditRenderItem(stack, "renderItem_model", model != null ? model.getClass().getName() : null);
         PipelineContext context = PipelineContext.getInstance();
         if (context.isRenderingGuiScreen()) {
+            context.probeGuiModelState("item-head");
             AUSM$guiItemStateStack.get().push(context.beginGuiItemStateScope());
+            context.beginGuiItemModelProbe(stack, model);
             AUSM$renderedItemStack.get().push(false);
             AUSM$itemPhaseStack.get().push(false);
             return;
@@ -76,17 +84,22 @@ public class RenderItemMixin {
 
     @Inject(method = "renderItem(Lnet/minecraft/item/ItemStack;Lnet/minecraft/client/renderer/block/model/IBakedModel;)V", at = @At("RETURN"))
     private void ausm$onRenderItemReturn(ItemStack stack, IBakedModel model, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
         Deque<Boolean> stackState = AUSM$itemPhaseStack.get();
         if (!stackState.isEmpty() && stackState.pop()) {
-            PipelineContext.getInstance().endPass();
+            context.endPass();
         }
         Deque<Boolean> renderedItemState = AUSM$renderedItemStack.get();
         if (!renderedItemState.isEmpty() && renderedItemState.pop()) {
-            PipelineContext.getInstance().endRenderedItem();
+            context.endRenderedItem();
         }
         Deque<Boolean> guiState = AUSM$guiItemStateStack.get();
         if (!guiState.isEmpty() && guiState.pop()) {
-            PipelineContext.getInstance().endGuiItemStateScope();
+            context.endGuiItemStateScope();
+        }
+        if (context.isRenderingGuiScreen()) {
+            context.probeGuiModelState("item-return");
+            context.endGuiItemModelProbe();
         }
     }
 
@@ -99,8 +112,26 @@ public class RenderItemMixin {
     )
     private void ausm$beforeBuiltInItemRenderer(ItemStack stack, IBakedModel model, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        if (!context.isRenderingGuiScreen()) {
+        if (context.isRenderingGuiScreen()) {
+            context.probeGuiModelState("before-built-in-item-renderer");
+            AUSM$guiBuiltInStateStack.get().push(context.beginGuiBuiltInItemStateScope());
+        } else {
             context.prepareHandItemDrawState("built_in_item_renderer");
+        }
+    }
+
+    @Inject(
+            method = "renderItem(Lnet/minecraft/item/ItemStack;Lnet/minecraft/client/renderer/block/model/IBakedModel;)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/tileentity/TileEntityItemStackRenderer;renderByItem(Lnet/minecraft/item/ItemStack;)V",
+                    shift = At.Shift.AFTER
+            )
+    )
+    private void ausm$afterBuiltInItemRenderer(ItemStack stack, IBakedModel model, CallbackInfo ci) {
+        Deque<Boolean> state = AUSM$guiBuiltInStateStack.get();
+        if (!state.isEmpty() && state.pop()) {
+            PipelineContext.getInstance().endGuiBuiltInItemStateScope();
         }
     }
 
@@ -115,6 +146,30 @@ public class RenderItemMixin {
         PipelineContext context = PipelineContext.getInstance();
         if (!context.isRenderingGuiScreen()) {
             context.prepareHandItemDrawState("forge_lit_item");
+        } else {
+            AUSM$guiForgeLitStateStack.get().push(context.beginGuiItemStateScope());
+            context.beginGuiItemModelProbe(stack, model);
+            context.probeGuiItemModel("forge-lit-item", stack, model);
+        }
+    }
+
+    @Inject(
+            method = "renderModel(Lnet/minecraft/client/renderer/block/model/IBakedModel;ILnet/minecraft/item/ItemStack;)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraftforge/client/ForgeHooksClient;renderLitItem(Lnet/minecraft/client/renderer/RenderItem;Lnet/minecraft/client/renderer/block/model/IBakedModel;ILnet/minecraft/item/ItemStack;)V",
+                    shift = At.Shift.AFTER
+            )
+    )
+    private void ausm$afterForgeLitItemDraw(IBakedModel model, int color, ItemStack stack, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.isRenderingGuiScreen()) {
+            return;
+        }
+        context.endGuiItemModelProbe();
+        Deque<Boolean> state = AUSM$guiForgeLitStateStack.get();
+        if (!state.isEmpty() && state.pop()) {
+            context.endGuiItemStateScope();
         }
     }
 

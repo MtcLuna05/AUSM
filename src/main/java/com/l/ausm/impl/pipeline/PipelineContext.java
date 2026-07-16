@@ -288,7 +288,12 @@ public class PipelineContext {
     private static final int MAX_BETTER_PORTALS_PIPELINE_LOGS = 0;
     private static final int MAX_SHADERLESS_BLOOM_HOOK_LOGS = 0;
     private static final int MAX_VISIBLE_BLOOM_DIAG_LOGS = 0;
-    private static final int MAX_WORLD_LAYER_DIAG_LOGS = 0;
+    private static final int MAX_WORLD_LAYER_DIAG_LOGS = 16;
+    private static final int MAX_GUI_MODEL_STATE_PROBE_LOGS = 24;
+    private static final int MAX_GUI_ENTITY_STATE_PROBE_LOGS = 8;
+    private static final int MAX_GUI_ITEM_MODEL_PROBE_LOGS = 24;
+    private static final int MAX_WATER_ROUTING_PROBE_LOGS = 12;
+    private static final int MAX_WATER_ATTACHMENT_DELTA_PROBE_LOGS = 4;
     private static final int MAX_EXTERNAL_OVERLAY_LOGS = 0;
     private static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 0;
     private static final int MAX_TERRAIN_HISTORY_CLEAR_LOGS = 8;
@@ -296,8 +301,8 @@ public class PipelineContext {
     private static final int MAX_DISTANT_HORIZONS_DIAGNOSTIC_LOGS = 0;
     private static final int MAX_TERRAIN_COLOR_PROBE_LOGS = 0;
     private static final int MAX_FINAL_COLOR_PROBE_LOGS = 0;
-    private static final int MAX_COMPOSITE_CHAIN_PROBE_LOGS = 0;
-    private static final int MAX_DEFERRED_BOUNDARY_PROBE_LOGS = 0;
+    private static final int MAX_COMPOSITE_CHAIN_PROBE_LOGS = 24;
+    private static final int MAX_DEFERRED_BOUNDARY_PROBE_LOGS = 32;
     private static final int MAX_PRE_DEFERRED_COLOR_RESTORE_LOGS = 0;
     private static final int MAX_DIRECT_COLOR_PRESENT_LOGS = 0;
     private static final int MAX_DIRECT_WINDOW_PRESENT_LOGS = 0;
@@ -690,6 +695,7 @@ public class PipelineContext {
     private final java.nio.ByteBuffer distantHorizonsReadbackPixel = org.lwjgl.BufferUtils.createByteBuffer(4);
     private final ByteBuffer terrainProbeColorPixel = org.lwjgl.BufferUtils.createByteBuffer(4);
     private final FloatBuffer terrainProbeDepthPixel = org.lwjgl.BufferUtils.createFloatBuffer(1);
+    private final FloatBuffer guiModelMatrixProbe = org.lwjgl.BufferUtils.createFloatBuffer(16);
     private final ByteBuffer terrainProbeBooleanBuffer = org.lwjgl.BufferUtils.createByteBuffer(16);
     private int currentEntityId = 0;
     private int currentRenderedItemId = -1;
@@ -891,6 +897,17 @@ public class PipelineContext {
     private int shadowMapSuppressedLogs = 0;
     private int guiRenderDepth = 0;
     private int guiEntityPreviewStateDepth = 0;
+    private int guiModelStateProbeLogs = 0;
+    private int guiEntityStateProbeLogs = 0;
+    private int guiItemModelProbeLogs = 0;
+    private final Deque<String> guiItemProbeNames = new ArrayDeque<>();
+    private int waterRoutingProbeLogs = 0;
+    private int waterAttachmentDeltaProbeLogs = 0;
+    private final ByteBuffer[] waterAttachmentBefore = new ByteBuffer[2];
+    private final ByteBuffer[] waterAttachmentAfter = new ByteBuffer[2];
+    private final int[] waterAttachmentProbeWidths = new int[2];
+    private final int[] waterAttachmentProbeHeights = new int[2];
+    private boolean waterAttachmentDeltaProbeActive = false;
     private int handItemDrawStateLogs = 0;
     private int handGbufferProbeLogs = 0;
     private int handPassBindLogs = 0;
@@ -2290,6 +2307,7 @@ public class PipelineContext {
 
     private void initializeInternal(String cacheKey, ShaderPack pack, Map<String, String> optionOverrides, ShaderProperties preloadedProperties,
                                     ShaderLoadingScreen.BackgroundMode loadingBackgroundMode) {
+        nothiriumShadowRenderer.resetPipelineProgramState();
         terrainRebuiltDuringLastInitialization = false;
         terrainCacheReusableDuringLastInitialization = false;
         boolean wasPipelineActive = isPipelineActive;
@@ -2474,7 +2492,9 @@ public class PipelineContext {
             syntheticLightCandidates.clear();
             resetColoredLightAudit();
             if (wasPipelineActive) {
-                ShaderLoadingScreen.step("Keeping terrain cache");
+                NothiriumBypass.markAllChanged();
+                scheduleWorldTerrainRefresh(true, true, 0);
+                ShaderLoadingScreen.step("Refreshing terrain metadata");
             } else {
                 boolean nothiriumFormatChanged = updateNothiriumPipelineBlockFormatMode();
                 ShaderLoadingScreen.step("Rebuilding terrain");
@@ -7460,6 +7480,7 @@ public class PipelineContext {
             boolean setupLists = setupNothiriumShaderedMainTerrainLists(true);
             logNothiriumMainSetupBridge(layer, setupLists, cameraX, cameraY, cameraZ);
         }
+        beginWaterAttachmentDeltaProbe(layer);
         int visibleCount = nothiriumShadowRenderer.renderVisibleLayer(
                 layer,
                 cameraX,
@@ -7593,10 +7614,123 @@ public class PipelineContext {
                 visibleCount = Math.max(visibleCount, 0) + providerCount;
             }
         }
+        if (layer == BlockRenderLayer.TRANSLUCENT && activePass == RenderPass.GBUFFERS_WATER) {
+            PipelineProgram waterProgram = programs.get(RenderPass.GBUFFERS_WATER);
+            finishWaterAttachmentDeltaProbe();
+            logWaterRoutingProbe(
+                    "after-nothirium-count=" + visibleCount,
+                    waterProgram,
+                    waterProgram != null ? effectiveDrawBuffersForCurrentPhase(waterProgram) : List.of()
+            );
+        }
         if (visibleCount > 0) {
             return visibleCount;
         }
         return 0;
+    }
+
+    private void beginWaterAttachmentDeltaProbe(BlockRenderLayer layer) {
+        waterAttachmentDeltaProbeActive = false;
+        if (layer != BlockRenderLayer.TRANSLUCENT
+                || activePass != RenderPass.GBUFFERS_WATER
+                || waterAttachmentDeltaProbeLogs >= MAX_WATER_ATTACHMENT_DELTA_PROBE_LOGS
+                || !pingPongManager.isInitialized()) {
+            return;
+        }
+        DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
+        PipelineProgram program = programs.get(RenderPass.GBUFFERS_WATER);
+        if (framebuffer == null || program == null) {
+            return;
+        }
+        List<Attachment> attachments = effectiveDrawBuffersForCurrentPhase(program);
+        int count = Math.min(waterAttachmentBefore.length, attachments.size());
+        for (int slot = count; slot < waterAttachmentBefore.length; slot++) {
+            waterAttachmentProbeWidths[slot] = 0;
+            waterAttachmentProbeHeights[slot] = 0;
+        }
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        try {
+            for (int slot = 0; slot < count; slot++) {
+                Attachment attachment = attachments.get(slot);
+                int width = framebuffer.getAttachmentWidth(attachment);
+                int height = framebuffer.getAttachmentHeight(attachment);
+                int bytes = width * height * 4;
+                ByteBuffer buffer = waterAttachmentBefore[slot];
+                if (buffer == null || buffer.capacity() < bytes) {
+                    buffer = BufferUtils.createByteBuffer(bytes);
+                    waterAttachmentBefore[slot] = buffer;
+                }
+                buffer.clear();
+                buffer.limit(bytes);
+                GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0 + slot);
+                GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer);
+                waterAttachmentProbeWidths[slot] = width;
+                waterAttachmentProbeHeights[slot] = height;
+            }
+            waterAttachmentDeltaProbeActive = count > 0;
+        } finally {
+            GL11.glReadBuffer(previousReadBuffer);
+        }
+    }
+
+    private void finishWaterAttachmentDeltaProbe() {
+        if (!waterAttachmentDeltaProbeActive) {
+            return;
+        }
+        waterAttachmentDeltaProbeActive = false;
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        StringBuilder result = new StringBuilder();
+        try {
+            for (int slot = 0; slot < waterAttachmentBefore.length; slot++) {
+                ByteBuffer before = waterAttachmentBefore[slot];
+                int width = waterAttachmentProbeWidths[slot];
+                int height = waterAttachmentProbeHeights[slot];
+                if (before == null || width <= 0 || height <= 0) {
+                    continue;
+                }
+                int bytes = width * height * 4;
+                ByteBuffer after = waterAttachmentAfter[slot];
+                if (after == null || after.capacity() < bytes) {
+                    after = BufferUtils.createByteBuffer(bytes);
+                    waterAttachmentAfter[slot] = after;
+                }
+                after.clear();
+                after.limit(bytes);
+                GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0 + slot);
+                GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, after);
+                long changedPixels = 0L;
+                long totalDelta = 0L;
+                int maxDelta = 0;
+                for (int pixel = 0; pixel < width * height; pixel++) {
+                    boolean changed = false;
+                    int base = pixel * 4;
+                    for (int channel = 0; channel < 4; channel++) {
+                        int delta = Math.abs((before.get(base + channel) & 0xFF) - (after.get(base + channel) & 0xFF));
+                        if (delta != 0) {
+                            changed = true;
+                            totalDelta += delta;
+                            maxDelta = Math.max(maxDelta, delta);
+                        }
+                    }
+                    if (changed) {
+                        changedPixels++;
+                    }
+                }
+                if (result.length() > 0) {
+                    result.append(';');
+                }
+                result.append("slot").append(slot)
+                        .append('=').append(width).append('x').append(height)
+                        .append(",changedPixels=").append(changedPixels)
+                        .append(",totalDelta=").append(totalDelta)
+                        .append(",maxDelta=").append(maxDelta);
+            }
+        } finally {
+            GL11.glReadBuffer(previousReadBuffer);
+        }
+        waterAttachmentDeltaProbeLogs++;
+        MainMod.LOGGER.warn("[AUSMWaterAttachmentDelta] call={} {} gl={}",
+                waterAttachmentDeltaProbeLogs, result, glStateSummary());
     }
 
     private boolean shouldRefreshNothiriumNonSolidListsBeforeDraw(BlockRenderLayer layer) {
@@ -8948,7 +9082,6 @@ public class PipelineContext {
         TextureBinder.restoreDefaultTextureUnit();
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
-        GL11.glFrontFace(GL11.GL_CW);
         if (!shaderlessBloomExtractionActive) {
             unbindShaderStorageBuffers();
         }
@@ -9023,7 +9156,6 @@ public class PipelineContext {
         com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
-        GL11.glFrontFace(GL11.GL_CW);
         unbindShaderImages();
         unbindShaderStorageBuffers();
         resetIndexedBlendState();
@@ -9039,18 +9171,21 @@ public class PipelineContext {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        GL11.glDepthMask(true);
         GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        probeGuiEntityState("entity-prepared");
     }
 
     public void finishGuiEntityPreviewRenderState() {
         if (guiEntityPreviewStateDepth <= 0) {
             return;
         }
+        probeGuiEntityState("entity-return");
         guiEntityPreviewStateDepth--;
         GL11.glPopAttrib();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
@@ -9068,6 +9203,189 @@ public class PipelineContext {
         }
     }
 
+    public void probeGuiModelState(String stage) {
+        if (!isPipelineActive || guiModelStateProbeLogs >= MAX_GUI_MODEL_STATE_PROBE_LOGS) {
+            return;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Object screen = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) : null;
+        if (!(screen instanceof net.minecraft.client.gui.inventory.GuiContainer)) {
+            return;
+        }
+        guiModelStateProbeLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMGuiModelState] call={} stage={} screen={} guiDepth={} entityDepth={} frontFace={} cullFace={} cullEnabled={} matrix={} gl={}",
+                guiModelStateProbeLogs,
+                stage,
+                screen != null ? screen.getClass().getName() : "null",
+                guiRenderDepth,
+                guiEntityPreviewStateDepth,
+                GL11.glGetInteger(GL11.GL_FRONT_FACE),
+                GL11.glGetInteger(GL11.GL_CULL_FACE_MODE),
+                GL11.glIsEnabled(GL11.GL_CULL_FACE),
+                guiModelMatrixSummary(),
+                glStateSummary()
+        );
+    }
+
+    public void beginGuiItemModelProbe(ItemStack stack, net.minecraft.client.renderer.block.model.IBakedModel model) {
+        String name = renderedItemDebugName(stack);
+        guiItemProbeNames.push(name);
+        probeGuiItemModel("item-scope", name, model);
+    }
+
+    public void endGuiItemModelProbe() {
+        if (!guiItemProbeNames.isEmpty()) {
+            guiItemProbeNames.pop();
+        }
+    }
+
+    public void probeGuiItemModel(String stage, ItemStack stack, net.minecraft.client.renderer.block.model.IBakedModel model) {
+        probeGuiItemModel(stage, renderedItemDebugName(stack), model);
+    }
+
+    private void probeGuiItemModel(String stage, String name, net.minecraft.client.renderer.block.model.IBakedModel model) {
+        if (!isPipelineActive
+                || !renderingGuiScreen()
+                || guiItemModelProbeLogs >= MAX_GUI_ITEM_MODEL_PROBE_LOGS
+                || name == null
+                || !name.startsWith("bloodmagic:")) {
+            return;
+        }
+
+        int quads = 0;
+        int diffuseQuads = 0;
+        java.util.LinkedHashSet<String> formats = new java.util.LinkedHashSet<>();
+        if (model != null) {
+            for (net.minecraft.util.EnumFacing face : net.minecraft.util.EnumFacing.values()) {
+                List<net.minecraft.client.renderer.block.model.BakedQuad> faceQuads = com.l.ausm.impl.util.MinecraftReflectionCompat.bakedModelQuads(model, null, face, 0L);
+                quads += faceQuads.size();
+                for (net.minecraft.client.renderer.block.model.BakedQuad quad : faceQuads) {
+                    if (com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadApplyDiffuseLighting(quad)) {
+                        diffuseQuads++;
+                    }
+                    formats.add(guiProbeFormatSummary(com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadFormat(quad)));
+                }
+            }
+            List<net.minecraft.client.renderer.block.model.BakedQuad> generalQuads = com.l.ausm.impl.util.MinecraftReflectionCompat.bakedModelQuads(model, null, null, 0L);
+            quads += generalQuads.size();
+            for (net.minecraft.client.renderer.block.model.BakedQuad quad : generalQuads) {
+                if (com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadApplyDiffuseLighting(quad)) {
+                    diffuseQuads++;
+                }
+                formats.add(guiProbeFormatSummary(com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadFormat(quad)));
+            }
+        }
+
+        guiItemModelProbeLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMGuiItemModel] call={} stage={} item={} model={} builtIn={} gui3d={} quads={} diffuseQuads={} formats={} lighting={} rescale={} normalize={} twoSided={} shadeModel={} frontFace={} cull={} gl={}",
+                guiItemModelProbeLogs,
+                stage,
+                name,
+                model != null ? model.getClass().getName() : "null",
+                model != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean(model, new String[] {"func_188618_c", "isBuiltInRenderer"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false),
+                model != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean(model, new String[] {"func_177555_b", "isGui3d"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false),
+                quads,
+                diffuseQuads,
+                formats,
+                GL11.glIsEnabled(GL11.GL_LIGHTING),
+                GL11.glIsEnabled(GL12.GL_RESCALE_NORMAL),
+                GL11.glIsEnabled(GL11.GL_NORMALIZE),
+                GL11.glGetBoolean(GL11.GL_LIGHT_MODEL_TWO_SIDE),
+                GL11.glGetInteger(GL11.GL_SHADE_MODEL),
+                GL11.glGetInteger(GL11.GL_FRONT_FACE),
+                GL11.glIsEnabled(GL11.GL_CULL_FACE),
+                glStateSummary()
+        );
+    }
+
+    public void probeGuiItemBufferDraw(BufferBuilder buffer, net.minecraft.client.renderer.vertex.VertexFormat format) {
+        String name = guiItemProbeNames.peek();
+        if (!isPipelineActive
+                || !renderingGuiScreen()
+                || guiItemModelProbeLogs >= MAX_GUI_ITEM_MODEL_PROBE_LOGS
+                || name == null
+                || !name.startsWith("bloodmagic:")) {
+            return;
+        }
+        guiItemModelProbeLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMGuiItemDraw] call={} item={} vertices={} drawMode={} format={} vertexArray={} colorArray={} normalArray={} texCoordArray={} lighting={} rescale={} frontFace={} cull={} gl={}",
+                guiItemModelProbeLogs,
+                name,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(buffer, -1, "field_179006_k", "drawMode"),
+                guiProbeFormatSummary(format),
+                GL11.glIsEnabled(GL11.GL_VERTEX_ARRAY),
+                GL11.glIsEnabled(GL11.GL_COLOR_ARRAY),
+                GL11.glIsEnabled(GL11.GL_NORMAL_ARRAY),
+                GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY),
+                GL11.glIsEnabled(GL11.GL_LIGHTING),
+                GL11.glIsEnabled(GL12.GL_RESCALE_NORMAL),
+                GL11.glGetInteger(GL11.GL_FRONT_FACE),
+                GL11.glIsEnabled(GL11.GL_CULL_FACE),
+                glStateSummary()
+        );
+    }
+
+    private static String guiProbeFormatSummary(net.minecraft.client.renderer.vertex.VertexFormat format) {
+        if (format == null) {
+            return "null";
+        }
+        return "size=" + ExtendedVertexFormats.size(format)
+                + ",elements=" + com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(format,
+                new String[] {"func_177345_h", "getElementCount"},
+                com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS,
+                -1)
+                + ",normal=" + ExtendedVertexFormats.hasNormal(format)
+                + ",uv1=" + ExtendedVertexFormats.hasUvOffset(format, 1);
+    }
+
+    private String guiModelMatrixSummary() {
+        guiModelMatrixProbe.clear();
+        GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, guiModelMatrixProbe);
+        float m00 = guiModelMatrixProbe.get(0);
+        float m01 = guiModelMatrixProbe.get(1);
+        float m02 = guiModelMatrixProbe.get(2);
+        float m10 = guiModelMatrixProbe.get(4);
+        float m11 = guiModelMatrixProbe.get(5);
+        float m12 = guiModelMatrixProbe.get(6);
+        float m20 = guiModelMatrixProbe.get(8);
+        float m21 = guiModelMatrixProbe.get(9);
+        float m22 = guiModelMatrixProbe.get(10);
+        float determinant = m00 * (m11 * m22 - m12 * m21)
+                - m10 * (m01 * m22 - m02 * m21)
+                + m20 * (m01 * m12 - m02 * m11);
+        return "diag=" + formatProbeFloat(m00) + '/' + formatProbeFloat(m11) + '/' + formatProbeFloat(m22)
+                + ",det=" + formatProbeFloat(determinant)
+                + ",translation=" + formatProbeFloat(guiModelMatrixProbe.get(12)) + '/'
+                + formatProbeFloat(guiModelMatrixProbe.get(13)) + '/'
+                + formatProbeFloat(guiModelMatrixProbe.get(14));
+    }
+
+    private void probeGuiEntityState(String stage) {
+        if (!isPipelineActive || guiEntityStateProbeLogs >= MAX_GUI_ENTITY_STATE_PROBE_LOGS) {
+            return;
+        }
+        guiEntityStateProbeLogs++;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Object screen = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) : null;
+        MainMod.LOGGER.info(
+                "[AUSMGuiEntityState] call={} stage={} screen={} guiDepth={} entityDepth={} frontFace={} cullFace={} cullEnabled={} matrix={} gl={}",
+                guiEntityStateProbeLogs,
+                stage,
+                screen != null ? screen.getClass().getName() : "null",
+                guiRenderDepth,
+                guiEntityPreviewStateDepth,
+                GL11.glGetInteger(GL11.GL_FRONT_FACE),
+                GL11.glGetInteger(GL11.GL_CULL_FACE_MODE),
+                GL11.glIsEnabled(GL11.GL_CULL_FACE),
+                guiModelMatrixSummary(),
+                glStateSummary()
+        );
+    }
+
     public boolean beginGuiItemStateScope() {
         if (!isPipelineActive) {
             return false;
@@ -9076,60 +9394,31 @@ public class PipelineContext {
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
             return false;
         }
-        GL11.glPushAttrib(GL11.GL_ENABLE_BIT
-                | GL11.GL_COLOR_BUFFER_BIT
-                | GL11.GL_DEPTH_BUFFER_BIT
-                | GL11.GL_SCISSOR_BIT
-                | GL11.GL_POLYGON_BIT
-                | GL11.GL_TEXTURE_BIT
-                | GL11.GL_LIGHTING_BIT
-                | GL11.GL_CURRENT_BIT
-                | GL11.GL_TRANSFORM_BIT
-                | GL11.GL_VIEWPORT_BIT);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-        disablePipelineVertexAttributes();
-        restoreVanillaClientRenderState();
-        GL11.glFrontFace(GL11.GL_CW);
-        unbindShaderImages();
-        unbindShaderStorageBuffers();
-        resetIndexedBlendState();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        GL11.glDisable(GL11.GL_SCISSOR_TEST);
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GL11.glPolygonOffset(0.0F, 0.0F);
+        GL11.glPushAttrib(GL11.GL_DEPTH_BUFFER_BIT | GL11.GL_ENABLE_BIT | GL11.GL_POLYGON_BIT);
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE_MINUS_SRC_ALPHA,
-                GL11.GL_ONE,
-                GL11.GL_ZERO
-        );
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        GL11.glDepthMask(true);
+        GL11.glDisable(GL11.GL_CULL_FACE);
+        GL11.glFrontFace(GL11.GL_CW);
         return true;
     }
 
     public void endGuiItemStateScope() {
         GL11.glPopAttrib();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        disablePipelineVertexAttributes();
-        restoreVanillaClientRenderState();
-        unbindShaderStorageBuffers();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+    }
+
+    public boolean beginGuiBuiltInItemStateScope() {
+        if (!isPipelineActive || !renderingGuiScreen()) {
+            return false;
+        }
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_POLYGON_BIT);
+        GL11.glDisable(GL11.GL_CULL_FACE);
+        GL11.glFrontFace(GL11.GL_CW);
+        return true;
+    }
+
+    public void endGuiBuiltInItemStateScope() {
+        GL11.glPopAttrib();
     }
 
     public void prepareGuiItemGlintRenderState() {
@@ -9207,7 +9496,9 @@ public class PipelineContext {
     }
 
     public boolean shouldDrawActiveProgramAsPatches() {
-        return isPipelineActive && activeProgramTessellated && (GLContext.getCapabilities().OpenGL40 || GLContext.getCapabilities().GL_ARB_tessellation_shader);
+        return hasBoundPipelineProgram()
+                && activeProgramTessellated
+                && (GLContext.getCapabilities().OpenGL40 || GLContext.getCapabilities().GL_ARB_tessellation_shader);
     }
 
     public int drawModeForActiveProgram(int drawMode) {
@@ -9222,7 +9513,16 @@ public class PipelineContext {
     }
 
     public boolean shouldDrawFullscreenAsTriangles() {
-        return isPipelineActive && activeProgramGeometric && !shouldDrawActiveProgramAsPatches();
+        return hasBoundPipelineProgram() && activeProgramGeometric && !shouldDrawActiveProgramAsPatches();
+    }
+
+    private boolean hasBoundPipelineProgram() {
+        if (!isPipelineActive || renderingGuiScreen() || activePass == null) {
+            return false;
+        }
+        PipelineProgram pipelineProgram = effectivePipelineProgram(activePass);
+        ShaderProgram shaderProgram = pipelineProgram != null ? pipelineProgram.shaderProgram() : null;
+        return shaderProgram != null && GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM) == shaderProgram.getId();
     }
 
     private static void setPatchVertices(int vertices) {
@@ -9295,6 +9595,9 @@ public class PipelineContext {
             bindBlockAtlas();
         }
         activePass = pass;
+        if (pass == RenderPass.GBUFFERS_WATER) {
+            logWaterRoutingProbe("after-bind", bindingProgram, drawBuffers);
+        }
         return true;
     }
 
@@ -9678,6 +9981,83 @@ public class PipelineContext {
         if (!drawBuffers.isEmpty()) {
             pingPongManager.bindForGbuffers(drawBuffers.toArray(new Attachment[0]));
         }
+    }
+
+    public void restoreActiveGbufferRenderState() {
+        if (!isPipelineActive
+                || !pingPongManager.isInitialized()
+                || activePass == null) {
+            return;
+        }
+        PipelineProgram pipelineProgram = programs.get(activePass);
+        if (pipelineProgram == null || pipelineProgram.stage() != ProgramStage.GBUFFERS) {
+            return;
+        }
+        List<Attachment> drawBuffers = effectiveDrawBuffersForCurrentPhase(pipelineProgram);
+        boolean valid = !drawBuffers.isEmpty();
+        for (int slot = 0; valid && slot < drawBuffers.size(); slot++) {
+            valid = GL11.glGetInteger(GL20.GL_DRAW_BUFFER0 + slot) == GL30.GL_COLOR_ATTACHMENT0 + slot;
+        }
+        if (!valid) {
+            pingPongManager.forceGbufferDrawBuffers(drawBuffers.toArray(new Attachment[0]));
+        }
+        applyAlphaTest(activePass);
+        applyBlendMode(activePass, drawBuffers);
+        applyOitDepthState(activePass);
+        applyGbufferDepthState(activePass);
+    }
+
+    private void logWaterRoutingProbe(String stage, PipelineProgram pipelineProgram, List<Attachment> drawBuffers) {
+        if (!isPipelineActive
+                || !pingPongManager.isInitialized()
+                || waterRoutingProbeLogs >= MAX_WATER_ROUTING_PROBE_LOGS) {
+            return;
+        }
+        waterRoutingProbeLogs++;
+        DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
+        StringBuilder slots = new StringBuilder();
+        int slotCount = Math.min(8, Math.max(1, drawBuffers != null ? drawBuffers.size() : 0));
+        for (int slot = 0; slot < slotCount; slot++) {
+            if (slot > 0) {
+                slots.append(';');
+            }
+            int drawBuffer = GL11.glGetInteger(GL20.GL_DRAW_BUFFER0 + slot);
+            int texture = 0;
+            try {
+                texture = GL30.glGetFramebufferAttachmentParameteri(
+                        GL30.GL_DRAW_FRAMEBUFFER,
+                        GL30.GL_COLOR_ATTACHMENT0 + slot,
+                        GL30.GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME
+                );
+            } catch (RuntimeException | LinkageError ignored) {
+            }
+            slots.append(slot).append("=draw:").append(drawBuffer).append(",tex:").append(texture);
+        }
+        int depthTexture = 0;
+        try {
+            depthTexture = GL30.glGetFramebufferAttachmentParameteri(
+                    GL30.GL_DRAW_FRAMEBUFFER,
+                    GL30.GL_DEPTH_ATTACHMENT,
+                    GL30.GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME
+            );
+        } catch (RuntimeException | LinkageError ignored) {
+        }
+        MainMod.LOGGER.info(
+                "[AUSMWaterRouting] call={} stage={} program={} declared={} effective={} fbo={} slots={} depthAttachment={} textures={} colors={} depth0={} depth1={} gl={}",
+                waterRoutingProbeLogs,
+                stage,
+                pipelineProgram != null ? describePipelineProgram(pipelineProgram) : "null",
+                pipelineProgram != null ? pipelineProgram.drawBuffers() : "none",
+                drawBuffers,
+                framebuffer != null ? framebuffer.getFramebufferId() : -1,
+                slots,
+                depthTexture,
+                deferredBoundaryTextureSummary(framebuffer),
+                deferredBoundaryColorSummary(framebuffer),
+                deferredDepthSampleSummary(framebuffer, -1),
+                deferredDepthSampleSummary(framebuffer, DeferredFramebuffer.DEPTHTEX1_SNAPSHOT),
+                glStateSummary()
+        );
     }
 
     private void configureShadowDrawBuffers(PipelineProgram pipelineProgram, List<Attachment> drawBuffers) {
