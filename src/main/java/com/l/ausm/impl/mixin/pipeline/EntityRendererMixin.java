@@ -14,7 +14,6 @@ import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiIngame;
-import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.client.particle.ParticleManager;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
@@ -74,7 +73,9 @@ public class EntityRendererMixin {
             return;
         }
 
+        PipelineContext.getInstance().logHudProbe("overlay-redirect-before");
         com.l.ausm.impl.util.MinecraftReflectionCompat.renderGameOverlay(guiIngame, partialTicks);
+        PipelineContext.getInstance().logHudProbe("overlay-redirect-after");
     }
 
     @Inject(
@@ -98,9 +99,27 @@ public class EntityRendererMixin {
                     value = "INVOKE",
                     target = "Lnet/minecraft/client/gui/GuiScreen;func_73863_a(IIF)V",
                     shift = At.Shift.BEFORE
-            )
+            ),
+            require = 0
     )
     private void onBeforeGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
+        ausm$beginGuiScreenRendering();
+    }
+
+    @Inject(
+            method = "func_181560_a(FJ)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraftforge/client/ForgeHooksClient;drawScreen(Lnet/minecraft/client/gui/GuiScreen;IIF)V",
+                    shift = At.Shift.BEFORE
+            ),
+            require = 1
+    )
+    private void onBeforeForgeGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
+        ausm$beginGuiScreenRendering();
+    }
+
+    private void ausm$beginGuiScreenRendering() {
         PipelineContext context = PipelineContext.getInstance();
         if (ausm$shouldUseVanillaGuiScreen()) {
             return;
@@ -108,7 +127,7 @@ public class EntityRendererMixin {
         if (!context.isActive()) {
             return;
         }
-        context.beginGuiRendering();
+        context.beginGuiScreenRendering();
     }
 
     @Inject(
@@ -117,21 +136,42 @@ public class EntityRendererMixin {
                     value = "INVOKE",
                     target = "Lnet/minecraft/client/gui/GuiScreen;func_73863_a(IIF)V",
                     shift = At.Shift.AFTER
-            )
+            ),
+            require = 0
     )
     private void onAfterGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
+        ausm$finishGuiScreenRendering();
+    }
+
+    @Inject(
+            method = "func_181560_a(FJ)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraftforge/client/ForgeHooksClient;drawScreen(Lnet/minecraft/client/gui/GuiScreen;IIF)V",
+                    shift = At.Shift.AFTER
+            ),
+            require = 1
+    )
+    private void onAfterForgeGuiScreenDraw(float partialTicks, long nanoTime, CallbackInfo ci) {
+        ausm$finishGuiScreenRendering();
+    }
+
+    private void ausm$finishGuiScreenRendering() {
         PipelineContext context = PipelineContext.getInstance();
         if (ausm$shouldUseVanillaGuiScreen()) {
             return;
         }
-        context.finishGuiRendering();
+        context.finishGuiScreenRendering();
     }
 
     private boolean ausm$shouldUseVanillaGuiScreen() {
         Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Object screen = minecraft != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft)
+                : null;
         return minecraft == null
                 || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft) instanceof GuiContainer;
+                || (screen != null && "tinker_io.gui.GuiSmartOutput".equals(screen.getClass().getName()));
     }
 
     private void ausm$prepareNoWorldCustomMainMenu() {

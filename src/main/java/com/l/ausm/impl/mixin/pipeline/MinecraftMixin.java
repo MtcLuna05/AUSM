@@ -100,13 +100,6 @@ public class MinecraftMixin {
         if (context.shouldDirectPresentFramebuffer()) {
             context.presentFramebufferDirectly(framebuffer, width, height);
             context.logFramebufferPresentationBoundary("runGameLoop-after-direct", framebuffer, width, height, true);
-            if (com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null) {
-                context.beginDeferredIngameHud();
-                com.l.ausm.impl.util.MinecraftReflectionCompat.renderGameOverlay(
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.client.gui.GuiIngame.class, null, "field_71456_v", "ingameGUI"),
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
-                context.endDeferredIngameHud();
-            }
         }
     }
 

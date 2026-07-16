@@ -19,14 +19,14 @@ public class GuiContainerMixin {
             return;
         }
         ausm$prepareCompatContainerGui();
-        context.beginGuiRendering();
+        context.beginGuiScreenRendering();
     }
 
     @Inject(method = "drawScreen(IIF)V", at = @At("RETURN"))
     private void ausm$finishContainerGui(int mouseX, int mouseY, float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.isActive()) {
-            context.finishGuiRendering();
+            context.finishGuiScreenRendering();
         }
     }
 

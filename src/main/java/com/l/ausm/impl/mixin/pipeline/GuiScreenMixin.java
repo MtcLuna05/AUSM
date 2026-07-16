@@ -1,5 +1,6 @@
 package com.l.ausm.impl.mixin.pipeline;
 
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
@@ -38,9 +39,12 @@ public class GuiScreenMixin {
             return false;
         }
 
-        // Preserve the rendered world behind all screens. Recovery blits can be
-        // unavailable for custom shader screens and otherwise produce a black base.
-        return false;
+        PipelineContext context = PipelineContext.getInstance();
+        if (!context.isActive()) {
+            return false;
+        }
+        context.logGuiScreenBackgroundSuppressed();
+        return true;
     }
 
     private boolean ausm$shouldUseVanillaWorldBackground() {

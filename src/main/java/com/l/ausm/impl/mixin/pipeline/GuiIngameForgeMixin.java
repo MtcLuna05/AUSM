@@ -12,22 +12,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(value = GuiIngameForge.class, remap = false)
 public class GuiIngameForgeMixin {
-    @Inject(method = "renderGameOverlay(F)V", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "func_175180_a(F)V", at = @At("HEAD"), require = 1)
     private void ausm$beforeForgeGameOverlay(float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (ausm$isHudHidden()) {
             return;
         }
-        if (context.shouldDeferIngameHud()) {
-            ci.cancel();
-            return;
-        }
-
         context.renderShaderlessBloomBeforeGui();
         context.beginGuiRendering();
     }
 
-    @Inject(method = "renderGameOverlay(F)V", at = @At("RETURN"))
+    @Inject(method = "func_175180_a(F)V", at = @At("RETURN"), require = 1)
     private void ausm$afterForgeGameOverlay(float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (ausm$isHudHidden()) {
