@@ -45,6 +45,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class EntityRendererMixin {
     private static boolean ausm$loggedSelectionBoxStateRepair;
     private static boolean ausm$loggedEntityStateRepair;
+    private static boolean ausm$loggedEntityBufferRepair;
 
     @Shadow(remap = false)
     protected void func_78474_d(float partialTicks) {
@@ -245,6 +246,7 @@ public class EntityRendererMixin {
     private void ausm$renderEntitiesIfGbufferRenderingEnabled(RenderGlobal renderGlobal, Entity renderViewEntity, ICamera camera, float partialTicks) {
         PipelineContext context = PipelineContext.getInstance();
         if (!context.shouldSkipAllMainGbufferRendering()) {
+            ausm$repairEntityTessellatorState();
             ausm$repairEntityClientArrayState();
             com.l.ausm.impl.util.MinecraftReflectionCompat.renderEntities(renderGlobal, renderViewEntity, camera, partialTicks);
         }
@@ -583,6 +585,20 @@ public class EntityRendererMixin {
         }
 
         FixedFunctionGlState.resetClientArrayState(false);
+    }
+
+    private static void ausm$repairEntityTessellatorState() {
+        Tessellator tessellator = MinecraftReflectionCompat.tessellator();
+        BufferBuilder buffer = MinecraftReflectionCompat.tessellatorBuffer(tessellator);
+        if (!MinecraftReflectionCompat.bufferIsDrawing(buffer)) {
+            return;
+        }
+
+        if (!ausm$loggedEntityBufferRepair) {
+            ausm$loggedEntityBufferRepair = true;
+            MainMod.LOGGER.warn("[AUSMEntityRender] Resetting an unexpectedly open shared BufferBuilder before entity rendering.");
+        }
+        MinecraftReflectionCompat.forceResetBufferDrawingState(buffer);
     }
 
     @Inject(

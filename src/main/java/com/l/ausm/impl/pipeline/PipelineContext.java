@@ -18266,6 +18266,9 @@ public class PipelineContext {
             }
             com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
         } finally {
+            Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.forceResetBufferDrawingState(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator));
             if (pushedModelView) {
                 GL11.glMatrixMode(GL11.GL_MODELVIEW);
                 GL11.glPopMatrix();

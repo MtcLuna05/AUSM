@@ -2,10 +2,16 @@ package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.world.World;
+import net.minecraftforge.client.IRenderHandler;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
 import java.util.List;
@@ -14,6 +20,10 @@ import java.util.List;
 public class AstralSorceryRenderSkyboxMixin {
     private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
     private static Boolean ausm$lastCustomVoidSky;
+
+    @Shadow(remap = false)
+    @Final
+    private IRenderHandler otherSkyRenderer;
 
     @Redirect(
             method = "render",
@@ -26,12 +36,41 @@ public class AstralSorceryRenderSkyboxMixin {
     private boolean ausm$scopeFullAstralSky(List<Integer> whitelist, Object dimension) {
         if (dimension instanceof Number && ((Number) dimension).intValue() == SIMPLE_VOID_WORLD_DIMENSION_ID) {
             ausm$logVoidSkyMode();
-            // Botania supplies the sky dome and textured quads in both modes.
-            // The shader option decides whether those inputs remain Botania-style
-            // or are transformed into the custom Void sky.
-            return true;
+            Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+            World world = minecraft != null ? MinecraftReflectionCompat.world(minecraft) : null;
+            return !PipelineContext.getInstance().isCustomVoidWorldSkyEnabled(world);
         }
         return whitelist != null && whitelist.contains(dimension);
+    }
+
+    @Redirect(
+            method = "render",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lhellfirepvp/astralsorcery/client/sky/RenderAstralSkybox;render(FLnet/minecraft/client/multiplayer/WorldClient;Lnet/minecraft/client/Minecraft;)V"
+            ),
+            remap = false
+    )
+    private void ausm$renderCustomVoidSkyLayers(@Coerce Object astralSky, float partialTicks, WorldClient world, Minecraft minecraft) {
+        if (world != null
+                && MinecraftReflectionCompat.providerDimension(MinecraftReflectionCompat.worldProvider(world)) == SIMPLE_VOID_WORLD_DIMENSION_ID
+                && PipelineContext.getInstance().isCustomVoidWorldSkyEnabled(world)
+                && otherSkyRenderer != null) {
+            MinecraftReflectionCompat.invoke(
+                    otherSkyRenderer,
+                    new String[] {"render"},
+                    new Class<?>[] {float.class, WorldClient.class, Minecraft.class},
+                    partialTicks,
+                    world,
+                    minecraft);
+        }
+        MinecraftReflectionCompat.invoke(
+                astralSky,
+                new String[] {"render"},
+                new Class<?>[] {float.class, WorldClient.class, Minecraft.class},
+                partialTicks,
+                world,
+                minecraft);
     }
 
     private static void ausm$logVoidSkyMode() {

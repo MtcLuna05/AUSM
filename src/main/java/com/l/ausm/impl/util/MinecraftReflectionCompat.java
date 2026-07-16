@@ -1,6 +1,7 @@
 package com.l.ausm.impl.util;
 
 import com.google.common.util.concurrent.ListenableFuture;
+import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import net.minecraft.block.material.Material;
 import net.minecraft.client.Minecraft;
 import net.minecraft.block.state.IBlockState;
@@ -1810,6 +1811,25 @@ public final class MinecraftReflectionCompat {
 
     public static void tessellatorDraw(Tessellator tessellator) {
         invoke(tessellator, new String[] {"func_78381_a", "draw"}, NO_PARAMETERS);
+    }
+
+    public static boolean bufferIsDrawing(BufferBuilder buffer) {
+        if (buffer instanceof IBufferBuilderExtension extension) {
+            return extension.ausm$isDrawing();
+        }
+        return fieldBoolean(buffer, false, "field_179010_r", "isDrawing");
+    }
+
+    public static void forceResetBufferDrawingState(BufferBuilder buffer) {
+        if (buffer == null) {
+            return;
+        }
+        if (buffer instanceof IBufferBuilderExtension extension) {
+            extension.ausm$forceResetDrawingState();
+            return;
+        }
+        setField(buffer, false, "field_179010_r", "isDrawing");
+        invoke(buffer, new String[] {"func_178965_a", "reset"}, NO_PARAMETERS);
     }
 
     public static VertexFormat bufferVertexFormat(BufferBuilder buffer) {

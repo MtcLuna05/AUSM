@@ -67,10 +67,8 @@ public class BotaniaSkyblockSkyRendererMixin {
     )
     private void ausm$drawOrSuppressSunsetFan(Tessellator tessellator) {
         if (ausm$shouldSuppressBase()) {
-            MinecraftReflectionCompat.invoke(
-                    MinecraftReflectionCompat.tessellatorBuffer(tessellator),
-                    new String[] {"func_178965_a", "reset"},
-                    MinecraftReflectionCompat.NO_PARAMETERS);
+            MinecraftReflectionCompat.forceResetBufferDrawingState(
+                    MinecraftReflectionCompat.tessellatorBuffer(tessellator));
             return;
         }
         MinecraftReflectionCompat.tessellatorDraw(tessellator);

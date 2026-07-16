@@ -2,7 +2,6 @@ package com.l.ausm.impl.pipeline.compat;
 
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.impl.MainMod;
-import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
@@ -150,11 +149,7 @@ public final class BetterPortalsPortalSurfaceRenderer {
     }
 
     private static void forceResetBuffer(BufferBuilder buffer) {
-        if (buffer instanceof IBufferBuilderExtension extension) {
-            extension.ausm$forceResetDrawingState();
-        } else if (buffer != null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((buffer), new String[] {"func_178965_a", "reset"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
-        }
+        com.l.ausm.impl.util.MinecraftReflectionCompat.forceResetBufferDrawingState(buffer);
     }
 
     private static void renderPartialPortalFace(BufferBuilder buffer, EnumFacing facing) {

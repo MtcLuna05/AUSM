@@ -6,7 +6,6 @@ import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
-import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
@@ -215,11 +214,7 @@ public class RenderSkyMixin {
             return;
         }
         BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
-        if (buffer instanceof IBufferBuilderExtension extension) {
-            extension.ausm$forceResetDrawingState();
-        } else if (buffer != null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((buffer), new String[] {"func_178965_a", "reset"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
-        }
+        MinecraftReflectionCompat.forceResetBufferDrawingState(buffer);
     }
 
     @Redirect(
