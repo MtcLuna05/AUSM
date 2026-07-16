@@ -34,7 +34,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.lang.reflect.Field;
-import java.util.IdentityHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(targets = "meldexun.nothirium.mc.renderer.chunk.RenderChunkTaskCompile", remap = false)
@@ -68,17 +67,6 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
 
     @Unique
     private static final AtomicInteger AUSM_SHADERLESS_COMPILE_LIGHT_PROBES = new AtomicInteger();
-
-    @Unique
-    private static final int AUSM_THREAD_CACHE_LIMIT = 4096;
-
-    @Unique
-    private static final ThreadLocal<IdentityHashMap<IBlockState, Block>> AUSM_STATE_BLOCKS =
-            ThreadLocal.withInitial(IdentityHashMap::new);
-
-    @Unique
-    private static final ThreadLocal<IdentityHashMap<IBlockState, ResourceLocation>> AUSM_STATE_REGISTRY_NAMES =
-            ThreadLocal.withInitial(IdentityHashMap::new);
 
     @Shadow(remap = false)
     private IBlockAccess chunkCache;
@@ -973,21 +961,8 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (state == null) {
             return null;
         }
-        IdentityHashMap<IBlockState, ResourceLocation> cache = AUSM_STATE_REGISTRY_NAMES.get();
-        ResourceLocation cached = cache.get(state);
-        if (cached != null) {
-            return cached;
-        }
         Block block = ausm$block(state);
-        ResourceLocation name = block != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block) : null;
-        if (name != null) {
-            if (cache.size() > AUSM_THREAD_CACHE_LIMIT) {
-                cache.clear();
-            }
-            cache.put(state, name);
-            return name;
-        }
-        return null;
+        return block != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block) : null;
     }
 
     @Unique
@@ -995,26 +970,11 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (state == null) {
             return null;
         }
-        IdentityHashMap<IBlockState, Block> cache = AUSM_STATE_BLOCKS.get();
-        Block cached = cache.get(state);
-        if (cached != null) {
-            return cached;
-        }
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        if (block != null) {
-            if (cache.size() > AUSM_THREAD_CACHE_LIMIT) {
-                cache.clear();
-            }
-            cache.put(state, block);
-            return block;
-        }
-        return null;
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
     }
 
     @Unique
     private static void ausm$clearThreadCaches() {
-        AUSM_STATE_BLOCKS.get().clear();
-        AUSM_STATE_REGISTRY_NAMES.get().clear();
         com.l.ausm.impl.util.MinecraftReflectionCompat.clearHotThreadCaches();
     }
 

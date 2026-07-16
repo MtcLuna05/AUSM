@@ -117,8 +117,6 @@ public final class MinecraftReflectionCompat {
     private static final Set<FieldKey> MISSING_FIELDS = ConcurrentHashMap.newKeySet();
     private static final ConcurrentMap<StateValueMethodKey, Method> STATE_VALUE_METHOD_CACHE = new ConcurrentHashMap<>();
     private static final Set<StateValueMethodKey> MISSING_STATE_VALUE_METHODS = ConcurrentHashMap.newKeySet();
-    private static final ConcurrentMap<IdentityKey<IBlockState>, Block> STATE_BLOCK_CACHE = new ConcurrentHashMap<>();
-    private static final ConcurrentMap<IdentityKey<IBlockState>, Map<IProperty<?>, Comparable<?>>> STATE_PROPERTIES_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<IProperty<?>, String> PROPERTY_NAME_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<PropertyValueNameKey, String> PROPERTY_VALUE_NAME_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<Block, ResourceLocation> BLOCK_REGISTRY_NAME_CACHE = new ConcurrentHashMap<>();
@@ -127,8 +125,6 @@ public final class MinecraftReflectionCompat {
     private static final ConcurrentMap<ResourceLocation, String> RESOURCE_STRING_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<ResourceLocation, String> RESOURCE_PATH_LOWER_CACHE = new ConcurrentHashMap<>();
     private static final int HOT_IDENTITY_CACHE_LIMIT = 4096;
-    private static final ThreadLocal<IdentityHashMap<IBlockState, Block>> THREAD_STATE_BLOCK_CACHE =
-            ThreadLocal.withInitial(IdentityHashMap::new);
     private static final ThreadLocal<IdentityHashMap<IBlockState, String>> THREAD_STATE_STRING_CACHE =
             ThreadLocal.withInitial(IdentityHashMap::new);
     public static final Class<?>[] NO_PARAMETERS = new Class<?>[0];
@@ -811,17 +807,10 @@ public final class MinecraftReflectionCompat {
         if (state == null) {
             return Collections.emptyMap();
         }
-        IdentityKey<IBlockState> key = new IdentityKey<>(state);
-        Map<IProperty<?>, Comparable<?>> cached = STATE_PROPERTIES_CACHE.get(key);
-        if (cached != null) {
-            return cached;
-        }
         Object value = invoke(state, new String[] {"func_177228_b", "getProperties"}, NO_PARAMETERS);
-        Map<IProperty<?>, Comparable<?>> properties = value instanceof Map<?, ?>
+        return value instanceof Map<?, ?>
                 ? (Map<IProperty<?>, Comparable<?>>) value
                 : Collections.emptyMap();
-        Map<IProperty<?>, Comparable<?>> existing = STATE_PROPERTIES_CACHE.putIfAbsent(key, properties);
-        return existing != null ? existing : properties;
     }
 
     public static Comparable<?> statePropertyValue(IBlockState state, IProperty<?> property) {
@@ -864,20 +853,19 @@ public final class MinecraftReflectionCompat {
         return existing != null ? existing : valueName;
     }
 
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public static IBlockState stateWithProperty(IBlockState state, IProperty property, Comparable value) {
+        if (state == null || property == null || value == null) {
+            return state;
+        }
+        return call(state, IBlockState.class, state,
+                new String[] {"func_177226_a", "withProperty"},
+                new Class<?>[] {IProperty.class, Comparable.class}, property, value);
+    }
+
     public static Block blockFromState(IBlockState state) {
         if (state == null) {
             return null;
-        }
-        IdentityHashMap<IBlockState, Block> hotCache = THREAD_STATE_BLOCK_CACHE.get();
-        Block hotCached = hotCache.get(state);
-        if (hotCached != null) {
-            return hotCached;
-        }
-        IdentityKey<IBlockState> key = new IdentityKey<>(state);
-        Block cached = STATE_BLOCK_CACHE.get(key);
-        if (cached != null) {
-            putThreadStateBlock(state, cached);
-            return cached;
         }
         Block block = null;
         if (BLOCK_FROM_STATE_HANDLE != null) {
@@ -889,25 +877,10 @@ public final class MinecraftReflectionCompat {
         if (block == null) {
             block = call(state, Block.class, null, new String[] {"func_177230_c", "getBlock"}, NO_PARAMETERS);
         }
-        if (block != null) {
-            Block existing = STATE_BLOCK_CACHE.putIfAbsent(key, block);
-            Block resolved = existing != null ? existing : block;
-            putThreadStateBlock(state, resolved);
-            return resolved;
-        }
-        return null;
-    }
-
-    private static void putThreadStateBlock(IBlockState state, Block block) {
-        IdentityHashMap<IBlockState, Block> hotCache = THREAD_STATE_BLOCK_CACHE.get();
-        if (hotCache.size() > HOT_IDENTITY_CACHE_LIMIT) {
-            hotCache.clear();
-        }
-        hotCache.put(state, block);
+        return block;
     }
 
     public static void clearHotThreadCaches() {
-        THREAD_STATE_BLOCK_CACHE.get().clear();
         THREAD_STATE_STRING_CACHE.get().clear();
     }
 
@@ -2452,32 +2425,6 @@ public final class MinecraftReflectionCompat {
                     || obj instanceof PropertyValueNameKey other
                     && property == other.property
                     && value == other.value;
-        }
-
-        @Override
-        public int hashCode() {
-            return hash;
-        }
-    }
-
-    private static final class IdentityKey<T> {
-        private final T value;
-        private final int hash;
-
-        private IdentityKey(T value) {
-            this.value = value;
-            this.hash = System.identityHashCode(value);
-        }
-
-        @Override
-        public boolean equals(Object object) {
-            if (this == object) {
-                return true;
-            }
-            if (!(object instanceof IdentityKey<?> other)) {
-                return false;
-            }
-            return value == other.value;
         }
 
         @Override
