@@ -5,6 +5,8 @@ import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
 import com.l.ausm.impl.pipeline.compat.NothiriumPipelineCompat;
+import com.l.ausm.impl.pipeline.compat.TerrainCompileCoordinator;
+import com.l.ausm.impl.pipeline.compat.TerrainRenderProbeState;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
@@ -60,13 +62,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private static final int AUSM_SHADERLESS_COMPILE_LIGHT_PROBE_LIMIT = 0;
 
     @Unique
-    private static final int AUSM_NOTHIRIUM_LAYER_COMPILE_LOG_LIMIT = 16;
-
-    @Unique
-    private static final AtomicInteger AUSM_NOTHIRIUM_LAYER_COMPILE_LOGS = new AtomicInteger();
-
-    @Unique
     private static final AtomicInteger AUSM_SHADERLESS_COMPILE_LIGHT_PROBES = new AtomicInteger();
+
+    @Unique
+    private static final AtomicInteger AUSM_LUMINOUS_COMPILE_PROBES = new AtomicInteger();
 
     @Shadow(remap = false)
     private IBlockAccess chunkCache;
@@ -86,6 +85,12 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     @Unique
     private BlockRenderLayer ausm$framedDiagnosticLayer = null;
 
+    @Unique
+    private int ausm$terrainCompileProbeStart = -1;
+
+    @Unique
+    private BlockRenderLayer ausm$terrainCompileProbeLayer = null;
+
     @Inject(
             method = "compileSection(Lnet/minecraft/client/renderer/RegionRenderCacheBuilder;)Lmeldexun/nothirium/api/renderer/chunk/RenderChunkTaskResult;",
             at = @At("HEAD"),
@@ -94,6 +99,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private void ausm$resetShaderlessBloomLayerSummaries(RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
         ausm$clearThreadCaches();
         PipelineContext.getInstance().beginFramedMaterialCompileCache();
+        TerrainCompileCoordinator.beginSection();
         ausm$resetShaderlessBloomMetadata(regionBuffers);
     }
 
@@ -126,6 +132,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         } finally {
             ausm$resetShaderlessBloomMetadata(regionBuffers);
             PipelineContext.getInstance().endFramedMaterialCompileCache();
+            TerrainCompileCoordinator.endSection();
             ausm$clearThreadCaches();
         }
     }
@@ -139,10 +146,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             ),
             remap = false
     )
-    private void ausm$logNothiriumLayerCompileBuffers(RegionRenderCacheBuilder regionBuffers,
-                                                      CallbackInfoReturnable<?> cir) {
-        int index = AUSM_NOTHIRIUM_LAYER_COMPILE_LOGS.incrementAndGet();
-        if (index > AUSM_NOTHIRIUM_LAYER_COMPILE_LOG_LIMIT) {
+    private void ausm$probeNothiriumCompileBuffers(RegionRenderCacheBuilder regionBuffers,
+                                                   CallbackInfoReturnable<?> cir) {
+        int call = TerrainRenderProbeState.nextTerrainCompileBufferProbe();
+        if (call < 0) {
             return;
         }
         Object renderChunk = ausm$renderChunk();
@@ -151,16 +158,19 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             chunk = nothiriumChunk.getX() + "," + nothiriumChunk.getY() + "," + nothiriumChunk.getZ();
         }
         MainMod.LOGGER.info(
-                "[AUSMNothiriumLayerCompile] call={} chunk={} solid={} cutoutMipped={} cutout={} translucent={} currentLayer={} pipelineActive={} formatMode={}",
-                index,
+                "[AUSMNothiriumCompileBuffers] call={} thread={} chunk={} currentLayer={} pipelineActive={} forceVanilla={} formatMode={} solid={} cutoutMipped={} cutout={} translucent={} bloom={}",
+                call,
+                Thread.currentThread().getName(),
                 chunk,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
+                PipelineContext.getInstance().isPipelineActive(),
+                PipelineContext.getInstance().shouldForceVanillaTerrainRenderer(),
+                NothiriumPipelineCompat.shouldUsePipelineBlockFormat(),
                 ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.SOLID),
                 ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.CUTOUT_MIPPED),
                 ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.CUTOUT),
                 ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.TRANSLUCENT),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
-                PipelineContext.getInstance().isPipelineActive(),
-                NothiriumPipelineCompat.shouldUsePipelineBlockFormat()
+                ausm$layerCompileBufferDetails(regionBuffers, AusmBloomLayer.layer())
         );
     }
 
@@ -274,6 +284,45 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         ausm$fireCutoutFallbackStart = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer);
     }
 
+    @Inject(method = "renderBlockState", at = @At("HEAD"), remap = false)
+    private void ausm$probeLuminousLayerDecision(IBlockState state, BlockPos pos, VisibilityGraph visibilityGraph,
+                                                 RegionRenderCacheBuilder regionBuffers, CallbackInfo ci) {
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+        if (!ausm$isLuminousBlock(block)) {
+            return;
+        }
+        int call = AUSM_LUMINOUS_COMPILE_PROBES.incrementAndGet();
+        if (call > 16) {
+            return;
+        }
+        PipelineContext pipeline = PipelineContext.getInstance();
+        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
+        MainMod.LOGGER.info(
+                "[AUSMLuminousCompile] call={} pos={} class={} current={} natural={} bloomLayer={} nativeSolid={} nativeBloom={} solid={} bloom={} forceVanilla={}",
+                call,
+                pos,
+                block.getClass().getName(),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockRenderLayer(block),
+                bloomLayer,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockCanRenderInLayer(block, state, BlockRenderLayer.SOLID),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockCanRenderInLayer(block, state, bloomLayer),
+                TerrainCompileCoordinator.canRenderInLayer(block, state, BlockRenderLayer.SOLID, pipeline),
+                TerrainCompileCoordinator.canRenderInLayer(block, state, bloomLayer, pipeline),
+                pipeline.shouldForceVanillaTerrainRenderer()
+        );
+    }
+
+    @Unique
+    private static boolean ausm$isLuminousBlock(Block block) {
+        for (Class<?> type = block != null ? block.getClass() : null; type != null; type = type.getSuperclass()) {
+            if ("lumien.randomthings.block.BlockBlockLuminousBase".equals(type.getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Inject(
             method = "renderBlockState",
             at = @At(
@@ -287,6 +336,13 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private void ausm$setPipelineBlockContext(IBlockState state, BlockPos pos, VisibilityGraph visibilityGraph,
                                               RegionRenderCacheBuilder bufferBuilder, CallbackInfo ci) {
         PipelineContext pipeline = PipelineContext.getInstance();
+        ausm$terrainCompileProbeLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
+        BufferBuilder terrainProbeBuffer = ausm$terrainCompileProbeLayer != null && bufferBuilder != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(bufferBuilder, ausm$terrainCompileProbeLayer)
+                : null;
+        ausm$terrainCompileProbeStart = terrainProbeBuffer != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(terrainProbeBuffer)
+                : -1;
         if (pipeline.shouldForceVanillaTerrainRenderer()) {
             BlockRenderContext.setBlockEntityId(0);
             BlockRenderContext.setRenderType((short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(state));
@@ -494,15 +550,57 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                 );
             }
         }
+        ausm$logTerrainCompileBlockProbe(state, pos, bufferBuilder, ci.isCancelled());
         ausm$framedDiagnosticStart = -1;
         ausm$framedDiagnosticLayer = null;
+        ausm$terrainCompileProbeStart = -1;
+        ausm$terrainCompileProbeLayer = null;
         BlockRenderContext.clear();
+    }
+
+    @Unique
+    private void ausm$logTerrainCompileBlockProbe(IBlockState state, BlockPos pos, RegionRenderCacheBuilder regionBuffers,
+                                                  boolean cancelled) {
+        int call = TerrainRenderProbeState.nextTerrainCompileBlockProbe();
+        if (call < 0) {
+            return;
+        }
+        BlockRenderLayer layer = ausm$terrainCompileProbeLayer;
+        BufferBuilder buffer = layer != null && regionBuffers != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, layer)
+                : null;
+        int end = buffer != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer) : -1;
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+        MainMod.LOGGER.info(
+                "[AUSMNothiriumCompileBlock] call={} thread={} pos={} layer={} state={} block={} start={} end={} delta={} cancelled={} buffer={} drawing={} format={} contextBlockId={} contextEmission={} packedLight=0x{} pipelineActive={} forceVanilla={}",
+                call,
+                Thread.currentThread().getName(),
+                pos,
+                layer,
+                PipelineContext.getInstance().diagnosticStateName(state),
+                block != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block) : null,
+                ausm$terrainCompileProbeStart,
+                end,
+                ausm$terrainCompileProbeStart >= 0 && end >= 0 ? end - ausm$terrainCompileProbeStart : -1,
+                cancelled,
+                ausm$bufferDetails(buffer),
+                buffer instanceof IBufferBuilderExtension extension && extension.ausm$isDrawing(),
+                buffer != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(buffer) : null,
+                BlockRenderContext.blockEntityId(),
+                BlockRenderContext.blockEmission(),
+                Integer.toHexString(BlockRenderContext.packedLightmap()),
+                PipelineContext.getInstance().isPipelineActive(),
+                PipelineContext.getInstance().shouldForceVanillaTerrainRenderer()
+        );
     }
 
     @Inject(method = "renderBlockState", at = @At("RETURN"), remap = false)
     private void ausm$renderBloomOnlyFallback(IBlockState state, BlockPos pos, VisibilityGraph visibilityGraph,
                                               RegionRenderCacheBuilder regionBuffers, CallbackInfo ci) {
         PipelineContext pipeline = PipelineContext.getInstance();
+        if (!pipeline.isManualBloomExtractionEnabled()) {
+            return;
+        }
         IBlockState effectiveState = pipeline.effectiveBlockRenderState(state, chunkCache, pos);
         IBlockState inheritedBloomState = pipeline.inheritedBloomRenderState(state, chunkCache, pos);
         if (ausm$renderMissingFireCutoutFallback(state, effectiveState, pos, regionBuffers)) {
@@ -584,9 +682,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
 
             boolean textureBloomSource = PipelineContext.getInstance().stateUsesTextureBloomSource(fallbackSourceState);
             boolean solidBloomMaskFallback = framedState && !textureBloomSource;
+            IBlockState fallbackGeometryState = solidBloomMaskFallback ? renderState : fallbackRenderState;
             BlockRenderLayer renderLayer = framedState
-                    ? ausm$framedGeometryLayer(fallbackRenderState, fallbackSourceState)
-                    : bloomLayer;
+                    ? ausm$framedGeometryLayer(fallbackGeometryState, fallbackSourceState)
+                    : ausm$bloomFallbackLayer(fallbackSourceState);
             BlockRenderLayer bufferLayer = framedState ? renderLayer : ausm$bloomFallbackLayer(fallbackSourceState);
             BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, bufferLayer);
             if (buffer == null) {
@@ -603,9 +702,9 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                         fallbackSourceState, bufferLayer, renderLayer, normalDelta, false, 0, buffer, regionBuffers);
                 normalDelta = 0;
             } else if (normalDelta > 0) {
+                ausm$markShaderlessBloomMetadata(buffer, bufferLayer, pos);
                 ausm$logEmissiveFallback("normal-or-dispatcher-present", renderState, fallbackRenderState, pos,
                         fallbackSourceState, bufferLayer, renderLayer, normalDelta, false, 0, buffer, regionBuffers);
-                return true;
             }
 
             if (!((IBufferBuilderExtension) buffer).ausm$isDrawing()) {
@@ -617,16 +716,27 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             }
 
             int fallbackStart = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer);
-            boolean rendered = ausm$renderEmissiveFallbackWithLayer(fallbackRenderState, fallbackSourceState, pos, buffer, renderLayer, solidBloomMaskFallback);
+            boolean rendered = ausm$renderEmissiveFallbackWithLayer(fallbackGeometryState, fallbackSourceState, pos, buffer, renderLayer, solidBloomMaskFallback);
             int fallbackDelta = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer) - fallbackStart;
+            if (fallbackDelta > 0) {
+                ausm$markShaderlessBloomMetadata(buffer, bufferLayer, pos);
+            }
             String mode = normalDelta > 0 ? "stacked-bloom-layer" : "fallback-bloom-layer";
-            ausm$logEmissiveFallback(mode, renderState, fallbackRenderState, pos,
+            ausm$logEmissiveFallback(mode, renderState, fallbackGeometryState, pos,
                     fallbackSourceState, bufferLayer, renderLayer, normalDelta, rendered, fallbackDelta, buffer,
                     regionBuffers);
             return true;
         } finally {
             ausm$emissiveFallbackStart = -1;
         }
+    }
+
+    @Unique
+    private static void ausm$markShaderlessBloomMetadata(BufferBuilder buffer, BlockRenderLayer layer, BlockPos pos) {
+        if (buffer instanceof IBufferBuilderExtension extension) {
+            extension.ausm$markShaderlessBloomMetadata();
+        }
+        PipelineContext.getInstance().recordShaderlessBloomMetadata(pos, layer);
     }
 
     @Unique
@@ -852,11 +962,6 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (path.contains("fire") || com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsFire(state)) {
             return BlockRenderLayer.CUTOUT;
         }
-        if (ausm$isRandomThingsLuminousState(state)) {
-            return ausm$isRandomThingsTranslucentLuminousState(state)
-                    ? BlockRenderLayer.TRANSLUCENT
-                    : BlockRenderLayer.SOLID;
-        }
         BlockRenderLayer naturalLayer = ausm$naturalRenderLayer(state);
         if (naturalLayer != null && !AusmBloomLayer.isBloomLayer(naturalLayer)) {
             return naturalLayer;
@@ -864,33 +969,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (path.contains("translucent") || !com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((state), new String[] {"func_185913_b", "isOpaqueCube"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) || !com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((state), new String[] {"func_185917_h", "isFullCube"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
             return BlockRenderLayer.TRANSLUCENT;
         }
-        if (path.contains("luminous")) {
-            return BlockRenderLayer.CUTOUT;
-        }
         return BlockRenderLayer.SOLID;
-    }
-
-    @Unique
-    private static boolean ausm$isRandomThingsLuminousState(IBlockState state) {
-        ResourceLocation name = ausm$registryName(state);
-        return name != null
-                && "randomthings".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
-                && ausm$isRandomThingsLuminousPath(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name));
-    }
-
-    @Unique
-    private static boolean ausm$isRandomThingsLuminousPath(String path) {
-        return "luminousblock".equalsIgnoreCase(path)
-                || "translucentluminousblock".equalsIgnoreCase(path)
-                || "luminousstainedbrick".equalsIgnoreCase(path);
-    }
-
-    @Unique
-    private static boolean ausm$isRandomThingsTranslucentLuminousState(IBlockState state) {
-        ResourceLocation name = ausm$registryName(state);
-        return name != null
-                && "randomthings".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
-                && "translucentluminousblock".equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name));
     }
 
     @Unique
@@ -906,7 +985,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     @Unique
     private static boolean ausm$canRenderInLayer(Block block, IBlockState state, BlockRenderLayer layer) {
         try {
-            return block != null && layer != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer);
+            return TerrainCompileCoordinator.canRenderInLayer(block, state, layer, PipelineContext.getInstance());
         } catch (RuntimeException | LinkageError ignored) {
             return false;
         }
@@ -940,11 +1019,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
         String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name);
         return "lumenized".equals(namespace)
-                || ausm$isRandomThingsLuminousState(state)
-                || path.contains("lumenized")
-                || path.contains("luminous")
-                || path.contains("emissive")
-                || path.contains("bloom");
+                || path.contains("lumenized");
     }
 
     @Unique

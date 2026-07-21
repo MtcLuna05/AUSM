@@ -2,10 +2,10 @@ package com.l.ausm.impl.pipeline.bloom;
 
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.mixin.pipeline.EntityRendererAccessor;
 import com.l.ausm.impl.pipeline.PipelineContext;
-import com.l.ausm.impl.pipeline.compat.NothiriumBypass;
 import com.l.ausm.impl.pipeline.fbo.DeferredFramebuffer;
-import com.l.ausm.impl.pipeline.pack.ShaderPack;
+import com.l.ausm.impl.pipeline.matrix.MatrixState;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -19,16 +19,16 @@ import net.minecraft.entity.Entity;
 import net.minecraft.util.BlockRenderLayer;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
+import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
+import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.util.Collection;
 import java.util.List;
@@ -44,7 +44,7 @@ public final class AusmBloomRenderer {
     private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
     private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = false;
     private static final int BLOOM_RENDER_LOG_LIMIT = 0;
-    private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 0;
+    private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 8;
     private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_FACTOR = -1.0F;
     private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_UNITS = -4.0F;
 
@@ -53,6 +53,8 @@ public final class AusmBloomRenderer {
     private Framebuffer bloomLayerTarget;
     private Framebuffer bloomDownsampleTarget;
     private Framebuffer bloomBlurTarget;
+    private int bloomDepthTexture;
+    private int finalDepthTexture;
     private int width = -1;
     private int height = -1;
     private int halfWidth = -1;
@@ -70,7 +72,16 @@ public final class AusmBloomRenderer {
     private int framebufferBloomLogs;
     private int bloomRenderLogs;
     private int zeroBloomRenderLogs;
+    private int depthMaskProbeLogs;
+    private int bloomOcclusionProbeLogs;
+    private int bloomFrameProbeCalls;
+    private int bloomCompositeProbeCalls;
+    private int bloomOcclusionQuery;
+    private int depthAttachmentProbeLogs;
     private LumenizedTicketBridge lumenizedTickets;
+    private boolean globalFacadesBloomResolved;
+    private Method globalFacadesBloomMethod;
+    private boolean loggedGlobalFacadesBloomBridge;
 
     public int renderBloomLayer(RenderGlobal renderGlobal, double partialTicks, int pass, Entity entity,
                                 DeferredFramebuffer pipelineDepthSource, Framebuffer minecraftDepthSource,
@@ -91,17 +102,46 @@ public final class AusmBloomRenderer {
 
         RenderState state = captureState();
         int rendered = 0;
+        int passedSamples = -1;
+        boolean sharedMinecraftDepth = false;
         try {
-            clearLayerTarget();
-            copyDepth(pipelineDepthSource, minecraftDepthSource);
+            // In shaderless mode, keep the bloom target attached to the live
+            // terrain depth renderbuffer. Blitting depth into a private target
+            // raced the world-pass FBO lifecycle and allowed bloom through walls.
+            sharedMinecraftDepth = pipelineDepthSource == null && attachMinecraftDepth(minecraftDepthSource);
+            clearLayerTarget(sharedMinecraftDepth);
+            if (!sharedMinecraftDepth) {
+                copyDepth(pipelineDepthSource, minecraftDepthSource);
+            }
+            logDepthAttachmentProbe("prepared", minecraftDepthSource, sharedMinecraftDepth);
             bindLayerTargetForGeometry();
-            rendered = renderBloomGeometry(renderGlobal, bloomLayer, partialTicks, pass, entity);
-            if (rendered > 0) {
-                layerBloomPending = true;
-                if (bloomRenderLogs < BLOOM_RENDER_LOG_LIMIT) {
-                    bloomRenderLogs++;
-                    
+            int query = 0;
+            if (query > 0) {
+                GL15.glBeginQuery(GL15.GL_SAMPLES_PASSED, query);
+            }
+            try {
+                rendered = renderBloomGeometry(renderGlobal, bloomLayer, partialTicks, pass, entity);
+                rendered += renderGlobalFacadesBloomGeometry();
+            } finally {
+                if (query > 0) {
+                    GL15.glEndQuery(GL15.GL_SAMPLES_PASSED);
                 }
+            }
+            if (rendered > 0) {
+                copyDepthTexture(bloomLayerTarget, true);
+            }
+            logDepthAttachmentProbe("after-geometry", minecraftDepthSource, sharedMinecraftDepth);
+            if (bloomRenderLogs < BLOOM_RENDER_LOG_LIMIT) {
+                bloomRenderLogs++;
+                MainMod.LOGGER.info("[AUSMBloomDraw] layer={} rendered={} defer={} depthSource={} target={}",
+                        bloomLayer,
+                        rendered,
+                        deferComposite,
+                        pipelineDepthSource != null ? "pipeline" : (minecraftDepthSource != null ? "minecraft" : "none"),
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget));
+            }
+            if (rendered > 0 && passedSamples != 0) {
+                layerBloomPending = true;
                 if (!loggedLayerRenderer) {
                     loggedLayerRenderer = true;
                     
@@ -110,13 +150,18 @@ public final class AusmBloomRenderer {
                     compositePendingLayerBloom(minecraftDepthSource, false);
                 }
             }
+            logBloomFrameProbe(rendered, passedSamples, sharedMinecraftDepth, deferComposite);
         } finally {
+            if (sharedMinecraftDepth) {
+                restoreLayerDepthAttachment();
+            }
             state.restore();
         }
 
-        if (rendered <= 0 && resourceIndex.hasBloomResources() && zeroBloomRenderLogs < BLOOM_ZERO_RENDER_LOG_LIMIT) {
+        if (rendered <= 0 && zeroBloomRenderLogs < BLOOM_ZERO_RENDER_LOG_LIMIT) {
             zeroBloomRenderLogs++;
-            
+            MainMod.LOGGER.info("[AUSMBloomDraw] empty layer={} resources={} nativeHook={}",
+                    bloomLayer, resourceIndex.hasBloomResources(), AusmBloomLayer.shouldUseNativeHook());
         }
         return rendered;
     }
@@ -171,7 +216,7 @@ public final class AusmBloomRenderer {
         int rendered = 0;
         RenderState state = captureState();
         try {
-            clearLayerTarget();
+            clearLayerTarget(false);
             copyDepth(pipelineDepthSource, target);
             bindLayerTargetForGeometry();
             prepareShaderlessEmissiveGeometryState(program);
@@ -221,6 +266,14 @@ public final class AusmBloomRenderer {
         bloomLayerTarget = null;
         bloomDownsampleTarget = null;
         bloomBlurTarget = null;
+        deleteTexture(bloomDepthTexture);
+        deleteTexture(finalDepthTexture);
+        if (bloomOcclusionQuery > 0) {
+            GL15.glDeleteQueries(bloomOcclusionQuery);
+            bloomOcclusionQuery = 0;
+        }
+        bloomDepthTexture = 0;
+        finalDepthTexture = 0;
         width = -1;
         height = -1;
         halfWidth = -1;
@@ -254,19 +307,25 @@ public final class AusmBloomRenderer {
         RenderState state = captureState ? captureState() : null;
         try {
             if (runBlurChain(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget))) {
-                compositeBlurredBloom(target, BLOOM_STRENGTH, preHandDepthTexture, postHandDepthTexture);
+                boolean useSceneDepthMask = copyDepthTexture(target, false);
+                compositeBlurredBloom(target, BLOOM_STRENGTH, preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
                 if (BLOOM_DIRECT_DEBUG_STRENGTH > 0.0F) {
                     compositeTexture(target, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget), BLOOM_DIRECT_DEBUG_STRENGTH,
-                            preHandDepthTexture, postHandDepthTexture);
+                            preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
                 }
                 composited = true;
+                logBloomCompositeProbe(target, useSceneDepthMask, composited);
                 if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
                     bloomCompositeLogs++;
-                    
+                    MainMod.LOGGER.info("[AUSMBloomComposite] result=blurred target={} layer={}",
+                            com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(target),
+                            com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget));
                 }
             } else if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
                 bloomCompositeLogs++;
-                
+                MainMod.LOGGER.warn("[AUSMBloomComposite] result=blur-failed target={} layer={}",
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(target),
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget));
             }
         } finally {
             layerBloomPending = false;
@@ -275,6 +334,14 @@ public final class AusmBloomRenderer {
             }
         }
         return composited;
+    }
+
+    private void logBloomFrameProbe(int rendered, int passedSamples, boolean sharedMinecraftDepth, boolean deferComposite) {
+        // Bloom diagnostics are disabled outside focused F1 investigations.
+    }
+
+    private void logBloomCompositeProbe(Framebuffer target, boolean sceneDepthMask, boolean composited) {
+        // Bloom diagnostics are disabled outside focused F1 investigations.
     }
 
     private void renderFramebufferBloom(Framebuffer target) {
@@ -365,16 +432,18 @@ public final class AusmBloomRenderer {
         compositeTexture(target, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), strength);
     }
 
-    private void compositeBlurredBloom(Framebuffer target, float strength, int preHandDepthTexture, int postHandDepthTexture) {
-        compositeTexture(target, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), strength, preHandDepthTexture, postHandDepthTexture);
+    private void compositeBlurredBloom(Framebuffer target, float strength, int preHandDepthTexture, int postHandDepthTexture,
+                                       boolean useSceneDepthMask) {
+        compositeTexture(target, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), strength,
+                preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
     }
 
     private void compositeTexture(Framebuffer target, int texture, float strength) {
-        compositeTexture(target, texture, strength, 0, 0);
+        compositeTexture(target, texture, strength, 0, 0, false);
     }
 
     private void compositeTexture(Framebuffer target, int texture, float strength,
-                                  int preHandDepthTexture, int postHandDepthTexture) {
+                                  int preHandDepthTexture, int postHandDepthTexture, boolean useSceneDepthMask) {
         if (target == null || compositeProgram() == -1) {
             return;
         }
@@ -402,8 +471,13 @@ public final class AusmBloomRenderer {
             bindTextureUniform(compositeProgram, "preHandDepth", preHandDepthTexture, 1);
             bindTextureUniform(compositeProgram, "postHandDepth", postHandDepthTexture, 2);
         }
-        setUniform1f(compositeProgram, "strength", strength * configuredBloomIntensity());
+        if (useSceneDepthMask) {
+            bindTextureUniform(compositeProgram, "bloomDepth", bloomDepthTexture, 3);
+            bindTextureUniform(compositeProgram, "finalDepth", finalDepthTexture, 4);
+        }
+        setUniform1f(compositeProgram, "strength", strength);
         setUniform1i(compositeProgram, "useHandMask", useHandMask ? 1 : 0);
+        setUniform1i(compositeProgram, "useSceneDepthMask", useSceneDepthMask ? 1 : 0);
         drawFullscreenQuad();
     }
 
@@ -414,34 +488,83 @@ public final class AusmBloomRenderer {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        // The bloom target borrows the live world depth attachment in shaderless
+        // mode. It must test against it without modifying the scene depth. The
+        // matching source faces need a minimal bias or equal-depth rasterization
+        // intermittently rejects the bloom geometry on different drivers.
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
+        GL11.glPolygonOffset(SHADERLESS_EMISSIVE_DEPTH_BIAS_FACTOR, SHADERLESS_EMISSIVE_DEPTH_BIAS_UNITS);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-        GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-        GL11.glPolygonOffset(-4.0F, -8.0F);
-
-        boolean forcedNothiriumBypass = false;
+        int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+        boolean pushedProjection = false;
+        boolean pushedModelView = false;
         try {
-            NothiriumBypass.pushForcedBypass();
-            forcedNothiriumBypass = true;
-            int rendered = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, bloomLayer, partialTicks, pass, entity);
-            rendered += lumenizedTickets().draw(entity, (float) partialTicks);
+            Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+            Object entityRenderer = minecraft == null ? null : MinecraftReflectionCompat.entityRenderer(minecraft);
+            if (entityRenderer instanceof EntityRendererAccessor) {
+                GL11.glMatrixMode(GL11.GL_PROJECTION);
+                GL11.glPushMatrix();
+                pushedProjection = true;
+                GL11.glMatrixMode(GL11.GL_MODELVIEW);
+                GL11.glPushMatrix();
+                pushedModelView = true;
+                ((EntityRendererAccessor) entityRenderer).ausm$setupCameraTransform((float) partialTicks, 2);
+                MatrixState.captureGbufferMatrices();
+            }
+            // Read Nothirium VBO data directly when present. Its renderer is never
+            // invoked here because it would replace AUSM's frontend program/state.
+            int rendered = PipelineContext.getInstance().renderAusmOwnedNothiriumBloomGeometry(partialTicks, entity);
+            if (rendered < 0) {
+                rendered = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, bloomLayer, partialTicks, pass, entity);
+            }
             return rendered;
         } finally {
-            if (forcedNothiriumBypass) {
-                NothiriumBypass.popForcedBypass();
+            if (pushedModelView) {
+                GL11.glMatrixMode(GL11.GL_MODELVIEW);
+                GL11.glPopMatrix();
             }
-            GL11.glPolygonOffset(0.0F, 0.0F);
-            GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+            if (pushedProjection) {
+                GL11.glMatrixMode(GL11.GL_PROJECTION);
+                GL11.glPopMatrix();
+            }
+            GL11.glMatrixMode(previousMatrixMode);
         }
     }
 
-    private void clearLayerTarget() {
+    private int renderGlobalFacadesBloomGeometry() {
+        if (!globalFacadesBloomResolved) {
+            globalFacadesBloomResolved = true;
+            try {
+                Class<?> renderer = Class.forName("com.l.globalfacades.client.render.FacadeWorldRenderer");
+                globalFacadesBloomMethod = renderer.getMethod("renderBloomForAusm");
+            } catch (ReflectiveOperationException | LinkageError ignored) {
+                globalFacadesBloomMethod = null;
+            }
+        }
+        if (globalFacadesBloomMethod == null) {
+            return 0;
+        }
+        try {
+            Object result = globalFacadesBloomMethod.invoke(null);
+            boolean rendered = result instanceof Boolean && (Boolean) result;
+            if (rendered && !loggedGlobalFacadesBloomBridge) {
+                loggedGlobalFacadesBloomBridge = true;
+                MainMod.LOGGER.info("[AUSMGlobalFacadesBloom] Rendering facade bloom through the native AUSM depth-tested target.");
+            }
+            return rendered ? 1 : 0;
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            return 0;
+        }
+    }
+
+    private void clearLayerTarget(boolean preserveDepth) {
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
         com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(bloomLayerTarget, false);
         GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
@@ -449,7 +572,83 @@ public final class AusmBloomRenderer {
         GL11.glViewport(0, 0, width, height);
         GL11.glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
         GL11.glClearDepth(1.0D);
-        GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+        GL11.glClear(preserveDepth ? GL11.GL_COLOR_BUFFER_BIT : GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+    }
+
+    private boolean attachMinecraftDepth(Framebuffer minecraftDepthSource) {
+        if (minecraftDepthSource == null || bloomLayerTarget == null) {
+            return false;
+        }
+        int sourceDepth = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(
+                minecraftDepthSource, 0, "field_147624_h", "depthBuffer");
+        int targetFramebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(bloomLayerTarget);
+        if (sourceDepth <= 0 || targetFramebuffer <= 0) {
+            return false;
+        }
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, targetFramebuffer);
+        GL30.glFramebufferRenderbuffer(GL30.GL_FRAMEBUFFER, GL30.GL_DEPTH_ATTACHMENT,
+                GL30.GL_RENDERBUFFER, sourceDepth);
+        return GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER) == GL30.GL_FRAMEBUFFER_COMPLETE;
+    }
+
+    private void restoreLayerDepthAttachment() {
+        if (bloomLayerTarget == null) {
+            return;
+        }
+        int layerDepth = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(
+                bloomLayerTarget, 0, "field_147624_h", "depthBuffer");
+        int targetFramebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(bloomLayerTarget);
+        if (layerDepth <= 0 || targetFramebuffer <= 0) {
+            return;
+        }
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, targetFramebuffer);
+        GL30.glFramebufferRenderbuffer(GL30.GL_FRAMEBUFFER, GL30.GL_DEPTH_ATTACHMENT,
+                GL30.GL_RENDERBUFFER, layerDepth);
+    }
+
+    private void logDepthAttachmentProbe(String stage, Framebuffer minecraftDepthSource, boolean sharedDepth) {
+        // Depth-attachment diagnostics are disabled outside focused F1 investigations.
+        return;
+        /*
+        if (bloomLayerTarget == null) {
+            return;
+        }
+        int targetFramebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(bloomLayerTarget);
+        int sourceFramebuffer = minecraftDepthSource == null ? -1
+                : com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(minecraftDepthSource);
+        int sourceDepth = minecraftDepthSource == null ? -1
+                : com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(minecraftDepthSource, 0, "field_147624_h", "depthBuffer");
+        int layerDepth = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(bloomLayerTarget, 0,
+                "field_147624_h", "depthBuffer");
+        int previousRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        float bloomCenter = Float.NaN;
+        float sourceCenter = Float.NaN;
+        int attachedName = -1;
+        int attachedType = -1;
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, targetFramebuffer);
+            bloomCenter = readCenterDepth();
+            attachedType = GL30.glGetFramebufferAttachmentParameteri(GL30.GL_READ_FRAMEBUFFER,
+                    GL30.GL_DEPTH_ATTACHMENT, GL30.GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE);
+            attachedName = GL30.glGetFramebufferAttachmentParameteri(GL30.GL_READ_FRAMEBUFFER,
+                    GL30.GL_DEPTH_ATTACHMENT, GL30.GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME);
+            if (sourceFramebuffer >= 0) {
+                GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, sourceFramebuffer);
+                sourceCenter = readCenterDepth();
+            }
+        } catch (RuntimeException | LinkageError ignored) {
+            // Diagnostic-only: leave rendering unaffected on unusual drivers.
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousRead);
+        }
+        */
+    }
+
+    private float readCenterDepth() {
+        FloatBuffer sample = BufferUtils.createFloatBuffer(1);
+        GL11.glReadPixels(Math.max(0, width / 2), Math.max(0, height / 2), 1, 1,
+                GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, sample);
+        return sample.get(0);
     }
 
     private void copyDepth(DeferredFramebuffer pipelineDepthSource, Framebuffer minecraftDepthSource) {
@@ -524,7 +723,8 @@ public final class AusmBloomRenderer {
         bloomLayerTarget = resizeFramebuffer(bloomLayerTarget, width, height, true);
         bloomDownsampleTarget = resizeFramebuffer(bloomDownsampleTarget, halfWidth, halfHeight, false);
         bloomBlurTarget = resizeFramebuffer(bloomBlurTarget, halfWidth, halfHeight, false);
-        return bloomLayerTarget != null && bloomDownsampleTarget != null && bloomBlurTarget != null;
+        return bloomLayerTarget != null && bloomDownsampleTarget != null && bloomBlurTarget != null
+                && ensureDepthMaskTextures();
     }
 
     private static Framebuffer resizeFramebuffer(Framebuffer framebuffer, int width, int height, boolean depth) {
@@ -545,6 +745,59 @@ public final class AusmBloomRenderer {
         return framebuffer;
     }
 
+    private boolean ensureDepthMaskTextures() {
+        bloomDepthTexture = resizeDepthTexture(bloomDepthTexture, width, height);
+        finalDepthTexture = resizeDepthTexture(finalDepthTexture, width, height);
+        return bloomDepthTexture > 0 && finalDepthTexture > 0;
+    }
+
+    private static int resizeDepthTexture(int texture, int width, int height) {
+        if (texture <= 0) {
+            texture = GL11.glGenTextures();
+        }
+        if (texture <= 0) {
+            return 0;
+        }
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        try {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL14.GL_DEPTH_COMPONENT24, width, height, 0,
+                    GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, (java.nio.ByteBuffer) null);
+        } finally {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
+            GL13.glActiveTexture(previousActiveTexture);
+        }
+        return texture;
+    }
+
+    private boolean copyDepthTexture(Framebuffer source, boolean bloomDepth) {
+        if (source == null || width <= 0 || height <= 0 || bloomDepthTexture <= 0 || finalDepthTexture <= 0) {
+            return false;
+        }
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(source));
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, bloomDepth ? bloomDepthTexture : finalDepthTexture);
+            GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
+            return GL11.glGetError() == GL11.GL_NO_ERROR;
+        } catch (RuntimeException | LinkageError ignored) {
+            return false;
+        } finally {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
+            GL13.glActiveTexture(previousActiveTexture);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+        }
+    }
+
     private int targetWidth(DeferredFramebuffer pipelineDepthSource, Framebuffer minecraftDepthSource) {
         if (pipelineDepthSource != null) {
             return pipelineDepthSource.getAttachmentWidth(Attachment.COLOR);
@@ -561,28 +814,28 @@ public final class AusmBloomRenderer {
 
     private int copyProgram() {
         if (copyProgram == -1) {
-            copyProgram = createProgram("copy", bloomFragmentSource("copy", COPY_FRAGMENT_SHADER));
+            copyProgram = createProgram("copy", COPY_FRAGMENT_SHADER);
         }
         return copyProgram;
     }
 
     private int thresholdProgram() {
         if (thresholdProgram == -1) {
-            thresholdProgram = createProgram("threshold", bloomFragmentSource("threshold", THRESHOLD_FRAGMENT_SHADER));
+            thresholdProgram = createProgram("threshold", THRESHOLD_FRAGMENT_SHADER);
         }
         return thresholdProgram;
     }
 
     private int blurProgram() {
         if (blurProgram == -1) {
-            blurProgram = createProgram("blur", bloomFragmentSource("blur", BLUR_FRAGMENT_SHADER));
+            blurProgram = createProgram("blur", BLUR_FRAGMENT_SHADER);
         }
         return blurProgram;
     }
 
     private int compositeProgram() {
         if (compositeProgram == -1) {
-            compositeProgram = createProgram("composite", bloomFragmentSource("composite", COMPOSITE_FRAGMENT_SHADER));
+            compositeProgram = createProgram("composite", COMPOSITE_FRAGMENT_SHADER);
         }
         return compositeProgram;
     }
@@ -591,8 +844,8 @@ public final class AusmBloomRenderer {
         if (emissiveExtractProgram == -1) {
             emissiveExtractProgram = createProgram(
                     "shaderless-emissive-extract",
-                    bloomVertexSource("emissive_extract", EMISSIVE_EXTRACT_VERTEX_SHADER),
-                    bloomFragmentSource("emissive_extract", EMISSIVE_EXTRACT_FRAGMENT_SHADER),
+                    EMISSIVE_EXTRACT_VERTEX_SHADER,
+                    EMISSIVE_EXTRACT_FRAGMENT_SHADER,
                     true
             );
         }
@@ -600,32 +853,7 @@ public final class AusmBloomRenderer {
     }
 
     private int createProgram(String name, String fragmentSource) {
-        return createProgram(name, bloomVertexSource("fullscreen", VERTEX_SHADER), fragmentSource, false);
-    }
-
-    private String bloomVertexSource(String name, String fallback) {
-        return bloomShaderSource("shaders/ausm/bloom/" + name + ".vsh", fallback);
-    }
-
-    private String bloomFragmentSource(String name, String fallback) {
-        return bloomShaderSource("shaders/ausm/bloom/" + name + ".fsh", fallback);
-    }
-
-    private String bloomShaderSource(String path, String fallback) {
-        ShaderPack pack = MainMod.getShaderPackManager().getCurrentPack();
-        if (pack == null || !pack.hasResource(path)) {
-            return fallback;
-        }
-        try (InputStream stream = pack.getResourceAsStream(path)) {
-            if (stream == null) {
-                return fallback;
-            }
-            MainMod.LOGGER.info("[AUSMBloom] Using shaderpack override for internal bloom shader {}", path);
-            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            MainMod.LOGGER.warn("[AUSMBloom] Failed to load shaderpack override for {}; using built-in source", path, e);
-            return fallback;
-        }
+        return createProgram(name, VERTEX_SHADER, fragmentSource, false);
     }
 
     private int createProgram(String name, String vertexSource, String fragmentSource, boolean bindPipelineAttributes) {
@@ -713,11 +941,6 @@ public final class AusmBloomRenderer {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
-    private static float configuredBloomIntensity() {
-        com.l.ausm.impl.client.ClientSettingsConfig config = MainMod.getClientSettingsConfig();
-        return config != null ? config.shaderlessBloomIntensity() : 0.85F;
-    }
-
     private static void bindBlockAtlasOnDefaultTextureUnit() {
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
@@ -800,6 +1023,12 @@ public final class AusmBloomRenderer {
     private static void deleteProgram(int program) {
         if (program > 0) {
             GL20.glDeleteProgram(program);
+        }
+    }
+
+    private static void deleteTexture(int texture) {
+        if (texture > 0) {
+            GL11.glDeleteTextures(texture);
         }
     }
 
@@ -1032,15 +1261,13 @@ public final class AusmBloomRenderer {
             varying vec2 textureCoords;
             varying vec4 vertexColor;
             varying float vertexEmission;
-            varying float specialBloomBoost;
             void main() {
                 gl_Position = ftransform();
                 textureCoords = gl_MultiTexCoord0.st;
                 vertexColor = gl_Color;
                 float rawEmission = at_midBlock.w;
-                float metadataEmission = rawEmission > 15.5 ? 0.16 : rawEmission >= 0.5 ? rawEmission / 15.0 : 0.0;
+                float metadataEmission = rawEmission >= 0.5 && rawEmission <= 15.5 ? rawEmission / 15.0 : 0.0;
                 vertexEmission = max(metadataEmission, forceEmission);
-                specialBloomBoost = rawEmission > 15.5 ? 4.70 : 1.0;
             }
             """;
 
@@ -1050,7 +1277,6 @@ public final class AusmBloomRenderer {
             varying vec2 textureCoords;
             varying vec4 vertexColor;
             varying float vertexEmission;
-            varying float specialBloomBoost;
             void main() {
                 if (vertexEmission <= 0.0) {
                     discard;
@@ -1060,9 +1286,7 @@ public final class AusmBloomRenderer {
                     discard;
                 }
                 float emissionMask = smoothstep(0.04, 0.45, vertexEmission);
-                vec3 dyeColor = clamp(albedo.rgb, 0.0, 1.0);
-                float emissionScale = (0.45 + vertexEmission * 0.55) * emissionMask * specialBloomBoost;
-                vec3 bloom = dyeColor * emissionScale;
+                vec3 bloom = albedo.rgb * (1.15 + vertexEmission * 4.25) * emissionMask;
                 gl_FragColor = vec4(bloom, albedo.a * emissionMask);
             }
             """;
@@ -1109,10 +1333,20 @@ public final class AusmBloomRenderer {
             uniform sampler2D bloom;
             uniform sampler2D preHandDepth;
             uniform sampler2D postHandDepth;
+            uniform sampler2D bloomDepth;
+            uniform sampler2D finalDepth;
             uniform float strength;
             uniform int useHandMask;
+            uniform int useSceneDepthMask;
             varying vec2 textureCoords;
             void main() {
+                if (useSceneDepthMask == 1) {
+                    float emissionDepth = texture2D(bloomDepth, textureCoords).r;
+                    float sceneDepth = texture2D(finalDepth, textureCoords).r;
+                    if (emissionDepth > sceneDepth + 0.00002 && sceneDepth < 0.99999) {
+                        discard;
+                    }
+                }
                 if (useHandMask == 1) {
                     float preHand = texture2D(preHandDepth, textureCoords).r;
                     float postHand = texture2D(postHandDepth, textureCoords).r;
@@ -1121,7 +1355,7 @@ public final class AusmBloomRenderer {
                     }
                 }
                 vec3 source = texture2D(bloom, textureCoords).rgb;
-                gl_FragColor = vec4(source * strength, 0.0);
+                gl_FragColor = vec4(source * strength, 1.0);
             }
             """;
 }

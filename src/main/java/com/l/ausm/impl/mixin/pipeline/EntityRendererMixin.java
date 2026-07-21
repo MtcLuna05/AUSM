@@ -60,22 +60,6 @@ public class EntityRendererMixin {
         PipelineContext.getInstance().beginClientRenderFrame(nanoTime);
     }
 
-    @Redirect(
-            method = "func_181560_a(FJ)V",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/gui/GuiIngame;func_175180_a(F)V"
-            )
-    )
-    private void ausm$renderGameOverlayIfPlayerReady(GuiIngame guiIngame, float partialTicks) {
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft) == null) {
-            return;
-        }
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.renderGameOverlay(guiIngame, partialTicks);
-    }
-
     @Inject(
             method = "func_181560_a(FJ)V",
             at = @At(
@@ -89,6 +73,12 @@ public class EntityRendererMixin {
         context.captureShaderlessWorldFramebufferForUi();
         context.renderShaderlessBloomBeforeGui();
         context.prepareShaderlessUiRenderingBoundary();
+        context.logHiddenSkyFramebufferProbe("post-world-before-ui");
+    }
+
+    @Inject(method = "func_181560_a(FJ)V", at = @At("RETURN"))
+    private void ausm$probeHiddenSkyAtPresentation(float partialTicks, long nanoTime, CallbackInfo ci) {
+        PipelineContext.getInstance().logHiddenSkyFramebufferProbe("frame-return");
     }
 
     @Inject(
@@ -119,10 +109,14 @@ public class EntityRendererMixin {
 
     private void ausm$beginGuiScreenRendering() {
         PipelineContext context = PipelineContext.getInstance();
+        context.logGuiBypassProbe("screen-before-routing");
         if (ausm$shouldUseVanillaGuiScreen()) {
+            context.prepareBypassedGuiScreenRendering();
+            context.logGuiBypassProbe("screen-after-vanilla-bypass");
             return;
         }
         if (!context.isActive()) {
+            context.prepareShaderlessGuiScreenRendering();
             return;
         }
         context.beginGuiScreenRendering();
@@ -163,13 +157,14 @@ public class EntityRendererMixin {
     }
 
     private boolean ausm$shouldUseVanillaGuiScreen() {
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        Object screen = minecraft != null
-                ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft)
-                : null;
-        return minecraft == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) == null
-                || (screen != null && "tinker_io.gui.GuiSmartOutput".equals(screen.getClass().getName()));
+        return true;
+    }
+
+    private boolean ausm$shouldBypassPipelineGuiScreen(Object screen) {
+        String name = screen.getClass().getName();
+        return "tinker_io.gui.GuiSmartOutput".equals(name)
+                || name.startsWith("com.l.ausm.impl.client.gui.GuiShader")
+                || "com.l.ausm.impl.client.gui.GuiDynamicLights".equals(name);
     }
 
     private void ausm$prepareNoWorldCustomMainMenu() {
@@ -248,6 +243,8 @@ public class EntityRendererMixin {
         PipelineContext context = PipelineContext.getInstance();
         context.runPendingClientChunkRenderRefreshesForCurrentRenderPass();
         context.updateShaderlessVanillaViewFrustumForCamera();
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        context.ensureRenderGlobalViewFrustum(minecraft != null ? MinecraftReflectionCompat.renderGlobal(minecraft) : null);
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }
@@ -761,20 +758,16 @@ public class EntityRendererMixin {
     private void onRenderWorldPassAfterTranslucentTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldBypassWorldPassRendering()) {
-            if (context.renderEmissiveBloomExtractionFromWorldPass(partialTicks, pass) <= 0) {
-                context.renderShaderlessVisibleBloomLayerFromWorldPass(partialTicks, pass);
-                context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
-            }
+            context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
+            context.renderShaderlessVisibleBloomLayerFromWorldPass(partialTicks, pass);
             return;
         }
 
         context.endPass();
         context.restoreTerrainCulling();
         context.restoreWaterRenderState();
-        if (context.renderEmissiveBloomExtractionFromWorldPass(partialTicks, pass) <= 0) {
-            context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
-            context.renderShaderlessVisibleBloomLayerFromWorldPass(partialTicks, pass);
-        }
+        context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
+        context.renderShaderlessVisibleBloomLayerFromWorldPass(partialTicks, pass);
     }
 
     @Inject(

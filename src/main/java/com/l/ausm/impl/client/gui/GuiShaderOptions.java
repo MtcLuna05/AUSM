@@ -1,9 +1,9 @@
 package com.l.ausm.impl.client.gui;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.pack.ShaderOption;
 import com.l.ausm.api.pipeline.pack.ShaderOptions;
-import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
 import com.l.ausm.api.pipeline.pack.ShaderScreen;
 import com.l.ausm.api.pipeline.pack.ShaderScreenEntry;
@@ -1305,51 +1305,42 @@ public class GuiShaderOptions extends GuiScreen {
 
     @Override
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
-        PipelineContext context = PipelineContext.getInstance();
-        boolean managedGuiRender = context.isActive();
-        if (managedGuiRender) {
-            context.beginGuiRendering();
+        PipelineContext.getInstance().logGuiBypassProbe("shader-options-draw-entry");
+        lastMouseX = mouseX;
+        lastMouseY = mouseY;
+        hoveredCommentTitle = List.of();
+        hoveredCommentBody = List.of();
+        if (previewHidden) {
+            super.drawScreen(mouseX, mouseY, partialTicks);
+            return;
         }
-        try {
-            lastMouseX = mouseX;
-            lastMouseY = mouseY;
-            hoveredCommentTitle = List.of();
-            hoveredCommentBody = List.of();
-            if (previewHidden) {
-                super.drawScreen(mouseX, mouseY, partialTicks);
-                return;
-            }
 
-            drawRect(0, 0, this.width, this.height, 0x330B1016);
-            drawRect(8, 34, sidebarWidth + 8, this.height - 34, 0x66101418);
-            drawRect(optionPanelLeft() - 4, 34, this.width - 8, this.height - 34, 0x66101418);
-            this.drawCenteredString(this.fontRenderer, "Shader Options - " + displayPackName(), this.width / 2, 16, 0xFFFFFF);
-            String pageText = (page + 1) + " / " + (maxPage() + 1);
-            this.drawCenteredString(this.fontRenderer, pageText, this.width / 2, this.height - 22, 0xA0A0A0);
-            if (searchField != null) {
-                searchField.drawTextBox();
-                if (!searchField.isFocused() && searchField.getText().isEmpty()) {
-                    fontRenderer.drawString("Search options", searchField.x + 4, searchField.y + 5, 0xFF6F7E8D);
-                }
-            }
-            drawSidebarScrollbar();
-            boolean dropdownOpen = activeDropdown != null || activeProfileDropdown != null;
-            super.drawScreen(dropdownOpen ? -1 : mouseX, dropdownOpen ? -1 : mouseY, partialTicks);
-            drawFocusedButtonOutline();
-            if (activeDropdown != null) {
-                activeDropdown.drawDropdown(mouseX, mouseY);
-            }
-            if (activeProfileDropdown != null) {
-                activeProfileDropdown.drawDropdown(mouseX, mouseY);
-            }
-            drawShaderTooltip(mouseX, mouseY);
-            drawBottomCommentPanel();
-            drawEscapeHintTooltip(mouseX, mouseY);
-        } finally {
-            if (managedGuiRender) {
-                context.finishGuiRendering();
+        drawRect(0, 0, this.width, this.height, 0x330B1016);
+        drawRect(8, 34, sidebarWidth + 8, this.height - 34, 0x66101418);
+        drawRect(optionPanelLeft() - 4, 34, this.width - 8, this.height - 34, 0x66101418);
+        this.drawCenteredString(this.fontRenderer, "Shader Options - " + displayPackName(), this.width / 2, 16, 0xFFFFFF);
+        String pageText = (page + 1) + " / " + (maxPage() + 1);
+        this.drawCenteredString(this.fontRenderer, pageText, this.width / 2, this.height - 22, 0xA0A0A0);
+        if (searchField != null) {
+            searchField.drawTextBox();
+            if (!searchField.isFocused() && searchField.getText().isEmpty()) {
+                fontRenderer.drawString("Search options", searchField.x + 4, searchField.y + 5, 0xFF6F7E8D);
             }
         }
+        drawSidebarScrollbar();
+        boolean dropdownOpen = activeDropdown != null || activeProfileDropdown != null;
+        super.drawScreen(dropdownOpen ? -1 : mouseX, dropdownOpen ? -1 : mouseY, partialTicks);
+        drawFocusedButtonOutline();
+        if (activeDropdown != null) {
+            activeDropdown.drawDropdown(mouseX, mouseY);
+        }
+        if (activeProfileDropdown != null) {
+            activeProfileDropdown.drawDropdown(mouseX, mouseY);
+        }
+        drawShaderTooltip(mouseX, mouseY);
+        drawBottomCommentPanel();
+        drawEscapeHintTooltip(mouseX, mouseY);
+        PipelineContext.getInstance().logGuiBypassProbe("shader-options-draw-return");
     }
 
     private void drawSidebarScrollbar() {

@@ -60,6 +60,7 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                 uniform int hasSkylight;
                 uniform int ausmSimpleVoidWorld;
                 uniform int ausmSkyboxRepair;
+                uniform int ausmUiSkyRepair;
                 uniform int hideGUI;
                 uniform int ausmGuiScreen;
                 uniform float viewWidth;
@@ -82,11 +83,6 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     return mix(vec3(luminance), color, ausmOfficial01(saturation));
                 }
 
-                float ausmOfficialNightFactor() {
-                    float ausmOfficialTimeAngle = fract(float(worldTime) / 24000.0);
-                    return max(sin(ausmOfficialTimeAngle * -6.28318530718), 0.0);
-                }
-
                 vec3 ausmOfficialSkyColor(vec2 uv) {
                     if (ausmSimpleVoidWorld <= 0) {
                         float horizonY = 0.50;
@@ -102,17 +98,13 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     float horizonY = 0.50;
                     float softness = 0.70;
                     float lowerMix = 0.08;
-                    float dayFactor = 1.0 - ausmOfficial01(ausmOfficialNightFactor());
 
                     vec3 dayTop = max(skyColor, vec3(0.45, 0.62, 0.86));
                     vec3 dayHorizon = mix(ausmOfficialDesaturate(dayTop, 0.35), vec3(0.84, 0.90, 1.0), 0.62);
                     vec3 dayLower = mix(dayHorizon, dayTop, lowerMix);
 
-                    vec3 nightSky = max(skyColor, vec3(0.004, 0.006, 0.014));
-                    vec3 nightBase = mix(vec3(0.0), nightSky, 0.75);
-
-                    vec3 topColor = mix(nightBase, dayTop, dayFactor);
-                    vec3 lowerColor = mix(nightBase, dayLower, dayFactor);
+                    vec3 topColor = dayTop;
+                    vec3 lowerColor = dayLower;
 
                     float band = (uv.y - (horizonY - softness)) / (softness * 2.0);
                     vec3 result = mix(lowerColor, topColor, ausmOfficialSmoother(band));
@@ -124,6 +116,17 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
 	                    vec3 rainColor = min(result, vec3(0.17, 0.185, 0.235));
 	                    return mix(result, rainColor, ausmOfficial01(rainAmount * 0.50));
 	                }
+
+                vec3 ausmOfficialUiSkyColor(vec2 uv) {
+                    float horizonY = 0.50;
+                    float softness = 0.70;
+                    float lowerMix = 0.08;
+                    vec3 dayTop = max(skyColor, vec3(0.45, 0.62, 0.86));
+                    vec3 dayHorizon = mix(ausmOfficialDesaturate(dayTop, 0.35), vec3(0.84, 0.90, 1.0), 0.62);
+                    vec3 dayLower = mix(dayHorizon, dayTop, lowerMix);
+                    float band = (uv.y - (horizonY - softness)) / (softness * 2.0);
+                    return mix(dayLower, dayTop, ausmOfficialSmoother(band));
+                }
 	                """ + officialCelestialFunctionsSource() + """
 
 	                float ausmOfficialSkyRepairAmount(vec2 uv, vec3 color) {
@@ -161,6 +164,16 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     return false;
                 }
 
+                bool ausmOfficialShouldRepairUiSkyPixel(float depth, vec3 color, vec2 uv) {
+                    float maxChannel = max(max(color.r, color.g), color.b);
+                    float minChannel = min(min(color.r, color.g), color.b);
+                    float liveDepth = texture2D(depthtex0, uv).r;
+                    bool cleanSkyDepth = liveDepth > 0.999;
+                    bool missingSkyColor = maxChannel < 0.012 || minChannel > 0.985;
+                    bool staleDarkSky = maxChannel < 0.12 && liveDepth > 0.98;
+                    return cleanSkyDepth || missingSkyColor || staleDarkSky;
+                }
+
                 float ausmOfficialSceneDepth(vec2 uv) {
                     float liveDepth = texture2D(depthtex0, uv).r;
                     float preTranslucentDepth = texture2D(depthtex1, uv).r;
@@ -180,17 +193,15 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
 	                    vec4 color = texture2D(colortex0, uv);
 	                    float depth = ausmOfficialSceneDepth(uv);
 	                    bool ausmOfficialSkyPixel = depth > 0.999 && !ausmOfficialHasNearbySceneGeometry(uv);
-	                    if (ausmOfficialShouldRepairSkyPixel(depth, color.rgb, uv) && ausmSkyboxRepair > 0) {
+	                    if (ausmUiSkyRepair > 0 && ausmOfficialShouldRepairUiSkyPixel(depth, color.rgb, uv)) {
+	                        color.rgb = ausmOfficialUiSkyColor(uv);
+	                    } else if (ausmOfficialShouldRepairSkyPixel(depth, color.rgb, uv) && ausmSkyboxRepair > 0) {
 	                        color.rgb = ausmOfficialSkyColor(uv);
 	                    } else if (depth > 0.999 && ausmSkyboxRepair > 0) {
 	                        float repairAmount = ausmOfficialSkyRepairAmount(uv, color.rgb);
 	                        color.rgb = mix(color.rgb, ausmOfficialSkyColor(uv), repairAmount);
                     }
-	                    if (ausmSkyboxRepair > 0) {
-	                        gl_FragData[0] = vec4(color.rgb, 1.0);
-	                        return;
-	                    }
-	                    if (ausmSkyboxRepair > 0 && ausmOfficialSkyPixel) {
+	                    if (ausmSkyboxRepair > 0 && ausmSimpleVoidWorld > 0 && ausmOfficialSkyPixel) {
 	                        color.rgb = ausmOfficialApplyVoidCelestials(color.rgb, uv);
 	                    }
                     gl_FragData[0] = vec4(color.rgb, 1.0);
@@ -210,6 +221,7 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
         appendUniformIfMissing(preamble, source, "int", "hasSkylight");
         appendUniformIfMissing(preamble, source, "int", "ausmSimpleVoidWorld");
         appendUniformIfMissing(preamble, source, "int", "ausmSkyboxRepair");
+        appendUniformIfMissing(preamble, source, "int", "ausmUiSkyRepair");
         appendUniformIfMissing(preamble, source, "int", "hideGUI");
         appendUniformIfMissing(preamble, source, "int", "ausmGuiScreen");
         appendUniformIfMissing(preamble, source, "float", "viewWidth");
@@ -330,11 +342,6 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     return mix(vec3(luminance), color, ausmOfficial01(saturation));
                 }
 
-                float ausmOfficialNightFactor() {
-                    float ausmOfficialTimeAngle = fract(float(worldTime) / 24000.0);
-                    return max(sin(ausmOfficialTimeAngle * -6.28318530718), 0.0);
-                }
-
                 vec3 ausmOfficialSkyColor(vec2 uv) {
                     if (ausmSimpleVoidWorld <= 0) {
                         float horizonY = 0.50;
@@ -350,17 +357,13 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     float horizonY = 0.50;
                     float softness = 0.70;
                     float lowerMix = 0.08;
-                    float dayFactor = 1.0 - ausmOfficial01(ausmOfficialNightFactor());
 
                     vec3 dayTop = max(skyColor, vec3(0.45, 0.62, 0.86));
                     vec3 dayHorizon = mix(ausmOfficialDesaturate(dayTop, 0.35), vec3(0.84, 0.90, 1.0), 0.62);
                     vec3 dayLower = mix(dayHorizon, dayTop, lowerMix);
 
-                    vec3 nightSky = max(skyColor, vec3(0.004, 0.006, 0.014));
-                    vec3 nightBase = mix(vec3(0.0), nightSky, 0.75);
-
-                    vec3 topColor = mix(nightBase, dayTop, dayFactor);
-                    vec3 lowerColor = mix(nightBase, dayLower, dayFactor);
+                    vec3 topColor = dayTop;
+                    vec3 lowerColor = dayLower;
 
                     float band = (uv.y - (horizonY - softness)) / (softness * 2.0);
                     vec3 result = mix(lowerColor, topColor, ausmOfficialSmoother(band));
@@ -372,6 +375,17 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
 	                    vec3 rainColor = min(result, vec3(0.17, 0.185, 0.235));
 	                    return mix(result, rainColor, ausmOfficial01(rainAmount * 0.50));
 	                }
+
+                vec3 ausmOfficialUiSkyColor(vec2 uv) {
+                    float horizonY = 0.50;
+                    float softness = 0.70;
+                    float lowerMix = 0.08;
+                    vec3 dayTop = max(skyColor, vec3(0.45, 0.62, 0.86));
+                    vec3 dayHorizon = mix(ausmOfficialDesaturate(dayTop, 0.35), vec3(0.84, 0.90, 1.0), 0.62);
+                    vec3 dayLower = mix(dayHorizon, dayTop, lowerMix);
+                    float band = (uv.y - (horizonY - softness)) / (softness * 2.0);
+                    return mix(dayLower, dayTop, ausmOfficialSmoother(band));
+                }
 	                """ + officialCelestialFunctionsSource() + """
 
                 float ausmOfficialSkyRepairAmount(vec2 uv, vec3 color) {
@@ -409,6 +423,16 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     return false;
                 }
 
+                bool ausmOfficialShouldRepairUiSkyPixel(float depth, vec3 color, vec2 uv) {
+                    float maxChannel = max(max(color.r, color.g), color.b);
+                    float minChannel = min(min(color.r, color.g), color.b);
+                    float liveDepth = texture2D(depthtex0, uv).r;
+                    bool cleanSkyDepth = liveDepth > 0.999;
+                    bool missingSkyColor = maxChannel < 0.012 || minChannel > 0.985;
+                    bool staleDarkSky = maxChannel < 0.12 && liveDepth > 0.98;
+                    return cleanSkyDepth || missingSkyColor || staleDarkSky;
+                }
+
                 float ausmOfficialSceneDepth(vec2 uv) {
                     float liveDepth = texture2D(depthtex0, uv).r;
                     float preTranslucentDepth = texture2D(depthtex1, uv).r;
@@ -435,19 +459,17 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                             ausmOfficialFinalColor.rgb = ausmOfficialSourceColor.rgb;
 	                        }
 	                    }
-	                    if (ausmSkyboxRepair > 0) {
-	                        gl_FragData[0] = vec4(ausmOfficialFinalColor.rgb, 1.0);
-	                        return;
-	                    }
-		                    float depth = ausmOfficialSceneDepth(uv);
+	                    float depth = ausmOfficialSceneDepth(uv);
 		                    bool ausmOfficialSkyPixel = depth > 0.999 && !ausmOfficialHasNearbySceneGeometry(uv);
-	                    if (ausmOfficialShouldRepairSkyPixel(depth, ausmOfficialFinalColor.rgb, uv) && ausmSkyboxRepair > 0) {
+	                    if (ausmUiSkyRepair > 0 && ausmOfficialShouldRepairUiSkyPixel(depth, ausmOfficialFinalColor.rgb, uv)) {
+	                        ausmOfficialFinalColor.rgb = ausmOfficialUiSkyColor(uv);
+	                    } else if (ausmOfficialShouldRepairSkyPixel(depth, ausmOfficialFinalColor.rgb, uv) && ausmSkyboxRepair > 0) {
 	                        ausmOfficialFinalColor.rgb = ausmOfficialSkyColor(uv);
 	                    } else if (depth > 0.999 && ausmSkyboxRepair > 0) {
 	                        float repairAmount = ausmOfficialSkyRepairAmount(uv, ausmOfficialFinalColor.rgb);
 	                        ausmOfficialFinalColor.rgb = mix(ausmOfficialFinalColor.rgb, ausmOfficialSkyColor(uv), repairAmount);
                     }
-	                    if (ausmSkyboxRepair > 0 && ausmOfficialSkyPixel) {
+	                    if (ausmSkyboxRepair > 0 && ausmSimpleVoidWorld > 0 && ausmOfficialSkyPixel) {
 	                        ausmOfficialFinalColor.rgb = ausmOfficialApplyVoidCelestials(ausmOfficialFinalColor.rgb, uv);
 	                    }
                     gl_FragData[0] = vec4(ausmOfficialFinalColor.rgb, 1.0);

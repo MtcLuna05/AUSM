@@ -83,7 +83,8 @@ public class ExtendedVertexFormats {
     }
 
     public static boolean isPipelineBlock(VertexFormat format) {
-        return format != null
+        return format == PIPELINE_BLOCK
+                || format != null
                 && PIPELINE_BLOCK != null
                 && getElementCount(format) == getElementCount(PIPELINE_BLOCK)
                 && getSize(format) == getSize(PIPELINE_BLOCK)
@@ -91,7 +92,8 @@ public class ExtendedVertexFormats {
     }
 
     public static boolean isPipelineEntity(VertexFormat format) {
-        return format != null
+        return format == PIPELINE_ENTITY
+                || format != null
                 && PIPELINE_ENTITY != null
                 && getElementCount(format) == getElementCount(PIPELINE_ENTITY)
                 && getSize(format) == getSize(PIPELINE_ENTITY)
@@ -99,113 +101,53 @@ public class ExtendedVertexFormats {
     }
 
     public static int size(VertexFormat format) {
-        if (format == null) {
-            return -1;
-        }
-        try {
-            return format.getSize();
-        } catch (Throwable ignored) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177338_f", "getSize"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
-        }
+        return format != null ? MinecraftReflectionCompat.callInt(format,
+                new String[] {"func_177338_f", "getSize"}, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
     }
 
     public static int integerSize(VertexFormat format) {
-        if (format == null) {
-            return -1;
-        }
-        try {
-            return format.getIntegerSize();
-        } catch (Throwable ignored) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_181719_f", "getIntegerSize"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
-        }
+        return format != null ? MinecraftReflectionCompat.callInt(format,
+                new String[] {"func_181719_f", "getIntegerSize"}, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
     }
 
     public static int elementCount(VertexFormat format) {
-        if (format == null) {
-            return -1;
-        }
-        try {
-            return format.getElementCount();
-        } catch (Throwable ignored) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177345_h", "getElementCount"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
-        }
+        return format != null ? MinecraftReflectionCompat.callInt(format,
+                new String[] {"func_177345_h", "getElementCount"}, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
     }
 
     public static VertexFormatElement element(VertexFormat format, int index) {
-        if (format == null) {
-            return null;
-        }
-        try {
-            return format.getElement(index);
-        } catch (Throwable ignored) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.call(format, VertexFormatElement.class, null, new String[] {"func_177348_c", "getElement"}, new Class<?>[] {int.class}, index);
-        }
+        return format != null ? MinecraftReflectionCompat.call(format, VertexFormatElement.class, null,
+                new String[] {"func_177348_c", "getElement"}, new Class<?>[] {int.class}, index) : null;
     }
 
     public static int offset(VertexFormat format, int index) {
-        if (format == null) {
-            return -1;
-        }
-        try {
-            return format.getOffset(index);
-        } catch (Throwable ignored) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_181720_d", "getOffset"}, new Class<?>[] {int.class}, -1, (index));
-        }
+        return format != null ? MinecraftReflectionCompat.callInt(format,
+                new String[] {"func_181720_d", "getOffset"}, new Class<?>[] {int.class}, -1, index) : -1;
     }
 
     public static boolean hasColor(VertexFormat format) {
-        if (format == null) {
-            return false;
-        }
-        try {
-            return format.hasColor();
-        } catch (Throwable ignored) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((format), new String[] {"func_177346_d", "hasColor"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
-        }
+        return format != null && MinecraftReflectionCompat.callBoolean(format,
+                new String[] {"func_177346_d", "hasColor"}, MinecraftReflectionCompat.NO_PARAMETERS, false);
     }
 
     public static int colorOffset(VertexFormat format) {
-        if (format == null) {
-            return -1;
-        }
-        try {
-            return format.getColorOffset();
-        } catch (Throwable ignored) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177340_e", "getColorOffset"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
-        }
+        return format != null ? MinecraftReflectionCompat.callInt(format,
+                new String[] {"func_177340_e", "getColorOffset"}, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
     }
 
     public static boolean hasNormal(VertexFormat format) {
-        if (format == null) {
-            return false;
-        }
-        try {
-            return format.hasNormal();
-        } catch (Throwable ignored) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((format), new String[] {"func_177350_b", "hasNormal"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
-        }
+        return format != null && MinecraftReflectionCompat.callBoolean(format,
+                new String[] {"func_177350_b", "hasNormal"}, MinecraftReflectionCompat.NO_PARAMETERS, false);
     }
 
     public static boolean hasUvOffset(VertexFormat format, int id) {
-        if (format == null) {
-            return false;
-        }
-        try {
-            return format.hasUvOffset(id);
-        } catch (Throwable ignored) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((format), new String[] {"func_177347_a", "hasUvOffset"}, new Class<?>[] {int.class}, false, (id));
-        }
+        return format != null && MinecraftReflectionCompat.callBoolean(format,
+                new String[] {"func_177347_a", "hasUvOffset"}, new Class<?>[] {int.class}, false, id);
     }
 
     public static int uvOffsetById(VertexFormat format, int id) {
-        if (format == null) {
-            return -1;
-        }
-        try {
-            return format.getUvOffsetById(id);
-        } catch (Throwable ignored) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((format), new String[] {"func_177344_b", "getUvOffsetById"}, new Class<?>[] {int.class}, -1, (id));
-        }
+        return format != null ? MinecraftReflectionCompat.callInt(format,
+                new String[] {"func_177344_b", "getUvOffsetById"}, new Class<?>[] {int.class}, -1, id) : -1;
     }
 
     private static void addElement(VertexFormat format, VertexFormatElement element) {

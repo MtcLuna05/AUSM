@@ -20,6 +20,7 @@ import java.util.List;
 public class AstralSorceryRenderSkyboxMixin {
     private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
     private static Boolean ausm$lastCustomVoidSky;
+    private static int ausm$voidSkyRouteProbes;
 
     @Shadow(remap = false)
     @Final
@@ -34,11 +35,16 @@ public class AstralSorceryRenderSkyboxMixin {
             remap = false
     )
     private boolean ausm$scopeFullAstralSky(List<Integer> whitelist, Object dimension) {
+        // Shaderless rendering must retain Astral's own sky route. Forcing the
+        // Botania handler here leaves no lower-sky geometry in F1 and GUI frames.
+        if (!PipelineContext.getInstance().isActive()) {
+            return whitelist != null && whitelist.contains(dimension);
+        }
         if (dimension instanceof Number && ((Number) dimension).intValue() == SIMPLE_VOID_WORLD_DIMENSION_ID) {
-            ausm$logVoidSkyMode();
             Minecraft minecraft = MinecraftReflectionCompat.minecraft();
             World world = minecraft != null ? MinecraftReflectionCompat.world(minecraft) : null;
-            return !PipelineContext.getInstance().isCustomVoidWorldSkyEnabled(world);
+            boolean botaniaRoute = !PipelineContext.getInstance().isCustomVoidWorldSkyEnabled(world);
+            return botaniaRoute;
         }
         return whitelist != null && whitelist.contains(dimension);
     }

@@ -1,15 +1,15 @@
 package com.l.ausm.impl.mixin.compat;
 
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.NothiriumFogCompat;
 import com.l.ausm.impl.pipeline.compat.NothiriumPipelineCompat;
-import com.l.ausm.impl.pipeline.PipelineContext;
 import meldexun.nothirium.api.renderer.chunk.ChunkRenderPass;
 import meldexun.renderlib.util.GLShader;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.injection.Constant;
-import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 

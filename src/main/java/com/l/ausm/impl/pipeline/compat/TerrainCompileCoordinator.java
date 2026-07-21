@@ -1,0 +1,145 @@
+package com.l.ausm.impl.pipeline.compat;
+
+import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import net.minecraft.block.Block;
+import net.minecraft.block.state.IBlockState;
+import net.minecraft.util.BlockRenderLayer;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.IBlockAccess;
+
+import java.util.IdentityHashMap;
+
+/**
+ * Shared, backend-neutral decisions made while a chunk section is compiled.
+ * Native renderers retain mesh ownership; this avoids repeating expensive
+ * compatibility classification for every block/layer visit.
+ */
+public final class TerrainCompileCoordinator {
+    private static final ThreadLocal<CompileState> STATE = ThreadLocal.withInitial(CompileState::new);
+
+    private TerrainCompileCoordinator() {
+    }
+
+    public static void beginSection() {
+        CompileState state = STATE.get();
+        if (state.depth++ == 0) {
+            state.decisions.clear();
+            java.util.Arrays.fill(state.dynamicFallbackKnown, false);
+        }
+    }
+
+    public static void endSection() {
+        CompileState state = STATE.get();
+        if (state.depth > 0 && --state.depth == 0) {
+            state.decisions.clear();
+        }
+    }
+
+    public static boolean canRenderInLayer(Block block, IBlockState state, BlockRenderLayer layer,
+                                           PipelineContext pipeline) {
+        if (block == null || state == null || layer == null) {
+            return false;
+        }
+        CompileDecision decision = decision(state, pipeline);
+        // The resource pack owns BLOOM participation. Do not synthesize this
+        // layer from a classifier: compatibility mixins must be able to move
+        // a block back into a normal terrain layer without leaving a second
+        // bloom-only mesh behind.
+        if (AusmBloomLayer.isBloomLayer(layer)) {
+            return MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer);
+        }
+        if (decision.forgeFallback) {
+            if (MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer)) {
+                return true;
+            }
+            BlockRenderLayer vanillaLayer = MinecraftReflectionCompat.blockRenderLayer(block);
+            return (vanillaLayer != null && layer == vanillaLayer)
+                    || pipeline.shouldRenderBloomSourceInBaseLayer(state, layer);
+        }
+        int bit = 1 << Math.max(0, Math.min(30, layer.ordinal()));
+        if ((decision.knownLayers & bit) == 0) {
+            boolean nativeLayer = MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer);
+            boolean forcedBase = pipeline.shouldRenderBloomSourceInBaseLayer(state, layer);
+            if (nativeLayer || forcedBase) {
+                decision.renderedLayers |= bit;
+            }
+            decision.knownLayers |= bit;
+        }
+        return (decision.renderedLayers & bit) != 0;
+    }
+
+    private static boolean isBlockcrafteryState(IBlockState state) {
+        Block block = MinecraftReflectionCompat.blockFromState(state);
+        net.minecraft.util.ResourceLocation name = block == null
+                ? null : MinecraftReflectionCompat.blockRegistryName(block);
+        return "blockcraftery".equals(MinecraftReflectionCompat.resourceNamespace(name));
+    }
+
+    /**
+     * Vanilla Forge fallback is deliberately limited to Blockcraftery. Broad
+     * portal/bloom fallback routing was the dominant Celeritas compile cost.
+     */
+    public static boolean requiresForgeFallback(IBlockState state, PipelineContext pipeline) {
+        return state != null && decision(state, pipeline).forgeFallback;
+    }
+
+    public static boolean requiresForgeFallback(IBlockState state, IBlockAccess blockAccess, BlockPos pos,
+                                                PipelineContext pipeline) {
+        if (state == null) {
+            return false;
+        }
+        CompileDecision decision = decision(state, pipeline);
+        if (decision.forgeFallback) {
+            return true;
+        }
+        // Only editable Blockcraftery frames require position-sensitive material
+        // inspection. Cache that reflection-heavy lookup once per section cell,
+        // rather than repeating it for every native Celeritas render layer.
+        if (!isBlockcrafteryState(state) || blockAccess == null || pos == null) {
+            return false;
+        }
+        CompileState compileState = STATE.get();
+        int localIndex = localSectionIndex(pos);
+        if (!compileState.dynamicFallbackKnown[localIndex]) {
+            compileState.dynamicFallbackKnown[localIndex] = true;
+            compileState.dynamicFallback[localIndex] = pipeline.shouldUseCeleritasForgeFallback(state, blockAccess, pos);
+        }
+        return compileState.dynamicFallback[localIndex];
+    }
+
+    private static CompileDecision decision(IBlockState state, PipelineContext pipeline) {
+        CompileState compileState = STATE.get();
+        CompileDecision decision = compileState.decisions.get(state);
+        if (decision == null) {
+            decision = new CompileDecision(pipeline.shouldUseCeleritasForgeFallback(state));
+            compileState.decisions.put(state, decision);
+        }
+        return decision;
+    }
+
+    private static int localSectionIndex(BlockPos pos) {
+        int x = MinecraftReflectionCompat.blockPosX(pos) & 15;
+        int y = MinecraftReflectionCompat.blockPosY(pos) & 15;
+        int z = MinecraftReflectionCompat.blockPosZ(pos) & 15;
+        return x | z << 4 | y << 8;
+    }
+
+    private static final class CompileState {
+        private final IdentityHashMap<IBlockState, CompileDecision> decisions = new IdentityHashMap<>();
+        private final boolean[] dynamicFallbackKnown = new boolean[16 * 16 * 16];
+        private final boolean[] dynamicFallback = new boolean[16 * 16 * 16];
+        private int depth;
+    }
+
+    private static final class CompileDecision {
+        private final boolean forgeFallback;
+        private int knownLayers;
+        private int renderedLayers;
+
+        private CompileDecision(boolean forgeFallback) {
+            this.forgeFallback = forgeFallback;
+        }
+    }
+}

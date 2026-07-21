@@ -216,6 +216,23 @@ processResources {
     rename '(.+_at.cfg)', 'META-INF/$1'
 }
 
+// Gradle's incremental Java output does not remove classes/resources whose source
+// files were deleted. AUSM ships mixins, so a stale class can remain loadable and
+// fail verification at game startup. Recreate main outputs for every packaged build.
+tasks.named('compileJava').configure {
+    outputs.upToDateWhen { false }
+    doFirst {
+        delete(layout.buildDirectory.dir('classes/java/main'))
+    }
+}
+
+tasks.named('processResources').configure {
+    outputs.upToDateWhen { false }
+    doFirst {
+        delete(layout.buildDirectory.dir('resources/main'))
+    }
+}
+
 sourceSets {
     main {
         blossom {

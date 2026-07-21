@@ -5,6 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
@@ -14,18 +15,27 @@ import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.client.renderer.vertex.VertexBuffer;
+import net.minecraft.util.ResourceLocation;
 import net.minecraftforge.client.IRenderHandler;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL20;
+
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 /**
  * Mixin to bind the sky shader programs.
  */
 @Mixin(RenderGlobal.class)
 public class RenderSkyMixin {
+    private static int ausm$lowerSkyProbeCalls;
+    private static final ThreadLocal<Deque<Object>> ausm$blockedSkyRenderers = ThreadLocal.withInitial(ArrayDeque::new);
+    private static final ResourceLocation ausm$moonPhasesTexture = new ResourceLocation("textures/environment/moon_phases.png");
     @Inject(method = "markBlocksForUpdate", at = @At("HEAD"))
     private void ausm$ensureViewFrustumBeforeBlockUpdate(int minX, int minY, int minZ,
                                                          int maxX, int maxY, int maxZ,
@@ -51,17 +61,29 @@ public class RenderSkyMixin {
         // if the previous buffer was not closed.
         ausm$forceResetTessellator();
         PipelineContext.getInstance().setAstralSolarEclipseFactor(0.0f);
+        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.SKY);
+        PipelineContext.getInstance().renderOwnedSkyBackingBeforeSky(partialTicks);
         if (!PipelineContext.getInstance().shouldRenderSkyDisc()) {
+            PipelineContext.getInstance().endPass();
             ci.cancel();
             return;
         }
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.SKY);
-        PipelineContext.getInstance().renderOwnedSkyBackingBeforeSky(partialTicks);
+        Object blockedRenderer = PipelineContext.getInstance().detachNonVanillaSkyRendererForVanillaSky();
+        if (blockedRenderer != null) {
+            ausm$blockedSkyRenderers.get().push(blockedRenderer);
+        }
     }
 
     @Inject(method = "renderSky(FI)V", at = @At("RETURN"))
     private void onRenderSkyReturn(float partialTicks, int pass, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        Deque<Object> blockedRenderers = ausm$blockedSkyRenderers.get();
+        if (!blockedRenderers.isEmpty()) {
+            context.restoreNonVanillaSkyRenderer(blockedRenderers.pop());
+        }
+        context.renderShaderlessOwnedSkyDetailsAfterCelestials(partialTicks);
+        context.sealShaderlessSkyFramebufferAlpha();
+        context.logHiddenSkyFramebufferProbe("post-sky");
         context.endPass();
     }
 
@@ -78,6 +100,19 @@ public class RenderSkyMixin {
                                                         WorldClient world,
                                                         Minecraft minecraft) {
         PipelineContext context = PipelineContext.getInstance();
+        if (!context.isActive()) {
+            if (context.renderShaderlessOwnedVoidCompatibilitySky(skyRenderer, partialTicks, world, minecraft)) {
+                return;
+            }
+            MinecraftReflectionCompat.invoke(
+                    skyRenderer,
+                    new String[] {"render"},
+                    new Class<?>[] {float.class, WorldClient.class, Minecraft.class},
+                    partialTicks,
+                    world,
+                    minecraft);
+            return;
+        }
         context.endPass();
         context.prepareExternalWorldOverlayRender();
         context.beginPhase(WorldRenderingPhase.CUSTOM_SKY);
@@ -202,6 +237,10 @@ public class RenderSkyMixin {
             ausm$forceResetTessellator(tessellator);
             return;
         }
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        if (minecraft != null && MinecraftReflectionCompat.textureManager(minecraft) != null) {
+            MinecraftReflectionCompat.bindTexture(MinecraftReflectionCompat.textureManager(minecraft), ausm$moonPhasesTexture);
+        }
         com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
     }
 
@@ -258,8 +297,9 @@ public class RenderSkyMixin {
             )
     )
     private void onRenderSkyBeforeStars(float partialTicks, int pass, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.STARS);
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
+        context.beginPhase(WorldRenderingPhase.STARS);
     }
 
     @Redirect(
@@ -304,13 +344,16 @@ public class RenderSkyMixin {
     private void ausm$drawShaderedLowerSkyVbo(VertexBuffer vertexBuffer, int mode) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
+            ausm$probeLowerSky("vbo-suppressed");
             return;
         }
+        ausm$probeLowerSky("vbo-before");
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
             vertexBuffer.drawArrays(mode);
         } finally {
             context.endPass();
+            ausm$probeLowerSky("vbo-after");
         }
     }
 
@@ -326,13 +369,16 @@ public class RenderSkyMixin {
     private void ausm$drawShaderedLowerSkyList(int list) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
+            ausm$probeLowerSky("list-suppressed");
             return;
         }
+        ausm$probeLowerSky("list-before");
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
             com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
         } finally {
             context.endPass();
+            ausm$probeLowerSky("list-after");
         }
     }
 
@@ -348,13 +394,16 @@ public class RenderSkyMixin {
     private void ausm$drawShaderedLowerSkyListAfterHorizon(int list) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
+            ausm$probeLowerSky("horizon-list-suppressed");
             return;
         }
+        ausm$probeLowerSky("horizon-list-before");
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
             com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
         } finally {
             context.endPass();
+            ausm$probeLowerSky("horizon-list-after");
         }
     }
 
@@ -370,15 +419,22 @@ public class RenderSkyMixin {
     private void ausm$drawShaderedLowerSkyBox(Tessellator tessellator) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
+            ausm$probeLowerSky("box-suppressed");
             ausm$forceResetTessellator(tessellator);
             return;
         }
+        ausm$probeLowerSky("box-before");
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
             com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
         } finally {
             context.endPass();
+            ausm$probeLowerSky("box-after");
         }
+    }
+
+    private static void ausm$probeLowerSky(String stage) {
+        // Lower-sky diagnostics are disabled outside the focused F1 probes.
     }
 
     @Inject(

@@ -204,12 +204,12 @@ public final class DynamicLightManager {
     private static Map<String, DynamicLightSource> collectSources(Minecraft minecraft) {
         Map<String, DynamicLightSource> sources = new LinkedHashMap<>();
         EntityLivingBase player = com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft);
-        if (player != null && !com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((player), false, "field_70128_L", "isDead")) {
+        if (player != null && !com.l.ausm.impl.util.MinecraftReflectionCompat.entityIsDead(player)) {
             addHeldSource(sources, player, "main", com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemMainhand(player));
             addHeldSource(sources, player, "off", com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemOffhand(player));
         }
         for (Entity entity : com.l.ausm.impl.util.MinecraftReflectionCompat.loadedEntityList(com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft))) {
-            if (entity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((entity), false, "field_70128_L", "isDead")) {
+            if (entity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityIsDead(entity)) {
                 continue;
             }
             if (entity instanceof EntityLivingBase living) {

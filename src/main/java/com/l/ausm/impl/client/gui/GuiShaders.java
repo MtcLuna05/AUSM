@@ -252,35 +252,26 @@ public class GuiShaders extends GuiScreen {
 
     @Override
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
-        PipelineContext context = PipelineContext.getInstance();
-        boolean managedGuiRender = context.isActive();
-        if (managedGuiRender) {
-            context.beginGuiRendering();
-        }
-        try {
-            lastMouseX = mouseX;
-            lastMouseY = mouseY;
-            if (previewHidden) {
-                super.drawScreen(mouseX, mouseY, partialTicks);
-                drawFocusedButtonOutline();
-                return;
-            }
-
-            drawRect(0, 0, this.width, this.height, 0x330B1016);
-            drawPanels();
-            this.shaderList.drawScreen(mouseX, mouseY, partialTicks, focusedControl == -1);
-            drawHeader();
-            drawPackDetails();
-            drawNotification();
-
+        PipelineContext.getInstance().logGuiBypassProbe("shader-screen-draw-entry");
+        lastMouseX = mouseX;
+        lastMouseY = mouseY;
+        if (previewHidden) {
             super.drawScreen(mouseX, mouseY, partialTicks);
             drawFocusedButtonOutline();
-            drawEscapeHintTooltip(mouseX, mouseY);
-        } finally {
-            if (managedGuiRender) {
-                context.finishGuiRendering();
-            }
+            return;
         }
+
+        drawRect(0, 0, this.width, this.height, 0x330B1016);
+        drawPanels();
+        this.shaderList.drawScreen(mouseX, mouseY, partialTicks, focusedControl == -1);
+        drawHeader();
+        drawPackDetails();
+        drawNotification();
+
+        super.drawScreen(mouseX, mouseY, partialTicks);
+        drawFocusedButtonOutline();
+        drawEscapeHintTooltip(mouseX, mouseY);
+        PipelineContext.getInstance().logGuiBypassProbe("shader-screen-draw-return");
     }
 
     @Override

@@ -4,6 +4,7 @@ import com.l.ausm.api.shader.ShaderPackController;
 import com.l.ausm.impl.client.ClientSettingsConfig;
 import com.l.ausm.impl.client.dynamic.DynamicLightConfig;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
+import com.l.ausm.impl.pipeline.compat.CeleritasCompat;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.proxy.IProxy;
@@ -64,6 +65,8 @@ public class MainMod {
         shaderPackManager = new ShaderPackManager(gameDir);
 
         shaderPackManager.loadSavedConfiguration();
+
+        CeleritasCompat.logDiagnostics();
 
         LOGGER.info("Available Shader Packs: {}", shaderPackManager.getAvailablePacks());
     }

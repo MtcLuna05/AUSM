@@ -357,8 +357,23 @@ public class DeferredFramebuffer {
     }
 
     public void blitDepthTo(int targetFramebuffer, int targetWidth, int targetHeight) {
+        blitDepthTextureTo(depthTextureId, targetFramebuffer, targetWidth, targetHeight);
+    }
+
+    public void blitDepthSnapshotTo(int index, int targetFramebuffer, int targetWidth, int targetHeight) {
+        int texture = index >= 0 && index < depthSnapshotTextureIds.length
+                ? depthSnapshotTextureIds[index]
+                : -1;
+        if (texture <= 0) {
+            blitDepthTo(targetFramebuffer, targetWidth, targetHeight);
+            return;
+        }
+        blitDepthTextureTo(texture, targetFramebuffer, targetWidth, targetHeight);
+    }
+
+    private void blitDepthTextureTo(int texture, int targetFramebuffer, int targetWidth, int targetHeight) {
         bindFramebuffer(readFboId);
-        attachDepthTexture();
+        attachFramebufferDepthTexture(texture);
         GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFboId);
         GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, targetFramebuffer);
 

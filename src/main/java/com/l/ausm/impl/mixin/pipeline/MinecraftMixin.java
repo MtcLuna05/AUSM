@@ -7,6 +7,7 @@ import com.l.ausm.api.pipeline.pack.*;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
+import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.shader.Framebuffer;
@@ -60,6 +61,7 @@ public class MinecraftMixin {
         int width = com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc);
         int height = com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc);
         context.logFramebufferPresentationBoundary("runGameLoop-before-prepare", framebuffer, width, height, true);
+        context.clearWorldLoadWindowBackbuffer(mc);
         context.prepareFramebufferPresentation();
         context.logFramebufferPresentationBoundary("runGameLoop-after-prepare-before-vanilla", framebuffer, width, height, true);
     }
@@ -67,7 +69,10 @@ public class MinecraftMixin {
     @Inject(method = "runGameLoop", at = @At("HEAD"))
     private void ausm$runScheduledWork(CallbackInfo ci) {
         BetterPortalsCompat.tickMainViewSwapRecovery();
-        MainMod.getShaderPackManager().runPendingBetterPortalsDimensionCompile();
+        ShaderPackManager shaderPackManager = MainMod.getShaderPackManager();
+        if (shaderPackManager != null) {
+            shaderPackManager.runPendingBetterPortalsDimensionCompile();
+        }
         PipelineContext.getInstance().runPendingBetterPortalsPortalBlockRefresh();
         PipelineContext.getInstance().runPendingShaderChunkRefreshes();
         PipelineContext.getInstance().runPendingClientChunkRenderRefreshes();
@@ -108,12 +113,14 @@ public class MinecraftMixin {
         WorldClient currentWorld = com.l.ausm.impl.util.MinecraftReflectionCompat.world((Minecraft) (Object) this);
         ausm$hadWorldBeforeLoad = currentWorld != null;
         ausm$previousWorldDimensionId = ausm$dimensionId(currentWorld);
+        PipelineContext.getInstance().invalidateWorldLoadPresentationState();
     }
 
     @Inject(method = "loadWorld(Lnet/minecraft/client/multiplayer/WorldClient;Ljava/lang/String;)V", at = @At("RETURN"))
     private void ausm$scheduleLightRefreshAfterWorldLoad(WorldClient worldClient, String loadingMessage, CallbackInfo ci) {
         if (worldClient == null) {
             PipelineContext context = PipelineContext.getInstance();
+            context.invalidateWorldLoadPresentationState();
             context.clearClientParticles("world-unload");
             context.clearPendingShaderChunkRefreshes();
             context.clearPendingClientChunkRenderRefreshes();
@@ -123,6 +130,7 @@ public class MinecraftMixin {
             return;
         }
         PipelineContext context = PipelineContext.getInstance();
+        context.invalidateWorldLoadPresentationState();
         context.clearPendingShaderChunkRefreshes();
         context.clearPendingClientChunkRenderRefreshes();
         if (MainMod.getShaderPackManager() == null) {

@@ -18,8 +18,9 @@ public class GuiIngameForgeMixin {
         if (ausm$isHudHidden()) {
             return;
         }
-        context.renderShaderlessBloomBeforeGui();
-        context.beginGuiRendering();
+        context.logGuiBypassProbe("forge-hud-head-before-bypass");
+        context.prepareBypassedGuiScreenDrawState();
+        context.logGuiBypassProbe("forge-hud-head-after-bypass");
     }
 
     @Inject(method = "func_175180_a(F)V", at = @At("RETURN"), require = 1)
@@ -28,7 +29,7 @@ public class GuiIngameForgeMixin {
         if (ausm$isHudHidden()) {
             return;
         }
-        context.finishGuiRendering();
+        context.logGuiBypassProbe("forge-hud-return");
         ShaderCompileNotifications.renderOverlay(new ScaledResolution(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
     }
 

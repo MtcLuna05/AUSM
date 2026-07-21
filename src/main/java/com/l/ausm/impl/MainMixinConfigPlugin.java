@@ -25,7 +25,16 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         if (mixinClassName.endsWith(".NothiriumRenderChunkTaskCompileMixin")) {
+            // Celeritas owns the terrain compiler when installed. Applying the
+            // AUSM/Nothirium compile hooks alongside it duplicates framed
+            // geometry and can suppress unrelated translucent models.
+            if (optionalTargetPresent(mixinClassName, "org/taumc/celeritas/impl/render/terrain/compile/task/ChunkBuilderMeshingTask.class", true)) {
+                return false;
+            }
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskCompile.class", true);
+        }
+        if (mixinClassName.endsWith(".CeleritasChunkBuilderMeshingTaskMixin")) {
+            return optionalTargetPresent(mixinClassName, "org/taumc/celeritas/impl/render/terrain/compile/task/ChunkBuilderMeshingTask.class", true);
         }
         if (mixinClassName.endsWith(".NothiriumRenderChunkTaskSortTranslucentMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskSortTranslucent.class", true);
@@ -72,12 +81,6 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".ProjectRedLampRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "mrtjp/projectred/illumination/LampRenderer$.class", false);
         }
-        if (mixinClassName.endsWith(".ProjectRedLightFactoryItemRendererMixin")) {
-            return optionalTargetPresent(mixinClassName, "mrtjp/projectred/illumination/LightFactory$$anon$1.class", false);
-        }
-        if (mixinClassName.endsWith(".ProjectRedButtonItemRendererMixin")) {
-            return optionalTargetPresent(mixinClassName, "mrtjp/projectred/illumination/ButtonItemRenderer$.class", false);
-        }
         if (mixinClassName.endsWith(".AstralSorcerySkyboxMixin")) {
             return optionalTargetPresent(mixinClassName, "hellfirepvp/astralsorcery/client/sky/RenderAstralSkybox.class", true);
         }
@@ -98,9 +101,6 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         }
         if (mixinClassName.endsWith(".AppliedEnergisticsFacadeBuilderMixin")) {
             return optionalTargetPresent(mixinClassName, "appeng/client/render/cablebus/FacadeBuilder.class", false);
-        }
-        if (mixinClassName.endsWith(".CodeChickenRenderItemMixin")) {
-            return optionalTargetPresent(mixinClassName, "codechicken/lib/render/item/CCRenderItem.class", false);
         }
         if (mixinClassName.endsWith(".BetterPortalsPortalRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "de/johni0702/minecraft/betterportals/client/render/PortalRenderer.class", false);
@@ -144,23 +144,11 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".ScannableOverlayRendererMixin")) {
             return optionalTargetPresent(mixinClassName, "li/cil/scannable/client/renderer/OverlayRenderer.class", false);
         }
-        if (mixinClassName.endsWith(".RandomThingsLuminousBlockMixin")) {
-            return optionalTargetPresent(mixinClassName, "lumien/randomthings/block/BlockBlockLuminousBase.class", true);
-        }
         if (mixinClassName.endsWith(".ReachFixUtilMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/reachfix/util/ReachFixUtil.class", true);
         }
         if (mixinClassName.endsWith(".BewitchmentSyncExtendedPlayerHandlerMixin")) {
             return optionalTargetPresent(mixinClassName, "com/bewitchment/api/message/SyncExtendedPlayer$Handler.class", true);
-        }
-        if (mixinClassName.endsWith(".ArchitectureCraftRenderTargetWorldMixin")) {
-            return optionalTargetPresent(mixinClassName, "com/elytradev/architecture/client/render/target/RenderTargetWorld.class", true);
-        }
-        if (mixinClassName.endsWith(".ArchitectureCraftCustomBlockDispatcherMixin")) {
-            return optionalTargetPresent(mixinClassName, "com/elytradev/architecture/client/render/CustomBlockDispatcher.class", true);
-        }
-        if (mixinClassName.endsWith(".ArchitectureCraftRenderingManagerMixin")) {
-            return optionalTargetPresent(mixinClassName, "com/elytradev/architecture/client/render/RenderingManager.class", true);
         }
         if (mixinClassName.contains(".hei.")) {
             return optionalTargetPresent(mixinClassName, "mezz/jei/JEIInternalPlugin.class", false);
@@ -169,12 +157,6 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
     }
 
     private static boolean optionalTargetPresent(String mixinClassName, String resourcePath, boolean allowJarFallback) {
-        String source = classResourceSource(resourcePath, allowJarFallback);
-        boolean present = source != null;
-        return present;
-    }
-
-    private static boolean classResourcePresent(String resourcePath, boolean allowJarFallback) {
         return classResourceSource(resourcePath, allowJarFallback) != null;
     }
 
@@ -208,10 +190,6 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         } catch (RuntimeException ignored) {
             return false;
         }
-    }
-
-    private static boolean resourcePresentInModsDirectory(String resourcePath) {
-        return resourceJarInModsDirectory(resourcePath) != null;
     }
 
     private static File resourceJarInModsDirectory(String resourcePath) {

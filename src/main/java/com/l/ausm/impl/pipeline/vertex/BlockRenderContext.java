@@ -1,191 +1,158 @@
 package com.l.ausm.impl.pipeline.vertex;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
 
 public final class BlockRenderContext {
     public static final int BLOOM_ONLY_MASK_EMISSION = 16;
 
-    private static final ThreadLocal<Integer> CURRENT_BLOCK_ENTITY_ID = ThreadLocal.withInitial(() -> 0);
-    private static final ThreadLocal<Short> CURRENT_RENDER_TYPE = ThreadLocal.withInitial(() -> (short) -1);
-    private static final ThreadLocal<Short> CURRENT_METADATA = ThreadLocal.withInitial(() -> (short) 0);
-    private static final ThreadLocal<Integer> CURRENT_LOCAL_X = ThreadLocal.withInitial(() -> 0);
-    private static final ThreadLocal<Integer> CURRENT_LOCAL_Y = ThreadLocal.withInitial(() -> 0);
-    private static final ThreadLocal<Integer> CURRENT_LOCAL_Z = ThreadLocal.withInitial(() -> 0);
-    private static final ThreadLocal<Integer> CURRENT_BLOCK_X = ThreadLocal.withInitial(() -> 0);
-    private static final ThreadLocal<Integer> CURRENT_BLOCK_Y = ThreadLocal.withInitial(() -> 0);
-    private static final ThreadLocal<Integer> CURRENT_BLOCK_Z = ThreadLocal.withInitial(() -> 0);
-    private static final ThreadLocal<IBlockAccess> CURRENT_BLOCK_ACCESS = new ThreadLocal<>();
-    private static final ThreadLocal<BlockPos> CURRENT_BLOCK_POS = new ThreadLocal<>();
-    private static final ThreadLocal<Boolean> CURRENT_AGRICRAFT_CROP = ThreadLocal.withInitial(() -> false);
-    private static final ThreadLocal<Integer> CURRENT_PACKED_LIGHTMAP = ThreadLocal.withInitial(() -> 0);
-    private static final ThreadLocal<Integer> CURRENT_BLOCK_EMISSION = ThreadLocal.withInitial(() -> 0);
-    private static final ThreadLocal<Integer> CURRENT_BLOCK_ALPHA = ThreadLocal.withInitial(() -> -1);
-    private static final ThreadLocal<Integer> CURRENT_CUSTOM_LIQUID_TINT = ThreadLocal.withInitial(() -> -1);
-    private static final ThreadLocal<Boolean> CURRENT_CRYSTAL_ONLY_EMISSION = ThreadLocal.withInitial(() -> false);
-    private static final ThreadLocal<Boolean> CURRENT_BLOOM_ONLY_EMISSION = ThreadLocal.withInitial(() -> false);
-    private static final ThreadLocal<Integer> CURRENT_QUAD_EMISSION_OVERRIDE = new ThreadLocal<>();
-    private static final ThreadLocal<Integer> CURRENT_QUAD_BLOCK_ENTITY_ID_OVERRIDE = new ThreadLocal<>();
-    private static final ThreadLocal<Short> CURRENT_QUAD_RENDER_TYPE_OVERRIDE = new ThreadLocal<>();
-    private static final ThreadLocal<Short> CURRENT_QUAD_METADATA_OVERRIDE = new ThreadLocal<>();
-    private static final ThreadLocal<Boolean> SEPARATE_AO_ELIGIBLE = ThreadLocal.withInitial(() -> false);
-    private static final ThreadLocal<float[]> CURRENT_QUAD_AO = new ThreadLocal<>();
-    private static final ThreadLocal<Boolean> BLOOM_MASK_FALLBACK = ThreadLocal.withInitial(() -> false);
-    private static final ThreadLocal<String> CURRENT_DEBUG_KIND = ThreadLocal.withInitial(() -> "unknown");
-    private static final ThreadLocal<String> CURRENT_DEBUG_STATE = ThreadLocal.withInitial(() -> "unknown");
-    private static final ThreadLocal<String> CURRENT_DEBUG_EFFECTIVE_STATE = ThreadLocal.withInitial(() -> "unknown");
+    private static final ThreadLocal<State> CURRENT = ThreadLocal.withInitial(State::new);
 
     private BlockRenderContext() {
     }
 
     public static void setBlockEntityId(int blockEntityId) {
-        CURRENT_BLOCK_ENTITY_ID.set(blockEntityId);
+        current().blockEntityId = blockEntityId;
     }
 
     public static int blockEntityId() {
-        Integer override = CURRENT_QUAD_BLOCK_ENTITY_ID_OVERRIDE.get();
-        return override != null ? override : CURRENT_BLOCK_ENTITY_ID.get();
+        State state = current();
+        return state.hasQuadBlockEntityIdOverride ? state.quadBlockEntityIdOverride : state.blockEntityId;
     }
 
     public static void setRenderType(short renderType) {
-        CURRENT_RENDER_TYPE.set(renderType);
+        current().renderType = renderType;
     }
 
     public static short renderType() {
-        Short override = CURRENT_QUAD_RENDER_TYPE_OVERRIDE.get();
-        return override != null ? override : CURRENT_RENDER_TYPE.get();
+        State state = current();
+        return state.hasQuadRenderTypeOverride ? state.quadRenderTypeOverride : state.renderType;
     }
 
     public static void setMetadata(int metadata) {
-        CURRENT_METADATA.set((short) (metadata & 0xFFFF));
+        current().metadata = (short) (metadata & 0xFFFF);
     }
 
     public static short metadata() {
-        Short override = CURRENT_QUAD_METADATA_OVERRIDE.get();
-        return override != null ? override : CURRENT_METADATA.get();
+        State state = current();
+        return state.hasQuadMetadataOverride ? state.quadMetadataOverride : state.metadata;
     }
 
     public static void setLocalBlockPos(int x, int y, int z) {
-        CURRENT_BLOCK_X.set(x);
-        CURRENT_BLOCK_Y.set(y);
-        CURRENT_BLOCK_Z.set(z);
-        CURRENT_LOCAL_X.set(x & 15);
-        CURRENT_LOCAL_Y.set(y & 15);
-        CURRENT_LOCAL_Z.set(z & 15);
+        State state = current();
+        state.blockX = x;
+        state.blockY = y;
+        state.blockZ = z;
+        state.localX = x & 15;
+        state.localY = y & 15;
+        state.localZ = z & 15;
     }
 
     public static void setWorldBlockContext(IBlockAccess blockAccess, BlockPos pos) {
-        if (blockAccess != null) {
-            CURRENT_BLOCK_ACCESS.set(blockAccess);
-        } else {
-            CURRENT_BLOCK_ACCESS.remove();
-        }
-        if (pos != null) {
-            CURRENT_BLOCK_POS.set(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos));
-        } else {
-            CURRENT_BLOCK_POS.remove();
-        }
+        State state = current();
+        state.blockAccess = blockAccess;
+        state.blockPos = pos != null ? new BlockPos(state.blockX, state.blockY, state.blockZ) : null;
     }
 
     public static IBlockAccess blockAccess() {
-        return CURRENT_BLOCK_ACCESS.get();
+        return current().blockAccess;
     }
 
     public static BlockPos blockPos() {
-        return CURRENT_BLOCK_POS.get();
+        return current().blockPos;
     }
 
     public static int blockX() {
-        return CURRENT_BLOCK_X.get();
+        return current().blockX;
     }
 
     public static int blockY() {
-        return CURRENT_BLOCK_Y.get();
+        return current().blockY;
     }
 
     public static int blockZ() {
-        return CURRENT_BLOCK_Z.get();
+        return current().blockZ;
     }
 
     public static void setAgricraftCrop(boolean agricraftCrop) {
-        CURRENT_AGRICRAFT_CROP.set(agricraftCrop);
+        current().agricraftCrop = agricraftCrop;
     }
 
     public static boolean isAgricraftCrop() {
-        return CURRENT_AGRICRAFT_CROP.get();
+        return current().agricraftCrop;
     }
 
     public static void setPackedLightmap(int packedLightmap) {
-        CURRENT_PACKED_LIGHTMAP.set(packedLightmap);
+        current().packedLightmap = packedLightmap;
     }
 
     public static int packedLightmap() {
-        return CURRENT_PACKED_LIGHTMAP.get();
+        return current().packedLightmap;
     }
 
     public static int localX() {
-        return CURRENT_LOCAL_X.get();
+        return current().localX;
     }
 
     public static int localY() {
-        return CURRENT_LOCAL_Y.get();
+        return current().localY;
     }
 
     public static int localZ() {
-        return CURRENT_LOCAL_Z.get();
+        return current().localZ;
     }
 
     public static void setBlockEmission(int blockEmission) {
-        CURRENT_BLOCK_EMISSION.set(Math.max(0, Math.min(15, blockEmission)));
+        current().blockEmission = clamp(blockEmission, 0, 15);
     }
 
     public static int blockEmission() {
-        Integer override = CURRENT_QUAD_EMISSION_OVERRIDE.get();
-        return override != null ? Math.max(0, Math.min(15, override)) : CURRENT_BLOCK_EMISSION.get();
+        State state = current();
+        return state.hasQuadEmissionOverride ? clamp(state.quadEmissionOverride, 0, 15) : state.blockEmission;
     }
 
     public static void setBlockAlpha(int alpha) {
-        CURRENT_BLOCK_ALPHA.set(alpha >= 0 ? Math.max(0, Math.min(255, alpha)) : -1);
+        current().blockAlpha = alpha >= 0 ? clamp(alpha, 0, 255) : -1;
     }
 
     public static int blockAlpha() {
-        return CURRENT_BLOCK_ALPHA.get();
+        return current().blockAlpha;
     }
 
     public static void setCustomLiquidTint(int color) {
-        CURRENT_CUSTOM_LIQUID_TINT.set(color);
+        current().customLiquidTint = color;
     }
 
     public static int customLiquidTint() {
-        return CURRENT_CUSTOM_LIQUID_TINT.get();
+        return current().customLiquidTint;
     }
 
     public static int vanillaLightmapEmission() {
-        return CURRENT_CRYSTAL_ONLY_EMISSION.get() || CURRENT_BLOOM_ONLY_EMISSION.get() ? 0 : blockEmission();
+        State state = current();
+        return state.crystalOnlyEmission || state.bloomOnlyEmission ? 0 : blockEmission();
     }
 
     public static void setBloomOnlyEmission(boolean bloomOnlyEmission) {
-        CURRENT_BLOOM_ONLY_EMISSION.set(bloomOnlyEmission);
+        current().bloomOnlyEmission = bloomOnlyEmission;
     }
 
     public static void setCrystalOnlyEmission(boolean crystalOnlyEmission) {
-        CURRENT_CRYSTAL_ONLY_EMISSION.set(crystalOnlyEmission);
-        CURRENT_QUAD_EMISSION_OVERRIDE.remove();
+        State state = current();
+        state.crystalOnlyEmission = crystalOnlyEmission;
+        state.hasQuadEmissionOverride = false;
     }
 
     public static void setQuadSprite(String spriteName) {
-        if (!CURRENT_CRYSTAL_ONLY_EMISSION.get()) {
-            CURRENT_QUAD_EMISSION_OVERRIDE.remove();
+        State state = current();
+        if (!state.crystalOnlyEmission) {
+            state.hasQuadEmissionOverride = false;
             return;
         }
         if (isAstralCrystalSprite(spriteName)) {
-            CURRENT_QUAD_EMISSION_OVERRIDE.remove();
+            state.hasQuadEmissionOverride = false;
         } else {
-            CURRENT_QUAD_EMISSION_OVERRIDE.set(0);
+            state.quadEmissionOverride = 0;
+            state.hasQuadEmissionOverride = true;
         }
     }
 
@@ -194,29 +161,44 @@ public final class BlockRenderContext {
     }
 
     public static void setQuadBlockMetadata(int blockEntityId, short renderType, int metadata, int emission) {
-        CURRENT_QUAD_BLOCK_ENTITY_ID_OVERRIDE.set(blockEntityId);
-        CURRENT_QUAD_RENDER_TYPE_OVERRIDE.set(renderType);
-        CURRENT_QUAD_METADATA_OVERRIDE.set((short) (metadata & 0xFFFF));
-        CURRENT_QUAD_EMISSION_OVERRIDE.set(Math.max(0, Math.min(15, emission)));
+        State state = current();
+        state.quadBlockEntityIdOverride = blockEntityId;
+        state.quadRenderTypeOverride = renderType;
+        state.quadMetadataOverride = (short) (metadata & 0xFFFF);
+        state.quadEmissionOverride = clamp(emission, 0, 15);
+        state.hasQuadBlockEntityIdOverride = true;
+        state.hasQuadRenderTypeOverride = true;
+        state.hasQuadMetadataOverride = true;
+        state.hasQuadEmissionOverride = true;
     }
 
     public static void clearQuadOverrides() {
-        CURRENT_QUAD_BLOCK_ENTITY_ID_OVERRIDE.remove();
-        CURRENT_QUAD_RENDER_TYPE_OVERRIDE.remove();
-        CURRENT_QUAD_METADATA_OVERRIDE.remove();
-        CURRENT_QUAD_EMISSION_OVERRIDE.remove();
+        State state = current();
+        state.hasQuadBlockEntityIdOverride = false;
+        state.hasQuadRenderTypeOverride = false;
+        state.hasQuadMetadataOverride = false;
+        state.hasQuadEmissionOverride = false;
     }
 
     public static int midBlock(float x, float y, float z) {
+        return midBlock(x, y, z, midBlockEmission());
+    }
+
+    public static int midBlock(float x, float y, float z, int emission) {
+        State state = current();
         return packMidBlock(
-                CURRENT_LOCAL_X.get() + 0.5f - x,
-                CURRENT_LOCAL_Y.get() + 0.5f - y,
-                CURRENT_LOCAL_Z.get() + 0.5f - z
+                state.localX + 0.5f - x,
+                state.localY + 0.5f - y,
+                state.localZ + 0.5f - z,
+                emission
         );
     }
 
-    private static int packMidBlock(float x, float y, float z) {
-        int emission = bloomMaskFallback() ? BLOOM_ONLY_MASK_EMISSION : blockEmission();
+    public static int midBlockEmission() {
+        return current().bloomMaskFallback ? BLOOM_ONLY_MASK_EMISSION : blockEmission();
+    }
+
+    private static int packMidBlock(float x, float y, float z, int emission) {
         return ((int) (x * 64.0f) & 0xFF)
                 | (((int) (y * 64.0f) & 0xFF) << 8)
                 | (((int) (z * 64.0f) & 0xFF) << 16)
@@ -233,23 +215,23 @@ public final class BlockRenderContext {
     }
 
     public static void setSeparateAoEligible(boolean separateAoEligible) {
-        SEPARATE_AO_ELIGIBLE.set(separateAoEligible);
+        current().separateAoEligible = separateAoEligible;
     }
 
     public static boolean separateAoEligible() {
-        return SEPARATE_AO_ELIGIBLE.get();
+        return current().separateAoEligible;
     }
 
     public static void setQuadAo(float[] quadAo) {
-        CURRENT_QUAD_AO.set(quadAo == null ? null : quadAo.clone());
+        current().quadAo = quadAo == null ? null : quadAo.clone();
     }
 
     public static boolean hasQuadAo() {
-        return CURRENT_QUAD_AO.get() != null;
+        return current().quadAo != null;
     }
 
     public static float separateAoForVertex(int vertexIndex, float fallback) {
-        float[] quadAo = CURRENT_QUAD_AO.get();
+        float[] quadAo = current().quadAo;
         if (quadAo == null || vertexIndex < 1 || vertexIndex > 4) {
             return fallback;
         }
@@ -257,64 +239,119 @@ public final class BlockRenderContext {
     }
 
     public static void clearQuadAo() {
-        CURRENT_QUAD_AO.remove();
+        current().quadAo = null;
     }
 
     public static void setBloomMaskFallback(boolean enabled) {
-        BLOOM_MASK_FALLBACK.set(enabled);
+        current().bloomMaskFallback = enabled;
     }
 
     public static boolean bloomMaskFallback() {
-        return BLOOM_MASK_FALLBACK.get();
+        return current().bloomMaskFallback;
     }
 
     public static void clearBloomMaskFallback() {
-        BLOOM_MASK_FALLBACK.remove();
+        current().bloomMaskFallback = false;
     }
 
     public static void setDebugBlock(String kind, String state, String effectiveState) {
-        CURRENT_DEBUG_KIND.set(kind != null ? kind : "unknown");
-        CURRENT_DEBUG_STATE.set(state != null ? state : "unknown");
-        CURRENT_DEBUG_EFFECTIVE_STATE.set(effectiveState != null ? effectiveState : "unknown");
+        State current = current();
+        current.debugKind = kind != null ? kind : "unknown";
+        current.debugState = state != null ? state : "unknown";
+        current.debugEffectiveState = effectiveState != null ? effectiveState : "unknown";
     }
 
     public static String debugKind() {
-        return CURRENT_DEBUG_KIND.get();
+        return current().debugKind;
     }
 
     public static String debugState() {
-        return CURRENT_DEBUG_STATE.get();
+        return current().debugState;
     }
 
     public static String debugEffectiveState() {
-        return CURRENT_DEBUG_EFFECTIVE_STATE.get();
+        return current().debugEffectiveState;
     }
 
     public static void clear() {
-        CURRENT_BLOCK_ENTITY_ID.remove();
-        CURRENT_RENDER_TYPE.remove();
-        CURRENT_METADATA.remove();
-        CURRENT_LOCAL_X.remove();
-        CURRENT_LOCAL_Y.remove();
-        CURRENT_LOCAL_Z.remove();
-        CURRENT_BLOCK_X.remove();
-        CURRENT_BLOCK_Y.remove();
-        CURRENT_BLOCK_Z.remove();
-        CURRENT_BLOCK_ACCESS.remove();
-        CURRENT_BLOCK_POS.remove();
-        CURRENT_AGRICRAFT_CROP.remove();
-        CURRENT_PACKED_LIGHTMAP.remove();
-        CURRENT_BLOCK_EMISSION.remove();
-        CURRENT_BLOCK_ALPHA.remove();
-        CURRENT_CUSTOM_LIQUID_TINT.remove();
-        CURRENT_CRYSTAL_ONLY_EMISSION.remove();
-        CURRENT_BLOOM_ONLY_EMISSION.remove();
-        clearQuadOverrides();
-        SEPARATE_AO_ELIGIBLE.remove();
-        CURRENT_QUAD_AO.remove();
-        BLOOM_MASK_FALLBACK.remove();
-        CURRENT_DEBUG_KIND.remove();
-        CURRENT_DEBUG_STATE.remove();
-        CURRENT_DEBUG_EFFECTIVE_STATE.remove();
+        current().clear();
+    }
+
+    private static State current() {
+        return CURRENT.get();
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static final class State {
+        private int blockEntityId;
+        private short renderType = -1;
+        private short metadata;
+        private int localX;
+        private int localY;
+        private int localZ;
+        private int blockX;
+        private int blockY;
+        private int blockZ;
+        private IBlockAccess blockAccess;
+        private BlockPos blockPos;
+        private boolean agricraftCrop;
+        private int packedLightmap;
+        private int blockEmission;
+        private int blockAlpha = -1;
+        private int customLiquidTint = -1;
+        private boolean crystalOnlyEmission;
+        private boolean bloomOnlyEmission;
+        private int quadEmissionOverride;
+        private int quadBlockEntityIdOverride;
+        private short quadRenderTypeOverride;
+        private short quadMetadataOverride;
+        private boolean hasQuadEmissionOverride;
+        private boolean hasQuadBlockEntityIdOverride;
+        private boolean hasQuadRenderTypeOverride;
+        private boolean hasQuadMetadataOverride;
+        private boolean separateAoEligible;
+        private float[] quadAo;
+        private boolean bloomMaskFallback;
+        private String debugKind = "unknown";
+        private String debugState = "unknown";
+        private String debugEffectiveState = "unknown";
+
+        private void clear() {
+            blockEntityId = 0;
+            renderType = -1;
+            metadata = 0;
+            localX = 0;
+            localY = 0;
+            localZ = 0;
+            blockX = 0;
+            blockY = 0;
+            blockZ = 0;
+            blockAccess = null;
+            blockPos = null;
+            agricraftCrop = false;
+            packedLightmap = 0;
+            blockEmission = 0;
+            blockAlpha = -1;
+            customLiquidTint = -1;
+            crystalOnlyEmission = false;
+            bloomOnlyEmission = false;
+            quadEmissionOverride = 0;
+            quadBlockEntityIdOverride = 0;
+            quadRenderTypeOverride = 0;
+            quadMetadataOverride = 0;
+            hasQuadEmissionOverride = false;
+            hasQuadBlockEntityIdOverride = false;
+            hasQuadRenderTypeOverride = false;
+            hasQuadMetadataOverride = false;
+            separateAoEligible = false;
+            quadAo = null;
+            bloomMaskFallback = false;
+            debugKind = "unknown";
+            debugState = "unknown";
+            debugEffectiveState = "unknown";
+        }
     }
 }

@@ -86,7 +86,6 @@ public class WorldDynamicLightMixin {
                                                                      CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         World world = (World) (Object) this;
-        context.handleClientBlockRenderUpdate(world, pos);
         context.handleShaderlessBloomBlockUpdate(world, pos, oldState, newState, flags);
     }
 

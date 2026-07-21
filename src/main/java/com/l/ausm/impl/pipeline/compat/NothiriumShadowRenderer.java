@@ -66,11 +66,10 @@ public final class NothiriumShadowRenderer {
     private static final int MAX_PENDING_SHADOW_COMPILES = 64;
     private static final int MAX_CHUNK_REFRESH_COMPILES = 16;
     private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 0;
-    private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 16;
-    private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 16;
-    private static final int MAX_VISIBLE_NON_SOLID_TERRAIN_FAILURE_LOGS = 16;
-    private static final int MAX_VISIBLE_TERRAIN_DRAW_PROBE_LOGS = 12;
-    private static final int MAX_NATIVE_DRAW_AUDIT_LOGS = 0;
+    private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 0;
+    private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 0;
+    private static final int MAX_VISIBLE_NON_SOLID_TERRAIN_FAILURE_LOGS = 0;
+    private static final int MAX_VISIBLE_TERRAIN_DRAW_PROBE_LOGS = 0;
     private static final int MAX_PROVIDER_DRAW_AUDIT_LOGS = 0;
     private static final int MAX_EMPTY_LIST_AUDIT_LOGS = 0;
     private static final int NOTHIRIUM_OFFSET_ATTRIBUTE = 4;
@@ -96,7 +95,7 @@ public final class NothiriumShadowRenderer {
     private int visibleTerrainFailureAttempts;
     private int visibleNonSolidTerrainFailureAttempts;
     private int visibleTerrainDrawProbeAttempts;
-    private int nativeDrawAuditAttempts;
+    private int bloomVisibleListProbeAttempts;
     private final ByteBuffer visibleTerrainVertexProbe = BufferUtils.createByteBuffer(128);
     private final FloatBuffer visibleTerrainMatrixProbe = BufferUtils.createFloatBuffer(16);
     private final FloatBuffer visibleTerrainProjectionProbe = BufferUtils.createFloatBuffer(16);
@@ -231,11 +230,16 @@ public final class NothiriumShadowRenderer {
     public int renderLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ, double maxDistance,
                            int fallbackBlockEntityId, short fallbackRenderType) {
         return renderLayer(layer, cameraX, cameraY, cameraZ, maxDistance, false, true, false,
-                fallbackBlockEntityId, fallbackRenderType);
+                fallbackBlockEntityId, fallbackRenderType, false);
+    }
+
+    public int renderLayerRequiringPipelineStride(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
+                                                  double maxDistance) {
+        return renderLayer(layer, cameraX, cameraY, cameraZ, maxDistance, false, true, false, 0, (short) 0, true);
     }
 
     public int renderLayerSchedulingCompiles(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ, double maxDistance) {
-        return renderLayer(layer, cameraX, cameraY, cameraZ, maxDistance, true, true, false, 0, (short) 0);
+        return renderLayer(layer, cameraX, cameraY, cameraZ, maxDistance, true, true, false, 0, (short) 0, false);
     }
 
     public int renderProviderLayerSchedulingCompiles(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
@@ -404,33 +408,6 @@ public final class NothiriumShadowRenderer {
         return renderVisibleLayer(layer, cameraX, cameraY, cameraZ, fallbackBlockEntityId, fallbackRenderType, -1.0D, false);
     }
 
-    public int renderNativeLayer(BlockRenderLayer layer) {
-        Reflection reflection = reflection();
-        if (disabled || reflection == null) {
-            return -1;
-        }
-
-        Object pass = reflection.passFor(layer);
-        if (pass == null) {
-            return -1;
-        }
-
-        try {
-            Object renderer = reflection.getRenderer.invoke(null);
-            if (renderer == null) {
-                return -1;
-            }
-            reflection.render.invoke(renderer, pass);
-            int count = (Integer) reflection.renderedChunks.invoke(renderer, pass);
-            auditNativeDraw(layer, renderer, count);
-            return count;
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            disabled = true;
-            warnOnce(e);
-            return -1;
-        }
-    }
-
     private int renderVisibleLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
                                    int fallbackBlockEntityId, short fallbackRenderType, double maxDistance,
                                    boolean requirePipelineStride) {
@@ -462,6 +439,21 @@ public final class NothiriumShadowRenderer {
 
             DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, false,
                     fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
+            if ("BLOOM".equals(layer.name()) && bloomVisibleListProbeAttempts++ < 12) {
+                MainMod.LOGGER.info(
+                        "[AUSMNothiriumBloomList] call={} total={} present={} valid={} positive={} vbo={} stride={} invalidRange={} drawn={} firstChunk={} firstPart={}",
+                        bloomVisibleListProbeAttempts,
+                        stats.total,
+                        stats.partPresent,
+                        stats.validPart,
+                        stats.positiveCount,
+                        stats.positiveVbo,
+                        stats.unsupportedStride,
+                        stats.invalidRange,
+                        stats.drawn,
+                        stats.firstChunk,
+                        stats.firstPart);
+            }
             if (stats.unsupportedStride > 0) {
                 refreshUnsupportedPipelineChunks(reflection, stats.unsupportedPipelineChunks);
             }
@@ -480,7 +472,7 @@ public final class NothiriumShadowRenderer {
 
     private int renderLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ, double maxDistance,
                             boolean scheduleCompiles, boolean audit, boolean visibleOnly,
-                            int fallbackBlockEntityId, short fallbackRenderType) {
+                            int fallbackBlockEntityId, short fallbackRenderType, boolean requirePipelineStride) {
         Reflection reflection = reflection();
         if (disabled || reflection == null) {
             return 0;
@@ -502,7 +494,7 @@ public final class NothiriumShadowRenderer {
                             scheduleMissingLayerCompiles(layer, reflection, pass, candidates, cameraX, cameraY, cameraZ, maxDistance);
                         }
                         DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, candidates, cameraX, cameraY, cameraZ,
-                                maxDistance, false, fallbackBlockEntityId, fallbackRenderType, false);
+                                maxDistance, false, fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
                         if (audit) {
                             auditDrawStats("provider", layer, stats);
                         }
@@ -538,7 +530,7 @@ public final class NothiriumShadowRenderer {
             }
 
             DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, false,
-                    fallbackBlockEntityId, fallbackRenderType, false);
+                    fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
             if (audit) {
                 auditDrawStats("fallback", layer, stats);
             }
@@ -948,21 +940,6 @@ public final class NothiriumShadowRenderer {
         }
     }
 
-    private void auditNativeDraw(BlockRenderLayer layer, Object renderer, int count) {
-        if (nativeDrawAuditAttempts >= MAX_NATIVE_DRAW_AUDIT_LOGS) {
-            return;
-        }
-        nativeDrawAuditAttempts++;
-        MainMod.LOGGER.info(
-                "[AUSMNothiriumNative] call={} layer={} renderer={} chunks={} gl={}",
-                nativeDrawAuditAttempts,
-                layer,
-                renderer.getClass().getName(),
-                count,
-                glStateSummary()
-        );
-    }
-
     private DrawStats drawChunks(BlockRenderLayer layer, Reflection reflection, Object pass, Iterable<?> chunks,
                                  double cameraX, double cameraY, double cameraZ, double maxDistance, boolean collectState,
                                  int fallbackBlockEntityId, short fallbackRenderType, boolean requirePipelineStride)
@@ -1073,6 +1050,7 @@ public final class NothiriumShadowRenderer {
                 }
 
                 context.applyChunkFade(chunkX, chunkY, chunkZ);
+                context.prepareShaderlessOptimizedBloomDraw();
                 int program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
                 int chunkOffsetUniform = -1;
                 boolean useChunkOffsetUniform = false;
@@ -2197,7 +2175,6 @@ public final class NothiriumShadowRenderer {
         private final Method getProvider;
         private final Method getTaskDispatcher;
         private final Method dispatcherUpdate;
-        private final Method render;
         private final Method enumMapGet;
         private final Method renderedChunks;
         private final Method renderedSections;
@@ -2230,21 +2207,21 @@ public final class NothiriumShadowRenderer {
         private final Object cutout;
         private final Object cutoutMipped;
         private final Object translucent;
+        private final Object bloom;
 
         private Reflection(Method getRenderer, Method getProvider, Method getTaskDispatcher, Method dispatcherUpdate,
-                           Method render, Method enumMapGet, Method renderedChunks, Method renderedSections,
+                           Method enumMapGet, Method renderedChunks, Method renderedSections,
                            Method renderedSectionsAll, Method getVboPart, MethodHandle getVbo, MethodHandle getFirst,
                            MethodHandle getCount, MethodHandle getOffset, MethodHandle getSize, Method isValid, Method isDirty,
                            Method isEmpty, Method markDirty, Method releaseBuffers, Method canCompile,
                            Method compileAsync, MethodHandle getX, MethodHandle getY, MethodHandle getZ, Field chunks,
                            Field providerChunks, Field dispatcherQueue, Field lastCompileTask,
                            Field lastCompileTaskResult, Field lastTimeRecorded, Field lastTimeEnqueued, Field nonemptyVboParts,
-                           Object solid, Object cutout, Object cutoutMipped, Object translucent) {
+                           Object solid, Object cutout, Object cutoutMipped, Object translucent, Object bloom) {
             this.getRenderer = getRenderer;
             this.getProvider = getProvider;
             this.getTaskDispatcher = getTaskDispatcher;
             this.dispatcherUpdate = dispatcherUpdate;
-            this.render = render;
             this.enumMapGet = enumMapGet;
             this.renderedChunks = renderedChunks;
             this.renderedSections = renderedSections;
@@ -2277,6 +2254,7 @@ public final class NothiriumShadowRenderer {
             this.cutout = cutout;
             this.cutoutMipped = cutoutMipped;
             this.translucent = translucent;
+            this.bloom = bloom;
         }
 
         private int getX(Object chunk) throws ReflectiveOperationException {
@@ -2344,7 +2322,6 @@ public final class NothiriumShadowRenderer {
                 Method getProvider = managerClass.getMethod("getProvider");
                 Method getTaskDispatcher = managerClass.getMethod("getTaskDispatcher");
                 Method dispatcherUpdate = dispatcherClass.getMethod("update");
-                Method render = chunkRendererClass.getMethod("render", passClass);
                 Method renderedSections = managerClass.getMethod("renderedSections", passClass);
                 Method renderedSectionsAll = managerClass.getMethod("renderedSections");
                 Method enumMapGet = enumMapClass.getMethod("get", Enum.class);
@@ -2386,12 +2363,12 @@ public final class NothiriumShadowRenderer {
                 Object cutout = Enum.valueOf((Class<? extends Enum>) passClass.asSubclass(Enum.class), "CUTOUT");
                 Object cutoutMipped = Enum.valueOf((Class<? extends Enum>) passClass.asSubclass(Enum.class), "CUTOUT_MIPPED");
                 Object translucent = Enum.valueOf((Class<? extends Enum>) passClass.asSubclass(Enum.class), "TRANSLUCENT");
+                Object bloom = enumValueOrNull(passClass, "BLOOM");
                 return new Reflection(
                         getRenderer,
                         getProvider,
                         getTaskDispatcher,
                         dispatcherUpdate,
-                        render,
                         enumMapGet,
                         renderedChunks,
                         renderedSections,
@@ -2423,7 +2400,8 @@ public final class NothiriumShadowRenderer {
                         solid,
                         cutout,
                         cutoutMipped,
-                        translucent
+                        translucent,
+                        bloom
                 );
             } catch (ReflectiveOperationException | RuntimeException e) {
                 return null;
@@ -2477,8 +2455,17 @@ public final class NothiriumShadowRenderer {
                 case CUTOUT -> cutout;
                 case CUTOUT_MIPPED -> cutoutMipped;
                 case TRANSLUCENT -> translucent;
-                default -> null;
+                default -> "BLOOM".equals(layer.name()) ? bloom : null;
             };
+        }
+
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        private static Object enumValueOrNull(Class<?> enumClass, String name) {
+            try {
+                return Enum.valueOf((Class<? extends Enum>) enumClass.asSubclass(Enum.class), name);
+            } catch (IllegalArgumentException ignored) {
+                return null;
+            }
         }
 
         private static Field findField(Class<?> type, String name) throws NoSuchFieldException {

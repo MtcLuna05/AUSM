@@ -8,8 +8,6 @@ import net.minecraftforge.fml.common.Loader;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.List;
 
 public final class AusmBloomLayer {
     private static final String LUMENIZED_MOD_ID = "lumenized";
@@ -20,20 +18,18 @@ public final class AusmBloomLayer {
 
     private static BlockRenderLayer bloomLayer;
     private static boolean standaloneCreateAttempted;
-    private static boolean nothiriumLayerPatched;
+    private static boolean nothiriumBloomPassPatched;
+    private static boolean nothiriumRendererRecreatePending;
     private static boolean loggedAvailable;
     private static boolean loggedUnavailable;
     private static boolean loggedCreateFailure;
     private static boolean loggedLumenizedInitFailure;
     private static boolean loggedNothiriumPatchFailure;
-    private static boolean loggedNativeLayerDisabledForNothirium;
-    private static volatile Boolean nothiriumLoaded;
 
     private AusmBloomLayer() {
     }
 
     public static void initialize() {
-        sanitizeNothiriumLayerArrays();
         layer();
     }
 
@@ -50,7 +46,7 @@ public final class AusmBloomLayer {
         }
 
         if (bloomLayer != null) {
-            sanitizeNothiriumLayerArrays();
+            initializeNothiriumBloomLayerSupport();
             if (!loggedAvailable) {
                 loggedAvailable = true;
                 MainMod.LOGGER.info("[AUSMBloom] BLOOM render layer available at ordinal {}", bloomLayer.ordinal());
@@ -71,33 +67,29 @@ public final class AusmBloomLayer {
     }
 
     public static boolean shouldUseNativeHook() {
-        if (isNothiriumLoaded()) {
-            sanitizeNothiriumLayerArrays();
-            if (!loggedNativeLayerDisabledForNothirium) {
-                loggedNativeLayerDisabledForNothirium = true;
-                MainMod.LOGGER.info("[AUSMBloom] Disabled native BLOOM render-layer hook because Nothirium cannot index the added BLOOM layer.");
-            }
-            return false;
+        if (Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
+            return initializeNothiriumBloomLayerSupport() && isAvailable();
         }
         return isAvailable();
     }
 
     public static boolean shouldUseShaderlessNativeHook() {
-        if (isNothiriumLoaded()) {
-            sanitizeNothiriumLayerArrays();
-            return false;
+        if (Loader.isModLoaded(NOTHIRIUM_MOD_ID)) {
+            return initializeNothiriumBloomLayerSupport() && isAvailable();
         }
         return shouldUseNativeHook();
     }
 
-    private static boolean isNothiriumLoaded() {
-        Boolean cached = nothiriumLoaded;
-        if (cached != null) {
-            return cached;
+    /**
+     * Nothirium allocates per-pass renderer lists before AUSM can extend its
+     * enum. Recreate that data backend once from the world render thread.
+     */
+    public static boolean consumeNothiriumRendererRecreateRequest() {
+        if (!nothiriumRendererRecreatePending) {
+            return false;
         }
-        boolean loaded = Loader.isModLoaded(NOTHIRIUM_MOD_ID);
-        nothiriumLoaded = loaded;
-        return loaded;
+        nothiriumRendererRecreatePending = false;
+        return true;
     }
 
     private static BlockRenderLayer existingLayer() {
@@ -121,71 +113,45 @@ public final class AusmBloomLayer {
         }
     }
 
-    private static void sanitizeNothiriumLayerArrays() {
-        if (nothiriumLayerPatched || !isNothiriumLoaded()) {
-            return;
+    private static boolean initializeNothiriumBloomLayerSupport() {
+        if (nothiriumBloomPassPatched) {
+            return true;
+        }
+        if (!Loader.isModLoaded(NOTHIRIUM_MOD_ID) || existingLayer() == null) {
+            return false;
         }
 
         try {
             Class<?> blockRenderLayerUtilClass = Class.forName(NOTHIRIUM_BLOCK_RENDER_LAYER_UTIL, true, AusmBloomLayer.class.getClassLoader());
-            writeStaticField(blockRenderLayerUtilClass, "ALL", nonBloomBlockRenderLayers());
             Class<?> chunkRenderPassClass = Class.forName(NOTHIRIUM_CHUNK_RENDER_PASS, true, AusmBloomLayer.class.getClassLoader());
-            writeStaticField(chunkRenderPassClass, "ALL", nonBloomEnumArray(chunkRenderPassClass));
+            ensureEnumConstant(chunkRenderPassClass, "BLOOM");
 
-            nothiriumLayerPatched = true;
-            MainMod.LOGGER.info("[AUSMBloom] Sanitized Nothirium layer/pass snapshots to vanilla terrain layers.");
+            Object renderPasses = invokeValues(chunkRenderPassClass);
+            BlockRenderLayer[] renderLayers = BlockRenderLayer.values();
+            if (Array.getLength(renderPasses) != renderLayers.length) {
+                throw new IllegalStateException("Nothirium BLOOM pass count does not match block render layers");
+            }
+            Object bloomPass = Array.get(renderPasses, bloomLayer.ordinal());
+            if (!(bloomPass instanceof Enum<?>) || !"BLOOM".equals(((Enum<?>) bloomPass).name())) {
+                throw new IllegalStateException("Nothirium BLOOM pass is not aligned with BlockRenderLayer.BLOOM");
+            }
+
+            // Nothirium maps layers and passes solely by ordinal. Extending both
+            // snapshots before its renderer is created gives BLOOM its own VBO
+            // part and visible list instead of merging it into another pass.
+            writeStaticField(blockRenderLayerUtilClass, "ALL", renderLayers);
+            writeStaticField(chunkRenderPassClass, "ALL", renderPasses);
+            nothiriumBloomPassPatched = true;
+            nothiriumRendererRecreatePending = true;
+            MainMod.LOGGER.info("[AUSMBloom] Added native Nothirium BLOOM render pass at ordinal {}.", bloomLayer.ordinal());
+            return true;
         } catch (Throwable error) {
             if (!loggedNothiriumPatchFailure) {
                 loggedNothiriumPatchFailure = true;
-                MainMod.LOGGER.warn("[AUSMBloom] Failed to sanitize Nothirium terrain layer support", error);
+                MainMod.LOGGER.warn("[AUSMBloom] Failed to add Nothirium BLOOM render-pass support", error);
             }
+            return false;
         }
-    }
-
-    private static BlockRenderLayer[] nonBloomBlockRenderLayers() {
-        List<BlockRenderLayer> layers = new ArrayList<>();
-        for (BlockRenderLayer layer : BlockRenderLayer.values()) {
-            if (layer != null && !"BLOOM".equals(layer.name())) {
-                layers.add(layer);
-            }
-        }
-        return layers.toArray(new BlockRenderLayer[0]);
-    }
-
-    private static Object nonBloomEnumArray(Class<?> enumClass) {
-        try {
-            Field all = enumClass.getDeclaredField("ALL");
-            all.setAccessible(true);
-            Object values = all.get(null);
-            if (values != null && values.getClass().isArray()) {
-                return nonBloomEnumArray(values);
-            }
-        } catch (ReflectiveOperationException | RuntimeException ignored) {
-        }
-        return nonBloomEnumArray(invokeValues(enumClass));
-    }
-
-    private static Object nonBloomEnumArray(Object values) {
-        if (values == null || !values.getClass().isArray()) {
-            return values;
-        }
-
-        Class<?> componentType = values.getClass().getComponentType();
-        List<Enum<?>> entries = new ArrayList<>();
-        int length = Array.getLength(values);
-        for (int i = 0; i < length; i++) {
-            Object value = Array.get(values, i);
-            if (value instanceof Enum<?> enumValue && !"BLOOM".equals(enumValue.name())) {
-                entries.add(enumValue);
-            }
-        }
-        entries.sort((left, right) -> Integer.compare(left.ordinal(), right.ordinal()));
-
-        Object filtered = Array.newInstance(componentType, entries.size());
-        for (int i = 0; i < entries.size(); i++) {
-            Array.set(filtered, i, entries.get(i));
-        }
-        return filtered;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

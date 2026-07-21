@@ -81,6 +81,7 @@ import net.minecraft.world.biome.Biome;
 import net.minecraft.world.chunk.BlockStateContainer;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
+import net.minecraftforge.client.IRenderHandler;
 import net.minecraft.block.properties.IProperty;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL11;
@@ -163,6 +164,31 @@ public final class MinecraftReflectionCompat {
             new String[] {"func_185899_b", "getActualState"},
             new Class<?>[] {IBlockAccess.class, BlockPos.class}
     );
+    private static final MethodHandle BLOCK_POS_X_HANDLE = methodHandle(
+            BlockPos.class, new String[] {"func_177958_n", "getX"}, NO_PARAMETERS
+    );
+    private static final MethodHandle BLOCK_POS_Y_HANDLE = methodHandle(
+            BlockPos.class, new String[] {"func_177956_o", "getY"}, NO_PARAMETERS
+    );
+    private static final MethodHandle BLOCK_POS_Z_HANDLE = methodHandle(
+            BlockPos.class, new String[] {"func_177952_p", "getZ"}, NO_PARAMETERS
+    );
+    private static final Field BLOCK_POS_X_FIELD = firstField(BlockPos.class, "field_177962_a", "x");
+    private static final Field BLOCK_POS_Y_FIELD = firstField(BlockPos.class, "field_177960_b", "y");
+    private static final Field BLOCK_POS_Z_FIELD = firstField(BlockPos.class, "field_177961_c", "z");
+    private static final MethodHandle WORLD_CAN_SEE_SKY_HANDLE = methodHandle(
+            World.class, new String[] {"func_175678_i", "canSeeSky"}, new Class<?>[] {BlockPos.class}
+    );
+    private static final MethodHandle BLOCK_POS_UP_HANDLE = methodHandle(
+            BlockPos.class, new String[] {"func_177984_a", "up"}, NO_PARAMETERS
+    );
+    private static final MethodHandle HELD_ITEM_MAINHAND_HANDLE = methodHandle(
+            EntityLivingBase.class, new String[] {"func_184614_ca", "getHeldItemMainhand"}, NO_PARAMETERS
+    );
+    private static final MethodHandle HELD_ITEM_OFFHAND_HANDLE = methodHandle(
+            EntityLivingBase.class, new String[] {"func_184592_cb", "getHeldItemOffhand"}, NO_PARAMETERS
+    );
+    private static final Field ENTITY_DEAD_FIELD = firstField(Entity.class, "field_70128_L", "isDead");
 
     private MinecraftReflectionCompat() {
     }
@@ -253,6 +279,12 @@ public final class MinecraftReflectionCompat {
         if (world == null || pos == null) {
             return false;
         }
+        if (WORLD_CAN_SEE_SKY_HANDLE != null) {
+            try {
+                return (boolean) WORLD_CAN_SEE_SKY_HANDLE.invoke(world, pos);
+            } catch (Throwable ignored) {
+            }
+        }
         return callBoolean(world, new String[] {"func_175678_i", "canSeeSky"},
                 new Class<?>[] {BlockPos.class}, false, pos);
     }
@@ -330,28 +362,44 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int blockPosX(BlockPos pos) {
-        return pos != null ? pos.getX() : 0;
+        int fieldValue = blockPosFieldInt(BLOCK_POS_X_FIELD, pos, Integer.MIN_VALUE);
+        if (fieldValue != Integer.MIN_VALUE) {
+            return fieldValue;
+        }
+        return invokeInt(BLOCK_POS_X_HANDLE, pos, 0);
     }
 
     public static int blockPosY(BlockPos pos) {
-        return pos != null ? pos.getY() : 0;
+        int fieldValue = blockPosFieldInt(BLOCK_POS_Y_FIELD, pos, Integer.MIN_VALUE);
+        if (fieldValue != Integer.MIN_VALUE) {
+            return fieldValue;
+        }
+        return invokeInt(BLOCK_POS_Y_HANDLE, pos, 0);
     }
 
     public static int blockPosZ(BlockPos pos) {
-        return pos != null ? pos.getZ() : 0;
+        int fieldValue = blockPosFieldInt(BLOCK_POS_Z_FIELD, pos, Integer.MIN_VALUE);
+        if (fieldValue != Integer.MIN_VALUE) {
+            return fieldValue;
+        }
+        return invokeInt(BLOCK_POS_Z_HANDLE, pos, 0);
     }
 
     public static BlockPos blockPosToImmutable(BlockPos pos) {
-        return pos != null ? pos.toImmutable() : BlockPos.ORIGIN;
+        if (pos == null) {
+            return new BlockPos(0, 0, 0);
+        }
+        Object value = invoke(pos, new String[] {"func_185334_h", "toImmutable"}, NO_PARAMETERS);
+        return value instanceof BlockPos ? (BlockPos) value : pos;
     }
 
     public static long blockPosToLong(BlockPos pos) {
         if (pos == null) {
             return 0L;
         }
-        try {
-            return pos.toLong();
-        } catch (Throwable ignored) {
+        Object value = invoke(pos, new String[] {"func_177986_g", "toLong"}, NO_PARAMETERS);
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
         }
         return ((long) blockPosX(pos) & 0x3FFFFFFL) << 38
                 | ((long) blockPosZ(pos) & 0x3FFFFFFL) << 12
@@ -360,11 +408,16 @@ public final class MinecraftReflectionCompat {
 
     public static BlockPos blockPosUp(BlockPos pos) {
         if (pos == null) {
-            return BlockPos.ORIGIN.up();
+            return new BlockPos(0, 1, 0);
         }
-        try {
-            return pos.up();
-        } catch (Throwable ignored) {
+        if (BLOCK_POS_UP_HANDLE != null) {
+            try {
+                Object value = BLOCK_POS_UP_HANDLE.invoke(pos);
+                if (value instanceof BlockPos) {
+                    return (BlockPos) value;
+                }
+            } catch (Throwable ignored) {
+            }
         }
         Object value = invoke(pos, new String[] {"func_177984_a", "up"}, NO_PARAMETERS);
         return value instanceof BlockPos ? (BlockPos) value : new BlockPos(blockPosX(pos), blockPosY(pos) + 1, blockPosZ(pos));
@@ -605,11 +658,42 @@ public final class MinecraftReflectionCompat {
     }
 
     public static ItemStack heldItemMainhand(EntityLivingBase entity) {
+        if (entity != null && HELD_ITEM_MAINHAND_HANDLE != null) {
+            try {
+                Object value = HELD_ITEM_MAINHAND_HANDLE.invoke(entity);
+                if (value instanceof ItemStack) {
+                    return (ItemStack) value;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
         return call(entity, ItemStack.class, null, new String[] {"func_184614_ca", "getHeldItemMainhand"}, NO_PARAMETERS);
     }
 
     public static ItemStack heldItemOffhand(EntityLivingBase entity) {
+        if (entity != null && HELD_ITEM_OFFHAND_HANDLE != null) {
+            try {
+                Object value = HELD_ITEM_OFFHAND_HANDLE.invoke(entity);
+                if (value instanceof ItemStack) {
+                    return (ItemStack) value;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
         return call(entity, ItemStack.class, null, new String[] {"func_184592_cb", "getHeldItemOffhand"}, NO_PARAMETERS);
+    }
+
+    public static boolean entityIsDead(Entity entity) {
+        if (entity == null) {
+            return true;
+        }
+        if (ENTITY_DEAD_FIELD != null) {
+            try {
+                return ENTITY_DEAD_FIELD.getBoolean(entity);
+            } catch (ReflectiveOperationException ignored) {
+            }
+        }
+        return fieldBoolean(entity, false, "field_70128_L", "isDead");
     }
 
     public static boolean livingPotionActive(EntityLivingBase entity, Potion potion) {
@@ -673,28 +757,28 @@ public final class MinecraftReflectionCompat {
         if (block == null || state == null) {
             return 0;
         }
-        try {
-            return block.getMetaFromState(state);
-        } catch (Throwable ignored) {
-        }
         return callInt(block, new String[] {"func_176201_c", "getMetaFromState"},
                 new Class<?>[] {IBlockState.class}, 0, state);
     }
 
     public static Material stateMaterial(IBlockState state) {
-        return state != null ? state.getMaterial() : null;
+        return call(state, Material.class, null,
+                new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS);
     }
 
     public static boolean stateMaterialIsFire(IBlockState state) {
-        return stateMaterial(state) == Material.FIRE;
+        return stateMaterial(state) == field(Material.class, Material.class, null,
+                "field_151581_o", "FIRE");
     }
 
     public static boolean stateMaterialIsWater(IBlockState state) {
-        return stateMaterial(state) == Material.WATER;
+        return stateMaterial(state) == field(Material.class, Material.class, null,
+                "field_151586_h", "WATER");
     }
 
     public static EnumBlockRenderType stateRenderType(IBlockState state) {
-        return state != null ? state.getRenderType() : null;
+        return call(state, EnumBlockRenderType.class, null,
+                new String[] {"func_185911_a", "getRenderType"}, NO_PARAMETERS);
     }
 
     public static int stateRenderTypeOrdinal(IBlockState state) {
@@ -703,25 +787,12 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int stateLightValue(IBlockState state) {
-        if (state == null) {
-            return 0;
-        }
-        try {
-            return state.getLightValue();
-        } catch (Throwable ignored) {
-        }
         return callInt(state, new String[] {"func_185906_d", "getLightValue"}, NO_PARAMETERS, 0);
     }
 
     public static int stateLightValue(IBlockState state, IBlockAccess access, BlockPos pos) {
         if (state == null) {
             return 0;
-        }
-        if (access != null && pos != null) {
-            try {
-                return state.getLightValue(access, pos);
-            } catch (Throwable ignored) {
-            }
         }
         Object value = access != null && pos != null
                 ? invoke(state, new String[] {"func_185906_d", "getLightValue"},
@@ -732,14 +803,10 @@ public final class MinecraftReflectionCompat {
 
     public static int statePackedLightmapCoords(IBlockState state, IBlockAccess access, BlockPos pos) {
         if (state != null && access != null && pos != null) {
-            try {
-                return state.getPackedLightmapCoords(access, pos);
-            } catch (Throwable ignored) {
-                Object value = invoke(state, new String[] {"func_185889_a", "getPackedLightmapCoords"},
-                        new Class<?>[] {IBlockAccess.class, BlockPos.class}, access, pos);
-                if (value instanceof Number) {
-                    return ((Number) value).intValue();
-                }
+            Object value = invoke(state, new String[] {"func_185889_a", "getPackedLightmapCoords"},
+                    new Class<?>[] {IBlockAccess.class, BlockPos.class}, access, pos);
+            if (value instanceof Number) {
+                return ((Number) value).intValue();
             }
         }
         return blockAccessCombinedLight(access, pos, 0);
@@ -1074,6 +1141,10 @@ public final class MinecraftReflectionCompat {
 
     public static boolean hideGui(GameSettings settings) {
         return fieldBoolean(settings, false, "field_74319_N", "hideGUI");
+    }
+
+    public static boolean showDebugInfo(GameSettings settings) {
+        return fieldBoolean(settings, false, "field_74330_P", "showDebugInfo");
     }
 
     public static int thirdPersonView(GameSettings settings) {
@@ -1703,6 +1774,23 @@ public final class MinecraftReflectionCompat {
                 new String[] {"func_175602_ab", "getBlockRendererDispatcher"}, NO_PARAMETERS);
     }
 
+    public static IBakedModel blockModel(BlockRendererDispatcher dispatcher, IBlockState state) {
+        return call(dispatcher, IBakedModel.class, null,
+                new String[] {"func_184389_a", "getModelForState"},
+                new Class<?>[] {IBlockState.class}, state);
+    }
+
+    public static IBlockState blockExtendedState(IBlockState state, IBlockAccess access, BlockPos pos) {
+        Block block = blockFromState(state);
+        if (block == null || access == null || pos == null) {
+            return state;
+        }
+        return call(block, IBlockState.class, state,
+                new String[] {"getExtendedState"},
+                new Class<?>[] {IBlockState.class, IBlockAccess.class, BlockPos.class},
+                state, access, pos);
+    }
+
     public static ResourceLocation blocksTexture() {
         return field(TextureMap.class, ResourceLocation.class, new ResourceLocation("textures/atlas/blocks.png"),
                 "field_110575_b", "LOCATION_BLOCKS_TEXTURE");
@@ -1736,6 +1824,21 @@ public final class MinecraftReflectionCompat {
     public static int bakedQuadTintIndex(BakedQuad quad) {
         Object value = invoke(quad, new String[] {"func_178211_c", "getTintIndex"}, NO_PARAMETERS);
         return intValue(value, intValue(getField(quad, "field_178213_b", "tintIndex"), -1));
+    }
+
+    public static int blockColorMultiplier(Minecraft minecraft, IBlockState state, IBlockAccess blockAccess, BlockPos pos, int tintIndex) {
+        if (minecraft == null || state == null) {
+            return -1;
+        }
+        try {
+            Object blockColors = invoke(minecraft, new String[] {"func_184125_al", "getBlockColors"}, NO_PARAMETERS);
+            Object value = invoke(blockColors, new String[] {"func_189991_a", "colorMultiplier"},
+                    new Class<?>[] {IBlockState.class, IBlockAccess.class, BlockPos.class, int.class},
+                    state, blockAccess, pos, tintIndex);
+            return value instanceof Number ? ((Number) value).intValue() : -1;
+        } catch (RuntimeException | LinkageError ignored) {
+            return -1;
+        }
     }
 
     public static boolean bakedQuadHasTintIndex(BakedQuad quad) {
@@ -2017,6 +2120,26 @@ public final class MinecraftReflectionCompat {
         return type.isInstance(value) ? type.cast(value) : fallback;
     }
 
+    public static Object worldProviderSkyRenderer(WorldProvider provider) {
+        if (provider == null) {
+            return null;
+        }
+        Object renderer = invoke(provider, new String[] {"getSkyRenderer"}, NO_PARAMETERS);
+        return renderer != null ? renderer : field(provider, Object.class, null, "skyRenderer", "field_76579_a");
+    }
+
+    public static boolean setWorldProviderSkyRenderer(WorldProvider provider, Object renderer) {
+        if (provider == null) {
+            return false;
+        }
+        setField(provider, renderer, "skyRenderer", "field_76579_a");
+        if (worldProviderSkyRenderer(provider) == renderer) {
+            return true;
+        }
+        invoke(provider, new String[] {"setSkyRenderer"}, new Class<?>[] {IRenderHandler.class}, renderer);
+        return worldProviderSkyRenderer(provider) == renderer;
+    }
+
     public static int fieldInt(Object target, int fallback, String... names) {
         return intValue(getField(target, names), fallback);
     }
@@ -2091,6 +2214,15 @@ public final class MinecraftReflectionCompat {
             localCache.store(owner, name, parameters, null);
             return null;
         }
+        try {
+            Method publicMethod = owner.getMethod(name, parameters);
+            publicMethod.setAccessible(true);
+            Method existing = METHOD_CACHE.putIfAbsent(key, publicMethod);
+            Method resolved = existing != null ? existing : publicMethod;
+            localCache.store(owner, name, parameters, resolved);
+            return resolved;
+        } catch (ReflectiveOperationException | SecurityException ignored) {
+        }
         Method declared = findExactDeclaredMethod(owner, name, parameterTypes, new HashSet<>());
         if (declared != null) {
             declared.setAccessible(true);
@@ -2099,18 +2231,9 @@ public final class MinecraftReflectionCompat {
             localCache.store(owner, name, parameters, resolved);
             return resolved;
         }
-        try {
-            Method method = owner.getMethod(name, parameters);
-            method.setAccessible(true);
-            Method existing = METHOD_CACHE.putIfAbsent(key, method);
-            Method resolved = existing != null ? existing : method;
-            localCache.store(owner, name, parameters, resolved);
-            return resolved;
-        } catch (ReflectiveOperationException | SecurityException ignored) {
-            MISSING_METHODS.add(key);
-            localCache.store(owner, name, parameters, null);
-            return null;
-        }
+        MISSING_METHODS.add(key);
+        localCache.store(owner, name, parameters, null);
+        return null;
     }
 
     private static Method findExactDeclaredMethod(Class<?> owner, String name, Class<?>[] parameterTypes, Set<Class<?>> visited) {
@@ -2213,6 +2336,28 @@ public final class MinecraftReflectionCompat {
         return methodHandle(owner, names, parameterTypes);
     }
 
+    private static int invokeInt(MethodHandle handle, Object target, int fallback) {
+        if (target == null || handle == null) {
+            return fallback;
+        }
+        try {
+            return (int) handle.invoke(target);
+        } catch (Throwable ignored) {
+            return fallback;
+        }
+    }
+
+    private static int blockPosFieldInt(Field field, BlockPos pos, int fallback) {
+        if (field == null || pos == null) {
+            return fallback;
+        }
+        try {
+            return field.getInt(pos);
+        } catch (ReflectiveOperationException | IllegalArgumentException ignored) {
+            return fallback;
+        }
+    }
+
     private static Object getField(Object target, String... names) {
         if (target == null) {
             return null;
@@ -2268,6 +2413,13 @@ public final class MinecraftReflectionCompat {
         }
         if (MISSING_FIELDS.contains(key)) {
             return null;
+        }
+        try {
+            Field publicField = owner.getField(name);
+            publicField.setAccessible(true);
+            Field existing = FIELD_CACHE.putIfAbsent(key, publicField);
+            return existing != null ? existing : publicField;
+        } catch (NoSuchFieldException | SecurityException ignored) {
         }
         for (Class<?> current = owner; current != null; current = current.getSuperclass()) {
             try {

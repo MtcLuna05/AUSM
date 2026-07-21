@@ -1,5 +1,16 @@
 package com.l.ausm.impl.pipeline;
 
+import static com.l.ausm.impl.pipeline.PipelineCompatConstants.*;
+import static com.l.ausm.impl.pipeline.PipelineDistantHorizonsConstants.*;
+import static com.l.ausm.impl.pipeline.PipelineLightConstants.*;
+import static com.l.ausm.impl.pipeline.PipelinePresentationConstants.*;
+import static com.l.ausm.impl.pipeline.PipelineProbeLimits.*;
+import static com.l.ausm.impl.pipeline.PipelineRenderConstants.*;
+import static com.l.ausm.impl.pipeline.PipelineSkyConstants.*;
+import static com.l.ausm.impl.pipeline.PipelineTerrainConstants.*;
+import static com.l.ausm.impl.pipeline.PipelineGlState.*;
+import static com.l.ausm.impl.pipeline.pack.PipelineShaderSettings.*;
+
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
@@ -12,11 +23,15 @@ import com.l.ausm.impl.client.ThaumcraftParticleBridge;
 import com.l.ausm.impl.client.dynamic.DynamicLightManager;
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
+import com.l.ausm.impl.pipeline.bloom.BloomExtractionPlan;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomRenderer;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.compat.NothiriumBypass;
 import com.l.ausm.impl.pipeline.compat.NothiriumShadowRenderer;
 import com.l.ausm.impl.pipeline.compat.ProjectRedIlluminationCompat;
+import com.l.ausm.impl.pipeline.compat.ShaderlessNothiriumFogGuard;
+import com.l.ausm.impl.pipeline.dh.DistantHorizonsInternalShaders;
+import com.l.ausm.impl.pipeline.dh.DistantHorizonsMatrixState;
 import com.l.ausm.impl.pipeline.fbo.DeferredFramebuffer;
 import com.l.ausm.impl.pipeline.fbo.PingPongManager;
 import com.l.ausm.impl.pipeline.fbo.ShadowFramebuffer;
@@ -39,6 +54,7 @@ import com.l.ausm.impl.pipeline.pack.ShaderFeatureValidator;
 import com.l.ausm.impl.pipeline.pack.ShaderEnvironmentDefines;
 import com.l.ausm.impl.pipeline.pack.ShaderExpressionEvaluator;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
+import com.l.ausm.impl.pipeline.pack.PipelineShaderSettings;
 import com.l.ausm.impl.pipeline.resource.ShaderImageSet;
 import com.l.ausm.impl.pipeline.resource.ShaderStorageBufferSet;
 import com.l.ausm.api.pipeline.pack.ShaderRenderTargetSettings;
@@ -69,6 +85,7 @@ import com.l.ausm.impl.pipeline.shader.ShaderProgramSet;
 import com.l.ausm.impl.pipeline.shader.ShaderProgram;
 import com.l.ausm.impl.pipeline.shader.UniformRegistry;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
+import com.l.ausm.impl.util.ConcurrentLongSet;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.block.Block;
@@ -119,7 +136,6 @@ import net.minecraft.util.EnumFacing;
 import net.minecraft.util.EnumHandSide;
 import net.minecraft.util.math.RayTraceResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.Vec3d;
@@ -154,15 +170,12 @@ import org.lwjgl.opengl.GLContext;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.time.LocalDateTime;
-import java.nio.charset.StandardCharsets;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
@@ -172,6 +185,7 @@ import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -183,15603 +197,48 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
-
-/**
- * The central hub for the active render pipeline.
- * Replaces the monolithic Shaders class with a cleaner context object.
- */
-public class PipelineContext {
-    private static final String NOTHIRIUM_MOD_ID = "nothirium";
-    private static final String NAUGHTHIRIUM_MOD_ID = "naughthirium";
-
-    private static final PipelineContext INSTANCE = new PipelineContext();
-    private static final ICamera ALWAYS_VISIBLE_CAMERA = new ICamera() {
-        @Override
-        public boolean isBoundingBoxInFrustum(AxisAlignedBB box) {
-            return true;
-        }
-
-        @Override
-        public void setPosition(double x, double y, double z) {
-        }
-    };
-    private static final FloatBuffer IRIS_LIGHTMAP_TEXTURE_MATRIX = createIrisLightmapTextureMatrix();
-    private static final Pattern CONST_SETTING_PATTERN = Pattern.compile("^\\s*const\\s+\\w+\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*([^;\\s]+).*$");
-    private static final Pattern DEFINE_SETTING_PATTERN = Pattern.compile("^\\s*#define\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s+([^/\\s]+))?.*$");
-    private static final boolean ENABLE_CPU_LIGHT_INJECTION = true;
-    private static final ConcurrentMap<Block, Boolean> BLOCKCRAFTERY_EDITABLE_BLOCK_CACHE = new ConcurrentHashMap<>();
-    private static final ConcurrentMap<Block, Boolean> ARCHITECTURECRAFT_SHAPE_BLOCK_CACHE = new ConcurrentHashMap<>();
-    private static final boolean ENABLE_GENERIC_CPU_SHADER_BLOCK_LIGHT_INJECTION = false;
-    private static final int MAX_SYNTHETIC_LIGHT_CANDIDATES = 2048;
-    private static final int MAX_SYNTHETIC_LIGHT_RANGE_REFRESH_VOLUME = 4096;
-    private static final int MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME = 128;
-    private static final int MAX_CPU_LIGHT_TILE_ENTITY_SCANS_PER_FRAME = 128;
-    private static final int MAX_CPU_LIGHT_BLOCK_SCANS_PER_FRAME = 384;
-    private static final int MAX_CPU_LIGHT_BLOCK_SCAN_WIDTH = 48;
-    private static final int MAX_CPU_LIGHT_BLOCK_SCAN_HEIGHT = 32;
-    private static final int CPU_LIGHT_TILE_ENTITY_SNAPSHOT_INTERVAL_FRAMES = 20;
-    private static final int MAX_COLORED_LIGHT_AUDIT_LOGS = 0;
-    private static final int BIOME_NETHER_WASTES_ID = 100_000;
-    private static final int BIOME_CRIMSON_FOREST_ID = 100_001;
-    private static final int BIOME_WARPED_FOREST_ID = 100_002;
-    private static final int BIOME_BASALT_DELTAS_ID = 100_003;
-    private static final int BIOME_SOUL_SAND_VALLEY_ID = 100_004;
-    private static final int BIOME_PALE_GARDEN_ID = 100_005;
-    private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
-    private static final String CUSTOM_VOID_WORLD_OPTION = "AUSM_CUSTOM_VOID_WORLD";
-    private static final ResourceLocation BOTANIA_VOID_SKYBOX_TEXTURE = new ResourceLocation("botania", "textures/misc/skybox.png");
-    private static final ResourceLocation BOTANIA_VOID_RAINBOW_TEXTURE = new ResourceLocation("botania", "textures/misc/rainbow.png");
-    private static final ResourceLocation[] BOTANIA_VOID_PLANET_TEXTURES = new ResourceLocation[] {
-            new ResourceLocation("botania", "textures/misc/planet0.png"),
-            new ResourceLocation("botania", "textures/misc/planet1.png"),
-            new ResourceLocation("botania", "textures/misc/planet2.png"),
-            new ResourceLocation("botania", "textures/misc/planet3.png"),
-            new ResourceLocation("botania", "textures/misc/planet4.png"),
-            new ResourceLocation("botania", "textures/misc/planet5.png")
-    };
-    private static final int SPARSE_SHADOW_MIN_TERRAIN_DRAWS = 96;
-    private static final int SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES = 4;
-    private static final int SPARSE_SHADOW_STABLE_FRAMES = 2;
-    private static final float SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION = 0.003F;
-    private static final int NOTHIRIUM_SHADOW_SUPPRESS_AFTER_INVALID_FRAMES = 1;
-    private static final int NOTHIRIUM_SHADOW_SUPPRESS_FRAMES = 160;
-    private static final int FORCE_LIGHT_RECALC_MIN_RADIUS = 16;
-    private static final int FORCE_LIGHT_RECALC_MAX_RADIUS = 32;
-    private static final int WORLD_LOAD_FORCE_LIGHT_RECALC_ATTEMPTS = 2;
-    private static final int WORLD_LOAD_FORCE_LIGHT_RECALC_DELAY_FRAMES = 8;
-    private static final int WORLD_LOAD_LIGHT_REFRESH_RADIUS = 16;
-    private static final int WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS = 1;
-    private static final int WORLD_LOAD_TERRAIN_REFRESH_INITIAL_DELAY_FRAMES = 4;
-    private static final int WORLD_LOAD_TERRAIN_REFRESH_REPEAT_DELAY_FRAMES = 6;
-    private static final double CLIENT_TELEPORT_TERRAIN_REFRESH_DISTANCE_SQ = 64.0 * 64.0;
-    private static final int PARTICLE_DIMENSION_RECOVERY_FRAMES = 80;
-    private static final String ASTRAL_SKYBOX_CLASS = "hellfirepvp.astralsorcery.client.sky.RenderSkybox";
-    private static final int MAX_PENDING_SHADER_CHUNK_REFRESHES = 2048;
-    private static final int MAX_PENDING_CLIENT_CHUNK_RENDER_REFRESHES = 1024;
-    private static final int MAX_CLIENT_CHUNK_RENDER_REFRESHES_PER_FRAME = 8;
-    private static final int MAX_CLIENT_CHUNK_RENDER_REFRESH_SECTIONS_PER_FRAME = 32;
-    private static final int CLIENT_CHUNK_RENDER_REFRESH_RECENT_TTL_FRAMES = 12;
-    private static final int CLIENT_CHUNK_RENDER_REFRESH_RECENT_PRUNE_INTERVAL_FRAMES = 4;
-    private static final int MAX_RECENT_CLIENT_CHUNK_RENDER_REFRESHES_PER_WORLD = 2048;
-    private static final int MAX_STALE_CLIENT_CHUNK_REFRESHES_AGED_PER_FRAME = 32;
-    private static final int CLIENT_CHUNK_RENDER_REFRESH_ATTEMPTS = 8;
-    private static final int CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES = 1;
-    private static final int CLIENT_CHUNK_RENDER_REFRESH_REPEAT_DELAY_FRAMES = 1;
-    private static final int MAX_SHADERLESS_BLOOM_LOCAL_CHUNK_REFRESHES_PER_UPDATE = 16;
-    private static final String CLIENT_CHUNK_RENDER_REFRESH_REASON_BLOCK_UPDATE = "block-update";
-    private static final String CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM = "shaderless-bloom";
-    private static final int BETTER_PORTALS_VANILLA_RENDER_DISTANCE_CAP = 4;
-    private static final int MAX_CHUNK_FADE_STATES = 8192;
-    private static final int CHUNK_FADE_STALE_FRAMES = 600;
-    private static final int CHUNK_FADE_WARMUP_FRAMES = 20;
-    private static final float CHUNK_FADE_DURATION_SECONDS = 0.45f;
-    private static final int MAX_SHADER_CHUNK_REFRESHES_PER_FRAME = 8;
-    private static final int COMPILED_PIPELINE_CACHE_LIMIT = 4;
-    private static final int MAX_BETTER_PORTALS_PIPELINE_LOGS = 0;
-    private static final int MAX_SHADERLESS_BLOOM_HOOK_LOGS = 0;
-    private static final int MAX_VISIBLE_BLOOM_DIAG_LOGS = 0;
-    private static final int MAX_WORLD_LAYER_DIAG_LOGS = 16;
-    private static final int MAX_GUI_MODEL_STATE_PROBE_LOGS = 24;
-    private static final int MAX_GUI_ENTITY_STATE_PROBE_LOGS = 8;
-    private static final int MAX_GUI_ITEM_MODEL_PROBE_LOGS = 24;
-    private static final int MAX_WATER_ROUTING_PROBE_LOGS = 12;
-    private static final int MAX_WATER_ATTACHMENT_DELTA_PROBE_LOGS = 4;
-    private static final int MAX_EXTERNAL_OVERLAY_LOGS = 0;
-    private static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 0;
-    private static final int MAX_TERRAIN_HISTORY_CLEAR_LOGS = 8;
-    private static final int MAX_RENDER_GLOBAL_LOAD_RENDERER_LOGS = 0;
-    private static final int MAX_DISTANT_HORIZONS_DIAGNOSTIC_LOGS = 0;
-    private static final int MAX_TERRAIN_COLOR_PROBE_LOGS = 0;
-    private static final int MAX_FINAL_COLOR_PROBE_LOGS = 0;
-    private static final int MAX_COMPOSITE_CHAIN_PROBE_LOGS = 24;
-    private static final int MAX_DEFERRED_BOUNDARY_PROBE_LOGS = 32;
-    private static final int MAX_PRE_DEFERRED_COLOR_RESTORE_LOGS = 0;
-    private static final int MAX_DIRECT_COLOR_PRESENT_LOGS = 0;
-    private static final int MAX_DIRECT_WINDOW_PRESENT_LOGS = 0;
-    private static final int MAX_DIRECT_RECOVERED_WINDOW_REFRESH_LOGS = 0;
-    private static final int MAX_DIRECT_PRESENTATION_TEXTURE_REFRESH_LOGS = 12;
-    private static final int MAX_DIRECT_PRESENTATION_SNAPSHOT_LOGS = 0;
-    private static final int MAX_GUI_RECOVERED_BACKGROUND_LOGS = 12;
-    private static final int MAX_PRE_FINAL_DIRECT_PRESENT_LOGS = 0;
-    private static final int MAX_PRESENTATION_BOUNDARY_LOGS = 0;
-    private static final int MAX_TERRAIN_GRID_PROBE_LOGS = 0;
-    private static final int TERRAIN_GRID_PROBE_COLUMNS = 5;
-    private static final int TERRAIN_GRID_PROBE_ROWS = 5;
-    private static final int MAX_DH_PASS_COLOR_PROBE_LOGS = 0;
-    private static final String DISTANT_HORIZONS_FALLBACK_VERTEX_SHADER = """
-            #version 150 core
-
-            in uvec4 vPosition;
-            in vec4 color;
-            in uvec4 dhMaterialData;
-
-            uniform mat4 uCombinedMatrix;
-            uniform vec3 uModelOffset;
-            uniform float uWorldYOffset;
-            uniform float uMircoOffset;
-            uniform float uEarthRadius;
-
-            out vec4 vertexColor;
-            out vec3 vertexWorldPos;
-
-            void main() {
-                uint meta = vPosition.a;
-                uint mirco = (meta & 0xFF00u) >> 8u;
-                float mx = (mirco & 1u) != 0u ? uMircoOffset : 0.0;
-                mx = (mirco & 2u) != 0u ? -mx : mx;
-                float mz = (mirco & 16u) != 0u ? uMircoOffset : 0.0;
-                mz = (mirco & 32u) != 0u ? -mz : mz;
-                uint lights = meta & 0xFFu;
-                float skyLight = (float(lights / 16u) + 0.5) / 16.0;
-                float blockLight = (float(lights & 15u) + 0.5) / 16.0;
-                float light = clamp(max(blockLight, skyLight * 0.75) * 0.9 + 0.1, 0.0, 1.0);
-                vec3 worldPos = vec3(vPosition.xyz) + uModelOffset;
-                worldPos.x += mx;
-                worldPos.z += mz;
-                float vertexYPos = float(vPosition.y) + uWorldYOffset;
-                if (uEarthRadius < -1.0 || uEarthRadius > 1.0) {
-                    float localRadius = uEarthRadius + vertexYPos;
-                    float phi = length(worldPos.xz) / localRadius;
-                    worldPos.y += (cos(phi) - 1.0) * localRadius;
-                    worldPos.xz = worldPos.xz * sin(phi) / phi;
-                }
-                vertexWorldPos = worldPos;
-                vertexColor = vec4(color.rgb * light, color.a);
-                gl_Position = uCombinedMatrix * vec4(worldPos, 1.0);
-            }
-            """;
-    private static final String DISTANT_HORIZONS_FALLBACK_FRAGMENT_SHADER = """
-            #version 150 core
-
-            in vec4 vertexColor;
-            in vec3 vertexWorldPos;
-            out vec4 fragColor;
-
-            void main() {
-                fragColor = vertexColor;
-            }
-            """;
-    private static final String DISTANT_HORIZONS_COMPOSITE_VERTEX_SHADER = """
-            #version 120
-            varying vec2 textureCoords;
-            void main() {
-                textureCoords = gl_MultiTexCoord0.st;
-                gl_Position = vec4(textureCoords * 2.0 - 1.0, 0.0, 1.0);
-            }
-            """;
-    private static final String DISTANT_HORIZONS_COMPOSITE_FRAGMENT_SHADER = """
-            #version 120
-            uniform sampler2D dhColor;
-            uniform sampler2D dhDepth;
-            varying vec2 textureCoords;
-            void main() {
-                vec4 color = texture2D(dhColor, textureCoords);
-                if (color.a <= 0.001 || max(max(color.r, color.g), color.b) <= 0.001) {
-                    discard;
-                }
-                float depth = texture2D(dhDepth, textureCoords).r;
-                gl_FragDepth = depth < 0.999999 ? depth : 0.999998;
-                gl_FragColor = vec4(color.rgb, 1.0);
-            }
-            """;
-    private static final int MAX_TERRAIN_DIAGNOSTIC_LOGS = 0;
-    private static final int MAX_STEADY_VANILLA_TERRAIN_DIAGNOSTIC_LOGS = 0;
-    private static final int MAX_CAMERA_FRUSTUM_SYNC_LOGS = 0;
-    private static final int MAX_CLIENT_CHUNK_RENDER_REFRESH_LOGS = 0;
-    private static final int MAX_DECORATED_LIGHT_AUDIT_LOGS = 0;
-    private static final boolean DEBUG_PROBES_ENABLED = false;
-    private static final int MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS = 0;
-    private static final int MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS = 0;
-    private static final int MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS = 0;
-    private static final int MAX_CURRENT_PROBLEM_PROBE_LOGS = 0;
-    private static final int MAX_ACTIVE_LIGHT_OR_ID_PROBE_LOGS = 0;
-    private static final int MAX_INACTIVE_SKY_PIPELINE_PROBE_LOGS = 0;
-    private static final int MAX_ACTIVE_SKY_PIPELINE_PROBE_LOGS = 0;
-    private static final int MAX_HAND_ITEM_DRAW_STATE_LOGS = 0;
-    private static final int MAX_HAND_GBUFFER_PROBE_LOGS = 0;
-    private static final int MAX_HAND_PASS_BIND_LOGS = 0;
-    private static final int SHADERLESS_BLOOM_GEOMETRY_EMISSION = 15;
-    private static final int SHADERLESS_LIGHT_EMITTING_BLOOM_GEOMETRY_EMISSION = 5;
-    private static final int MAX_SHADERLESS_LIGHT_STATE_PROBE_LOGS = 0;
-    private static final int MAX_SKY_DOME_WORLD_PROBE_LOGS = 0;
-    private static final int MAX_SKY_DOME_GUI_PROBE_LOGS = 0;
-    private static final int MAX_SKY_DOME_PAUSE_PROBE_LOGS = 0;
-    private static final int MAX_WORLD_PASS_SKY_DOME_WORLD_PROBE_LOGS = 0;
-    private static final int MAX_WORLD_PASS_SKY_DOME_GUI_PROBE_LOGS = 0;
-    private static final int MAX_WORLD_PASS_SKY_DOME_PAUSE_PROBE_LOGS = 0;
-    private static final int MAX_SHADERLESS_SOLID_TERRAIN_SKY_WORLD_PROBE_LOGS = 0;
-    private static final int MAX_SHADERLESS_SOLID_TERRAIN_SKY_GUI_PROBE_LOGS = 0;
-    private static final int MAX_SHADERLESS_SOLID_TERRAIN_SKY_PAUSE_PROBE_LOGS = 0;
-    private static final int MAX_SHADERLESS_SKY_RGB_FILL_WORLD_LOGS = 0;
-    private static final int MAX_SHADERLESS_SKY_RGB_FILL_GUI_LOGS = 0;
-    private static final int MAX_SHADERLESS_SKY_RGB_FILL_PAUSE_LOGS = 0;
-    private static final int MAX_SHADERLESS_LOWER_SKY_MESH_WORLD_LOGS = 0;
-    private static final int MAX_SHADERLESS_LOWER_SKY_MESH_GUI_LOGS = 0;
-    private static final int MAX_SHADERLESS_LOWER_SKY_MESH_PAUSE_LOGS = 0;
-    private static final int MAX_VOID_WORLD_SKY_RENDERER_CHAIN_WORLD_LOGS = 0;
-    private static final int MAX_VOID_WORLD_SKY_RENDERER_CHAIN_GUI_LOGS = 0;
-    private static final int MAX_VOID_WORLD_SKY_RENDERER_CHAIN_PAUSE_LOGS = 0;
-    private static final int MAX_BLOCKCRAFTERY_TRANSPARENCY_PROBES = 0;
-    private static final int MAX_SHADERLESS_SKY_GUI_WORLD_PROBE_LOGS = 0;
-    private static final int MAX_SHADERLESS_SKY_GUI_SCREEN_PROBE_LOGS = 0;
-    private static final int MAX_ASTRAL_VOID_SKY_PROBE_LOGS = 0;
-    private static final int MAX_SHADERLESS_ASTRAL_SKY_COLOR_LOGS = 0;
-    private static final int MAX_FRESH_SKY_PROBE_LOGS = 0;
-    private static final int MAX_FRESH_SKY_GUI_PROBE_LOGS = 0;
-    private static final int MAX_NOTHIRIUM_FOG_PROBE_LOGS = 0;
-    private static final int MAX_NOTHIRIUM_RENDER_PROBE_LOGS = 0;
-    private static final int MAX_NOTHIRIUM_FOG_GUARD_LOGS = 0;
-    private static final int MAX_SHADERLESS_VOID_LIGHT_REPAIR_LOGS = 0;
-    private static final int MAX_SHADERLESS_VOID_SKY_PIXEL_PROBE_LOGS = 0;
-    private static final int MAX_SHADERLESS_VOID_SKY_REPAIR_LOGS = 0;
-    private static final int MAX_SHADERLESS_VOID_VANILLA_LOWER_SKY_LOGS = 0;
-    private static final int MAX_SHADERLESS_WORLD_FRAMEBUFFER_HANDOFF_LOGS = 0;
-    private static final boolean FORCE_DISTANT_HORIZONS_FALLBACK_PROGRAM = false;
-    private static final boolean ENABLE_DISTANT_HORIZONS_DIRECT_SHADER_RENDER = false;
-    private static final boolean ENABLE_DIRECT_DISTANT_HORIZONS_SHADER_MRT = Boolean.getBoolean("ausm.dhDirectShaderMrt");
-    private static final boolean FRAMED_BLOCK_DIAGNOSTICS_ENABLED =
-            MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS > 0
-                    || MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS > 0
-                    || MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS > 0;
-    private static final boolean CURRENT_PROBLEM_PROBES_ENABLED = MAX_CURRENT_PROBLEM_PROBE_LOGS > 0;
-    private static final int MAX_HARDWARE_CAPABILITY_LOGS = 0;
-    private static final int MAX_HARDWARE_TERRAIN_FALLBACK_LOGS = 0;
-    private static final int HARDWARE_TERRAIN_FALLBACK_ZERO_FRAMES = 5;
-    private static final int HARDWARE_TERRAIN_FALLBACK_SPARSE_FRAMES = 3;
-    private static final int HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS = 96;
-    private static final int NOTHIRIUM_PROVIDER_SUPPLEMENT_SPARSE_OPAQUE_DRAWS = 48;
-    private static final int NOTHIRIUM_PROVIDER_SUPPLEMENT_SPARSE_TRANSLUCENT_DRAWS = 8;
-    private static final boolean ENABLE_NOTHIRIUM_PROVIDER_SUPPLEMENT = false;
-    private static final int HARDWARE_TERRAIN_FALLBACK_REFRESH_COOLDOWN_FRAMES = 12;
-    private static final boolean ENABLE_SAFE_TERRAIN_FALLBACKS = false;
-    private static final boolean ENABLE_COMPOSITE_INVALID_PRESENTATION_RECOVERY = false;
-    private static final int NOTHIRIUM_NON_SOLID_REPAIR_COOLDOWN_FRAMES = 8;
-    private static final int NOTHIRIUM_SPARSE_MAIN_REPAIR_COOLDOWN_FRAMES = 8;
-    private static final int NOTHIRIUM_NON_SOLID_PROVIDER_DRAW_FRAMES = 16;
-    private static final int NOTHIRIUM_SPARSE_MAIN_PROVIDER_DRAW_FRAMES = 120;
-    private static final int NOTHIRIUM_SPARSE_MAIN_PROVIDER_SOLID_MAX_CHUNKS = 128;
-    private static final int NOTHIRIUM_SPARSE_MAIN_PROVIDER_CUTOUT_MAX_CHUNKS = 96;
-    private static final double NOTHIRIUM_SPARSE_MAIN_PROVIDER_SOLID_DISTANCE = 160.0D;
-    private static final double NOTHIRIUM_SPARSE_MAIN_PROVIDER_CUTOUT_DISTANCE = 128.0D;
-    private static final int NOTHIRIUM_HYBRID_VANILLA_MAINTENANCE_FRAMES = 240;
-    private static final int MAX_NOTHIRIUM_HYBRID_MAINTENANCE_LOGS = 0;
-    private static final int NOTHIRIUM_MAIN_VANILLA_DRAW_PATH_FRAMES = 240;
-    private static final int MAX_NOTHIRIUM_MAIN_VANILLA_DRAW_PATH_LOGS = 0;
-    private static final int MAX_SHADERED_NOTHIRIUM_GLOBAL_BYPASS_LOGS = 0;
-    private static final int MAX_POSITIVE_VANILLA_TERRAIN_PROBE_LOGS = 0;
-    private static final int MAX_NOTHIRIUM_MAIN_SETUP_BRIDGE_LOGS = 0;
-    private static final int MAX_NOTHIRIUM_NON_SOLID_REPAIR_LOGS = 0;
-    private static final int MAX_NOTHIRIUM_SPARSE_MAIN_REPAIR_LOGS = 0;
-    private static final int MAX_NOTHIRIUM_NON_SOLID_PROVIDER_DRAW_LOGS = 0;
-    private static final int MAX_NOTHIRIUM_SPARSE_MAIN_PROVIDER_DRAW_LOGS = 0;
-    private static final String COMPOSITE_INVALID_FALLBACK_SOURCE = "PRIVATE_COLOR";
-    private static final int COMPOSITE_INVALID_FALLBACK_HOLD_FRAMES = 12;
-    private static final int COMPOSITE_INVALID_FALLBACK_MAX_SNAPSHOT_AGE_FRAMES = 12;
-    private static final float COMPOSITE_RECOVERY_COLOR_MIN_MAX_CHANNEL = 0.12F;
-    private static final float COMPOSITE_RECOVERY_COLOR_MIN_LUMA = 0.04F;
-    private static final int MAX_COMPOSITE_INVALID_FALLBACK_LOGS = 0;
-    private static final int MAX_COMPOSITE_INVALID_RESTORE_LOGS = 0;
-    private static final boolean ENABLE_SPARSE_STARTUP_PRESENTATION_HOLD = false;
-    private static final boolean ENABLE_FLAT_COMPOSITE_SKY_ONLY_FINISH = false;
-    private static final int MAX_SPARSE_STARTUP_PRESENTATION_HOLD_LOGS = 0;
-    private static final int SPARSE_STARTUP_PRESENTATION_HOLD_FRAMES = 24;
-    private static final int SPARSE_STARTUP_PRESENTATION_MIN_TERRAIN_DRAWS = 24;
-    private static final int MAX_SOFT_VANILLA_PRESENTATION_PROBE_LOGS = 0;
-    private static final int MAX_SOFT_VANILLA_LAYER_TIMING_LOGS = 0;
-    private static final int MAX_SOFT_VANILLA_SPECIAL_BLOCK_PROBE_LOGS = 0;
-    private static final int MAX_SOFT_VANILLA_FRAME_TIMING_LOGS = 0;
-    private static final boolean ENABLE_CHUNK_FADE = false;
-    private static final boolean ENABLE_SYNCHRONOUS_CENTER_DEPTH_READBACK = false;
-    private static final long WORLD_TERRAIN_TRANSITION_DEBOUNCE_MS = 750L;
-    private static final long BETTER_PORTALS_PORTAL_BLOCK_REFRESH_DEBOUNCE_MS = 1000L;
-    private static final String RANDOM_THINGS_LUMINOUS_BLOCK_CLASS = "lumien.randomthings.lib.ILuminousBlock";
-    private static final String BLOCKCRAFTERY_TILE_EDITABLE_BLOCK_CLASS = "epicsquid.blockcraftery.tile.TileEditableBlock";
-    private static final String ARCHITECTURECRAFT_TILE_SHAPE_CLASS = "com.elytradev.architecture.common.tile.TileShape";
-    private static final String ARCHITECTURECRAFT_BLOCK_PACKAGE = "com.elytradev.architecture.common.block.";
-    private static final int RANDOM_THINGS_TRANSLUCENT_LUMINOUS_ALPHA = 160;
-    private static final float TEMPORAL_HISTORY_CAMERA_DELTA_RESET = 0.85f;
-    private static final float TEMPORAL_HISTORY_VERTICAL_CAMERA_DELTA_RESET = 4.0f;
-    private static final float TEMPORAL_HISTORY_ACCUMULATED_YAW_RESET = 35.0f;
-    private static final float TEMPORAL_HISTORY_ACCUMULATED_PITCH_RESET = 25.0f;
-    private static final ShaderBlendMode OIT_COEFFICIENT_BLEND = new ShaderBlendMode(true, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
-    private static final ShaderBlendMode WATER_BLEND_MODE = new ShaderBlendMode(true, GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA);
-    private static final ShaderBlendMode BLOCK_ENTITY_TRANSLUCENT_BLEND = new ShaderBlendMode(true, GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
-    private static final float PORTAL_NETHER_FOG_DENSITY = 0.08f;
-    private static final float[] PORTAL_NETHER_FOG_COLOR = {0.20f, 0.03f, 0.03f};
-    private static final float NETHER_SHADER_FOG_COLOR_SCALE = 0.25f;
-    private static final float SHADER_OVERWORLD_FOG_START_RATIO = 0.85f;
-    private static int maxDrawBuffers = -1;
-    private static int maxShaderStorageBufferBindings = -1;
-    private static boolean shaderStorageBuffersKnownUnbound = true;
-    private static boolean celeritasShadowCameraWarningLogged;
-
-    private final PingPongManager pingPongManager = new PingPongManager();
-    private final IrisLightmapTexture irisLightmapTexture = new IrisLightmapTexture();
-    private final Map<RenderPass, PipelineProgram> programs = new EnumMap<>(RenderPass.class);
-    private final Map<RenderPass, List<LoadedCustomTexture>> customTextures = new EnumMap<>(RenderPass.class);
-    private final Map<ShaderProgramArrayKey, List<LoadedCustomTexture>> customArrayTextures = new HashMap<>();
-    private final UniformRegistry uniformRegistry = new UniformRegistry();
-    private final Map<String, float[]> customUniformScalarScratch = new HashMap<>();
-    private ShadowFramebuffer shadowFramebuffer;
-    private ShaderProperties shaderProperties = emptyShaderProperties();
-    private ShaderPackDirectives packDirectives = emptyShaderProperties().packDirectives();
-    private ShaderProgramSet programSet;
-    private ShaderMap shaderMap;
-    private ShaderImageSet shaderImages = ShaderImageSet.empty();
-    private ShaderStorageBufferSet shaderStorageBuffers = ShaderStorageBufferSet.empty();
-    private final ConcurrentMap<Long, BlockPos> syntheticLightCandidates = new ConcurrentHashMap<>();
-    private final Set<String> coloredLightAuditKeys = ConcurrentHashMap.newKeySet();
-    private final AtomicInteger coloredLightAuditCount = new AtomicInteger();
-    private final Map<ProgramArrayId, List<ComputeProgram>> computeProgramArrays = new EnumMap<>(ProgramArrayId.class);
-    private List<ComputeProgram> shadowComputePrograms = List.of();
-    private List<ComputeProgram> finalComputePrograms = List.of();
-    private final Map<ProgramArrayId, FullscreenProgramArray> fullscreenProgramArrays = new EnumMap<>(ProgramArrayId.class);
-    private final Map<ProgramArrayId, List<FullscreenArrayProgram>> fullscreenArrayPrograms = new EnumMap<>(ProgramArrayId.class);
-    private final Map<RenderGlobal, Map<World, ViewFrustum>> vanillaViewFrustums = new IdentityHashMap<>();
-    private final Map<RenderGlobal, Map<World, Integer>> vanillaViewFrustumRenderDistances = new IdentityHashMap<>();
-    private final Map<ViewFrustum, Long> vanillaViewFrustumChunkPositionKeys = new IdentityHashMap<>();
-    private final Deque<Object[]> vanillaViewFrustumStateStack = new ArrayDeque<>();
-    private final Map<String, CompiledPipelineState> compiledPipelineCache = new LinkedHashMap<>() {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, CompiledPipelineState> eldest) {
-            if (size() <= COMPILED_PIPELINE_CACHE_LIMIT) {
-                return false;
-            }
-            eldest.getValue().delete();
-            MainMod.LOGGER.info("[Pipeline] Evicted cached compiled shader programs: {}", eldest.getKey());
-            return true;
-        }
-    };
-    private final NothiriumShadowRenderer nothiriumShadowRenderer = new NothiriumShadowRenderer();
-    private final AusmBloomRenderer bloomRenderer = new AusmBloomRenderer();
-    private final Set<ShaderChunkRefresh> pendingShaderChunkRefreshes = new LinkedHashSet<>();
-    private final Set<ClientChunkRenderRefresh> pendingClientChunkRenderRefreshes = new LinkedHashSet<>();
-    private final Map<WorldClient, Map<Long, ClientChunkRenderRefresh>> pendingClientChunkRenderRefreshLookupByWorld = new IdentityHashMap<>();
-    private final Map<WorldClient, LinkedHashSet<ClientChunkRenderRefresh>> pendingClientChunkRenderRefreshesByWorld = new IdentityHashMap<>();
-    private final Map<WorldClient, Map<Long, Long>> recentlyCompletedClientChunkRenderRefreshes = new IdentityHashMap<>();
-    private long recentlyCompletedClientChunkRenderRefreshLastPruneFrame = Long.MIN_VALUE;
-    private final ConcurrentMap<String, Boolean> bloomResourceGeometryStateCache = new ConcurrentHashMap<>();
-    private final Set<String> bloomResourceGeometryScansInProgress = ConcurrentHashMap.newKeySet();
-    private final Set<String> blockcrafteryTransparencyProbeKeys = ConcurrentHashMap.newKeySet();
-    private final AtomicInteger blockcrafteryTransparencyProbeCount = new AtomicInteger();
-    private final ThreadLocal<Map<FramedMaterialKey, FramedMaterialState>> framedMaterialCompileCache = new ThreadLocal<>();
-    private final ThreadLocal<Map<FramedMaterialKey, IBlockState>> actualLightStateCompileCache = new ThreadLocal<>();
-    private final ThreadLocal<BlockcrafteryDecoratedBlockAccess> blockcrafteryBlockAccessCache =
-            ThreadLocal.withInitial(() -> new BlockcrafteryDecoratedBlockAccess(null));
-    private int pendingWorldLoadLightRecalculationAttempts = 0;
-    private int pendingWorldLoadLightRecalculationDelay = 0;
-    private int pendingWorldLoadLightRecalculationDimension = Integer.MIN_VALUE;
-    private int pendingWorldTerrainRefreshAttempts = 0;
-    private int pendingWorldTerrainRefreshDelay = 0;
-    private int pendingWorldTerrainRefreshDimension = Integer.MIN_VALUE;
-    private boolean pendingWorldTerrainRendererReset = false;
-    private boolean pendingWorldTerrainFullRendererReset = false;
-    private boolean pendingWorldTerrainVanillaReload = false;
-    private String activeCompiledPipelineCacheKey;
-    private boolean randomThingsLuminousBlockResolved;
-    private Class<?> randomThingsLuminousBlockClass;
-    private Method randomThingsShouldGlowMethod;
-    private boolean blockcrafteryTileResolved;
-    private Class<?> blockcrafteryTileClass;
-    private Field blockcrafteryTileStateField;
-    private final ConcurrentMap<Class<?>, Method> blockcrafteryStatePropertyMethods = new ConcurrentHashMap<>();
-    private final Set<Class<?>> blockcrafteryMissingStatePropertyMethods = ConcurrentHashMap.newKeySet();
-    private boolean architectureCraftTileResolved;
-    private Class<?> architectureCraftTileClass;
-    private Method architectureCraftGetTileMethod;
-    private Method architectureCraftBaseStateMethod;
-    private Method architectureCraftSecondaryStateMethod;
-    private boolean celeritasShadowCameraResolved;
-    private Class<?> celeritasViewportProviderClass;
-    private Constructor<?> celeritasViewportConstructor;
-    private Constructor<?> celeritasVectorConstructor;
-    private Object celeritasAlwaysVisibleFrustum;
-
-    private final Deque<PassScope> passStack = new ArrayDeque<>();
-    private final Deque<Integer> renderedItemIdStack = new ArrayDeque<>();
-    private final Deque<Boolean> worldPassBypassStack = new ArrayDeque<>();
-    private final Deque<Long> worldPassSerialStack = new ArrayDeque<>();
-    private final Deque<Long> nothiriumPipelineTranslucentFrameStack = new ArrayDeque<>();
-    private final Deque<Long> nothiriumPipelineTranslucentWorldPassSerialStack = new ArrayDeque<>();
-    private final Deque<Boolean> untouchedBetterPortalsVanillaRendererStack = new ArrayDeque<>();
-    private RenderPass activePass = null;
-    private ShaderKey activeShaderKey = null;
-    private WorldRenderingPhase activePhase = WorldRenderingPhase.NONE;
-    private boolean activeProgramTessellated = false;
-    private boolean activeProgramGeometric = false;
-    private WorldRenderingPhase overridePhase = null;
-    private volatile boolean isPipelineActive = false;
-    private boolean shaderlessWorldPassActive = false;
-    private int vanillaParticleRecoveryFrames = 0;
-    private String activePackName = "(internal)";
-    private float centerDepth = 1.0f;
-    private float centerDepthSmooth = 1.0f;
-    private int centerDepthSmoothTexture = -1;
-    private int noiseTexture = -1;
-    private final FloatBuffer centerDepthTextureBuffer = org.lwjgl.BufferUtils.createFloatBuffer(1);
-    private final FloatBuffer fogColorBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
-    private final FloatBuffer dhProjectionBuffer = org.lwjgl.BufferUtils.createFloatBuffer(16);
-    private final FloatBuffer dhProjectionInverseBuffer = org.lwjgl.BufferUtils.createFloatBuffer(16);
-    private final FloatBuffer dhModelViewBuffer = org.lwjgl.BufferUtils.createFloatBuffer(16);
-    private final FloatBuffer dhModelViewProjectionBuffer = org.lwjgl.BufferUtils.createFloatBuffer(16);
-    private final float[] dhMatrixScratch = new float[16];
-    private final float[] dhModelOffset = new float[]{0.0f, 0.0f, 0.0f};
-    private RenderPass currentDistantHorizonsPass = RenderPass.DH_TERRAIN;
-    private ShaderProgram currentDistantHorizonsProgram = null;
-    private boolean currentDistantHorizonsFallbackProgram = false;
-    private boolean renderingDistantHorizonsPresentation = false;
-    private Framebuffer distantHorizonsPresentationTarget = null;
-    private float latestDistantHorizonsPartialTicks = 0.0F;
-    private int distantHorizonsVertexArray = -1;
-    private int distantHorizonsFallbackProgramId = 0;
-    private int distantHorizonsFallbackCombinedMatrixUniform = -1;
-    private int distantHorizonsFallbackProjectionMatrixUniform = -1;
-    private int distantHorizonsFallbackModelViewMatrixUniform = -1;
-    private int distantHorizonsFallbackModelOffsetUniform = -1;
-    private int distantHorizonsFallbackWorldYOffsetUniform = -1;
-    private int distantHorizonsFallbackMircoOffsetUniform = -1;
-    private int distantHorizonsFallbackEarthRadiusUniform = -1;
-    private boolean distantHorizonsFallbackProgramFailed = false;
-    private int distantHorizonsFramebufferId = 0;
-    private int distantHorizonsColorTextureId = 0;
-    private int distantHorizonsDepthTextureId = 0;
-    private boolean distantHorizonsTexturesOwned = false;
-    private int distantHorizonsFramebufferWidth = 0;
-    private int distantHorizonsFramebufferHeight = 0;
-    private long distantHorizonsFramebufferClearFrame = Long.MIN_VALUE;
-    private int distantHorizonsTextureReadbackFramebufferId = 0;
-    private int distantHorizonsCompositeProgramId = 0;
-    private int distantHorizonsCompositeTextureUniform = -1;
-    private int distantHorizonsCompositeDepthUniform = -1;
-    private boolean distantHorizonsCompositeProgramFailed = false;
-    private boolean distantHorizonsFramebufferPendingComposite = false;
-    private int distantHorizonsDiagnosticLogs = 0;
-    private int terrainColorProbeLogs = 0;
-    private int finalColorProbeLogs = 0;
-    private int compositeChainProbeLogs = 0;
-    private int deferredBoundaryProbeLogs = 0;
-    private int preDeferredColorRestoreLogs = 0;
-    private int terrainGridProbeLogs = 0;
-    private int distantHorizonsColorProbeLogs = 0;
-    private int distantHorizonsPassColorProbeLogs = 0;
-    private int pausedPostRenderGlErrorLogs = 0;
-    private int directRecoveredWindowRefreshLogs = 0;
-    private int directPresentationTextureRefreshLogs = 0;
-    private int directPresentationSnapshotLogs = 0;
-    private int guiRecoveredBackgroundLogs = 0;
-    private int preFinalDirectPresentLogs = 0;
-    private boolean preDeferredColorSnapshotThisFrame = false;
-    private DeferredFramebuffer directRecoveredWindowSource = null;
-    private Attachment directRecoveredWindowAttachment = null;
-    private long directRecoveredWindowFrame = Long.MIN_VALUE;
-    private int directRecoveredWindowTargetWidth = 0;
-    private int directRecoveredWindowTargetHeight = 0;
-    private float directRecoveredWindowColorScale = 1.0F;
-    private int directPresentationTexture = -1;
-    private int directPresentationFbo = -1;
-    private int directPresentationWidth = 0;
-    private int directPresentationHeight = 0;
-    private boolean directPresentationValid = false;
-    private long directPresentationFrame = Long.MIN_VALUE;
-    private String directPresentationReason = "";
-    private final java.nio.ByteBuffer distantHorizonsReadbackPixel = org.lwjgl.BufferUtils.createByteBuffer(4);
-    private final ByteBuffer terrainProbeColorPixel = org.lwjgl.BufferUtils.createByteBuffer(4);
-    private final FloatBuffer terrainProbeDepthPixel = org.lwjgl.BufferUtils.createFloatBuffer(1);
-    private final FloatBuffer guiModelMatrixProbe = org.lwjgl.BufferUtils.createFloatBuffer(16);
-    private final ByteBuffer terrainProbeBooleanBuffer = org.lwjgl.BufferUtils.createByteBuffer(16);
-    private int currentEntityId = 0;
-    private int currentRenderedItemId = -1;
-    private String currentRenderedItemDebugName = "";
-    private ResourceLocation currentEntityKey = null;
-    private float[] currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
-    private final float[] currentAstralConstellationColor = new float[]{1.0f, 1.0f, 1.0f};
-    private final float[] currentAstralTierColor = new float[]{1.0f, 1.0f, 1.0f};
-    private float currentAstralSolarEclipseFactor;
-    private float currentAlphaTestReference = 0.1f;
-    private float shadowMapDistance = 128.0f;
-    private float voxelDistance = 0.0f;
-    private float shadowDistanceRenderMul = -1.0f;
-    private float shadowIntervalSize = 2.0f;
-    private float sunPathRotation = 0.0f;
-    private float centerDepthHalfLife = 1.0f;
-    private float eyeBrightnessHalfLife = 3.0f;
-    private float wetnessHalfLife = 600.0f;
-    private float drynessHalfLife = 200.0f;
-    private final float[] eyeBrightnessSmooth = new float[]{0.0f, 0.0f};
-    private boolean eyeBrightnessSmoothInitialized = false;
-    private float wetnessSmooth = 0.0f;
-    private boolean wetnessSmoothInitialized = false;
-    private final float[] endFlashPosition = {0.0f, 0.0f, 0.0f};
-    private float endFlashIntensity = 0.0f;
-    private float previousEndFlashIntensity = 0.0f;
-    private float endFlashYawDegrees = 0.0f;
-    private float endFlashPitchDegrees = 0.0f;
-    private boolean shadowPolygonOffset = true;
-    private float shadowPolygonOffsetFactor = 1.1f;
-    private float shadowPolygonOffsetUnits = 4.0f;
-    private int shadowFrameCount = 1_000_000;
-    private long lastShadowFrameId = -1L;
-    private int lastShadowRenderDimensionId = Integer.MIN_VALUE;
-    private long lastShadowRenderWorldTime = Long.MIN_VALUE;
-    private double lastShadowRenderX = Double.NaN;
-    private double lastShadowRenderY = Double.NaN;
-    private double lastShadowRenderZ = Double.NaN;
-    private long pipelineFrameId = 0L;
-    private World cpuLightTileEntitySnapshotWorld = null;
-    private long cpuLightTileEntitySnapshotFrame = Long.MIN_VALUE;
-    private List<TileEntity> cpuLightTileEntitySnapshot = java.util.Collections.emptyList();
-    private int cpuLightTileEntityScanCursor = 0;
-    private final int[] cpuLightProjectRedVoxelIds = new int[8];
-    private final Set<Long> cpuLightWrittenVoxels = new HashSet<>();
-    private World shadowBlockEntityBoundsCacheWorld = null;
-    private final Map<TileEntity, ShadowBlockEntityBounds> shadowBlockEntityBoundsCache = new IdentityHashMap<>();
-    private World cpuLightBlockScanWorld = null;
-    private int cpuLightBlockScanCursor = 0;
-    private final long pipelineStartNanos = System.nanoTime();
-    private long lastPipelineFrameNanos = pipelineStartNanos;
-    private float currentFrameTime = 0.016f;
-    private int textureReloadCount = 0;
-    private float currentChunkFade = 1.0f;
-    private long chunkFadeWarmupUntilFrame = 0L;
-    private final Map<ChunkFadeKey, ChunkFadeState> chunkFadeStates = new LinkedHashMap<>();
-    private boolean terrainRebuiltDuringLastInitialization = false;
-    private boolean terrainCacheReusableDuringLastInitialization = false;
-    private float frameTimeCounter = 0.0f;
-    private float frameTimeSmooth = 0.016f;
-    private boolean frameTimeSmoothInitialized = false;
-    private final float[] cameraPosition = {0.0f, 0.0f, 0.0f};
-    private final float[] previousCameraPosition = {0.0f, 0.0f, 0.0f};
-    private final double[] cameraPositionUnshifted = {0.0, 0.0, 0.0};
-    private final double[] previousCameraPositionUnshifted = {0.0, 0.0, 0.0};
-    private double cameraShiftX = 0.0;
-    private double cameraShiftZ = 0.0;
-    private boolean temporalHistoryInitialized = false;
-    private int temporalHistoryDimensionId = Integer.MIN_VALUE;
-    private float previousTemporalYaw = 0.0f;
-    private float previousTemporalPitch = 0.0f;
-    private float accumulatedTemporalYaw = 0.0f;
-    private float accumulatedTemporalPitch = 0.0f;
-    private int temporalHistoryResetLogs = 0;
-    private String temporalHistoryResetReason = "";
-    private float temporalHistoryResetVelocity = 0.0f;
-    private float temporalHistoryResetYaw = 0.0f;
-    private float temporalHistoryResetPitch = 0.0f;
-    private int mainViewSwapTemporalResetDimensionId = Integer.MIN_VALUE;
-    private boolean pendingPersistentHistoryClear = false;
-    private String pendingPersistentHistoryClearReason = "";
-    private int persistentHistoryClearLogs = 0;
-    private long terrainLayerCountFrame = Long.MIN_VALUE;
-    private int terrainOpaqueLayerCount = 0;
-    private int terrainOpaqueDrawCount = 0;
-    private int hardwareCapabilityLogs = 0;
-    private int hardwareTerrainFallbackLogs = 0;
-    private int zeroOpaqueTerrainFrames = 0;
-    private int sparseOpaqueTerrainFrames = 0;
-    private boolean hardwareSafeVanillaTerrain = false;
-    private String hardwareSafeVanillaTerrainReason = "";
-    private boolean softVanillaTerrainRenderer = false;
-    private String softVanillaTerrainRendererReason = "";
-    private boolean shaderedNothiriumGlobalBypass = false;
-    private String shaderedNothiriumGlobalBypassReason = "";
-    private int shaderedNothiriumGlobalBypassLogs = 0;
-    private World shaderedNothiriumGlobalBypassPrimedWorld = null;
-    private RenderGlobal shaderedNothiriumGlobalBypassPrimedRenderGlobal = null;
-    private int positiveVanillaTerrainProbeLogs = 0;
-    private int positiveNothiriumTerrainProbeLogs = 0;
-    private boolean zeroOpaqueTerrainRecoveryRequested = false;
-    private int hardwareSafeVanillaTerrainRefreshCooldown = 0;
-    private int compositeInvalidFallbackFrames = 0;
-    private long compositeInvalidFallbackSnapshotFrame = Long.MIN_VALUE;
-    private boolean compositeInvalidFallbackSnapshotHasScene = false;
-    private int compositeInvalidFallbackLogs = 0;
-    private int compositeInvalidRestoreLogs = 0;
-    private int sparseStartupPresentationHoldLogs = 0;
-    private int sparseStartupPresentationHoldFrames = 0;
-    private int softVanillaPresentationProbeLogs = 0;
-    private int softVanillaLayerTimingLogs = 0;
-    private int softVanillaSpecialBlockProbeLogs = 0;
-    private int softVanillaFrameTimingLogs = 0;
-    private long currentWorldFrameStartNanos = Long.MIN_VALUE;
-    private long currentWorldFrameReadyNanos = Long.MIN_VALUE;
-    private long currentWorldFrameFinishStartNanos = Long.MIN_VALUE;
-    private long currentWorldFrameAfterNativeBloomNanos = Long.MIN_VALUE;
-    private long currentWorldFrameBlitStartNanos = Long.MIN_VALUE;
-    private int nothiriumHybridVanillaMaintenanceFrames = 0;
-    private int nothiriumHybridVanillaMaintenanceLogs = 0;
-    private String nothiriumHybridVanillaMaintenanceReason = "";
-    private int nothiriumMainVanillaDrawPathFrames = 0;
-    private int nothiriumMainVanillaDrawPathLogs = 0;
-    private String nothiriumMainVanillaDrawPathReason = "";
-    private int nothiriumMainSetupBridgeLogs = 0;
-    private long nothiriumShaderedMainSetupFrame = Long.MIN_VALUE;
-    private long nothiriumSparseMainTerrainFrame = Long.MIN_VALUE;
-    private long nothiriumShaderedMainPostCompileSetupFrame = Long.MIN_VALUE;
-    private long nothiriumProviderSupplementCompileFrame = Long.MIN_VALUE;
-    private int nothiriumProviderSupplementCompileLayerMask = 0;
-    private long nothiriumNonSolidRepairCutoutMippedFrame = Long.MIN_VALUE;
-    private long nothiriumNonSolidRepairCutoutFrame = Long.MIN_VALUE;
-    private long nothiriumNonSolidRepairTranslucentFrame = Long.MIN_VALUE;
-    private long nothiriumSparseMainRepairFrame = Long.MIN_VALUE;
-    private long nothiriumNonSolidProviderDrawCutoutMippedUntilFrame = Long.MIN_VALUE;
-    private long nothiriumNonSolidProviderDrawCutoutUntilFrame = Long.MIN_VALUE;
-    private long nothiriumNonSolidProviderDrawTranslucentUntilFrame = Long.MIN_VALUE;
-    private long nothiriumSparseMainProviderDrawUntilFrame = Long.MIN_VALUE;
-    private int nothiriumNonSolidRepairLogs = 0;
-    private int nothiriumSparseMainRepairLogs = 0;
-    private int nothiriumNonSolidProviderDrawLogs = 0;
-    private int nothiriumSparseMainProviderDrawLogs = 0;
-    private World lastHardwareSafeVanillaTerrainRefreshWorld = null;
-    private int lastHardwareSafeVanillaTerrainRefreshChunkX = Integer.MIN_VALUE;
-    private int lastHardwareSafeVanillaTerrainRefreshChunkZ = Integer.MIN_VALUE;
-    private boolean lastHardwareSafeVanillaTerrainLoadedNearPlayer = false;
-    private boolean pipelineTerrainFormatSupported = false;
-    private boolean deferredPassesRenderedThisFrame = false;
-    private boolean preparePassesRenderedBeforeShadowThisFrame = false;
-    private boolean preTranslucentDepthCopiedThisFrame = false;
-    private boolean preHandDepthCopiedThisFrame = false;
-    private boolean setupComputePending = false;
-    private boolean terrainCullOverrideActive = false;
-    private boolean previousTerrainCullEnabled = true;
-    private boolean terrainOcclusionOverrideActive = false;
-    private boolean previousRenderChunksManyForOcclusion = true;
-    private boolean nothiriumPipelineBlockFormatActive = false;
-    private boolean worldFrameActive = false;
-    private Framebuffer externalWorldFramebufferTarget = null;
-    private boolean renderingShadowMap = false;
-    private boolean renderingGui = false;
-    private long guiTargetContentFrame = Long.MIN_VALUE;
-    private boolean shadowMapPopulated = false;
-    private boolean shadowMapUsable = false;
-    private boolean shadowMapSparseForSampling = false;
-    private int shadowMapCoverageStableFrames = 0;
-    private int nothiriumShadowInvalidFrames = 0;
-    private int nothiriumShadowSuppressedFrames = 0;
-    private int nothiriumShadowSuppressionLogs = 0;
-    private World pendingBetterPortalsPortalBlockWorld;
-    private BlockPos pendingBetterPortalsPortalBlockPos;
-    private IBlockState pendingBetterPortalsPortalBlockOldState;
-    private IBlockState pendingBetterPortalsPortalBlockNewState;
-    private int pendingBetterPortalsPortalBlockRefreshDelay = -1;
-    private int pendingBetterPortalsPortalBlockChangeCount = 0;
-    private World lastBetterPortalsPortalBlockRefreshWorld;
-    private BlockPos lastBetterPortalsPortalBlockRefreshPos;
-    private int lastBetterPortalsPortalBlockRefreshDimension = Integer.MIN_VALUE;
-    private long lastBetterPortalsPortalBlockRefreshMillis = 0L;
-    private RenderGlobal activeVanillaViewFrustumRenderGlobal = null;
-    private World activeVanillaViewFrustumWorld = null;
-    private int activeVanillaViewFrustumRenderDistanceChunks = -1;
-    private boolean betterPortalsViewFrustumUpdateWarningLogged = false;
-    private int cameraFrustumSyncLogs = 0;
-    private int clientChunkRenderRefreshLogs = 0;
-    private World lastCameraFrustumSyncWorld = null;
-    private ViewFrustum lastCameraFrustumSyncViewFrustum = null;
-    private int lastCameraFrustumSyncChunkX = Integer.MIN_VALUE;
-    private int lastCameraFrustumSyncChunkZ = Integer.MIN_VALUE;
-    private int lastStableMainWorldVanillaRenderDistanceChunks = -1;
-    private int lastObservedRenderDistanceChunks = -1;
-    private World lastTerrainTransitionWorld = null;
-    private int lastTerrainTransitionDimension = Integer.MIN_VALUE;
-    private long lastTerrainTransitionMillis = 0L;
-    private boolean betterPortalsChunkUpdateWarningLogged = false;
-    private boolean shadowHealthLogged = false;
-    private int shadowHealthLogAttempts = 0;
-    private int shadowMapInvalidLogs = 0;
-    private int shadowMapSuppressedLogs = 0;
-    private int guiRenderDepth = 0;
-    private int guiEntityPreviewStateDepth = 0;
-    private int guiModelStateProbeLogs = 0;
-    private int guiEntityStateProbeLogs = 0;
-    private int guiItemModelProbeLogs = 0;
-    private final Deque<String> guiItemProbeNames = new ArrayDeque<>();
-    private int waterRoutingProbeLogs = 0;
-    private int waterAttachmentDeltaProbeLogs = 0;
-    private final ByteBuffer[] waterAttachmentBefore = new ByteBuffer[2];
-    private final ByteBuffer[] waterAttachmentAfter = new ByteBuffer[2];
-    private final int[] waterAttachmentProbeWidths = new int[2];
-    private final int[] waterAttachmentProbeHeights = new int[2];
-    private boolean waterAttachmentDeltaProbeActive = false;
-    private int handItemDrawStateLogs = 0;
-    private int handGbufferProbeLogs = 0;
-    private int handPassBindLogs = 0;
-    private int shaderlessLightStateProbeLogs = 0;
-    private int shaderlessSkyGuiWorldProbeLogs = 0;
-    private int shaderlessSkyGuiScreenProbeLogs = 0;
-    private int astralVoidSkyProbeLogs = 0;
-    private int shaderlessAstralSkyColorLogs = 0;
-    private int freshSkyProbeLogs = 0;
-    private int freshSkyGuiProbeLogs = 0;
-    private int shaderedVoidSkyProbeLogs = 0;
-    private int shaderedVoidSkyTargetProbeLogs = 0;
-    private int shaderedVoidSkyAttachmentProbeLogs = 0;
-    private int directColorPresentLogs = 0;
-    private int directWindowPresentLogs = 0;
-    private int presentationBoundaryLogs = 0;
-    private int skyDomeProbeLogs = 0;
-    private int skyDomeGuiProbeLogs = 0;
-    private int skyDomePauseProbeLogs = 0;
-    private int worldPassSkyDomeProbeLogs = 0;
-    private int worldPassSkyDomeGuiProbeLogs = 0;
-    private int worldPassSkyDomePauseProbeLogs = 0;
-    private int shaderlessSolidTerrainSkyProbeLogs = 0;
-    private int shaderlessSolidTerrainSkyGuiProbeLogs = 0;
-    private int shaderlessSolidTerrainSkyPauseProbeLogs = 0;
-    private int voidSkyStageProbeLogs = 0;
-    private int nothiriumFogProbeLogs = 0;
-    private int nothiriumRenderProbeLogs = 0;
-    private int nothiriumFogGuardLogs = 0;
-    private int shaderlessNothiriumTerrainFogGuardDepth = 0;
-    private boolean shaderlessNothiriumTerrainFogPreviouslyEnabled = false;
-    private int shaderlessVoidLightRepairLogs = 0;
-    private int shaderlessVoidSkyPixelProbeLogs = 0;
-    private int shaderlessVoidSkyRepairLogs = 0;
-    private int shaderlessVoidVanillaLowerSkyLogs = 0;
-    private int shaderlessWorldFramebufferHandoffLogs = 0;
-    private int shaderlessSkyRgbFillLogs = 0;
-    private int shaderlessSkyRgbFillGuiLogs = 0;
-    private int shaderlessSkyRgbFillPauseLogs = 0;
-    private int shaderlessLowerSkyMeshLogs = 0;
-    private int shaderlessLowerSkyMeshGuiLogs = 0;
-    private int shaderlessLowerSkyMeshPauseLogs = 0;
-    private int voidWorldSkyRendererChainLogs = 0;
-    private int voidWorldSkyRendererChainGuiLogs = 0;
-    private int voidWorldSkyRendererChainPauseLogs = 0;
-    private int shaderlessWorldFramebufferForUi = 0;
-    private int shaderlessWorldFramebufferWidth = 0;
-    private int shaderlessWorldFramebufferHeight = 0;
-    private long shaderlessWorldFramebufferFrame = Long.MIN_VALUE;
-    private Vec3d lastShaderlessAstralVoidSkyColor = null;
-    private boolean shaderlessTerrainLightmapCoordsSaved = false;
-    private float shaderlessTerrainPreviousLightmapX = 0.0F;
-    private float shaderlessTerrainPreviousLightmapY = 0.0F;
-    private int inactiveSkyPipelineProbeLogs = 0;
-    private int activeSkyPipelineProbeLogs = 0;
-    private int vanillaRecoveryFrames = 0;
-    private int pendingBloomTerrainRefreshAttempts = 0;
-    private int pendingBloomTerrainRefreshDelay = 0;
-    private String pendingBloomTerrainRefreshReason = "";
-    private boolean runningBloomTerrainRefresh = false;
-    private int bloomZeroGeometryFrames = 0;
-    private int bloomZeroGeometryRefreshCooldown = 0;
-    private long clientRenderFrameNanos = Long.MIN_VALUE;
-    private boolean shaderlessCustomSkyBackingThisFrame = false;
-    private int currentWorldPass = 0;
-    private float currentWorldPartialTicks = 0.0F;
-    private boolean bloomLayerRenderedThisWorldPass = false;
-    private boolean bloomLayerRenderedThisWorldFrame = false;
-    private boolean shaderlessStyleBloomRenderedThisWorldPass = false;
-    private boolean shaderlessStyleBloomRenderedThisWorldFrame = false;
-    private boolean pendingDeferredNativeBloom = false;
-    private double pendingDeferredBloomPartialTicks = 0.0D;
-    private int pendingDeferredBloomPass = 0;
-    private int betterPortalsPipelineLogs = 0;
-    private int shaderlessBloomHookLogs = 0;
-    private int visibleBloomDiagLogs = 0;
-    private int worldLayerDiagLogs = 0;
-    private int externalOverlayLogs = 0;
-    private int renderGlobalLoadRendererLogs = 0;
-    private int vanillaTerrainRendererCreationLogs = 0;
-    private int inactiveBetterPortalsTerrainSkipLogs = 0;
-    private int terrainDiagnosticLogs = 0;
-    private int steadyVanillaTerrainDiagnosticLogs = 0;
-    private int shaderlessNothiriumLoadRendererReloadLogs = 0;
-    private final Set<String> decoratedLightAuditKeys = ConcurrentHashMap.newKeySet();
-    private final AtomicInteger decoratedLightAuditCount = new AtomicInteger();
-    private final Set<String> framedBlockDiagnosticKeys = ConcurrentHashMap.newKeySet();
-    private final AtomicInteger blockcrafteryDiagnosticCount = new AtomicInteger();
-    private final AtomicInteger architectureCraftDiagnosticCount = new AtomicInteger();
-    private final AtomicInteger framedPriorityDiagnosticCount = new AtomicInteger();
-    private final Set<String> currentProblemProbeKeys = ConcurrentHashMap.newKeySet();
-    private final Set<String> softVanillaSpecialBlockProbeKeys = ConcurrentHashMap.newKeySet();
-    private final Set<Long> shaderlessBloomMetadataKnownChunkLayers = ConcurrentHashMap.newKeySet();
-    private final Set<Long> shaderlessBloomMetadataChunkLayers = ConcurrentHashMap.newKeySet();
-    private final AtomicInteger currentProblemProbeCount = new AtomicInteger();
-    private final AtomicInteger activeLightOrIdProbeCount = new AtomicInteger();
-    private final AtomicInteger waterLikeMaterialProbeCount = new AtomicInteger();
-    private long lastShaderlessNothiriumLoadRendererReloadMillis = 0L;
-    private int lastShaderlessNothiriumLoadRendererReloadDimension = Integer.MIN_VALUE;
-    private long nextWorldPassSerial = 0L;
-    private long currentWorldPassSerial = Long.MIN_VALUE;
-    private long nothiriumPipelineTranslucentFrame = Long.MIN_VALUE;
-    private long nothiriumPipelineTranslucentWorldPassSerial = Long.MIN_VALUE;
-    private long nothiriumPipelineTranslucentDrawnFrame = Long.MIN_VALUE;
-    private boolean shaderlessBloomRenderedThisWorldPass = false;
-    private boolean shaderlessBloomRenderedThisWorldFrame = false;
-    private boolean shaderlessBloomVertexFormatRefreshRequested = false;
-    private boolean shaderlessBloomExtractionActive = false;
-    private boolean shaderlessBloomExtractionBootstrapActive = false;
-    private int shaderlessTerrainSolidCount = -1;
-    private int shaderlessTerrainCutoutMippedCount = -1;
-    private int shaderlessTerrainCutoutCount = -1;
-    private int shaderlessTerrainTranslucentCount = -1;
-    private int shaderlessTerrainBloomCount = -1;
-    private final IntBuffer viewportBuffer = org.lwjgl.BufferUtils.createIntBuffer(16);
-
-    private PipelineContext() {
-        registerBaseUniforms();
-    }
-
-    private static final class PassScope {
-        private final boolean bound;
-        private final RenderPass previousPass;
-        private final ShaderKey previousShaderKey;
-        private final WorldRenderingPhase previousPhase;
-        private final boolean previousProgramTessellated;
-        private final boolean previousProgramGeometric;
-
-        private PassScope(boolean bound, RenderPass previousPass, ShaderKey previousShaderKey, WorldRenderingPhase previousPhase, boolean previousProgramTessellated, boolean previousProgramGeometric) {
-            this.bound = bound;
-            this.previousPass = previousPass;
-            this.previousShaderKey = previousShaderKey;
-            this.previousPhase = previousPhase;
-            this.previousProgramTessellated = previousProgramTessellated;
-            this.previousProgramGeometric = previousProgramGeometric;
-        }
-
-        private boolean bound() {
-            return bound;
-        }
-
-        private RenderPass previousPass() {
-            return previousPass;
-        }
-
-        private ShaderKey previousShaderKey() {
-            return previousShaderKey;
-        }
-
-        private WorldRenderingPhase previousPhase() {
-            return previousPhase;
-        }
-
-        private boolean previousProgramTessellated() {
-            return previousProgramTessellated;
-        }
-
-        private boolean previousProgramGeometric() {
-            return previousProgramGeometric;
-        }
-    }
-
-    private static final class CompiledPipelineState {
-        private final ShaderProgramSet programSet;
-        private final ShaderMap shaderMap;
-        private final Map<RenderPass, PipelineProgram> programs;
-        private final Map<ProgramArrayId, List<ComputeProgram>> computeProgramArrays;
-        private final List<ComputeProgram> shadowComputePrograms;
-        private final List<ComputeProgram> finalComputePrograms;
-        private final Map<ProgramArrayId, List<FullscreenArrayProgram>> fullscreenArrayPrograms;
-
-        private CompiledPipelineState(
-                ShaderProgramSet programSet,
-                ShaderMap shaderMap,
-                Map<RenderPass, PipelineProgram> programs,
-                Map<ProgramArrayId, List<ComputeProgram>> computeProgramArrays,
-                List<ComputeProgram> shadowComputePrograms,
-                List<ComputeProgram> finalComputePrograms,
-                Map<ProgramArrayId, List<FullscreenArrayProgram>> fullscreenArrayPrograms
-        ) {
-            this.programSet = programSet;
-            this.shaderMap = shaderMap;
-            this.programs = new EnumMap<>(programs);
-            this.computeProgramArrays = new EnumMap<>(computeProgramArrays);
-            this.shadowComputePrograms = List.copyOf(shadowComputePrograms);
-            this.finalComputePrograms = List.copyOf(finalComputePrograms);
-            this.fullscreenArrayPrograms = new EnumMap<>(fullscreenArrayPrograms);
-        }
-
-        private void delete() {
-            programs.values().forEach(PipelineProgram::delete);
-            computeProgramArrays.values().stream()
-                    .flatMap(List::stream)
-                    .forEach(ComputeProgram::delete);
-            shadowComputePrograms.forEach(ComputeProgram::delete);
-            finalComputePrograms.forEach(ComputeProgram::delete);
-            fullscreenArrayPrograms.values().stream()
-                    .flatMap(List::stream)
-                    .forEach(FullscreenArrayProgram::delete);
-        }
-    }
-
-    public static PipelineContext getInstance() {
-        return INSTANCE;
-    }
-
-    public void beginFramedMaterialCompileCache() {
-        framedMaterialCompileCache.set(new HashMap<>());
-        actualLightStateCompileCache.set(new HashMap<>());
-    }
-
-    public void endFramedMaterialCompileCache() {
-        framedMaterialCompileCache.remove();
-        actualLightStateCompileCache.remove();
-    }
-
-    private void registerBaseUniforms() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-
-        // --- 1. Global / Engine Uniforms ---
-        uniformRegistry.registerInt("worldTime", () -> {
-            World world = renderWorld(mc);
-            return world != null ? (int) (com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L) : 0;
-        });
-
-        uniformRegistry.registerFloat("viewWidth", () -> (float) worldTargetWidth(mc));
-        uniformRegistry.registerFloat("viewHeight", () -> (float) worldTargetHeight(mc));
-        uniformRegistry.registerFloat("pixelSizeX", () -> 1.0f / worldTargetWidth(mc));
-        uniformRegistry.registerFloat("pixelSizeY", () -> 1.0f / worldTargetHeight(mc));
-        uniformRegistry.registerFloat("aspectRatio", () -> (float) worldTargetWidth(mc) / (float) worldTargetHeight(mc));
-        uniformRegistry.registerFloat("aspectRatioInverse", () -> (float) worldTargetHeight(mc) / (float) worldTargetWidth(mc));
-        uniformRegistry.registerFloat("screenBrightness", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.fieldFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)), 0.0F, "field_74333_Y", "gammaSetting"));
-        uniformRegistry.registerInt("hideGUI", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)) ? 1 : 0);
-        uniformRegistry.registerInt("ausmGuiScreen", () -> renderingGuiScreen() ? 1 : 0);
-        uniformRegistry.registerInt("isRightHanded", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.field((com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)), net.minecraft.util.EnumHandSide.class, net.minecraft.util.EnumHandSide.RIGHT, "field_186715_A", "mainHand") == EnumHandSide.RIGHT ? 1 : 0);
-        uniformRegistry.registerInt("firstPersonCamera", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.thirdPersonView(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)) == 0 ? 1 : 0);
-        uniformRegistry.registerInt("currentColorSpace", () -> 0);
-        uniformRegistry.registerFloat("near", () -> 0.05f);
-        uniformRegistry.registerFloat("far", () -> shaderFarPlaneDistance(mc));
-        uniformRegistry.registerFloat("fogStart", () -> effectiveFogStart(mc));
-        uniformRegistry.registerFloat("fogEnd", () -> effectiveFogEnd(mc));
-        uniformRegistry.registerFloat("fogDensity", () -> effectiveFogDensity(mc));
-        uniformRegistry.registerFloat("iris_FogStart", () -> effectiveFogStart(mc));
-        uniformRegistry.registerFloat("iris_FogEnd", () -> effectiveFogEnd(mc));
-        uniformRegistry.registerFloat("iris_FogDensity", () -> Math.max(0.0f, effectiveFogDensity(mc)));
-        uniformRegistry.registerInt("fogMode", () -> effectiveFogMode(mc));
-        uniformRegistry.registerInt("fogShape", () -> 1);
-        uniformRegistry.registerFloat("rainStrength", () -> rainStrength(mc));
-        uniformRegistry.registerFloat("thunderStrength", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldThunderStrength(renderWorld(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) : 0.0f);
-        uniformRegistry.registerFloat("wetness", () -> wetnessSmooth);
-        uniformRegistry.registerInt("biome", () -> currentBiomeExpressionId(mc));
-        uniformRegistry.registerInt("biome_category", () -> currentBiomeCategory(mc));
-        uniformRegistry.registerInt("biome_precipitation", () -> currentBiomePrecipitation(mc));
-        uniformRegistry.registerFloat("rainfall", () -> currentBiomeRainfall(mc));
-        uniformRegistry.registerFloat("temperature", () -> currentBiomeTemperature(mc));
-        uniformRegistry.registerFloat("BiomeTemp", () -> currentBiomeTemperature(mc));
-        uniformRegistry.registerInt("BIOME_NETHER_WASTES", () -> BIOME_NETHER_WASTES_ID);
-        uniformRegistry.registerInt("BIOME_CRIMSON_FOREST", () -> BIOME_CRIMSON_FOREST_ID);
-        uniformRegistry.registerInt("BIOME_WARPED_FOREST", () -> BIOME_WARPED_FOREST_ID);
-        uniformRegistry.registerInt("BIOME_BASALT_DELTAS", () -> BIOME_BASALT_DELTAS_ID);
-        uniformRegistry.registerInt("BIOME_SOUL_SAND_VALLEY", () -> BIOME_SOUL_SAND_VALLEY_ID);
-        uniformRegistry.registerInt("BIOME_PALE_GARDEN", () -> BIOME_PALE_GARDEN_ID);
-        uniformRegistry.registerFloat("blindness", () -> blindness(mc));
-        uniformRegistry.registerFloat("darknessFactor", () -> 0.0f);
-        uniformRegistry.registerFloat("darknessLightFactor", () -> 0.0f);
-        uniformRegistry.registerInt("heavyFog", () -> blindness(mc) > 0.0f ? 1 : 0);
-        uniformRegistry.registerFloat("nightVision", () -> nightVision(mc));
-        uniformRegistry.registerFloat("blindFactor", () -> {
-            float value = clamp01(blindness(mc) * 2.0f - 1.0f);
-            return value * value;
-        });
-        uniformRegistry.registerInt("is_sneaking", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70093_af", "isSneaking"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
-        uniformRegistry.registerInt("is_sprinting", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70051_ag", "isSprinting"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
-        uniformRegistry.registerInt("is_hurt", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), 0, "field_70737_aN", "hurtTime") > 0 ? 1 : 0);
-        uniformRegistry.registerInt("is_invisible", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_82150_aj", "isInvisible"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
-        uniformRegistry.registerInt("is_burning", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70027_ad", "isBurning"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
-        uniformRegistry.registerInt("is_on_ground", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), false, "field_70122_E", "onGround") ? 1 : 0);
-        uniformRegistry.registerInt("isRiding", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_184218_aH", "isRiding"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
-        uniformRegistry.registerInt("isElytraFlying", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_184613_cA", "isElytraFlying"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
-        uniformRegistry.registerInt("feetInWater", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70090_H", "isInWater"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1 : 0);
-        uniformRegistry.registerInt("inSwimmingAnimation", () -> 0);
-        uniformRegistry.registerInt("vehicleInWater", () -> vehicleInWater(mc) ? 1 : 0);
-        uniformRegistry.registerInt("vehicleId", () -> vehicleId(mc));
-        uniformRegistry.registerFloat("sneakSmooth", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70093_af", "isSneaking"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1.0f : 0.0f);
-        uniformRegistry.registerFloat("burningSmooth", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70027_ad", "isBurning"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false) ? 1.0f : 0.0f);
-        uniformRegistry.registerFloat("touchmybody", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), 0, "field_70737_aN", "hurtTime") > 0 ? 1.0f : 0.0f);
-        uniformRegistry.registerFloat("effectStrength", () -> 0.0f);
-        uniformRegistry.registerFloat("playerMood", () -> 0.0f);
-        uniformRegistry.registerFloat("constantMood", () -> 0.0f);
-        uniformRegistry.registerFloat("starter", () -> 1.0f);
-        uniformRegistry.registerFloat("eyeAltitude", () -> cameraPosition[1]);
-        uniformRegistry.registerFloat("centerDepth", () -> centerDepth);
-        uniformRegistry.registerFloat("centerDepthSmooth", () -> centerDepthSmooth);
-        uniformRegistry.registerInt("iris_centerDepthSmooth", () -> TextureBinder.CENTER_DEPTH_SMOOTH_TEXTURE_UNIT);
-        uniformRegistry.registerInt("moonPhase", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((renderWorld(mc)), new String[] {"func_72853_d", "getMoonPhase"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0) : 0);
-        uniformRegistry.registerInt("frameCounter", () -> (int) (pipelineFrameId % 720720L));
-        uniformRegistry.registerInt("frameMod", () -> (int) (pipelineFrameId & 15L));
-        uniformRegistry.registerFloat("framemod2", () -> (float) (pipelineFrameId & 1L));
-        uniformRegistry.registerVec2("taaOffset", () -> taaOffset(mc));
-        uniformRegistry.registerInt("worldDay", () -> {
-            World world = renderWorld(mc);
-            return world != null ? (int) (com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) / 24000L) : 0;
-        });
-        uniformRegistry.registerInt("isSpectator", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) ? 1 : 0);
-        uniformRegistry.registerInt("seaLevel", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((renderWorld(mc)), new String[] {"func_181545_F", "getSeaLevel"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 63) : 63);
-        uniformRegistry.registerInt("bedrockLevel", () -> 0);
-        uniformRegistry.registerInt("heightLimit", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((renderWorld(mc)), new String[] {"func_72800_K", "getHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 256) : 256);
-        uniformRegistry.registerInt("logicalHeightLimit", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(renderWorld(mc), new String[] {"func_72940_L", "getActualHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(renderWorld(mc), new String[] {"func_72800_K", "getHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 256)) : 256);
-        uniformRegistry.registerFloat("cloudHeight", () -> cloudHeight(mc));
-        uniformRegistry.registerInt("hasCeiling", () -> isNetherRenderWorld(mc) ? 1 : 0);
-        uniformRegistry.registerInt("hasSkylight", () -> hasSkylight(mc) ? 1 : 0);
-        uniformRegistry.registerFloat("ambientLight", () -> isNetherRenderWorld(mc) ? 0.1f : 0.0f);
-        uniformRegistry.registerFloat("isDry", () -> currentBiomePrecipitation(mc) == 0 ? 1.0f : 0.0f);
-        uniformRegistry.registerFloat("isRainy", () -> currentBiomePrecipitation(mc) == 1 ? 1.0f : 0.0f);
-        uniformRegistry.registerFloat("isSnowy", () -> currentBiomePrecipitation(mc) == 2 ? 1.0f : 0.0f);
-        uniformRegistry.registerFloat("isPrecipitationRain", () -> currentBiomePrecipitation(mc) == 1 && cameraPositionUnshifted[1] < 96.0 ? 1.0f : 0.0f);
-        uniformRegistry.registerFloat("isEyeInCave", () -> isEyeInCave(mc) ? 1.0f : 0.0f);
-        uniformRegistry.registerInt("renderStage", () -> getPhase().ordinal());
-        uniformRegistry.registerFloat("mc_chunkFade", () -> ENABLE_CHUNK_FADE ? currentChunkFade : 1.0f);
-        uniformRegistry.registerVec3("ausmAstralConstellationColor", () -> currentAstralConstellationColor.clone());
-        uniformRegistry.registerVec3("ausmAstralTierColor", () -> currentAstralTierColor.clone());
-        uniformRegistry.registerFloat("ausmAstralSolarEclipse", () -> currentAstralSolarEclipseFactor);
-        uniformRegistry.registerVec4("ausmVoidSkyParams", () -> new float[]{1.0f, 1.0f, 1.0f, 1.0f});
-        uniformRegistry.registerInt("ausmSimpleVoidWorld", () -> isSimpleVoidWorld(renderWorld(mc)) ? 1 : 0);
-        uniformRegistry.registerInt("ausmSkyboxRepair", () -> isCustomVoidWorldSkyEnabled(renderWorld(mc)) ? 1 : 0);
-        uniformRegistry.registerFloat("dayMoment", () -> dayMoment(mc));
-        uniformRegistry.registerFloat("timeAngle", () -> dayMoment(mc));
-        uniformRegistry.registerFloat("timeBrightness", () -> Math.max((float) Math.sin(dayMoment(mc) * Math.PI * 2.0), 0.0f));
-        uniformRegistry.registerFloat("moonBrightness", () -> Math.max((float) Math.sin(dayMoment(mc) * Math.PI * -2.0), 0.0f));
-        uniformRegistry.registerFloat("shadowFade", () -> shadowFade(mc, 0.23f, 100.0f));
-        uniformRegistry.registerFloat("dayMixer", () -> dayMixer(mc));
-        uniformRegistry.registerFloat("nightMixer", () -> nightMixer(mc));
-        uniformRegistry.registerFloat("dayNightMix", () -> dayNightMix(mc));
-        uniformRegistry.registerFloat("volumetricDayMixer", () -> volumetricDayMixer(mc));
-        uniformRegistry.registerFloat("day", () -> dayHelper(mc));
-        uniformRegistry.registerFloat("night", () -> nightHelper(mc));
-        uniformRegistry.registerFloat("dawnDusk", () -> (1.0f - dayHelper(mc)) - nightHelper(mc));
-        uniformRegistry.registerFloat("shdFade", () -> shadowFade(mc, 0.225f, 40.0f));
-        uniformRegistry.registerFloat("rainFactor", () -> rainStrength(mc));
-        uniformRegistry.registerFloat("rainStrengthS", () -> rainStrength(mc));
-        uniformRegistry.registerFloat("rainStrengthShiningStars", () -> rainStrength(mc));
-        uniformRegistry.registerFloat("rainStrengthS2", () -> rainStrength(mc));
-        uniformRegistry.registerInt("entityId", () -> currentEntityId);
-        uniformRegistry.registerFloat("alphaTestRef", () -> currentAlphaTestReference);
-        uniformRegistry.registerFloat("iris_currentAlphaTest", () -> currentAlphaTestReference);
-        uniformRegistry.registerVec4("entityColor", () -> currentEntityColor);
-        uniformRegistry.registerInt("heldItemId", () -> heldItemId(heldMainStack(mc)));
-        uniformRegistry.registerInt("heldItemId2", () -> heldItemId(heldOffhandStack(mc)));
-        uniformRegistry.registerInt("heldBlockLightValue", () -> heldBlockLightValue(heldMainStack(mc)));
-        uniformRegistry.registerInt("heldBlockLightValue2", () -> heldBlockLightValue(heldOffhandStack(mc)));
-        uniformRegistry.registerVec3("heldBlockLightColor", () -> heldBlockLightColor(heldMainStack(mc)));
-        uniformRegistry.registerVec3("heldBlockLightColor2", () -> heldBlockLightColor(heldOffhandStack(mc)));
-        uniformRegistry.registerInt("currentSelectedBlockId", () -> currentSelectedBlockId(mc));
-        uniformRegistry.registerVec3("currentSelectedBlockPos", () -> currentSelectedBlockPos(mc, cameraPositionUnshifted));
-        uniformRegistry.registerInt("isEyeInWater", () -> eyeFluidState(mc));
-        uniformRegistry.registerVec2i("eyeBrightness", () -> eyeBrightness(mc));
-        uniformRegistry.registerVec2i("eyeBrightnessSmooth", this::smoothedEyeBrightness);
-        uniformRegistry.registerFloat("eyeBrightnessM", () -> eyeBrightness(mc)[1] / 240.0f);
-        uniformRegistry.registerFloat("currentPlayerHealth", () -> currentPlayerHealth(mc));
-        uniformRegistry.registerFloat("maxPlayerHealth", () -> maxPlayerHealth(mc));
-        uniformRegistry.registerFloat("currentPlayerHunger", () -> currentPlayerHunger(mc));
-        uniformRegistry.registerFloat("maxPlayerHunger", () -> 20.0f);
-        uniformRegistry.registerFloat("currentPlayerAir", () -> currentPlayerAir(mc));
-        uniformRegistry.registerFloat("maxPlayerAir", () -> maxPlayerAir(mc));
-        uniformRegistry.registerFloat("currentPlayerArmor", () -> currentPlayerArmor(mc));
-        uniformRegistry.registerFloat("maxPlayerArmor", () -> 50.0f);
-        uniformRegistry.registerFloat("pi", () -> (float) Math.PI);
-        uniformRegistry.registerInt("anisotropicFiltering", ShaderSamplerState::anisotropicFilteringUniform);
-        uniformRegistry.registerInt("blockEntityId", () -> -1);
-        uniformRegistry.registerInt("currentRenderedItemId", () -> currentRenderedItemId);
-
-        // --- 2. Matrix Uniforms ---
-        uniformRegistry.registerMatrix4("gbufferModelView", MatrixState::modelView);
-        uniformRegistry.registerMatrix4("modelViewMatrix", MatrixState::modelView);
-        uniformRegistry.registerMatrix4("iris_ModelViewMatrix", MatrixState::modelView);
-        uniformRegistry.registerMatrix4("iris_ModelViewMat", MatrixState::modelView);
-        uniformRegistry.registerMatrix4("gbufferModelViewInverse", MatrixState::modelViewInverse);
-        uniformRegistry.registerMatrix4("modelViewMatrixInverse", MatrixState::modelViewInverse);
-        uniformRegistry.registerMatrix4("iris_ModelViewMatrixInverse", MatrixState::modelViewInverse);
-        uniformRegistry.registerMatrix4("iris_ModelViewMatInverse", MatrixState::modelViewInverse);
-        uniformRegistry.registerMatrix4("gbufferPreviousModelView", MatrixState::previousModelView);
-        uniformRegistry.registerMatrix4("gbufferProjection", MatrixState::projection);
-        uniformRegistry.registerMatrix4("projectionMatrix", MatrixState::projection);
-        uniformRegistry.registerMatrix4("iris_ProjectionMatrix", MatrixState::projection);
-        uniformRegistry.registerMatrix4("iris_ProjMat", MatrixState::projection);
-        uniformRegistry.registerMatrix4("u_ModelViewProjectionMatrix", MatrixState::modelViewProjection);
-        uniformRegistry.registerMatrix4("gbufferProjectionInverse", MatrixState::projectionInverse);
-        uniformRegistry.registerMatrix4("projectionMatrixInverse", MatrixState::projectionInverse);
-        uniformRegistry.registerMatrix4("iris_ProjectionMatrixInverse", MatrixState::projectionInverse);
-        uniformRegistry.registerMatrix4("iris_ProjMatInverse", MatrixState::projectionInverse);
-        uniformRegistry.registerMatrix4("gbufferPreviousProjection", MatrixState::previousProjection);
-        uniformRegistry.registerMatrix4("dhProjection", () -> dhProjectionBuffer);
-        uniformRegistry.registerMatrix4("dhProjectionInverse", () -> dhProjectionInverseBuffer);
-        uniformRegistry.registerMatrix4("dhPreviousProjection", () -> dhProjectionBuffer);
-        uniformRegistry.registerMatrix4("dhModelView", () -> dhModelViewBuffer);
-        uniformRegistry.registerMatrix4("dhModelViewProjection", () -> dhModelViewProjectionBuffer);
-        uniformRegistry.registerVec3("dhModelOffset", () -> dhModelOffset);
-        uniformRegistry.registerInt("dhMaterialId", () -> 0);
-        uniformRegistry.registerInt("dhRenderDistance", () -> mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc) * 16 : 0);
-        uniformRegistry.registerFloat("fovYInverse", PipelineContext::fovYInverse);
-        uniformRegistry.registerMatrix4("textureMatrix", MatrixState::identity);
-        uniformRegistry.registerMatrix4("iris_TextureMat", MatrixState::identity);
-        uniformRegistry.registerMatrix3("iris_NormalMat", MatrixState::normalMatrix);
-        uniformRegistry.registerMatrix3("iris_NormalMatrix", MatrixState::normalMatrix);
-        uniformRegistry.registerMatrix3("normalMatrix", MatrixState::normalMatrix);
-        uniformRegistry.registerMatrix3("gl_NormalMatrix", MatrixState::normalMatrix);
-        uniformRegistry.registerMatrix4("shadowModelView", MatrixState::shadowModelView);
-        uniformRegistry.registerMatrix4("shadowModelViewInverse", MatrixState::shadowModelViewInverse);
-        uniformRegistry.registerMatrix4("shadowProjection", MatrixState::shadowProjection);
-        uniformRegistry.registerMatrix4("shadowProjectionInverse", MatrixState::shadowProjectionInverse);
-        uniformRegistry.registerMatrix4("iris_LightmapTextureMatrix", PipelineContext::irisLightmapTextureMatrix);
-
-        // =========================================================
-        // --- OPTIFINE STANDARD TEXTURE UNIT MAPPINGS ---
-        // =========================================================
-
-        // --- 3. G-Buffer Pass Inputs (Terrain / Entities) ---
-        // These expect the game to have bound the Minecraft Atlas/Lightmap to these units
-        uniformRegistry.registerInt("gtexture", () -> 0); // GL_TEXTURE0 (Block Atlas)
-        uniformRegistry.registerInt("texture", () -> 0);
-        uniformRegistry.registerInt("tex", () -> 0);
-        uniformRegistry.registerInt("u_MainSampler", () -> 0);
-        uniformRegistry.registerInt("lightmap", () -> 2); // Iris reserves GL_TEXTURE2 for the shader lightmap sampler.
-        uniformRegistry.registerInt("iris_overlay", () -> 1);
-        uniformRegistry.registerInt("normals", () -> 3);
-        uniformRegistry.registerInt("specular", () -> TextureBinder.SPECULAR_TEXTURE_UNIT);
-        uniformRegistry.registerInt("gtextureId", PipelineContext::boundTexture2d);
-        uniformRegistry.registerInt("textureReloadCount", () -> textureReloadCount);
-        uniformRegistry.registerInt("textureFilteringMode", ShaderSamplerState::textureFilteringModeUniform);
-        uniformRegistry.registerVec2i("atlasSize", PipelineContext::boundTextureSize);
-        uniformRegistry.registerVec2i("gtextureSize", PipelineContext::boundTextureSize);
-        uniformRegistry.registerVec4i("blendFunc", PipelineContext::blendFunc);
-        uniformRegistry.registerVec2("iris_ScreenSize", () -> new float[]{(float) worldTargetWidth(mc), (float) worldTargetHeight(mc)});
-        uniformRegistry.registerVec3("iris_CameraTranslation", () -> new float[]{0.0f, 0.0f, 0.0f});
-        uniformRegistry.registerVec3("iris_ModelOffset", () -> dhModelOffset);
-        uniformRegistry.registerVec4("iris_ColorModulator", () -> new float[]{1.0f, 1.0f, 1.0f, 1.0f});
-        uniformRegistry.registerFloat("iris_ModelScale", () -> 1.0f);
-        uniformRegistry.registerFloat("iris_TextureScale", () -> 1.0f);
-        uniformRegistry.registerFloat("iris_GlintAlpha", () -> 1.0f);
-        uniformRegistry.registerVec3("u_ModelScale", () -> new float[]{1.0f, 1.0f, 1.0f});
-        uniformRegistry.registerVec2("u_TextureScale", () -> new float[]{1.0f, 1.0f});
-        uniformRegistry.registerVec3("u_RegionOffset", () -> new float[]{0.0f, 0.0f, 0.0f});
-
-        // --- 4. Legacy Screen Samplers (Deferred / Composite Passes) ---
-        // These read from your FBO attachments
-        uniformRegistry.registerInt("gcolor", () -> 0);
-        uniformRegistry.registerInt("gdepth", () -> 1);
-        uniformRegistry.registerInt("gnormal", () -> 2);
-        uniformRegistry.registerInt("composite", () -> 3);
-        uniformRegistry.registerInt("gdepthtex", () -> TextureBinder.DEPTHTEX0_TEXTURE_UNIT);
-        uniformRegistry.registerInt("depthtex0", () -> TextureBinder.DEPTHTEX0_TEXTURE_UNIT);
-        uniformRegistry.registerInt("depthtex1", () -> TextureBinder.DEPTHTEX1_TEXTURE_UNIT);
-        uniformRegistry.registerInt("depthtex2", () -> TextureBinder.DEPTHTEX2_TEXTURE_UNIT);
-        uniformRegistry.registerInt("gaux1", () -> TextureBinder.COLORTEX4_TEXTURE_UNIT);
-        uniformRegistry.registerInt("gaux2", () -> TextureBinder.COLORTEX5_TEXTURE_UNIT);
-        uniformRegistry.registerInt("gaux3", () -> TextureBinder.COLORTEX6_TEXTURE_UNIT);
-        uniformRegistry.registerInt("gaux4", () -> TextureBinder.COLORTEX7_TEXTURE_UNIT);
-
-        // --- 5. Modern Screen Samplers (OptiFine colortexN) ---
-        // Modern OptiFine packs use colortex0-7 instead of gcolor/gnormal/gaux
-        uniformRegistry.registerInt("colortex0", () -> 0);
-        uniformRegistry.registerInt("colortex1", () -> 1);
-        uniformRegistry.registerInt("colortex2", () -> 2);
-        uniformRegistry.registerInt("colortex3", () -> 3);
-        uniformRegistry.registerInt("colortex4", () -> TextureBinder.COLORTEX4_TEXTURE_UNIT);
-        uniformRegistry.registerInt("colortex5", () -> TextureBinder.COLORTEX5_TEXTURE_UNIT);
-        uniformRegistry.registerInt("colortex6", () -> TextureBinder.COLORTEX6_TEXTURE_UNIT);
-        uniformRegistry.registerInt("colortex7", () -> TextureBinder.COLORTEX7_TEXTURE_UNIT);
-        uniformRegistry.registerInt("colortex8", () -> TextureBinder.COLORTEX8_TEXTURE_UNIT);
-        uniformRegistry.registerInt("colortex9", () -> TextureBinder.COLORTEX9_TEXTURE_UNIT);
-        uniformRegistry.registerInt("colortex16", () -> TextureBinder.COLORTEX16_TEXTURE_UNIT);
-        registerAttachmentSizeUniforms();
-
-        uniformRegistry.registerInt("shadow", () -> TextureBinder.SHADOWTEX0_TEXTURE_UNIT);
-        uniformRegistry.registerInt("watershadow", () -> TextureBinder.SHADOWTEX0_TEXTURE_UNIT);
-        uniformRegistry.registerInt("shadowtex0", () -> TextureBinder.SHADOWTEX0_TEXTURE_UNIT);
-        uniformRegistry.registerInt("shadowtex0HW", () -> TextureBinder.textureUnitForSampler("shadowtex0HW"));
-        uniformRegistry.registerInt("shadowtex1", () -> TextureBinder.SHADOWTEX1_TEXTURE_UNIT);
-        uniformRegistry.registerInt("shadowtex1HW", () -> TextureBinder.textureUnitForSampler("shadowtex1HW"));
-        uniformRegistry.registerInt("shadowcolor", () -> TextureBinder.SHADOWCOLOR0_TEXTURE_UNIT);
-        for (int i = 0; i < ShadowFramebuffer.SHADOW_COLOR_TARGET_COUNT; i++) {
-            int shadowColorIndex = i;
-            uniformRegistry.registerInt("shadowcolor" + shadowColorIndex, () -> TextureBinder.shadowColorTextureUnit(shadowColorIndex));
-        }
-        uniformRegistry.registerInt("shadowMapResolution", this::shadowResolution);
-        uniformRegistry.registerVec2i("shadowtex0Size", () -> shadowSize());
-        uniformRegistry.registerVec2i("shadowtex1Size", () -> shadowSize());
-        uniformRegistry.registerVec2i("shadowSize", () -> shadowSize());
-        for (int i = 0; i < ShadowFramebuffer.SHADOW_COLOR_TARGET_COUNT; i++) {
-            int shadowColorIndex = i;
-            uniformRegistry.registerVec2i("shadowcolor" + shadowColorIndex + "Size", () -> shadowSize());
-        }
-        uniformRegistry.registerInt("dhDepthTex", () -> TextureBinder.DEPTHTEX0_TEXTURE_UNIT);
-        uniformRegistry.registerInt("dhDepthTex0", () -> TextureBinder.DEPTHTEX0_TEXTURE_UNIT);
-        uniformRegistry.registerInt("dhDepthTex1", () -> TextureBinder.DEPTHTEX1_TEXTURE_UNIT);
-        uniformRegistry.registerInt("dhDepthTex2", () -> TextureBinder.DEPTHTEX2_TEXTURE_UNIT);
-        uniformRegistry.registerInt("noisetex", () -> TextureBinder.NOISETEX_TEXTURE_UNIT);
-
-        // Iris wraps frameTimeCounter hourly to avoid large float precision loss in pack animations.
-        uniformRegistry.registerFloat("frameTimeCounter", () -> frameTimeCounter);
-        uniformRegistry.registerFloat("frameTime", () -> currentFrameTime);
-        uniformRegistry.registerFloat("lastFrameTime", () -> currentFrameTime);
-        uniformRegistry.registerFloat("frameTimeSmooth", () -> frameTimeSmooth);
-        uniformRegistry.registerFloat("cloudTime", () -> cloudTime(mc));
-        uniformRegistry.registerFloat("chunkFadeTimeInv", () -> 1.0f / CHUNK_FADE_DURATION_SECONDS);
-        uniformRegistry.registerVec3i("currentDate", PipelineContext::currentDate);
-        uniformRegistry.registerVec3i("currentTime", PipelineContext::currentTime);
-        uniformRegistry.registerVec2i("currentYearTime", PipelineContext::currentYearTime);
-
-        uniformRegistry.registerVec3("cameraPosition", () -> cameraPosition.clone());
-        uniformRegistry.registerVec3("previousCameraPosition", () -> previousCameraPosition.clone());
-        uniformRegistry.registerVec3i("cameraPositionInt", () -> cameraPositionInt(cameraPositionUnshifted));
-        uniformRegistry.registerVec3("cameraPositionFract", () -> cameraPositionFract(cameraPositionUnshifted));
-        uniformRegistry.registerVec3i("previousCameraPositionInt", () -> cameraPositionInt(previousCameraPositionUnshifted));
-        uniformRegistry.registerVec3("previousCameraPositionFract", () -> cameraPositionFract(previousCameraPositionUnshifted));
-        uniformRegistry.registerVec3("eyePosition", () -> cameraPosition.clone());
-        uniformRegistry.registerVec3("relativeEyePosition", () -> new float[]{0.0f, 0.0f, 0.0f});
-        uniformRegistry.registerVec3("playerLookVector", () -> playerLookVector(mc));
-        uniformRegistry.registerVec3("playerBodyVector", () -> bodyVector(mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) : null));
-        uniformRegistry.registerVec3("vehicleLookVector", () -> vehicleLookVector(mc));
-        uniformRegistry.registerVec3("relativeVehiclePosition", () -> relativeVehiclePosition(mc));
-        uniformRegistry.registerVec4("lightningBoltPosition", () -> lightningBoltPosition(mc));
-        uniformRegistry.registerFloat("velocity", this::cameraVelocity);
-
-        uniformRegistry.registerVec3("upPosition", PipelineContext::upPosition);
-        uniformRegistry.registerVec3("skyColor", () -> skyColor(mc));
-        uniformRegistry.registerVec3("fogColor", () -> effectiveFogColor(mc));
-        uniformRegistry.registerVec4("iris_FogColor", () -> {
-            float[] color = effectiveFogColor(mc);
-            return new float[]{color[0], color[1], color[2], 1.0f};
-        });
-
-        // --- Sun & Moon Position ---
-        uniformRegistry.registerFloat("sunAngle", () -> sunAngle(mc));
-        uniformRegistry.registerFloat("shadowAngle", () -> shadowAngle(mc));
-        uniformRegistry.registerVec3("endFlashPosition", () -> endFlashPosition.clone());
-        uniformRegistry.registerFloat("endFlashIntensity", () -> endFlashIntensity);
-        uniformRegistry.registerFloat("previousEndFlashIntensity", () -> previousEndFlashIntensity);
-        uniformRegistry.registerVec3("sunPosition", () -> {
-            if (renderWorld(mc) != null) {
-                return shaderLightPosition(mc, false);
-            }
-            return new float[]{0, 100, 0};
-        });
-        uniformRegistry.registerVec3("moonPosition", () -> {
-            if (renderWorld(mc) != null) {
-                return shaderLightPosition(mc, true);
-            }
-            return new float[]{0, -100, 0};
-        });
-        uniformRegistry.registerVec3("shadowLightPosition", () -> {
-            World world = renderWorld(mc);
-            if (world != null) {
-                if (useEndFlashShadowLight(world)) {
-                    return endFlashPosition.clone();
-                }
-                float celestialAngle = com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
-                float sunAngle = celestialAngle < 0.75F ? celestialAngle + 0.25F : celestialAngle - 0.75F;
-                return legacyShadowLightVector(mc, sunAngle > 0.5F);
-            }
-            return new float[]{0.0f, 100.0f, 0.0f};
-        });
-        // --- TAA / History Matrices ---
-        /*uniformRegistry.registerMatrix4("gbufferPreviousModelView", MatrixState::getPreviousModelViewMatrix);
-        uniformRegistry.registerMatrix4("gbufferPreviousProjection", MatrixState::getPreviousProjectionMatrix);*/
-    }
-
-    private void registerAttachmentSizeUniforms() {
-        for (Attachment attachment : Attachment.values()) {
-            int index = attachment.getIndex();
-            uniformRegistry.registerVec2i("colortex" + index + "Size", () -> attachmentSize(attachment));
-        }
-        uniformRegistry.registerVec2i("gcolorSize", () -> attachmentSize(Attachment.COLOR));
-        uniformRegistry.registerVec2i("gdepthSize", () -> attachmentSize(Attachment.DEPTH));
-        uniformRegistry.registerVec2i("gnormalSize", () -> attachmentSize(Attachment.NORMAL));
-        uniformRegistry.registerVec2i("compositeSize", () -> attachmentSize(Attachment.COMPOSITE));
-        uniformRegistry.registerVec2i("gaux1Size", () -> attachmentSize(Attachment.AUX1));
-        uniformRegistry.registerVec2i("gaux2Size", () -> attachmentSize(Attachment.AUX2));
-        uniformRegistry.registerVec2i("gaux3Size", () -> attachmentSize(Attachment.AUX3));
-        uniformRegistry.registerVec2i("gaux4Size", () -> attachmentSize(Attachment.AUX4));
-        uniformRegistry.registerVec2i("depthtex0Size", () -> framebufferSize());
-        uniformRegistry.registerVec2i("depthtex1Size", () -> framebufferSize());
-        uniformRegistry.registerVec2i("depthtex2Size", () -> framebufferSize());
-    }
-
-    private Framebuffer currentWorldFramebufferTarget(Minecraft mc) {
-        return externalWorldFramebufferTarget != null ? externalWorldFramebufferTarget : mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) : null;
-    }
-
-    private static World renderWorld(Minecraft mc) {
-        WorldClient renderPassWorld = BetterPortalsCompat.currentRenderPassWorld();
-        if (renderPassWorld != null) {
-            return renderPassWorld;
-        }
-        return mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-    }
-
-    private static int[] currentDate() {
-        LocalDateTime now = LocalDateTime.now();
-        return new int[]{now.getYear(), now.getMonthValue(), now.getDayOfMonth()};
-    }
-
-    private static int[] currentTime() {
-        LocalDateTime now = LocalDateTime.now();
-        return new int[]{now.getHour(), now.getMinute(), now.getSecond()};
-    }
-
-    private static int[] currentYearTime() {
-        LocalDateTime now = LocalDateTime.now();
-        int elapsedSeconds = (now.getDayOfYear() - 1) * 86400
-                + now.getHour() * 3600
-                + now.getMinute() * 60
-                + now.getSecond();
-        int yearSeconds = now.toLocalDate().lengthOfYear() * 86400;
-        return new int[]{elapsedSeconds, yearSeconds - elapsedSeconds};
-    }
-
-    private boolean isExternalWorldFramebufferTarget(Framebuffer target) {
-        return externalWorldFramebufferTarget != null && target == externalWorldFramebufferTarget;
-    }
-
-    private boolean isBetterPortalsExternalWorldTarget() {
-        return externalWorldFramebufferTarget != null && isRenderingBetterPortalsNestedView();
-    }
-
-    private int worldTargetWidth(Minecraft mc) {
-        Framebuffer target = externalWorldFramebufferTarget;
-        return target != null ? Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target)) : Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc));
-    }
-
-    private int worldTargetHeight(Minecraft mc) {
-        Framebuffer target = externalWorldFramebufferTarget;
-        return target != null ? Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target)) : Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
-    }
-
-    private int framebufferWidth(Framebuffer target, Minecraft mc) {
-        return target != null ? Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target)) : Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc));
-    }
-
-    private int framebufferHeight(Framebuffer target, Minecraft mc) {
-        return target != null ? Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target)) : Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
-    }
-
-    private int[] attachmentSize(Attachment attachment) {
-        if (!pingPongManager.isInitialized()) {
-            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-            return new int[]{worldTargetWidth(mc), worldTargetHeight(mc)};
-        }
-        return new int[]{
-                Math.max(1, pingPongManager.attachmentWidth(attachment)),
-                Math.max(1, pingPongManager.attachmentHeight(attachment))
-        };
-    }
-
-    private int[] framebufferSize() {
-        if (!pingPongManager.isInitialized()) {
-            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-            return new int[]{worldTargetWidth(mc), worldTargetHeight(mc)};
-        }
-        return new int[]{Math.max(1, pingPongManager.width()), Math.max(1, pingPongManager.height())};
-    }
-
-    private int shadowResolution() {
-        return shadowFramebuffer != null ? Math.max(1, shadowFramebuffer.resolution()) : 1;
-    }
-
-    private int[] shadowSize() {
-        int resolution = shadowResolution();
-        return new int[]{resolution, resolution};
-    }
-
-    private static int[] eyeBrightness(Minecraft mc) {
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        World world = renderWorld(mc);
-        if (world == null || viewEntity == null) {
-            return new int[]{0, 0};
-        }
-
-        BlockPos pos = new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity) + com.l.ausm.impl.util.MinecraftReflectionCompat.eyeHeight(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity));
-        int combinedLight = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((world), new String[] {"func_175626_b", "getCombinedLight"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class, int.class}, 0, (pos), (0));
-        int block = combinedLight >> 4 & 0xF;
-        int sky = combinedLight >> 20 & 0xF;
-        if (eyeFluidState(mc) == 1) {
-            sky = underwaterSurfaceSkyLight(world, pos, sky);
-        }
-        return new int[]{block * 16, sky * 16};
-    }
-
-    private static float[] skyColor(Minecraft mc) {
-        Entity viewEntity = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        World world = renderWorld(mc);
-        if (mc != null && world != null && viewEntity != null) {
-            return vec3(com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_72833_a", "getSkyColor"},
-                new Class<?>[] {net.minecraft.entity.Entity.class, float.class}, (viewEntity), (com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc))));
-        }
-        return new float[]{0.5f, 0.7f, 1.0f};
-    }
-
-    private float effectiveFogStart(Minecraft mc) {
-        if (shouldUseNestedPortalFogFallback(mc)) {
-            return isNetherRenderWorld(mc) ? 0.0f : portalFogFar(mc) * 0.75f;
-        }
-        if (isNetherRenderWorld(mc)) {
-            return GL11.glIsEnabled(GL11.GL_FOG) ? GL11.glGetFloat(GL11.GL_FOG_START) : 0.0f;
-        }
-        return shaderFarPlaneDistance(mc) * SHADER_OVERWORLD_FOG_START_RATIO;
-    }
-
-    private float effectiveFogEnd(Minecraft mc) {
-        if (shouldUseNestedPortalFogFallback(mc)) {
-            return portalFogFar(mc);
-        }
-        if (isNetherRenderWorld(mc)) {
-            return GL11.glIsEnabled(GL11.GL_FOG)
-                    ? Math.max(GL11.glGetFloat(GL11.GL_FOG_END), shaderRenderDistance(mc))
-                    : shaderRenderDistance(mc);
-        }
-        return shaderFarPlaneDistance(mc);
-    }
-
-    private float effectiveFogDensity(Minecraft mc) {
-        if (GL11.glIsEnabled(GL11.GL_FOG)) {
-            return GL11.glGetFloat(GL11.GL_FOG_DENSITY);
-        }
-        if (isNetherRenderWorld(mc)) {
-            return PORTAL_NETHER_FOG_DENSITY;
-        }
-        if (!shouldUseNestedPortalFogFallback(mc)) {
-            return 0.0f;
-        }
-        return isNetherRenderWorld(mc) ? PORTAL_NETHER_FOG_DENSITY : 0.0f;
-    }
-
-    private int effectiveFogMode(Minecraft mc) {
-        if (GL11.glIsEnabled(GL11.GL_FOG)) {
-            return currentGlFogMode();
-        }
-        if (!shouldUseNestedPortalFogFallback(mc)) {
-            return isNetherRenderWorld(mc) ? 2 : 0;
-        }
-        return isNetherRenderWorld(mc) ? 2 : 0;
-    }
-
-    private float[] effectiveFogColor(Minecraft mc) {
-        if (isNetherRenderWorld(mc)) {
-            if (shouldUseNestedPortalFogFallback(mc)) {
-                return netherFogColor(mc);
-            }
-            float[] fogColor = currentGlFogColor();
-            return isProbablyUnsetFogColor(fogColor) ? netherFogColor(mc) : dampenNetherFogColor(fogColor);
-        }
-        float[] fogColor = GL11.glIsEnabled(GL11.GL_FOG) ? currentGlFogColor() : null;
-        return isProbablyUnsetFogColor(fogColor) ? overworldFogColor(mc) : fogColor;
-    }
-
-    private float[] overworldFogColor(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (world != null) {
-            return vec3(com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_72948_g", "getFogColor", "func_72824_f"},
-                new Class<?>[] {float.class}, (mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc) : 0.0f)));
-        }
-        return skyColor(mc);
-    }
-
-    private float[] netherFogColor(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (world != null) {
-            return dampenNetherFogColor(vec3(com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_72948_g", "getFogColor", "func_72824_f"},
-                new Class<?>[] {float.class}, (mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc) : 0.0f))));
-        }
-        return dampenNetherFogColor(PORTAL_NETHER_FOG_COLOR);
-    }
-
-    private float[] dampenNetherFogColor(float[] color) {
-        if (color == null || color.length < 3) {
-            color = PORTAL_NETHER_FOG_COLOR;
-        }
-        return new float[]{
-                clamp01(color[0] * NETHER_SHADER_FOG_COLOR_SCALE),
-                clamp01(color[1] * NETHER_SHADER_FOG_COLOR_SCALE),
-                clamp01(color[2] * NETHER_SHADER_FOG_COLOR_SCALE)
-        };
-    }
-
-    private float[] currentGlFogColor() {
-        fogColorBuffer.clear();
-        GL11.glGetFloat(GL11.GL_FOG_COLOR, fogColorBuffer);
-        return new float[]{
-                clamp01(fogColorBuffer.get(0)),
-                clamp01(fogColorBuffer.get(1)),
-                clamp01(fogColorBuffer.get(2))
-        };
-    }
-
-    private boolean isProbablyUnsetFogColor(float[] color) {
-        return color == null
-                || color.length < 3
-                || (color[0] <= 0.0001f && color[1] <= 0.0001f && color[2] <= 0.0001f);
-    }
-
-    private boolean shouldUseNestedPortalFogFallback(Minecraft mc) {
-        return isBetterPortalsExternalWorldTarget()
-                && !GL11.glIsEnabled(GL11.GL_FOG)
-                && renderWorld(mc) != null;
-    }
-
-    private boolean isNetherRenderWorld(Minecraft mc) {
-        return safeDimensionId(renderWorld(mc)) == -1;
-    }
-
-    private static float cloudHeight(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (world == null || com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) == null) {
-            return 128.0f;
-        }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)), new String[] {"func_76571_f", "getCloudHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 128.0F);
-    }
-
-    private static boolean hasSkylight(Minecraft mc) {
-        World world = renderWorld(mc);
-        return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.providerHasSkyLight(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world));
-    }
-
-    private static float cloudTime(Minecraft mc) {
-        World world = renderWorld(mc);
-        Object time = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
-                world,
-                new String[] {"func_82737_E", "getTotalWorldTime"},
-                new Class<?>[0]
-        );
-        return time instanceof Number ? (float) (((Number) time).longValue() + (mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc) : 0.0f)) : 0.0f;
-    }
-
-    private boolean isEyeInCave(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (world == null || eyeFluidState(mc) != 0) {
-            return false;
-        }
-        BlockPos pos = currentCameraBlockPos();
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.SKY, pos) <= 1 && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) < com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((world), new String[] {"func_181545_F", "getSeaLevel"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 63);
-    }
-
-    private float portalFogFar(Minecraft mc) {
-        return shaderFarPlaneDistance(mc);
-    }
-
-    private static float shaderFarPlaneDistance(Minecraft mc) {
-        return shaderRenderDistance(mc) * 2.0f;
-    }
-
-    private static float shaderRenderDistance(Minecraft mc) {
-        return Math.max(16.0f, mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc) * 16.0f : 16.0f);
-    }
-
-    private static int currentGlFogMode() {
-        return switch (GL11.glGetInteger(GL11.GL_FOG_MODE)) {
-            case GL11.GL_LINEAR -> 0;
-            case GL11.GL_EXP -> 1;
-            case GL11.GL_EXP2 -> 2;
-            default -> -1;
-        };
-    }
-
-    private int currentBiomeExpressionId(Minecraft mc) {
-        Biome biome = currentCameraBiome(mc);
-        if (biome == null) {
-            return -1;
-        }
-        int irisId = irisBiomeId(biome);
-        return irisId >= 0 ? irisId : com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(net.minecraft.world.biome.Biome.class, new String[] {"func_185362_a", "getIdForBiome"},
-                new Class<?>[] {net.minecraft.world.biome.Biome.class}, -1, (biome));
-    }
-
-    private int currentBiomePrecipitation(Minecraft mc) {
-        Biome biome = currentCameraBiome(mc);
-        if (biome == null) {
-            return 0;
-        }
-
-        BlockPos pos = currentCameraBlockPos();
-        boolean canRain = com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((biome), new String[] {"func_76738_d", "canRain"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((biome), new String[] {"func_76746_c", "getEnableSnow"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((biome), new String[] {"func_150559_j", "isSnowyBiome"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)
-                || (canRain && com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((biome), new String[] {"func_180626_a", "getTemperature"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, 0.0F, (pos)) < 0.15f)) {
-            return 2;
-        }
-        return canRain ? 1 : 0;
-    }
-
-    private int currentBiomeCategory(Minecraft mc) {
-        Biome biome = currentCameraBiome(mc);
-        Object category = biome != null
-                ? com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(biome, new String[] {"func_150561_m", "getTempCategory"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS)
+public class PipelineContext extends PipelineWorldRenderScope {
+    private static boolean disableShaderlessPreGuiHooks = true;
+    private static final AtomicInteger GUI_BYPASS_PROBE_LOGS = new AtomicInteger();
+    private static final Set<String> GUI_BYPASS_PROBE_KEYS = ConcurrentHashMap.newKeySet();
+
+    public void logGuiBypassProbe(String stage) {
+        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Object screen = minecraft != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft)
                 : null;
-        return category instanceof Enum<?> ? ((Enum<?>) category).ordinal() : -1;
-    }
-
-    private float currentBiomeRainfall(Minecraft mc) {
-        Biome biome = currentCameraBiome(mc);
-        return biome != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((biome), new String[] {"func_76727_i", "getRainfall"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0.0F) : 0.0f;
-    }
-
-    private float currentBiomeTemperature(Minecraft mc) {
-        Biome biome = currentCameraBiome(mc);
-        return biome != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((biome), new String[] {"func_180626_a", "getTemperature"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, 0.0F, (currentCameraBlockPos())) : 0.0f;
-    }
-
-    private Biome currentCameraBiome(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (mc == null || world == null) {
-            return null;
-        }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.world.biome.Biome.class, null, new String[] {"func_180494_b", "getBiome"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, (currentCameraBlockPos()));
-    }
-
-    private BlockPos currentCameraBlockPos() {
-        return new BlockPos(cameraPositionUnshifted[0], cameraPositionUnshifted[1], cameraPositionUnshifted[2]);
-    }
-
-    private static int irisBiomeId(Biome biome) {
-        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.call((biome), net.minecraft.util.ResourceLocation.class, null, new String[] {"getRegistryName"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
-        if (name == null) {
-            return -1;
-        }
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
-        if ("hell".equals(path) || "nether".equals(path) || "nether_wastes".equals(path)) {
-            return BIOME_NETHER_WASTES_ID;
-        }
-        if (path.contains("crimson") && path.contains("forest")) {
-            return BIOME_CRIMSON_FOREST_ID;
-        }
-        if (path.contains("warped") && path.contains("forest")) {
-            return BIOME_WARPED_FOREST_ID;
-        }
-        if (path.contains("basalt") && path.contains("delta")) {
-            return BIOME_BASALT_DELTAS_ID;
-        }
-        if ((path.contains("soul") && path.contains("valley")) || path.contains("soulsand_valley")) {
-            return BIOME_SOUL_SAND_VALLEY_ID;
-        }
-        if (path.contains("pale") && path.contains("garden")) {
-            return BIOME_PALE_GARDEN_ID;
-        }
-        return -1;
-    }
-
-    private static int underwaterSurfaceSkyLight(World world, BlockPos eyePos, int fallbackSky) {
-        int maxY = Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((world), new String[] {"func_72800_K", "getHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 256), 255);
-        int sky = fallbackSky;
-        BlockPos.MutableBlockPos probe = new BlockPos.MutableBlockPos(eyePos);
-        for (int y = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(eyePos); y <= maxY; y++) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.mutableBlockPosSet(probe, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(eyePos), y, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(eyePos));
-            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, probe);
-            if (!com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsWater(state)) {
-                return Math.max(sky, com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.SKY, probe));
-            }
-            sky = Math.max(sky, com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.SKY, probe));
-        }
-        return sky;
-    }
-
-    private static float blindness(Minecraft mc) {
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        if (viewEntity instanceof EntityLivingBase living && com.l.ausm.impl.util.MinecraftReflectionCompat.livingPotionActive(living, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.init.MobEffects.class, net.minecraft.potion.Potion.class, null, "field_76440_q", "BLINDNESS"))) {
-            PotionEffect effect = com.l.ausm.impl.util.MinecraftReflectionCompat.livingActivePotionEffect(living, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.init.MobEffects.class, net.minecraft.potion.Potion.class, null, "field_76440_q", "BLINDNESS"));
-            if (effect == null) {
-                return 1.0f;
-            }
-            return Math.max(0.0f, Math.min(1.0f, com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((effect), new String[] {"func_76459_b", "getDuration"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0) / 20.0f));
-        }
-        return 0.0f;
-    }
-
-    private static float nightVision(Minecraft mc) {
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        if (viewEntity instanceof EntityLivingBase living && com.l.ausm.impl.util.MinecraftReflectionCompat.livingPotionActive(living, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.init.MobEffects.class, net.minecraft.potion.Potion.class, null, "field_76439_r", "NIGHT_VISION"))) {
-            PotionEffect effect = com.l.ausm.impl.util.MinecraftReflectionCompat.livingActivePotionEffect(living, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.init.MobEffects.class, net.minecraft.potion.Potion.class, null, "field_76439_r", "NIGHT_VISION"));
-            if (effect == null) {
-                return 1.0f;
-            }
-            int duration = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((effect), new String[] {"func_76459_b", "getDuration"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0);
-            return duration > 200 ? 1.0f : 0.7f + (float) Math.sin((duration - com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) * (float) Math.PI * 0.2f) * 0.3f;
-        }
-        return 0.0f;
-    }
-
-    private int[] smoothedEyeBrightness() {
-        return new int[]{
-                Math.round(eyeBrightnessSmooth[0]),
-                Math.round(eyeBrightnessSmooth[1])
-        };
-    }
-
-    private void updateSmoothedEyeBrightness(Minecraft mc) {
-        int[] current = eyeBrightness(mc);
-        if (!eyeBrightnessSmoothInitialized) {
-            eyeBrightnessSmooth[0] = current[0];
-            eyeBrightnessSmooth[1] = current[1];
-            eyeBrightnessSmoothInitialized = true;
+        String screenName = screen != null ? screen.getClass().getName() : "null";
+        if (!GUI_BYPASS_PROBE_KEYS.add(stage + "|" + screenName)) {
             return;
         }
-
-        float smoothingFactor = smoothingFactor(eyeBrightnessHalfLife, currentFrameTime);
-        eyeBrightnessSmooth[0] += (current[0] - eyeBrightnessSmooth[0]) * smoothingFactor;
-        eyeBrightnessSmooth[1] += (current[1] - eyeBrightnessSmooth[1]) * smoothingFactor;
-    }
-
-    private void updateSmoothedWetness(Minecraft mc) {
-        World world = renderWorld(mc);
-        float current = world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) : 0.0f;
-        if (!wetnessSmoothInitialized) {
-            wetnessSmooth = current;
-            wetnessSmoothInitialized = true;
+        int call = GUI_BYPASS_PROBE_LOGS.incrementAndGet();
+        if (call > 48) {
             return;
         }
-
-        float halfLife = current > wetnessSmooth ? wetnessHalfLife : drynessHalfLife;
-        wetnessSmooth += (current - wetnessSmooth) * smoothingFactor(halfLife, currentFrameTime);
-    }
-
-    private float rainStrength(Minecraft mc) {
-        World world = renderWorld(mc);
-        return world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) : 0.0f;
-    }
-
-    private void updateSmoothedFrameTime() {
-        if (!frameTimeSmoothInitialized) {
-            frameTimeSmooth = currentFrameTime;
-            frameTimeSmoothInitialized = true;
-            return;
-        }
-        frameTimeSmooth += (currentFrameTime - frameTimeSmooth) * smoothingFactor(5.0f, currentFrameTime);
-    }
-
-    private static float smoothingFactor(float halfLifeDeciseconds, float frameTimeSeconds) {
-        if (halfLifeDeciseconds <= 0.0f) {
-            return 1.0f;
-        }
-        float halfLifeSeconds = halfLifeDeciseconds * 0.1f;
-        float decay = (float) (Math.log(2.0) / halfLifeSeconds);
-        return 1.0f - (float) Math.exp(-decay * Math.max(0.0f, frameTimeSeconds));
-    }
-
-    private static FloatBuffer createIrisLightmapTextureMatrix() {
-        FloatBuffer buffer = org.lwjgl.BufferUtils.createFloatBuffer(16);
-        buffer.put(new float[]{
-                0.00390625f, 0.0f, 0.0f, 0.0f,
-                0.0f, 0.00390625f, 0.0f, 0.0f,
-                0.0f, 0.0f, 0.00390625f, 0.0f,
-                0.03125f, 0.03125f, 0.03125f, 1.0f
-        });
-        buffer.flip();
-        return buffer;
-    }
-
-    private static FloatBuffer irisLightmapTextureMatrix() {
-        IRIS_LIGHTMAP_TEXTURE_MATRIX.position(0);
-        return IRIS_LIGHTMAP_TEXTURE_MATRIX;
-    }
-
-    private static float fovYInverse() {
-        FloatBuffer projection = MatrixState.projection();
-        float projectionY = projection.get(5);
-        if (Math.abs(projectionY) < 1.0E-6f) {
-            return 1.0f;
-        }
-        return 1.0f / (float) Math.atan(1.0f / projectionY) * 0.5f;
-    }
-
-    private static int boundTexture2d() {
-        return GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-    }
-
-    private static int[] boundTextureSize() {
-        int texture = boundTexture2d();
-        if (texture == 0) {
-            return new int[]{0, 0};
-        }
-
-        int width = Math.max(0, GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_WIDTH));
-        int height = Math.max(0, GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_HEIGHT));
-        return new int[]{width, height};
-    }
-
-    private static int[] blendFunc() {
-        if (!GL11.glIsEnabled(GL11.GL_BLEND)) {
-            return new int[]{0, 0, 0, 0};
-        }
-        return new int[]{
-                GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB),
-                GL11.glGetInteger(GL14.GL_BLEND_DST_RGB),
-                GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA),
-                GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA)
-        };
-    }
-
-    private static int[] cameraPositionInt(double[] position) {
-        return new int[]{
-                (int) Math.floor(position[0]),
-                (int) Math.floor(position[1]),
-                (int) Math.floor(position[2])
-        };
-    }
-
-    private static float[] cameraPositionFract(double[] position) {
-        return new float[]{
-                (float) (position[0] - Math.floor(position[0])),
-                (float) (position[1] - Math.floor(position[1])),
-                (float) (position[2] - Math.floor(position[2]))
-        };
-    }
-
-    private int currentSelectedBlockId(Minecraft mc) {
-        BlockPos pos = currentSelectedBlockPosition(mc);
-        World world = renderWorld(mc);
-        if (world == null || pos == null) {
-            return 0;
-        }
-        return blockEntityId(com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos), world, pos);
-    }
-
-    private static float[] currentSelectedBlockPos(Minecraft mc, double[] cameraPosition) {
-        BlockPos pos = currentSelectedBlockPosition(mc);
-        if (pos == null) {
-            return new float[]{-256.0f, -256.0f, -256.0f};
-        }
-        return new float[]{
-                (float) (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + 0.5 - cameraPosition[0]),
-                (float) (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + 0.5 - cameraPosition[1]),
-                (float) (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + 0.5 - cameraPosition[2])
-        };
-    }
-
-    private static BlockPos currentSelectedBlockPosition(Minecraft mc) {
-        RayTraceResult hit = com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.util.math.RayTraceResult.class, null, "field_71476_x", "objectMouseOver");
-        if (hit == null || com.l.ausm.impl.util.MinecraftReflectionCompat.field((hit), net.minecraft.util.math.RayTraceResult.Type.class, null, "field_72313_a", "typeOfHit") != RayTraceResult.Type.BLOCK) {
-            return null;
-        }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.rayTraceBlockPos(hit);
-    }
-
-    private static boolean playerSurvivalStatsVisible(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.client.multiplayer.PlayerControllerMP.class, null, "field_71442_b", "playerController") == null) {
-            return false;
-        }
-        net.minecraft.world.GameType gameType = com.l.ausm.impl.util.MinecraftReflectionCompat.call((com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.client.multiplayer.PlayerControllerMP.class, null, "field_71442_b", "playerController")), net.minecraft.world.GameType.class, null, new String[] {"func_178889_l", "getCurrentGameType"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
-        int id = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(gameType, new String[] {"func_77148_a", "getID"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, -1);
-        return id == 0 || id == 2;
-    }
-
-    private float currentPlayerHealth(Minecraft mc) {
-        if (!playerSurvivalStatsVisible(mc)) {
-            return -1.0f;
-        }
-        float maxHealth = Math.max(0.001f, com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_110138_aP", "getMaxHealth"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0.0F));
-        return clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_110143_aJ", "getHealth"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0.0F) / maxHealth);
-    }
-
-    private float maxPlayerHealth(Minecraft mc) {
-        return playerSurvivalStatsVisible(mc) ? com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_110138_aP", "getMaxHealth"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0.0F) : -1.0f;
-    }
-
-    private float currentPlayerHunger(Minecraft mc) {
-        if (!playerSurvivalStatsVisible(mc)) {
-            return -1.0f;
-        }
-        Object foodStats = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc), new String[] {"func_71024_bL", "getFoodStats"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
-        return clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(foodStats, new String[] {"func_75116_a", "getFoodLevel"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0) / 20.0f);
-    }
-
-    private float currentPlayerAir(Minecraft mc) {
-        if (!playerSurvivalStatsVisible(mc)) {
-            return -1.0f;
-        }
-        return clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70086_ai", "getAir"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0) / 300.0f);
-    }
-
-    private float maxPlayerAir(Minecraft mc) {
-        return playerSurvivalStatsVisible(mc) ? 300.0f : -1.0f;
-    }
-
-    private float currentPlayerArmor(Minecraft mc) {
-        if (!playerSurvivalStatsVisible(mc)) {
-            return -1.0f;
-        }
-        return clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), new String[] {"func_70658_aO", "getTotalArmorValue"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0) / 50.0f);
-    }
-
-    private static float[] playerLookVector(Minecraft mc) {
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        if (viewEntity == null) {
-            return new float[]{0.0f, 0.0f, 1.0f};
-        }
-        Vec3d look = com.l.ausm.impl.util.MinecraftReflectionCompat.look(viewEntity, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
-        return vec3(look);
-    }
-
-    private static float[] upPosition() {
-        return MatrixState.transformModelViewDirection(0.0f, 100.0f, 0.0f);
-    }
-
-    private float cameraVelocity() {
-        float x = cameraPosition[0] - previousCameraPosition[0];
-        float y = cameraPosition[1] - previousCameraPosition[1];
-        float z = cameraPosition[2] - previousCameraPosition[2];
-        return (float) Math.sqrt(x * x + y * y + z * z);
-    }
-
-    private float[] taaOffset(Minecraft mc) {
-        float[][] offsets = {
-                {0.5f, 0.5f},
-                {-0.5f, -0.5f},
-                {-0.5f, 0.5f},
-                {0.5f, -0.5f},
-                {0.5f, 0.5f},
-                {-0.5f, -0.5f},
-                {-0.5f, 0.5f},
-                {0.5f, -0.5f},
-                {0.5f, 0.5f},
-                {-0.5f, -0.5f},
-                {-0.5f, 0.5f},
-                {0.5f, -0.5f},
-                {0.5f, 0.5f},
-                {-0.5f, -0.5f},
-                {-0.5f, 0.5f},
-                {0.5f, -0.5f}
-        };
-        float[] offset = offsets[(int) (pipelineFrameId & 15L)];
-        return new float[]{
-                offset[0] / worldTargetWidth(mc),
-                offset[1] / worldTargetHeight(mc)
-        };
-    }
-
-    private static float[] vec3(Vec3d vec) {
-        return new float[]{
-                (float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(vec),
-                (float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(vec),
-                (float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(vec)
-        };
-    }
-
-    private float[] viewSpaceLightVector(Minecraft mc, boolean moon) {
-        float[] world = worldSpaceLightVector(mc, moon);
-        return MatrixState.transformModelViewDirection(world[0], world[1], world[2]);
-    }
-
-    private float[] shaderLightPosition(Minecraft mc, boolean moon) {
-        return viewSpaceLightVector(mc, moon);
-    }
-
-    private float[] worldSpaceLightVector(Minecraft mc, boolean moon) {
-        World world = renderWorld(mc);
-        if (world == null) {
-            return new float[]{0.0f, moon ? -100.0f : 100.0f, 0.0f};
-        }
-        float skyAngle = com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) * (float) (Math.PI * 2.0);
-        if (moon) {
-            skyAngle += (float) Math.PI;
-        }
-        float path = sunPathRotation * (float) (Math.PI / 180.0);
-
-        // Iris derives celestial uniforms from the same transform chain used by
-        // sky rendering: rotate Y -90, rotate Z by sunPathRotation, then rotate X
-        // by the current sun/moon angle.  The initial vector is the vanilla
-        // celestial body position in sky model space.
-        float x = 0.0f;
-        float y = 100.0f * (float) Math.cos(skyAngle);
-        float z = 100.0f * (float) Math.sin(skyAngle);
-
-        float pathX = x * (float) Math.cos(path) - y * (float) Math.sin(path);
-        float pathY = x * (float) Math.sin(path) + y * (float) Math.cos(path);
-        x = -z;
-        y = pathY;
-        z = pathX;
-        return new float[]{x, y, z};
-    }
-
-    private float sunAngle(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (world == null) {
-            return 0.0f;
-        }
-        float angle = com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)) + 0.25f;
-        if (angle >= 1.0f) {
-            angle -= 1.0f;
-        }
-        return angle;
-    }
-
-    private float shadowAngle(Minecraft mc) {
-        if (renderWorld(mc) == null) {
-            return 0.0f;
-        }
-        float angle = sunAngle(mc);
-        return angle < 0.5f ? angle : angle - 0.5f;
-    }
-
-    private float shadowFade(Minecraft mc, float threshold, float scale) {
-        float angle = sunAngle(mc);
-        return clamp01(1.0f - (Math.abs(Math.abs(angle - 0.5f) - 0.25f) - threshold) * scale);
-    }
-
-    private float[] legacyShadowLightVector(Minecraft mc, boolean moon) {
-        return viewSpaceLightVector(mc, moon);
-    }
-
-    private float dayMoment(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (world == null) {
-            return 0.25f;
-        }
-        return world != null ? (float) ((com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L) / 24000.0) : 0.25f;
-    }
-
-    private float adjustedDayTime(Minecraft mc) {
-        World world = renderWorld(mc);
-        long worldTime = world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L : 0L;
-        return Math.abs(((((worldTime) / 1000.0f) + 6.0f) % 24.0f) - 12.0f);
-    }
-
-    private float dayHelper(Minecraft mc) {
-        return clamp01(5.4f - adjustedDayTime(mc));
-    }
-
-    private float nightHelper(Minecraft mc) {
-        return clamp01(adjustedDayTime(mc) - 6.0f);
-    }
-
-    private float dayMixer(Minecraft mc) {
-        float moment = dayMoment(mc) - 0.25f;
-        return clamp01(-(moment * moment) * 20.0f + 1.25f);
-    }
-
-    private float nightMixer(Minecraft mc) {
-        float moment = dayMoment(mc) - 0.75f;
-        return clamp01(-(moment * moment) * 50.0f + 3.125f);
-    }
-
-    private float dayNightMix(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (world == null) {
-            return 1.0f;
-        }
-        float worldTime = com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L;
-        float day = worldTime < 12485.0f || worldTime >= 23515.0f ? 1.0f : 0.0f;
-        float dusk = worldTime >= 12485.0f && worldTime < 13085.0f
-                ? 1.0f - ((worldTime - 12485.0f) * 0.0016666667f)
-                : 0.0f;
-        float dawn = worldTime >= 22915.0f && worldTime < 23515.0f
-                ? (worldTime - 22915.0f) * 0.0016666667f
-                : 0.0f;
-        return Math.max(Math.max(day, dusk), dawn);
-    }
-
-    private float volumetricDayMixer(Minecraft mc) {
-        float moment = dayMoment(mc);
-        float day = (moment * 4.0f) - 1.0f;
-        float night = (moment * 4.0f) - 3.0f;
-        float dayValue = clamp((-(day * day * day * day) + 1.0f) * 7.0f + 1.0f, 1.0f, 8.0f);
-        float nightValue = clamp((-(night * night * night * night) + 1.0f) * 7.0f + 1.0f, 1.0f, 8.0f);
-        return Math.max(dayValue, nightValue);
-    }
-
-    private float clamp01(float value) {
-        return Math.max(0.0f, Math.min(1.0f, value));
-    }
-
-    private float clamp(float value, float min, float max) {
-        return Math.max(min, Math.min(max, value));
-    }
-
-    public void initialize(ShaderPack pack) {
-        initialize(pack, Map.of());
-    }
-
-    public void initialize(ShaderPack pack, Map<String, String> optionOverrides) {
-        initialize(pack, optionOverrides, null);
-    }
-
-    public void initialize(ShaderPack pack, Map<String, String> optionOverrides, ShaderProperties preloadedProperties) {
-        initialize(pack, optionOverrides, preloadedProperties, ShaderLoadingScreen.BackgroundMode.SNAPSHOT);
-    }
-
-    public void initialize(ShaderPack pack, Map<String, String> optionOverrides, ShaderProperties preloadedProperties,
-                           ShaderLoadingScreen.BackgroundMode loadingBackgroundMode) {
-        initializeInternal(null, pack, optionOverrides, preloadedProperties, loadingBackgroundMode);
-    }
-
-    public void initializeCached(String cacheKey, ShaderPack pack, Map<String, String> optionOverrides, ShaderProperties preloadedProperties) {
-        initializeInternal(cacheKey, pack, optionOverrides, preloadedProperties, ShaderLoadingScreen.BackgroundMode.SNAPSHOT);
-    }
-
-    private void initializeInternal(String cacheKey, ShaderPack pack, Map<String, String> optionOverrides, ShaderProperties preloadedProperties,
-                                    ShaderLoadingScreen.BackgroundMode loadingBackgroundMode) {
-        nothiriumShadowRenderer.resetPipelineProgramState();
-        terrainRebuiltDuringLastInitialization = false;
-        terrainCacheReusableDuringLastInitialization = false;
-        boolean wasPipelineActive = isPipelineActive;
-        boolean replacingActiveCacheKey = cacheKey != null && cacheKey.equals(activeCompiledPipelineCacheKey);
-        CompiledPipelineState cachedPrograms = replacingActiveCacheKey ? null : removeCachedCompiledPipeline(cacheKey);
-        if (cacheKey == null) {
-            cleanupRuntimeState(true, true);
-        } else {
-            if (replacingActiveCacheKey) {
-                deleteCachedCompiledPipeline(cacheKey);
-                activeCompiledPipelineCacheKey = null;
-            } else {
-                cacheActiveCompiledPipeline();
-            }
-            cleanupRuntimeState(true, false, !wasPipelineActive);
-        }
-        shaderProperties = emptyShaderProperties();
-        activePackName = pack.getName();
-        resetHardwareCompatibilityState();
-
-        MainMod.LOGGER.info("[Pipeline] Initializing with pack: {}", pack.getName());
-        logHardwareCapabilities("initialize:" + pack.getName(), preloadedProperties != null ? preloadedProperties.packDirectives() : null);
-
-        if (pack.getName().equals("(internal)")) { // NoneShaderPack
-            MainMod.LOGGER.info("[Pipeline] Internal None pack selected. Pipeline is inactive.");
-            return;
-        }
-
-        releaseMouseForShaderLoad(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
-        boolean usingCachedPrograms = cachedPrograms != null;
-        boolean restoredCachedPrograms = false;
-        ShaderLoadingScreen.begin(pack.getName(), usingCachedPrograms ? 9 : 12, loadingBackgroundMode);
-        try {
-            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-            ShaderLoadingScreen.step("Loading shader properties");
-            ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
-            logHardwareCapabilities("properties:" + pack.getName(), properties.packDirectives());
-            ShaderCompileNotifications.beginReload();
-            ShaderLoadingScreen.step("Scanning shader programs");
-            programSet = usingCachedPrograms ? cachedPrograms.programSet : ShaderProgramSet.load(pack, properties);
-            packDirectives = properties.packDirectives().withComputeDirectives(programSet.computeDirectives());
-            rebuildFullscreenProgramArrays();
-            packDirectives = packDirectives.withCapabilities(
-                    ShaderPipelineCapabilities.from(packDirectives)
-                            .withGeometry(programSet.hasGeometrySources())
-                            .withTessellation(programSet.hasTessellationSources())
-                            .withExtraProgramArrayEntries(hasExtraProgramArrayEntries())
-            );
-            ShaderFeatureValidator.Result featureValidation = ShaderFeatureValidator.validate(packDirectives);
-            for (String warning : featureValidation.warnings()) {
-                MainMod.LOGGER.warn("[Pipeline] {}", warning);
-            }
-            if (!featureValidation.supported()) {
-                String summary = featureValidation.summary();
-                MainMod.LOGGER.error("[Pipeline] Shaderpack '{}' disabled: {}", pack.getName(), summary);
-                ShaderCompileNotifications.reportLoadFailure(pack.getName(), summary);
-                return;
-            }
-            ShaderLoadingScreen.setTotalSteps(usingCachedPrograms ? 9 : shaderLoadingStepCount(properties));
-            ShaderLoadingMap loadingMap = usingCachedPrograms ? null : new ShaderLoadingMap();
-            shaderProperties = properties;
-            ShaderBlockLayerOverrides.install(properties.blockIds());
-            ShaderSamplerState.setBreaksAnisotropy(properties.renderSettings().breaksAnisotropy());
-            shadowMapDistance = parseFloatSettingWithComment(pack, properties, "shadowDistance", "SHADOWHPL", 128.0f);
-            voxelDistance = parseFloatSetting(pack, properties, "voxelDistance", 0.0f);
-            shadowDistanceRenderMul = parseFloatSetting(pack, properties, "shadowDistanceRenderMul", -1.0f);
-            shadowIntervalSize = parseFloatSetting(pack, properties, "shadowIntervalSize", 2.0f);
-            sunPathRotation = parseFloatSetting(pack, properties, "sunPathRotation", 0.0f);
-            centerDepthHalfLife = parseFloatSetting(pack, properties, "centerDepthHalflife", 1.0f);
-            eyeBrightnessHalfLife = parseFloatSetting(pack, properties, "eyeBrightnessHalflife", 3.0f);
-            wetnessHalfLife = parseFloatSetting(pack, properties, "wetnessHalflife", 600.0f);
-            drynessHalfLife = parseFloatSetting(pack, properties, "drynessHalflife", 200.0f);
-            shadowPolygonOffset = parseBooleanSetting(pack, properties, "shadowPolygonOffset", true);
-            shadowPolygonOffsetFactor = parseFloatSetting(pack, properties, "shadowPolygonOffsetFactor", 1.1f);
-            shadowPolygonOffsetUnits = parseFloatSetting(pack, properties, "shadowPolygonOffsetUnits", 4.0f);
-            shadowFrameCount = 1_000_000;
-            lastShadowFrameId = -1L;
-            resetShadowRenderCache();
-            shadowHealthLogged = false;
-            shadowHealthLogAttempts = 0;
-            ShaderLoadingScreen.step("Preparing framebuffers");
-            pingPongManager.initialize(com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), packDirectives.renderTargets());
-            initializeBlankShadowFramebuffer(pack, properties);
-            MainMod.LOGGER.debug(
-                    "[Pipeline] Shadow config: framebuffer={} distance={} voxelDistance={} renderMul={} interval={} sunPathRotation={} hardwareFiltering={} tex0Nearest={} tex1Nearest={} polygonOffset={} factor={} units={}",
-                    shadowFramebuffer != null ? shadowFramebuffer.resolution() : 0,
-                    shadowMapDistance,
-                    voxelDistance,
-                    shadowDistanceRenderMul,
-                    shadowIntervalSize,
-                    sunPathRotation,
-                    packDirectives.renderTargets().shadowHardwareFiltering(),
-                    packDirectives.renderTargets().shadowDepthNearest(0),
-                    packDirectives.renderTargets().shadowDepthNearest(1),
-                    shadowPolygonOffset,
-                    shadowPolygonOffsetFactor,
-                    shadowPolygonOffsetUnits
-            );
-            if (packDirectives.computeDirectives().hasComputes()) {
-                MainMod.LOGGER.debug(
-                        "[Pipeline] Loaded compute metadata: arrays={} shadow={} final={}",
-                        packDirectives.computeDirectives().computeArrays().values().stream().mapToInt(List::size).sum(),
-                        packDirectives.computeDirectives().shadowComputes().size(),
-                        packDirectives.computeDirectives().finalComputes().size()
-                    );
-            }
-            ShaderLoadingScreen.step("Preparing shader resources");
-            shaderImages = ShaderImageSet.load(packDirectives.images());
-            shaderImages.resize(com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
-            clearColoredLightImages();
-            shaderStorageBuffers = ShaderStorageBufferSet.load(pack, packDirectives.storageBuffers());
-            shaderStorageBuffers.resize(com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
-            if (shaderStorageBuffers.active()) {
-                markShaderStorageBuffersBound();
-            }
-            if (!usingCachedPrograms) {
-                ShaderLoadingScreen.step("Compiling compute shaders");
-                compileComputePrograms(pack, properties);
-                setupComputePending = !computeProgramArrays.getOrDefault(ProgramArrayId.SETUP, List.of()).isEmpty();
-            }
-            logRequestedFeaturesAndCapabilities();
-            ShaderLoadingScreen.step("Loading noise texture");
-            initializeNoiseTexture(pack, properties);
-            ShaderLoadingScreen.step("Loading custom textures");
-            loadCustomTextures(pack, properties);
-            lastPipelineFrameNanos = System.nanoTime() - 1_000_000_000L;
-            currentFrameTime = 1.0f;
-
-            if (usingCachedPrograms) {
-                ShaderLoadingScreen.step("Restoring cached shader programs");
-                restoreCompiledPipeline(cachedPrograms);
-                restoredCachedPrograms = true;
-                MainMod.LOGGER.info("[Pipeline] Reused cached compiled shader programs for pack: {}", pack.getName());
-            } else {
-                for (RenderPass pass : RenderPass.values()) {
-                    PipelineProgram pipelineProgram = new PipelineProgram(pass, programSet.source(pass.programId()).directives());
-                    applyFallbackDefaultDrawBuffers(pipelineProgram);
-                    ShaderProgramSource source = programSet.source(pass.programId());
-                    boolean hasOfficialFinalSource = pass == RenderPass.FINAL
-                            && (source.fragmentPath() != null || source.fragmentSource() != null);
-                    boolean enabled = properties.isProgramEnabled(pass) || hasOfficialFinalSource;
-                    pipelineProgram.setEnabled(enabled);
-
-                    if (enabled) {
-                        ShaderLoadingScreen.step("Compiling " + pass.getProgramName());
-                        ShaderProgram program = ShaderCompiler.compilePass(pack, pass, properties, source, packDirectives);
-                        if (program != null) {
-                            pipelineProgram.setShaderProgram(program);
-                            loadingMap.put(pipelineProgram.shaderKey(), program);
-                            MainMod.LOGGER.debug("[Pipeline] Added program for pass: {}", pass);
-                        }
-                    } else {
-                        MainMod.LOGGER.debug("[Pipeline] Program disabled by properties: {}", pass.getProgramName());
-                    }
-                    programs.put(pass, pipelineProgram);
-                }
-                compileFullscreenArrayPrograms(pack, properties);
-                ShaderLoadingScreen.step("Building shader pipeline");
-                shaderMap = new ShaderMap(loadingMap);
-            }
-            setupComputePending = hasSetupPrograms();
-
-            isPipelineActive = pingPongManager.isInitialized();
-            activeSkyPipelineProbeLogs = 0;
-            compositeChainProbeLogs = 0;
-            resetChunkFadeState(true);
-            activeCompiledPipelineCacheKey = cacheKey;
-            long loadedProgramCount = programs.values().stream().filter(PipelineProgram::hasOwnProgram).count();
-            long loadedArrayProgramCount = fullscreenArrayPrograms.values().stream()
-                    .flatMap(List::stream)
-                    .filter(FullscreenArrayProgram::hasProgram)
-                    .count();
-            clearHardwareSafeVanillaTerrainAfterSuccessfulProgramLoad("initialize:" + pack.getName());
-            applyPackStartupTerrainFallback("initialize:" + pack.getName());
-            MainMod.LOGGER.info(
-                    "[Pipeline] Initialization complete. Pipeline Active: {}, Loaded Programs: {} (+{} indexed fullscreen)",
-                    isPipelineActive,
-                    loadedProgramCount,
-                    loadedArrayProgramCount
-            );
-            ShaderCompileNotifications.finishReload(pack.getName());
-            syntheticLightCandidates.clear();
-            resetColoredLightAudit();
-            if (wasPipelineActive) {
-                NothiriumBypass.markAllChanged();
-                scheduleWorldTerrainRefresh(true, true, 0);
-                ShaderLoadingScreen.step("Refreshing terrain metadata");
-            } else {
-                boolean nothiriumFormatChanged = updateNothiriumPipelineBlockFormatMode();
-                ShaderLoadingScreen.step("Rebuilding terrain");
-                rebuildTerrainRenderers(nothiriumFormatChanged, true);
-                terrainRebuiltDuringLastInitialization = true;
-            }
-        } finally {
-            if (cachedPrograms != null && !restoredCachedPrograms) {
-                cachedPrograms.delete();
-            }
-            ShaderLoadingScreen.finish();
-        }
-    }
-
-    private void releaseMouseForShaderLoad(Minecraft mc) {
-        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((mc), false, "field_71415_G", "inGameHasFocus")) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((mc), new String[] {"func_71364_i", "setIngameNotInFocus"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
-        }
-        try {
-            if (org.lwjgl.input.Mouse.isCreated()) {
-                org.lwjgl.input.Mouse.setGrabbed(false);
-            }
-        } catch (RuntimeException ignored) {
-        }
-    }
-
-    public ShaderProperties getShaderProperties() {
-        return shaderProperties;
-    }
-
-    public boolean activateCachedCompiledPipeline(String cacheKey, ShaderPack pack, Map<String, String> optionOverrides,
-                                                  ShaderProperties preloadedProperties) {
-        if (cacheKey == null || cacheKey.isBlank()) {
-            return false;
-        }
-        if (cacheKey.equals(activeCompiledPipelineCacheKey) && programSet != null && shaderMap != null && isPipelineActive) {
-            return true;
-        }
-        if (!pingPongManager.isInitialized()) {
-            return false;
-        }
-
-        CompiledPipelineState cachedPrograms = removeCachedCompiledPipeline(cacheKey);
-        if (cachedPrograms == null) {
-            return false;
-        }
-
-        try {
-            cacheActiveCompiledPipeline();
-            ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
-            programSet = cachedPrograms.programSet;
-            shaderProperties = properties;
-            ShaderBlockLayerOverrides.install(properties.blockIds());
-            ShaderSamplerState.setBreaksAnisotropy(properties.renderSettings().breaksAnisotropy());
-            packDirectives = properties.packDirectives().withComputeDirectives(programSet.computeDirectives());
-            rebuildFullscreenProgramArrays();
-            packDirectives = packDirectives.withCapabilities(
-                    ShaderPipelineCapabilities.from(packDirectives)
-                            .withGeometry(programSet.hasGeometrySources())
-                            .withTessellation(programSet.hasTessellationSources())
-                            .withExtraProgramArrayEntries(hasExtraProgramArrayEntries())
-            );
-            restoreCompiledPipeline(cachedPrograms);
-            activePackName = pack.getName();
-            activeCompiledPipelineCacheKey = cacheKey;
-            setupComputePending = hasSetupPrograms();
-            resetTransientWorldRenderState();
-            isPipelineActive = true;
-            activeSkyPipelineProbeLogs = 0;
-            resetChunkFadeState(true);
-            clearHardwareSafeVanillaTerrainAfterSuccessfulProgramLoad("activate-cache:" + pack.getName());
-            applyPackStartupTerrainFallback("activate-cache:" + pack.getName());
-            MainMod.LOGGER.debug("[Pipeline] Activated cached compiled shader programs: {}", cacheKey);
-            return true;
-        } catch (RuntimeException e) {
-            MainMod.LOGGER.warn("[Pipeline] Failed to activate cached compiled shader programs: {}", cacheKey, e);
-            cachedPrograms.delete();
-            return false;
-        }
-    }
-
-    public void clearCompiledPipelineCache() {
-        deleteCachedCompiledPipelines();
-        activeCompiledPipelineCacheKey = null;
-    }
-
-    public boolean consumeTerrainRebuiltDuringLastInitialization() {
-        boolean rebuilt = terrainRebuiltDuringLastInitialization;
-        terrainRebuiltDuringLastInitialization = false;
-        return rebuilt;
-    }
-
-    public boolean consumeTerrainCacheReusableDuringLastInitialization() {
-        boolean reusable = terrainCacheReusableDuringLastInitialization;
-        terrainCacheReusableDuringLastInitialization = false;
-        return reusable;
-    }
-
-    private void cacheActiveCompiledPipeline() {
-        if (activeCompiledPipelineCacheKey == null || programSet == null || shaderMap == null || isInternalPipelinePack()) {
-            return;
-        }
-
-        CompiledPipelineState previous = compiledPipelineCache.put(activeCompiledPipelineCacheKey, detachCompiledPipeline());
-        if (previous != null) {
-            previous.delete();
-        }
-        MainMod.LOGGER.debug("[Pipeline] Cached compiled shader programs: {}", activeCompiledPipelineCacheKey);
-        activeCompiledPipelineCacheKey = null;
-    }
-
-    private CompiledPipelineState detachCompiledPipeline() {
-        CompiledPipelineState state = new CompiledPipelineState(
-                programSet,
-                shaderMap,
-                programs,
-                computeProgramArrays,
-                shadowComputePrograms,
-                finalComputePrograms,
-                fullscreenArrayPrograms
-        );
-        programs.clear();
-        computeProgramArrays.clear();
-        shadowComputePrograms = List.of();
-        finalComputePrograms = List.of();
-        fullscreenArrayPrograms.clear();
-        programSet = null;
-        shaderMap = null;
-        setupComputePending = false;
-        return state;
-    }
-
-    private void restoreCompiledPipeline(CompiledPipelineState state) {
-        programs.clear();
-        programs.putAll(state.programs);
-        computeProgramArrays.clear();
-        computeProgramArrays.putAll(state.computeProgramArrays);
-        shadowComputePrograms = state.shadowComputePrograms;
-        finalComputePrograms = state.finalComputePrograms;
-        fullscreenArrayPrograms.clear();
-        fullscreenArrayPrograms.putAll(state.fullscreenArrayPrograms);
-        programSet = state.programSet;
-        shaderMap = state.shaderMap;
-        applyFallbackDefaultDrawBuffers();
-    }
-
-    private void applyFallbackDefaultDrawBuffers() {
-        for (PipelineProgram program : programs.values()) {
-            applyFallbackDefaultDrawBuffers(program);
-        }
-        for (Map.Entry<ProgramArrayId, List<FullscreenArrayProgram>> entry : fullscreenArrayPrograms.entrySet()) {
-            for (FullscreenArrayProgram program : entry.getValue()) {
-                applyFallbackDefaultDrawBuffers(program);
-            }
-        }
-    }
-
-    private void applyFallbackDefaultDrawBuffers(PipelineProgram program) {
-        if (program == null || !program.directives().drawBuffers().isEmpty()) {
-            return;
-        }
-        program.setDrawBuffers(defaultDrawBuffers(program.stage()));
-    }
-
-    private void applyFallbackDefaultDrawBuffers(FullscreenArrayProgram program) {
-        if (program == null || !program.directives().drawBuffers().isEmpty()) {
-            return;
-        }
-        program.setDrawBuffers(program.arrayId() == ProgramArrayId.SHADOWCOMP
-                ? List.of(Attachment.COLOR)
-                : List.of(fallbackColorAttachment()));
-    }
-
-    private List<Attachment> defaultDrawBuffers(ProgramStage stage) {
-        return switch (stage) {
-            case PREPARE, GBUFFERS, DEFERRED, COMPOSITE -> List.of(fallbackColorAttachment());
-            case SHADOW -> List.of(Attachment.COLOR);
-            case FINAL, NONE -> List.of();
-        };
-    }
-
-    private Attachment fallbackColorAttachment() {
-        int index = shaderProperties != null ? shaderProperties.renderSettings().fallbackTex() : 0;
-        Attachment attachment = Attachment.fromColorIndex(index);
-        return attachment != null ? attachment : Attachment.COLOR;
-    }
-
-    private CompiledPipelineState removeCachedCompiledPipeline(String cacheKey) {
-        return cacheKey == null ? null : compiledPipelineCache.remove(cacheKey);
-    }
-
-    private void deleteCachedCompiledPipeline(String cacheKey) {
-        CompiledPipelineState state = removeCachedCompiledPipeline(cacheKey);
-        if (state != null) {
-            state.delete();
-        }
-    }
-
-    private void deleteCachedCompiledPipelines() {
-        compiledPipelineCache.values().forEach(CompiledPipelineState::delete);
-        compiledPipelineCache.clear();
-    }
-
-    private boolean isInternalPipelinePack() {
-        return "(internal)".equals(activePackName);
-    }
-
-    private void applyPackStartupTerrainFallback(String stage) {
-        if (!ENABLE_SAFE_TERRAIN_FALLBACKS || !isPipelineActive || !shouldStartWithSoftVanillaTerrain()) {
-            return;
-        }
-        activateSoftVanillaTerrainRenderer("pack-startup-" + terrainFallbackPackKey() + ":" + stage);
-    }
-
-    private boolean shouldStartWithSoftVanillaTerrain() {
-        return ENABLE_SAFE_TERRAIN_FALLBACKS && isComplementarySoftVanillaStartupPack();
-    }
-
-    private boolean shouldPresentPreCompositeForSoftVanillaStartupPack() {
-        return ENABLE_SAFE_TERRAIN_FALLBACKS && isComplementarySoftVanillaStartupFallbackActive();
-    }
-
-    private boolean shouldPresentPreCompositeForNothiriumCompositeLoss() {
-        return false;
-    }
-
-    private boolean shouldSuppressShadowMapForSoftVanillaStartupPack() {
-        return false;
-    }
-
-    private boolean isComplementarySoftVanillaStartupFallbackActive() {
-        return isPipelineActive && softVanillaTerrainRenderer && isComplementarySoftVanillaStartupPack();
-    }
-
-    private boolean isComplementarySoftVanillaStartupPack() {
-        String name = activePackName != null ? activePackName.toLowerCase(Locale.ROOT) : "";
-        return name.contains("complementaryunbound")
-                || name.contains("complimentary entree")
-                || name.contains("complementary entree");
-    }
-
-    private String terrainFallbackPackKey() {
-        String name = activePackName != null ? activePackName.toLowerCase(Locale.ROOT) : "";
-        if (name.contains("complementaryunbound")) {
-            return "unbound";
-        }
-        if (name.contains("complimentary entree") || name.contains("complementary entree")) {
-            return "entree";
-        }
-        return "shaderpack";
-    }
-
-    private void resetTransientWorldRenderState() {
-        activePass = null;
-        activeShaderKey = null;
-        activePhase = WorldRenderingPhase.NONE;
-        overridePhase = null;
-        passStack.clear();
-        worldPassBypassStack.clear();
-        worldPassSerialStack.clear();
-        nothiriumPipelineTranslucentFrameStack.clear();
-        nothiriumPipelineTranslucentWorldPassSerialStack.clear();
-        currentWorldPassSerial = Long.MIN_VALUE;
-        shaderlessWorldPassActive = false;
-        worldFrameActive = false;
-        deferredPassesRenderedThisFrame = false;
-        preparePassesRenderedBeforeShadowThisFrame = false;
-        preTranslucentDepthCopiedThisFrame = false;
-        preHandDepthCopiedThisFrame = false;
-        renderingShadowMap = false;
-        sparseStartupPresentationHoldFrames = 0;
-        clearNothiriumPipelineTranslucentBridge();
-        nothiriumPipelineTranslucentDrawnFrame = Long.MIN_VALUE;
-    }
-
-    private void initializeBlankShadowFramebuffer(ShaderPack pack, ShaderProperties properties) {
-        if (!shouldCreateShadowFramebuffer(pack, properties)) {
-            return;
-        }
-
-        String resolutionValue = settingValueWithComment(pack, properties, "shadowMapResolution", "SHADOWRES");
-        int resolution = parseIntValue(resolutionValue, 1024);
-        resolution = Math.max(16, Math.min(8192, resolution));
-        shadowFramebuffer = new ShadowFramebuffer(resolution, packDirectives.renderTargets());
-        shadowMapPopulated = false;
-        shadowMapUsable = false;
-        shadowMapSparseForSampling = false;
-        shadowMapCoverageStableFrames = 0;
-        nothiriumShadowInvalidFrames = 0;
-        nothiriumShadowSuppressedFrames = 0;
-        resetShadowRenderCache();
-        MainMod.LOGGER.debug(
-                "[Pipeline] Blank shadow textures initialized: {}x{} (shadowMapResolution={} option={} changedOption={} activeConst={} profile={} distanceSlider={} qualitySlider={})",
-                resolution,
-                resolution,
-                resolutionValue,
-                optionValue(properties, "shadowMapResolution"),
-                changedOptionValue(properties, "shadowMapResolution"),
-                activeConstSetting(pack, properties, "shadowMapResolution"),
-                optionValue(properties, "<profile>"),
-                optionValue(properties, "SHADOW_DISTANCE_SLIDER"),
-                optionValue(properties, "SHADOW_QTY_SLIDER")
-        );
-    }
-
-    private static boolean shouldCreateShadowFramebuffer(ShaderPack pack, ShaderProperties properties) {
-        return hasEffectiveShadowProgram(properties)
-                || properties.options().booleanValue("SHADOW_CASTING")
-                || properties.options().booleanValue("ENABLE_SHADOWS")
-                || hasShadowProgramFiles(pack);
-    }
-
-    private static boolean hasEffectiveShadowProgram(ShaderProperties properties) {
-        for (RenderPass pass : RenderPass.values()) {
-            if (pass.stage() == ProgramStage.SHADOW && properties.isProgramEnabled(pass)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean hasShadowProgramFiles(ShaderPack pack) {
-        ShaderPackLayout layout = ShaderPackLayout.detect(pack);
-        for (RenderPass pass : RenderPass.values()) {
-            if (pass.stage() != ProgramStage.SHADOW) {
-                continue;
-            }
-            for (String base : layout.programBases(pass)) {
-                if (pack.hasResource(base + ".vsh") || pack.hasResource(base + ".fsh") || pack.hasResource(base + ".gsh")) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private static String optionValue(ShaderProperties properties, String name) {
-        var option = properties.options().get(name);
-        return option == null ? null : option.value();
-    }
-
-    private static String changedOptionValue(ShaderProperties properties, String name) {
-        var option = properties.options().get(name);
-        return option == null || !option.changed() ? null : option.value();
-    }
-
-    private static int parseIntOption(ShaderProperties properties, String name, int fallback) {
-        String value = optionValue(properties, name);
-        if (value == null) {
-            return fallback;
-        }
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException ignored) {
-            return fallback;
-        }
-    }
-
-    private static int parseIntSettingWithComment(ShaderPack pack, ShaderProperties properties, String optionName, String commentName, int fallback) {
-        return parseIntValue(settingValueWithComment(pack, properties, optionName, commentName), fallback);
-    }
-
-    private static int parseIntSetting(ShaderPack pack, ShaderProperties properties, String name, int fallback) {
-        return parseIntValue(settingValue(pack, properties, name), fallback);
-    }
-
-    private static float parseFloatOption(ShaderProperties properties, String name, float fallback) {
-        String value = optionValue(properties, name);
-        if (value == null) {
-            return fallback;
-        }
-
-        try {
-            return Float.parseFloat(value);
-        } catch (NumberFormatException ignored) {
-            return fallback;
-        }
-    }
-
-    private static float parseFloatSetting(ShaderPack pack, ShaderProperties properties, String name, float fallback) {
-        return parseFloatValue(settingValue(pack, properties, name), fallback);
-    }
-
-    private static float parseFloatSettingWithComment(ShaderPack pack, ShaderProperties properties, String optionName, String commentName, float fallback) {
-        return parseFloatValue(settingValueWithComment(pack, properties, optionName, commentName), fallback);
-    }
-
-    private static boolean optionBoolean(ShaderProperties properties, String name, boolean fallback) {
-        var option = properties.options().get(name);
-        return option == null ? fallback : option.asBoolean();
-    }
-
-    private static boolean parseBooleanSetting(ShaderPack pack, ShaderProperties properties, String name, boolean fallback) {
-        String value = settingValue(pack, properties, name);
-        return value == null ? fallback : Boolean.parseBoolean(value);
-    }
-
-    private static String settingValueWithComment(ShaderPack pack, ShaderProperties properties, String optionName, String commentName) {
-        String value = settingValue(pack, properties, optionName);
-        if (value != null) {
-            return value;
-        }
-        value = rawShaderProperty(pack, commentName);
-        if (value != null) {
-            return value;
-        }
-        return scanCommentDirective(pack, commentName);
-    }
-
-    private static String settingValue(ShaderPack pack, ShaderProperties properties, String name) {
-        String value = changedOptionValue(properties, name);
-        if (value != null) {
-            return value;
-        }
-        value = rawShaderProperty(pack, name);
-        if (value != null) {
-            return value;
-        }
-        value = activeConstSetting(pack, properties, name);
-        return value != null ? value : optionValue(properties, name);
-    }
-
-    private static int parseIntValue(String value, int fallback) {
-        if (value == null) {
-            return fallback;
-        }
-        try {
-            return Integer.parseInt(value.trim());
-        } catch (NumberFormatException ignored) {
-            return fallback;
-        }
-    }
-
-    private static float parseFloatValue(String value, float fallback) {
-        if (value == null) {
-            return fallback;
-        }
-        try {
-            return Float.parseFloat(value.trim());
-        } catch (NumberFormatException ignored) {
-            return fallback;
-        }
-    }
-
-    private static String rawShaderProperty(ShaderPack pack, String name) {
-        ShaderPackLayout layout = ShaderPackLayout.detect(pack);
-        if (!pack.hasResource(layout.propertiesPath())) {
-            return null;
-        }
-        Properties properties = new Properties();
-        try (var stream = pack.getResourceAsStream(layout.propertiesPath())) {
-            if (stream == null) {
-                return null;
-            }
-            properties.load(stream);
-        } catch (IOException ignored) {
-            return null;
-        }
-        String value = properties.getProperty(name);
-        return value == null || value.isBlank() ? null : value.trim();
-    }
-
-    private static String scanCommentDirective(ShaderPack pack, String name) {
-        ShaderPackLayout layout = ShaderPackLayout.detect(pack);
-        String value = null;
-        for (RenderPass pass : RenderPass.values()) {
-            for (String base : layout.programBases(pass)) {
-                value = lastCommentDirectiveValue(pack, base + ".vsh", name, value);
-                value = lastCommentDirectiveValue(pack, base + ".fsh", name, value);
-                value = lastCommentDirectiveValue(pack, base + ".gsh", name, value);
-            }
-        }
-        value = lastCommentDirectiveValue(pack, layout.rootPath("shader.h"), name, value);
-        return value;
-    }
-
-    private static String lastCommentDirectiveValue(ShaderPack pack, String path, String name, String fallback) {
-        if (!pack.hasResource(path)) {
-            return fallback;
-        }
-        try (var stream = pack.getResourceAsStream(path)) {
-            if (stream == null) {
-                return fallback;
-            }
-            String source = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-            String prefix = "/* " + name + ":";
-            int start = source.lastIndexOf(prefix);
-            if (start < 0) {
-                return fallback;
-            }
-            int valueStart = start + prefix.length();
-            int end = source.indexOf("*/", valueStart);
-            if (end < 0) {
-                return fallback;
-            }
-            return source.substring(valueStart, end).trim();
-        } catch (IOException ignored) {
-            return fallback;
-        }
-    }
-
-    private static String activeConstSetting(ShaderPack pack, ShaderProperties properties, String name) {
-        ShaderPackLayout layout = ShaderPackLayout.detect(pack);
-        ActiveConstScan scan = new ActiveConstScan(pack, properties, name);
-        scan.scan(layout.rootPath("lib/config.glsl"));
-        scan.scan(layout.rootPath("lib/settings.glsl"));
-        scan.scan(layout.rootPath("settings.glsl"));
-        scan.scan(layout.rootPath("shader.h"));
-        for (RenderPass pass : RenderPass.values()) {
-            for (String base : layout.programBases(pass)) {
-                scan.scan(base + ".vsh");
-                scan.scan(base + ".fsh");
-                scan.scan(base + ".gsh");
-            }
-        }
-        return scan.value();
-    }
-
-    private static String includePath(String includeLine, String currentFile) {
-        int firstQuote = includeLine.indexOf('"');
-        int lastQuote = includeLine.lastIndexOf('"');
-        if (firstQuote == -1 || lastQuote == -1 || firstQuote >= lastQuote) {
-            return null;
-        }
-
-        String path = includeLine.substring(firstQuote + 1, lastQuote);
-        if (path.startsWith("/")) {
-            return currentFile.startsWith("shaders/") ? "shaders" + path : path.substring(1);
-        }
-        int lastSlash = currentFile.lastIndexOf('/');
-        return lastSlash == -1 ? path : currentFile.substring(0, lastSlash + 1) + path;
-    }
-
-    private static final class ActiveConstScan {
-        private final ShaderPack pack;
-        private final ShaderProperties properties;
-        private final String targetName;
-        private final Map<String, String> defines = new HashMap<>();
-        private final Set<String> visited = new HashSet<>();
-        private final Deque<ConditionFrame> conditions = new ArrayDeque<>();
-        private String value;
-
-        private ActiveConstScan(ShaderPack pack, ShaderProperties properties, String targetName) {
-            this.pack = pack;
-            this.properties = properties;
-            this.targetName = targetName;
-            defines.putAll(ShaderEnvironmentDefines.defineMap(properties.options()));
-        }
-
-        private String value() {
-            return value;
-        }
-
-        private void scan(String path) {
-            if (!pack.hasResource(path) || !visited.add(path)) {
-                return;
-            }
-            try (var stream = pack.getResourceAsStream(path)) {
-                if (stream == null) {
-                    return;
-                }
-                String source = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-                for (String line : source.split("\\R", -1)) {
-                    scanLine(path, line);
-                }
-            } catch (IOException ignored) {
-            } finally {
-                visited.remove(path);
-            }
-        }
-
-        private void scanLine(String currentFile, String line) {
-            String trimmed = line.trim();
-            if (trimmed.startsWith("#include ")) {
-                if (active()) {
-                    String includePath = includePath(trimmed, currentFile);
-                    if (includePath != null) {
-                        scan(includePath);
-                    }
-                }
-                return;
-            }
-            if (trimmed.startsWith("#if ")) {
-                pushCondition(evaluateCondition(trimmed.substring(4)));
-                return;
-            }
-            if (trimmed.startsWith("#ifdef ")) {
-                pushCondition(defines.containsKey(trimmed.substring(7).trim()));
-                return;
-            }
-            if (trimmed.startsWith("#ifndef ")) {
-                pushCondition(!defines.containsKey(trimmed.substring(8).trim()));
-                return;
-            }
-            if (trimmed.startsWith("#elif ")) {
-                replaceCondition(evaluateCondition(trimmed.substring(6)));
-                return;
-            }
-            if (trimmed.startsWith("#else")) {
-                replaceCondition(true);
-                return;
-            }
-            if (trimmed.startsWith("#endif")) {
-                if (!conditions.isEmpty()) {
-                    conditions.pop();
-                }
-                return;
-            }
-            if (!active()) {
-                return;
-            }
-
-            String withoutComment = stripLineComment(line);
-            Matcher defineMatcher = DEFINE_SETTING_PATTERN.matcher(withoutComment);
-            if (defineMatcher.matches()) {
-                applyDefine(defineMatcher.group(1), defineMatcher.group(2));
-                return;
-            }
-
-            Matcher constMatcher = CONST_SETTING_PATTERN.matcher(withoutComment);
-            if (constMatcher.matches()) {
-                defines.put(constMatcher.group(1), constMatcher.group(2));
-                if (targetName.equals(constMatcher.group(1))) {
-                    value = constMatcher.group(2);
-                }
-            }
-        }
-
-        private void applyDefine(String name, String value) {
-            var option = properties.options().get(name);
-            if (option != null && option.toggle() && !option.asBoolean()) {
-                defines.remove(name);
-            } else if (option != null) {
-                defines.put(name, option.toggle() ? "1" : option.value());
-            } else {
-                defines.put(name, value == null ? "1" : value);
-            }
-        }
-
-        private void pushCondition(boolean condition) {
-            boolean parentActive = active();
-            boolean branchActive = parentActive && condition;
-            conditions.push(new ConditionFrame(parentActive, branchActive, condition));
-        }
-
-        private void replaceCondition(boolean condition) {
-            if (conditions.isEmpty()) {
-                return;
-            }
-            ConditionFrame previous = conditions.pop();
-            boolean branchActive = previous.parentActive() && !previous.branchMatched() && condition;
-            conditions.push(new ConditionFrame(previous.parentActive(), branchActive, previous.branchMatched() || condition));
-        }
-
-        private boolean active() {
-            return conditions.isEmpty() || conditions.peek().active();
-        }
-
-        private boolean evaluateCondition(String expression) {
-            return ShaderExpressionEvaluator.evaluate(stripLineComment(expression), defines);
-        }
-
-        private String stripLineComment(String line) {
-            int commentStart = line.indexOf("//");
-            return commentStart < 0 ? line : line.substring(0, commentStart);
-        }
-    }
-
-    private static final class ConditionFrame {
-        private final boolean parentActive;
-        private final boolean active;
-        private final boolean branchMatched;
-
-        private ConditionFrame(boolean parentActive, boolean active, boolean branchMatched) {
-            this.parentActive = parentActive;
-            this.active = active;
-            this.branchMatched = branchMatched;
-        }
-
-        private boolean parentActive() {
-            return parentActive;
-        }
-
-        private boolean active() {
-            return active;
-        }
-
-        private boolean branchMatched() {
-            return branchMatched;
-        }
-    }
-
-    private void rebuildFullscreenProgramArrays() {
-        fullscreenProgramArrays.clear();
-        for (ProgramArrayId arrayId : ProgramArrayId.values()) {
-            FullscreenProgramArray array = FullscreenProgramArray.fromProgramSet(arrayId, programSet);
-            fullscreenProgramArrays.put(arrayId, array);
-            if (hasUnsupportedFullscreenArrayEntries(array)) {
-                MainMod.LOGGER.debug(
-                        "[Pipeline] Program array {} declares {} programs; current 1.12 adapter exposes {} fixed slots and cannot run the remaining entries yet.",
-                        arrayId.sourcePrefix(),
-                        array.declaredProgramCount(),
-                        array.fixedPasses().size()
-                );
-            }
-        }
-    }
-
-    private boolean hasExtraProgramArrayEntries() {
-        return fullscreenProgramArrays.values().stream()
-                .anyMatch(PipelineContext::hasUnsupportedFullscreenArrayEntries);
-    }
-
-    private static boolean hasUnsupportedFullscreenArrayEntries(FullscreenProgramArray array) {
-        if (!array.hasExtraPrograms()) {
-            return false;
-        }
-        return !supportsIndexedFullscreenArray(array.arrayId());
-    }
-
-    private int shaderLoadingStepCount(ShaderProperties properties) {
-        return 9
-                + computeProgramSourceCount(packDirectives.computeDirectives())
-                + enabledProgramCount(properties)
-                + enabledFullscreenArrayProgramSourceCount(properties);
-    }
-
-    private static int computeProgramSourceCount(ShaderComputeDirectives directives) {
-        if (directives == null) {
-            return 0;
-        }
-        int count = directives.shadowComputes().size() + directives.finalComputes().size();
-        for (List<ComputeProgramSource> sources : directives.computeArrays().values()) {
-            count += sources.size();
-        }
-        return count;
-    }
-
-    private int enabledFullscreenArrayProgramSourceCount(ShaderProperties properties) {
-        if (programSet == null) {
-            return 0;
-        }
-        int count = 0;
-        for (ProgramArrayId arrayId : ProgramArrayId.values()) {
-            for (ShaderProgramSource source : programSet.programArray(arrayId)) {
-                int index = indexForFullscreenArraySource(arrayId, source.name());
-                if (source.hasAnyStage()
-                        && shouldCompileIndexedFullscreenArraySource(arrayId, index)
-                        && properties.isProgramArrayEnabled(arrayId, source.name())) {
-                    count++;
-                }
-            }
-        }
-        return count;
-    }
-
-    private static int enabledProgramCount(ShaderProperties properties) {
-        int count = 0;
-        for (RenderPass pass : RenderPass.values()) {
-            if (properties.isProgramEnabled(pass)) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private void compileComputePrograms(ShaderPack pack, ShaderProperties properties) {
-        computeProgramArrays.clear();
-        for (ProgramArrayId arrayId : ProgramArrayId.values()) {
-            List<ComputeProgram> compiled = compileComputeList(
-                    pack,
-                    properties,
-                    arrayId,
-                    packDirectives.computeDirectives().computeArrays().getOrDefault(arrayId, List.of()),
-                    packDirectives
-            );
-            if (!compiled.isEmpty()) {
-                computeProgramArrays.put(arrayId, compiled);
-            }
-        }
-        shadowComputePrograms = compileComputeList(pack, properties, null, packDirectives.computeDirectives().shadowComputes(), packDirectives);
-        finalComputePrograms = compileComputeList(pack, properties, null, packDirectives.computeDirectives().finalComputes(), packDirectives);
-    }
-
-    private void compileFullscreenArrayPrograms(ShaderPack pack, ShaderProperties properties) {
-        fullscreenArrayPrograms.clear();
-        for (ProgramArrayId arrayId : ProgramArrayId.values()) {
-            List<FullscreenArrayProgram> compiled = compileFullscreenArrayList(pack, properties, arrayId);
-            if (!compiled.isEmpty()) {
-                fullscreenArrayPrograms.put(arrayId, compiled);
-            }
-        }
-    }
-
-    private List<FullscreenArrayProgram> compileFullscreenArrayList(
-            ShaderPack pack,
-            ShaderProperties properties,
-            ProgramArrayId arrayId
-    ) {
-        List<ShaderProgramSource> sources = programSet.programArray(arrayId);
-        if (sources.isEmpty()) {
-            return List.of();
-        }
-
-        List<FullscreenArrayProgram> compiled = new ArrayList<>();
-        RenderPass bindingPass = fullscreenArrayBindingPass(arrayId);
-        for (ShaderProgramSource source : sources) {
-            if (!source.hasAnyStage()) {
-                continue;
-            }
-            if (!properties.isProgramArrayEnabled(arrayId, source.name())) {
-                MainMod.LOGGER.debug("[Pipeline] Program array source disabled by properties: {}", source.name());
-                continue;
-            }
-            int index = indexForFullscreenArraySource(arrayId, source.name());
-            if (!shouldCompileIndexedFullscreenArraySource(arrayId, index)) {
-                continue;
-            }
-
-            FullscreenArrayProgram arrayProgram = new FullscreenArrayProgram(
-                    arrayId,
-                    index,
-                    source.name(),
-                    bindingPass,
-                    properties.directivesFor(arrayId, source.name())
-            );
-            applyFallbackDefaultDrawBuffers(arrayProgram);
-            ShaderLoadingScreen.step("Compiling " + source.name());
-            ShaderProgram shaderProgram = ShaderCompiler.compileSource(pack, properties, source, bindingPass, packDirectives);
-            if (shaderProgram != null) {
-                arrayProgram.setShaderProgram(shaderProgram);
-                compiled.add(arrayProgram);
-                MainMod.LOGGER.debug("[Pipeline] Added indexed fullscreen program: {}", source.name());
-            }
-        }
-        return List.copyOf(compiled);
-    }
-
-    private static int indexForFullscreenArraySource(ProgramArrayId arrayId, String sourceName) {
-        ShaderProperties.ProgramArrayKey key = ShaderProperties.ProgramArrayKey.parse(sourceName);
-        if (key == null || key.arrayId() != arrayId) {
-            return 0;
-        }
-        return key.index();
-    }
-
-    private static boolean supportsIndexedFullscreenArray(ProgramArrayId arrayId) {
-        return switch (arrayId) {
-            case SETUP, BEGIN, PREPARE, DEFERRED, COMPOSITE, SHADOWCOMP -> true;
-        };
-    }
-
-    private static boolean shouldCompileIndexedFullscreenArraySource(ProgramArrayId arrayId, int index) {
-        return switch (arrayId) {
-            case SETUP, BEGIN -> true;
-            case PREPARE -> index >= 1;
-            case DEFERRED -> index >= RenderPass.DEFERRED_PASSES.length;
-            case COMPOSITE -> index >= RenderPass.COMPOSITE_PASSES.length;
-            case SHADOWCOMP -> true;
-        };
-    }
-
-    private static RenderPass fullscreenArrayBindingPass(ProgramArrayId arrayId) {
-        if (arrayId == ProgramArrayId.SETUP || arrayId == ProgramArrayId.BEGIN || arrayId == ProgramArrayId.PREPARE) {
-            return RenderPass.PREPARE;
-        }
-        if (arrayId == ProgramArrayId.DEFERRED) {
-            return RenderPass.DEFERRED;
-        }
-        if (arrayId == ProgramArrayId.COMPOSITE) {
-            return RenderPass.COMPOSITE;
-        }
-        if (arrayId == ProgramArrayId.SHADOWCOMP) {
-            return RenderPass.SHADOW;
-        }
-        return RenderPass.FINAL;
-    }
-
-    private boolean hasSetupPrograms() {
-        return !computeProgramArrays.getOrDefault(ProgramArrayId.SETUP, List.of()).isEmpty()
-                || !fullscreenArrayPrograms.getOrDefault(ProgramArrayId.SETUP, List.of()).isEmpty();
-    }
-
-    private static List<ComputeProgram> compileComputeList(
-            ShaderPack pack,
-            ShaderProperties properties,
-            ProgramArrayId arrayId,
-            List<ComputeProgramSource> sources,
-            ShaderPackDirectives directives
-    ) {
-        if (sources.isEmpty()) {
-            return List.of();
-        }
-        List<ComputeProgram> compiled = new ArrayList<>();
-        for (ComputeProgramSource source : sources) {
-            if (arrayId != null && !properties.isProgramArrayEnabled(arrayId, source.name())) {
-                MainMod.LOGGER.debug("[Pipeline] Compute array source disabled by properties: {}", source.name());
-                continue;
-            }
-            ShaderLoadingScreen.step("Compiling " + source.name());
-            ComputeProgram program = ComputeProgram.compile(pack, properties, source, directives);
-            if (program != null) {
-                compiled.add(program);
-            }
-        }
-        return List.copyOf(compiled);
-    }
-
-    private void deleteComputePrograms() {
-        computeProgramArrays.values().stream()
-                .flatMap(List::stream)
-                .forEach(ComputeProgram::delete);
-        shadowComputePrograms.forEach(ComputeProgram::delete);
-        finalComputePrograms.forEach(ComputeProgram::delete);
-    }
-
-    private void deleteFullscreenArrayPrograms() {
-        fullscreenArrayPrograms.values().stream()
-                .flatMap(List::stream)
-                .forEach(FullscreenArrayProgram::delete);
-    }
-
-    private void logRequestedFeaturesAndCapabilities() {
-        if (!packDirectives.features().required().isEmpty() || !packDirectives.features().optional().isEmpty()) {
-            MainMod.LOGGER.info(
-                    "[Pipeline] Pack feature flags: required={} optional={}",
-                    packDirectives.features().required(),
-                    packDirectives.features().optional()
-            );
-        }
-
-        ShaderPipelineCapabilities capabilities = packDirectives.capabilities();
-        if (capabilities.compute()
-                || capabilities.images()
-                || capabilities.storageBuffers()
-                || capabilities.customUniforms()
-                || capabilities.customTextures()
-                || capabilities.geometry()
-                || capabilities.tessellation()
-                || capabilities.extraProgramArrayEntries()) {
-            MainMod.LOGGER.info("[Pipeline] Pack capabilities: {}", capabilities);
-        }
-        if (shaderImages.active()) {
-            MainMod.LOGGER.info("[Pipeline] Loaded {} Iris custom image directives", shaderImages.count());
-        }
-        if (shaderStorageBuffers.active()) {
-            MainMod.LOGGER.info("[Pipeline] Loaded {} Iris SSBO directives", shaderStorageBuffers.count());
-        }
-        if (packDirectives.textureDirectives().rawTextureCount() > 0) {
-            MainMod.LOGGER.info(
-                    "[Pipeline] Loaded {} Iris raw custom texture directives",
-                    packDirectives.textureDirectives().rawTextureCount()
-            );
-        }
-        if (capabilities.images() && !packDirectives.features().requires("custom_images") && !packDirectives.features().optional("custom_images")) {
-            MainMod.LOGGER.warn("[Pipeline] Pack declares image directives without iris.features custom_images");
-        }
-        if (capabilities.storageBuffers() && !packDirectives.features().requires("ssbo") && !packDirectives.features().optional("ssbo")) {
-            MainMod.LOGGER.warn("[Pipeline] Pack declares SSBO directives without iris.features ssbo");
-        }
-    }
-
-    private void resetHardwareCompatibilityState() {
-        zeroOpaqueTerrainFrames = 0;
-        sparseOpaqueTerrainFrames = 0;
-        zeroOpaqueTerrainRecoveryRequested = false;
-        softVanillaTerrainRenderer = false;
-        softVanillaTerrainRendererReason = "";
-        shaderedNothiriumGlobalBypass = false;
-        shaderedNothiriumGlobalBypassReason = "";
-        shaderedNothiriumGlobalBypassPrimedWorld = null;
-        shaderedNothiriumGlobalBypassPrimedRenderGlobal = null;
-        positiveVanillaTerrainProbeLogs = 0;
-        terrainGridProbeLogs = 0;
-        nothiriumHybridVanillaMaintenanceFrames = 0;
-        nothiriumHybridVanillaMaintenanceReason = "";
-        nothiriumMainVanillaDrawPathFrames = 0;
-        nothiriumMainVanillaDrawPathReason = "";
-        pipelineTerrainFormatSupported = detectPipelineTerrainFormatSupport();
-        hardwareSafeVanillaTerrain = ENABLE_SAFE_TERRAIN_FALLBACKS && !pipelineTerrainFormatSupported;
-        hardwareSafeVanillaTerrainReason = hardwareSafeVanillaTerrain ? "missing-pipeline-terrain-format" : "";
-    }
-
-    private void clearShaderedTerrainFallbackState() {
-        hardwareSafeVanillaTerrain = false;
-        hardwareSafeVanillaTerrainReason = "";
-        hardwareSafeVanillaTerrainRefreshCooldown = 0;
-        lastHardwareSafeVanillaTerrainRefreshWorld = null;
-        lastHardwareSafeVanillaTerrainRefreshChunkX = Integer.MIN_VALUE;
-        lastHardwareSafeVanillaTerrainRefreshChunkZ = Integer.MIN_VALUE;
-        lastHardwareSafeVanillaTerrainLoadedNearPlayer = false;
-        softVanillaTerrainRenderer = false;
-        softVanillaTerrainRendererReason = "";
-        clearShaderedNothiriumGlobalBypassState(true);
-        zeroOpaqueTerrainFrames = 0;
-        sparseOpaqueTerrainFrames = 0;
-        zeroOpaqueTerrainRecoveryRequested = false;
-    }
-
-    private void clearShaderedNothiriumGlobalBypassState() {
-        clearShaderedNothiriumGlobalBypassState(false);
-    }
-
-    private void clearShaderedNothiriumGlobalBypassState(boolean clearTemporaryDrawPaths) {
-        shaderedNothiriumGlobalBypass = false;
-        shaderedNothiriumGlobalBypassReason = "";
-        shaderedNothiriumGlobalBypassPrimedWorld = null;
-        shaderedNothiriumGlobalBypassPrimedRenderGlobal = null;
-        positiveVanillaTerrainProbeLogs = 0;
-        if (clearTemporaryDrawPaths) {
-            nothiriumHybridVanillaMaintenanceFrames = 0;
-            nothiriumHybridVanillaMaintenanceReason = "";
-            nothiriumMainVanillaDrawPathFrames = 0;
-            nothiriumMainVanillaDrawPathReason = "";
-        }
-    }
-
-    private void clearHardwareSafeVanillaTerrainAfterSuccessfulProgramLoad(String stage) {
-        if (!isPipelineActive || !pipelineTerrainFormatSupported() || !hasUsableShaderTerrainProgram()) {
-            return;
-        }
-        boolean changed = hardwareSafeVanillaTerrain
-                || !hardwareSafeVanillaTerrainReason.isEmpty()
-                || hardwareSafeVanillaTerrainRefreshCooldown > 0
-                || zeroOpaqueTerrainFrames != 0
-                || sparseOpaqueTerrainFrames != 0
-                || zeroOpaqueTerrainRecoveryRequested
-                || softVanillaTerrainRenderer
-                || !softVanillaTerrainRendererReason.isEmpty()
-                || shaderedNothiriumGlobalBypass
-                || !shaderedNothiriumGlobalBypassReason.isEmpty()
-                || nothiriumHybridVanillaMaintenanceFrames != 0
-                || !nothiriumHybridVanillaMaintenanceReason.isEmpty()
-                || nothiriumMainVanillaDrawPathFrames != 0
-                || !nothiriumMainVanillaDrawPathReason.isEmpty();
-        hardwareSafeVanillaTerrain = false;
-        hardwareSafeVanillaTerrainReason = "";
-        softVanillaTerrainRenderer = false;
-        softVanillaTerrainRendererReason = "";
-        shaderedNothiriumGlobalBypass = false;
-        shaderedNothiriumGlobalBypassReason = "";
-        shaderedNothiriumGlobalBypassPrimedWorld = null;
-        shaderedNothiriumGlobalBypassPrimedRenderGlobal = null;
-        positiveVanillaTerrainProbeLogs = 0;
-        positiveNothiriumTerrainProbeLogs = 0;
-        terrainGridProbeLogs = 0;
-        nothiriumHybridVanillaMaintenanceFrames = 0;
-        nothiriumHybridVanillaMaintenanceReason = "";
-        nothiriumMainVanillaDrawPathFrames = 0;
-        nothiriumMainVanillaDrawPathReason = "";
-        hardwareSafeVanillaTerrainRefreshCooldown = 0;
-        zeroOpaqueTerrainFrames = 0;
-        sparseOpaqueTerrainFrames = 0;
-        zeroOpaqueTerrainRecoveryRequested = false;
-        if (changed) {
-            NothiriumBypass.markAllChanged();
-            scheduleWorldTerrainRefresh(true, true, 0);
-            MainMod.LOGGER.info("[Pipeline] Cleared hardware safe vanilla terrain fallback after loading shader terrain programs: {}", stage);
-        }
-    }
-
-    private boolean hasUsableShaderTerrainProgram() {
-        return hasUsableShaderProgram(RenderPass.GBUFFERS_TERRAIN_SOLID)
-                || hasUsableShaderProgram(RenderPass.GBUFFERS_TERRAIN_CUTOUT)
-                || hasUsableShaderProgram(RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP)
-                || hasUsableShaderProgram(RenderPass.GBUFFERS_TERRAIN)
-                || hasUsableShaderProgram(RenderPass.GBUFFERS_TEXTURED_LIT)
-                || hasUsableShaderProgram(RenderPass.GBUFFERS_TEXTURED);
-    }
-
-    private boolean hasUsableShaderProgram(RenderPass pass) {
-        PipelineProgram program = programs.get(pass);
-        return program != null && program.effectiveProgram(programs) != null;
-    }
-
-    private boolean detectPipelineTerrainFormatSupport() {
-        if (ExtendedVertexFormats.PIPELINE_BLOCK == null) {
-            ExtendedVertexFormats.initialize();
-        }
-        return ExtendedVertexFormats.PIPELINE_BLOCK != null
-                && safeGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS) > ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE;
-    }
-
-    private boolean pipelineTerrainFormatSupported() {
-        if (!pipelineTerrainFormatSupported) {
-            pipelineTerrainFormatSupported = detectPipelineTerrainFormatSupport();
-        }
-        return pipelineTerrainFormatSupported;
-    }
-
-    private void logHardwareCapabilities(String stage, ShaderPackDirectives directives) {
-        if (hardwareCapabilityLogs >= MAX_HARDWARE_CAPABILITY_LOGS) {
-            return;
-        }
-        hardwareCapabilityLogs++;
-
-        org.lwjgl.opengl.ContextCapabilities caps = GLContext.getCapabilities();
-        int maxVertexAttribs = safeGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS);
-        int maxDrawBuffers = caps.OpenGL20 ? safeGetInteger(GL20.GL_MAX_DRAW_BUFFERS) : 1;
-        int maxColorAttachments = caps.OpenGL30 ? safeGetInteger(GL30.GL_MAX_COLOR_ATTACHMENTS) : 1;
-        int maxTextureUnits = caps.OpenGL20 ? safeGetInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) : safeGetInteger(GL13.GL_MAX_TEXTURE_UNITS);
-        int maxImageUnits = caps.OpenGL42 ? safeGetInteger(GL42.GL_MAX_IMAGE_UNITS) : 0;
-        int maxSsboBindings = caps.OpenGL43 ? safeGetInteger(GL43.GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS) : 0;
-        ShaderPipelineCapabilities requested = directives != null ? directives.capabilities() : null;
-        boolean requestedCompute = requested != null && requested.compute();
-        boolean requestedImages = requested != null && requested.images();
-        boolean requestedSsbo = requested != null && requested.storageBuffers();
-        boolean requestedGeometry = requested != null && requested.geometry();
-        boolean requestedTessellation = requested != null && requested.tessellation();
-
+        Framebuffer framebuffer = minecraft != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(minecraft)
+                : null;
         MainMod.LOGGER.info(
-                "[AUSMHardware] stage={} vendor='{}' renderer='{}' version='{}' gl20={} gl30={} gl32={} gl40={} gl42={} gl43={} arbCompute={} arbImages={} arbSsbo={} arbDrawBuffersBlend={} arbTessellation={} fboEnabled={} maxAttribs={} maxDrawBuffers={} maxColorAttachments={} maxTextureUnits={} maxImageUnits={} maxSsboBindings={} requiredAttribs={} requestedCompute={} requestedImages={} requestedSsbo={} requestedGeometry={} requestedTessellation={}",
-                stage,
-                safeGetString(GL11.GL_VENDOR),
-                safeGetString(GL11.GL_RENDERER),
-                safeGetString(GL11.GL_VERSION),
-                caps.OpenGL20,
-                caps.OpenGL30,
-                caps.OpenGL32,
-                caps.OpenGL40,
-                caps.OpenGL42,
-                caps.OpenGL43,
-                caps.GL_ARB_compute_shader,
-                caps.GL_ARB_shader_image_load_store,
-                caps.GL_ARB_shader_storage_buffer_object,
-                caps.GL_ARB_draw_buffers_blend,
-                caps.GL_ARB_tessellation_shader,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.isFramebufferEnabled(),
-                maxVertexAttribs,
-                maxDrawBuffers,
-                maxColorAttachments,
-                maxTextureUnits,
-                maxImageUnits,
-                maxSsboBindings,
-                ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE + 1,
-                requestedCompute,
-                requestedImages,
-                requestedSsbo,
-                requestedGeometry,
-                requestedTessellation
-        );
-
-        if (maxVertexAttribs <= ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE) {
-            MainMod.LOGGER.warn(
-                    "[AUSMHardware] GPU exposes only {} vertex attribs; pipeline terrain metadata needs attribute index {}. Nothirium shader terrain will be bypassed if terrain fails.",
-                    maxVertexAttribs,
-                    ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE
-            );
-        }
-        if (requestedCompute && !caps.OpenGL43 && !caps.GL_ARB_compute_shader) {
-            MainMod.LOGGER.warn("[AUSMHardware] Shaderpack requests compute programs, but OpenGL 4.3 is unavailable.");
-        }
-        if (requestedImages && !caps.OpenGL42 && !caps.GL_ARB_shader_image_load_store) {
-            MainMod.LOGGER.warn("[AUSMHardware] Shaderpack requests custom image load/store, but OpenGL 4.2 is unavailable.");
-        }
-        if (requestedSsbo && !caps.OpenGL43 && !caps.GL_ARB_shader_storage_buffer_object) {
-            MainMod.LOGGER.warn("[AUSMHardware] Shaderpack requests SSBOs, but OpenGL 4.3 is unavailable.");
-        }
-        if (requestedGeometry && !caps.OpenGL32) {
-            MainMod.LOGGER.warn("[AUSMHardware] Shaderpack requests geometry shaders, but OpenGL 3.2 is unavailable.");
-        }
-        if (requestedTessellation && !caps.OpenGL40 && !caps.GL_ARB_tessellation_shader) {
-            MainMod.LOGGER.warn("[AUSMHardware] Shaderpack requests tessellation shaders, but OpenGL 4.0 is unavailable.");
-        }
-    }
-
-    private static int safeGetInteger(int parameter) {
-        try {
-            return GL11.glGetInteger(parameter);
-        } catch (RuntimeException | LinkageError ignored) {
-            return -1;
-        }
-    }
-
-    private static String safeGetString(int parameter) {
-        try {
-            String value = GL11.glGetString(parameter);
-            return value != null ? value : "unknown";
-        } catch (RuntimeException | LinkageError ignored) {
-            return "unavailable";
-        }
-    }
-
-    public int blockEntityId(IBlockState state) {
-        return blockEntityId(state, null, null);
-    }
-
-    public int blockEntityId(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null) {
-            return 0;
-        }
-
-        IBlockState pipelineState = actualLightState(state, blockAccess, pos);
-
-        ShaderBlockIdMap.BlockIdRules blockIds = shaderProperties.blockIds();
-        if (!blockIds.isEmpty()) {
-            int id = blockIds.idFor(pipelineState);
-            if (id != 0) {
-                logWaterLikeMaterialProbe(pipelineState, blockAccess, pos, id, "mapped");
-                return id;
-            }
-        }
-
-        int waterLikeFallbackId = waterLikeFluidFallbackId(pipelineState);
-        if (waterLikeFallbackId != 0) {
-            logWaterLikeMaterialProbe(pipelineState, blockAccess, pos, waterLikeFallbackId, "water-like-fallback");
-            return waterLikeFallbackId;
-        }
-
-        logWaterLikeMaterialProbe(pipelineState, blockAccess, pos, 0, "unmapped");
-        return 0;
-    }
-
-    public int customLiquidTintColor(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return -1;
-    }
-
-    private void logWaterLikeMaterialProbe(IBlockState state, IBlockAccess blockAccess, BlockPos pos, int id, String source) {
-        if (!DEBUG_PROBES_ENABLED || state == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsWater(state)) {
-            return;
-        }
-
-        int call = waterLikeMaterialProbeCount.incrementAndGet();
-        if (call > 96) {
-            return;
-        }
-
-        MainMod.LOGGER.info(
-                "[AUSMFluidMaterialProbe] call={} source={} id={} registry={} state={} pos={} access={}",
+                "[AUSMGuiBypass] call={} stage={} active={} worldFrame={} guiDepth={} screen={} framebuffer={} drawFbo={} readFbo={} program={} state={}",
                 call,
-                source,
-                id,
-                registryName(state),
-                state,
-                pos,
-                blockAccess != null ? blockAccess.getClass().getName() : "null"
-        );
-    }
-
-    private static int waterLikeFluidFallbackId(IBlockState state) {
-        if (state == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsWater(state)) {
-            return 0;
-        }
-
-        ResourceLocation name = registryName(state);
-        if (name == null) {
-            return 0;
-        }
-
-        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name);
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
-        if ("minecraft".equals(namespace)) {
-            return ("water".equals(path) || "flowing_water".equals(path)) ? 32000 : 0;
-        }
-        if ("actuallyadditions".equals(namespace)) return 32621;
-        if ("buildcraftenergy".equals(namespace) || "buildcraftfactory".equals(namespace)) return 32620;
-        if ("enderio".equals(namespace)) return 32622;
-        if ("cyclicmagic".equals(namespace)) return 32623;
-        if ("immersiveengineering".equals(namespace) || "immersivepetroleum".equals(namespace)) return 32624;
-        if ("gendustry".equals(namespace) || "binniecore".equals(namespace) || "binnie-mods".equals(namespace)) return 32625;
-        if ("advancedrocketry".equals(namespace)) return 32626;
-        if ("abyssalcraft".equals(namespace) || "acintegration".equals(namespace)) return 32627;
-        if ("bloodmagic".equals(namespace) || "bloodarsenal".equals(namespace)) return 32628;
-        if ("erebus".equals(namespace)) return 32629;
-        if ("thaumcraft".equals(namespace)) return 32630;
-        if ("thebetweenlands".equals(namespace)) return 32631;
-        if ("thermalfoundation".equals(namespace)) return 32632;
-        if ("tconstruct".equals(namespace) || "plustic".equals(namespace) || "iceandfire".equals(namespace)) return 32633;
-        if ("biomesoplenty".equals(namespace)) return 32634;
-        if ("forestry".equals(namespace)) return 32635;
-        if ("industrialforegoing".equals(namespace)) return 32636;
-        if ("railcraft".equals(namespace)) return 32637;
-        if ("bigreactors".equals(namespace)) return 32638;
-        if ("hatchery".equals(namespace)) return 32639;
-        if ("extrabotany".equals(namespace) || ("botania".equals(namespace) && path.contains("mana"))) return 32641;
-        if ("integrateddynamics".equals(namespace)) return 32642;
-        if ("astralsorcery".equals(namespace)) return 32643;
-        if ("animus".equals(namespace)) return 32644;
-        return 32645;
-    }
-
-    public int blockMetadata(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return blockMetadata(actualLightState(state, blockAccess, pos));
-    }
-
-    public IBlockState effectiveBlockRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        IBlockState inheritedBlockcrafteryState = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
-        if (inheritedBlockcrafteryState != null) {
-            return inheritedBlockcrafteryState;
-        }
-        return actualLightState(state, blockAccess, pos);
-    }
-
-    public IBlockState inheritedBlockcrafteryRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (!isBlockcrafteryEditableBlock(state)) {
-            return null;
-        }
-        IBlockState inheritedState = firstInheritedRenderState(state, blockAccess, pos);
-        if (inheritedState != null
-                && inheritedState != state
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(inheritedState) != null
-                && !isBlockcrafteryEditableBlock(inheritedState)) {
-            return inheritedState;
-        }
-        if (blockAccess != null || pos != null) {
-            inheritedState = firstInheritedRenderState(state, null, null);
-            if (inheritedState != null
-                    && inheritedState != state
-                    && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(inheritedState) != null
-                    && !isBlockcrafteryEditableBlock(inheritedState)) {
-                return inheritedState;
-            }
-        }
-        return null;
-    }
-
-    public boolean shouldProbeBlockcrafteryTransparency(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (!isBlockcrafteryEditableBlock(state)) {
-            return false;
-        }
-        IBlockState decoratedState = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
-        return decoratedState != null && isBlockcrafteryTransparencyProbeDecoratedState(decoratedState);
-    }
-
-    public void logBlockcrafteryTransparencyProbe(String source, IBlockState state, IBlockAccess blockAccess,
-                                                  BlockPos pos, BlockRenderLayer layer, Integer startVertex,
-                                                  Integer endVertex, Boolean result, String detail) {
-        if (!shouldProbeBlockcrafteryTransparency(state, blockAccess, pos)) {
-            return;
-        }
-        IBlockState decoratedState = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
-        int dimension = safeDimensionId(blockAccess instanceof World world ? world : null);
-        int start = startVertex != null ? startVertex : -1;
-        int end = endVertex != null ? endVertex : -1;
-        int delta = start >= 0 && end >= 0 ? end - start : -1;
-        String key = source
-                + "|" + dimension
-                + "|" + formatBlockPos(pos)
-                + "|" + stateName(state)
-                + "|" + stateName(decoratedState)
-                + "|" + String.valueOf(layer)
-                + "|" + String.valueOf(result)
-                + "|" + start
-                + "|" + end
-                + "|" + String.valueOf(detail);
-        if (!blockcrafteryTransparencyProbeKeys.add(key)) {
-            return;
-        }
-        int count = blockcrafteryTransparencyProbeCount.incrementAndGet();
-        if (count > MAX_BLOCKCRAFTERY_TRANSPARENCY_PROBES) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMBlockcrafteryTransparencyProbe] call={} source={} pipelineActive={} shaderless={} phase={} dim={} pos={} layer={} result={} start={} end={} delta={} state={} decorated={} decoratedInfo={} detail={}",
-                count,
-                source,
-                isPipelineActive,
-                !isPipelineActive,
-                getPhase(),
-                dimension,
-                formatBlockPos(pos),
-                layer,
-                result,
-                start,
-                end,
-                delta,
-                stateName(state),
-                stateName(decoratedState),
-                blockcrafteryTransparencyStateInfo(decoratedState, blockAccess, pos, layer),
-                detail
-        );
-    }
-
-    private boolean isBlockcrafteryTransparencyProbeDecoratedState(IBlockState state) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null || isBlockcrafteryEditableBlock(state)) {
-            return false;
-        }
-        ResourceLocation name = registryName(state);
-        String namespace = name != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null
-                ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).toLowerCase(Locale.ROOT)
-                : "";
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
-        String blockClass = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state).getClass().getName().toLowerCase(Locale.ROOT);
-        BlockRenderLayer naturalLayer = safeRenderLayer(state);
-        boolean transparentLayer = naturalLayer == BlockRenderLayer.TRANSLUCENT
-                || naturalLayer == BlockRenderLayer.CUTOUT
-                || naturalLayer == BlockRenderLayer.CUTOUT_MIPPED
-                || canRenderInLayer(state, BlockRenderLayer.TRANSLUCENT)
-                || canRenderInLayer(state, BlockRenderLayer.CUTOUT)
-                || canRenderInLayer(state, BlockRenderLayer.CUTOUT_MIPPED);
-        boolean transparentIdentity = namespace.contains("enderio")
-                || path.contains("glass")
-                || path.contains("clear")
-                || path.contains("fused")
-                || path.contains("quartz")
-                || path.contains("transparent")
-                || path.contains("translucent")
-                || blockClass.contains("glass")
-                || blockClass.contains("transparent")
-                || blockClass.contains("translucent");
-        return transparentLayer || transparentIdentity;
-    }
-
-    private String blockcrafteryTransparencyStateInfo(IBlockState state, IBlockAccess blockAccess, BlockPos pos,
-                                                      BlockRenderLayer currentLayer) {
-        if (state == null) {
-            return "null";
-        }
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        return "{renderType=" + safeRenderType(state)
-                + ", naturalLayer=" + safeRenderLayer(state)
-                + ", canCurrent=" + canRenderInLayer(state, currentLayer)
-                + ", canSolid=" + canRenderInLayer(state, BlockRenderLayer.SOLID)
-                + ", canCutoutMipped=" + canRenderInLayer(state, BlockRenderLayer.CUTOUT_MIPPED)
-                + ", canCutout=" + canRenderInLayer(state, BlockRenderLayer.CUTOUT)
-                + ", canTranslucent=" + canRenderInLayer(state, BlockRenderLayer.TRANSLUCENT)
-                + ", opaque=" + safeOpaqueCube(state)
-                + ", full=" + safeFullCube(state)
-                + ", material=" + (com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(state) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(state) : "null")
-                + ", light=" + safeLightValue(state, blockAccess, pos)
-                + ", class=" + (block != null ? block.getClass().getName() : "null")
-                + "}";
-    }
-
-    public IBlockState inheritedBloomRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null) {
-            return null;
-        }
-
-        IBlockState[] inheritedStates = inheritedRenderStates(state, blockAccess, pos);
-        for (IBlockState inheritedState : inheritedStates) {
-            if (isBloomOrEmissiveInheritedState(inheritedState, blockAccess, pos)) {
-                return inheritedState;
-            }
-        }
-        if (isBlockcrafteryEditableBlock(state)) {
-            return null;
-        }
-        if (inheritedStates.length > 0) {
-            return inheritedStates[0];
-        }
-        return actualLightState(state, blockAccess, pos);
-    }
-
-    public IBlockState firstInheritedRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        IBlockState[] inheritedStates = inheritedRenderStates(state, blockAccess, pos);
-        return inheritedStates.length > 0 ? inheritedStates[0] : null;
-    }
-
-    public IBlockState inheritedBloomGeometryRenderState(IBlockState state, IBlockState inheritedState) {
-        if (state != null && inheritedState != null
-                && (isArchitectureCraftShapeBlock(state) || isBlockcrafteryEditableBlock(state))) {
-            return state;
-        }
-        return inheritedState != null ? inheritedState : state;
-    }
-
-    public boolean isFramedBlockDiagnosticTarget(IBlockState state) {
-        return isBlockcrafteryEditableBlock(state) || isArchitectureCraftShapeBlock(state);
-    }
-
-    public boolean framedBlockDiagnosticsEnabled() {
-        return false;
-    }
-
-    public boolean currentProblemProbesEnabled() {
-        return false;
-    }
-
-    private static boolean debugProbeLoggingEnabled() {
-        return false;
-    }
-
-    public boolean isBlockcrafteryEditableState(IBlockState state) {
-        return isBlockcrafteryEditableBlock(state);
-    }
-
-    public boolean stateHasBloomLayerGeometry(IBlockState state) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null || isBlockcrafteryEditableBlock(state)) {
-            return false;
-        }
-        if (isExplicitBloomState(state)) {
-            return true;
-        }
-        return stateHasBloomResourceGeometry(state);
-    }
-
-    public void logFramedBlockDiagnostic(String source, IBlockState state, IBlockAccess blockAccess, BlockPos pos,
-                                         BlockRenderLayer layer, int startVertex, int endVertex, Boolean result,
-                                         String extra) {
-        if (!debugProbeLoggingEnabled()) {
-            return;
-        }
-        if (!FRAMED_BLOCK_DIAGNOSTICS_ENABLED) {
-            return;
-        }
-        if (!isFramedBlockDiagnosticTarget(state)) {
-            return;
-        }
-
-        IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
-        IBlockState inheritedBloomState = inheritedBloomRenderState(state, blockAccess, pos);
-        if (isBlockcrafteryEditableBlock(state)
-                && blockcrafteryLightEmission(state) <= 0
-                && !isBloomOrEmissiveInheritedState(inheritedBloomState, blockAccess, pos)) {
-            return;
-        }
-        IBlockState inheritedGeometryState = inheritedBloomGeometryRenderState(state, inheritedBloomState);
-        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        boolean priority = isPriorityFramedDiagnosticName(state)
-                || isPriorityFramedDiagnosticState(effectiveState, blockAccess, pos, bloomLayer)
-                || isPriorityFramedDiagnosticState(inheritedBloomState, blockAccess, pos, bloomLayer)
-                || (inheritedGeometryState != state
-                && isPriorityFramedDiagnosticState(inheritedGeometryState, blockAccess, pos, bloomLayer));
-
-        String key = source
-                + "|" + safeDimensionId(blockAccess instanceof World world ? world : null)
-                + "|" + formatBlockPos(pos)
-                + "|" + stateName(state)
-                + "|" + String.valueOf(layer)
-                + "|" + stateName(effectiveState)
-                + "|" + stateName(inheritedBloomState)
-                + "|" + String.valueOf(priority ? extra : "");
-        if (!framedBlockDiagnosticKeys.add(key)) {
-            return;
-        }
-
-        int count = nextFramedDiagnosticCount(state, priority);
-        if (count < 0) {
-            return;
-        }
-
-        int delta = startVertex >= 0 && endVertex >= 0 ? endVertex - startVertex : -1;
-
-        MainMod.LOGGER.info(
-                "[AUSMFramedDiag] call={} priority={} kind={} source={} dim={} pos={} layer={} bloomLayer={} result={} start={} end={} delta={} access={} extra={} original={} effective={} inheritedBloom={} inheritedGeometry={} inheritedStates={}",
-                count,
-                priority,
-                framedDiagnosticKind(state),
-                source,
-                safeDimensionId(blockAccess instanceof World world ? world : null),
-                formatBlockPos(pos),
-                layer,
-                bloomLayer,
-                result,
-                startVertex,
-                endVertex,
-                delta,
-                blockAccess != null ? blockAccess.getClass().getName() : "null",
-                extra,
-                framedDiagnosticState("original", state, blockAccess, pos, layer, bloomLayer),
-                framedDiagnosticState("effective", effectiveState, blockAccess, pos, layer, bloomLayer),
-                framedDiagnosticState("inheritedBloom", inheritedBloomState, blockAccess, pos, layer, bloomLayer),
-                framedDiagnosticState("inheritedGeometry", inheritedGeometryState, blockAccess, pos, layer, bloomLayer),
-                framedDiagnosticInheritedStates(state, blockAccess, pos, layer, bloomLayer)
-        );
-    }
-
-    public int blockRenderEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null) {
-            return 0;
-        }
-        if (isPipelineActive && !shaderlessBloomExtractionActive) {
-            return explicitShaderedBlockEmission(state, blockAccess, pos);
-        }
-        return blockRenderEmissionForState(state, blockAccess, pos);
-    }
-
-    public boolean shouldUseShaderlessBloomEmission() {
-        if (shaderlessBloomExtractionActive) {
-            return true;
-        }
-        if (isPipelineActive) {
-            return false;
-        }
-        return !AusmBloomLayer.shouldUseShaderlessNativeHook();
-    }
-
-    public int blockShaderlessBloomEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null || (isPipelineActive && !shaderlessBloomExtractionActive)) {
-            return 0;
-        }
-        int explicit = explicitShaderlessBloomEmission(state, blockAccess, pos);
-        if (explicit > 0) {
-            return explicit;
-        }
-
-        IBlockState effectiveState = actualLightState(state, blockAccess, pos);
-        return effectiveState != null && effectiveState != state
-                ? explicitShaderlessBloomEmission(effectiveState, blockAccess, pos)
-                : 0;
-    }
-
-    public boolean stateHasShaderlessBloomSource(IBlockState state) {
-        if (isPipelineActive && !shaderlessBloomExtractionActive) {
-            return false;
-        }
-        return blockShaderlessBloomEmission(state, null, null) > 0;
-    }
-
-    public boolean stateUsesTextureBloomSource(IBlockState state) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null || isBlockcrafteryEditableBlock(state)) {
-            return false;
-        }
-        return stateHasBloomResourceGeometry(state) || isLumenizedBloomState(state);
-    }
-
-    private int explicitShaderlessBloomEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (isBlockcrafteryEditableBlock(state)) {
-            return 0;
-        }
-        if (isRandomThingsLuminousBlock(state)) {
-            return SHADERLESS_BLOOM_GEOMETRY_EMISSION;
-        }
-        if (stateHasBloomLayerGeometry(state) || stateHasBloomResourceGeometry(state) || isLumenizedBloomState(state)) {
-            return shaderlessBloomGeometryEmission(state, blockAccess, pos);
-        }
-        return 0;
-    }
-
-    private int shaderlessBloomGeometryEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (isRandomThingsLuminousBlock(state)) {
-            return SHADERLESS_BLOOM_GEOMETRY_EMISSION;
-        }
-        if (blockRenderEmissionForState(state, blockAccess, pos) > 0) {
-            return SHADERLESS_LIGHT_EMITTING_BLOOM_GEOMETRY_EMISSION;
-        }
-        return SHADERLESS_BLOOM_GEOMETRY_EMISSION;
-    }
-
-    public int blockRenderEmissionWithFramedInheritance(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        int emission = blockRenderEmission(state, blockAccess, pos);
-        if (!isFramedBlockDiagnosticTarget(state)) {
-            return emission;
-        }
-        for (IBlockState inheritedState : inheritedRenderStates(state, blockAccess, pos)) {
-            if (isBloomOrEmissiveInheritedState(inheritedState, blockAccess, pos)) {
-                emission = Math.max(emission, isPipelineActive && !shaderlessBloomExtractionActive
-                        ? explicitShaderedBlockEmission(inheritedState, blockAccess, pos)
-                        : inheritedBlockRenderEmission(inheritedState));
-            }
-        }
-        return emission;
-    }
-
-    public int shaderlessFramedBloomExtractionEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (isPipelineActive || !isFramedBlockDiagnosticTarget(state)) {
-            return 0;
-        }
-        int blockcrafteryEmission = blockcrafteryLightEmission(state);
-        if (blockcrafteryEmission > 0) {
-            return blockcrafteryEmission;
-        }
-        IBlockState inheritedState = inheritedBloomRenderState(state, blockAccess, pos);
-        if (inheritedState == null || inheritedState == state || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(inheritedState) == null) {
-            return 0;
-        }
-        int inheritedEmission = blockShaderlessBloomEmission(inheritedState, blockAccess, pos);
-        if (inheritedEmission > 0) {
-            return inheritedEmission;
-        }
-        return isBloomOrEmissiveInheritedState(inheritedState, blockAccess, pos) ? 15 : 0;
-    }
-
-    public int framedBloomFallbackEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (!isFramedBlockDiagnosticTarget(state)) {
-            return 0;
-        }
-        int blockcrafteryEmission = blockcrafteryLightEmission(state);
-        if (blockcrafteryEmission > 0) {
-            return blockcrafteryEmission;
-        }
-        IBlockState inheritedState = inheritedBloomRenderState(state, blockAccess, pos);
-        if (inheritedState == null || inheritedState == state || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(inheritedState) == null) {
-            return 0;
-        }
-        int inheritedEmission = blockShaderlessBloomEmission(inheritedState, blockAccess, pos);
-        if (inheritedEmission > 0) {
-            return inheritedEmission;
-        }
-        return isBloomOrEmissiveInheritedState(inheritedState, blockAccess, pos) ? 15 : 0;
-    }
-
-    public boolean shouldInheritFramedEmissionInBasePass(IBlockState state) {
-        return !isPipelineActive && isFramedBlockDiagnosticTarget(state);
-    }
-
-    public int blockRenderAlpha(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
-        if (shaderlessBloomExtractionActive
-                && (isRandomThingsTranslucentLuminousBlock(state) || isRandomThingsTranslucentLuminousBlock(effectiveState))) {
-            return RANDOM_THINGS_TRANSLUCENT_LUMINOUS_ALPHA;
-        }
-        if (!CURRENT_PROBLEM_PROBES_ENABLED) {
-            return -1;
-        }
-        if (isCurrentProblemProbeTarget(state) || isCurrentProblemProbeTarget(effectiveState)) {
-            logCurrentProblemProbe("alpha-query", state, blockAccess, pos,
-                    "effective=" + stateName(effectiveState)
-                            + ", alpha=-1"
-                            + ", originalOpaque=" + safeOpaqueCube(state)
-                            + ", originalFull=" + safeFullCube(state)
-                            + ", effectiveOpaque=" + safeOpaqueCube(effectiveState)
-                            + ", effectiveFull=" + safeFullCube(effectiveState)
-                            + ", originalLayer=" + safeRenderLayer(state)
-                            + ", effectiveLayer=" + safeRenderLayer(effectiveState)
-                            + ", layer=" + com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
-        }
-        return -1;
-    }
-
-    public void setBlockRenderDebugContext(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (!CURRENT_PROBLEM_PROBES_ENABLED) {
-            return;
-        }
-        IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
-        BlockRenderContext.setDebugBlock(
-                diagnosticBlockKind(state, effectiveState, blockAccess, pos),
-                stateName(state),
-                stateName(effectiveState)
-        );
-    }
-
-    public String diagnosticStateName(IBlockState state) {
-        return stateName(state);
-    }
-
-    public String diagnosticBlockKind(IBlockState state, IBlockState effectiveState) {
-        return diagnosticBlockKind(state, effectiveState, null, null);
-    }
-
-    private String diagnosticBlockKind(IBlockState state, IBlockState effectiveState, IBlockAccess blockAccess, BlockPos pos) {
-        if (isArchitectureCraftShapeBlock(state)) {
-            return "architecturecraft";
-        }
-        if (isBlockcrafteryEditableBlock(state)) {
-            return "blockcraftery";
-        }
-        if (isRandomThingsLuminousBlock(state) || isRandomThingsLuminousBlock(effectiveState)) {
-            return "randomthings-luminous";
-        }
-        if (isPriorityFramedDiagnosticName(state) || isPriorityFramedDiagnosticName(effectiveState)) {
-            return "emissive-name";
-        }
-        if (blockRenderEmission(state, blockAccess, pos) > 0
-                || blockRenderEmission(effectiveState, blockAccess, pos) > 0
-                || blockEntityId(state, blockAccess, pos) != 0
-                || blockEntityId(effectiveState, blockAccess, pos) != 0) {
-            return "active-light-or-id";
-        }
-        return "other";
-    }
-
-    public boolean isCurrentProblemProbeTarget(IBlockState state) {
-        if (!CURRENT_PROBLEM_PROBES_ENABLED) {
-            return false;
-        }
-        return isRandomThingsLuminousBlock(state)
-                || isPriorityFramedDiagnosticName(state)
-                || isAstralCrystalCluster(state)
-                || stateName(state).contains("lumenized")
-                || stateName(state).contains("glow")
-                || stateName(state).contains("emissive")
-                || stateName(state).contains("shimmer")
-                || stateName(state).contains("shinyflower")
-                || stateName(state).contains("nitor")
-                || stateName(state).contains("crystal");
-    }
-
-    public boolean shouldProbeSoftVanillaSpecialBlock(IBlockState state, IBlockState effectiveState,
-                                                      IBlockAccess blockAccess, BlockPos pos) {
-        if (!isComplementarySoftVanillaStartupFallbackActive()) {
-            return false;
-        }
-        if (softVanillaSpecialBlockProbeLogs >= MAX_SOFT_VANILLA_SPECIAL_BLOCK_PROBE_LOGS) {
-            return false;
-        }
-        return isSoftVanillaSpecialProbeState(state)
-                || isSoftVanillaSpecialProbeState(effectiveState)
-                || blockRenderEmission(state, blockAccess, pos) > 0
-                || blockRenderEmission(effectiveState, blockAccess, pos) > 0
-                || blockEntityId(state, blockAccess, pos) != 0
-                || blockEntityId(effectiveState, blockAccess, pos) != 0;
-    }
-
-    private boolean isSoftVanillaSpecialProbeState(IBlockState state) {
-        if (state == null) {
-            return false;
-        }
-        String name = stateName(state).toLowerCase(Locale.ROOT);
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        String className = block != null ? block.getClass().getName().toLowerCase(Locale.ROOT) : "";
-        return name.contains("randomthings")
-                || name.contains("quantumthings")
-                || name.contains("luminous")
-                || name.contains("lumen")
-                || name.contains("portal")
-                || name.contains("emissive")
-                || name.contains("glow")
-                || name.contains("nitor")
-                || name.contains("shimmer")
-                || name.contains("crystal")
-                || name.contains("astral")
-                || className.contains("randomthings")
-                || className.contains("quantumthings")
-                || className.contains("luminous")
-                || className.contains("portal")
-                || className.contains("emissive")
-                || className.contains("glow");
-    }
-
-    public void logSoftVanillaSpecialBlockProbe(String source, IBlockState state, IBlockAccess blockAccess, BlockPos pos,
-                                                int startVertex, int endVertex, Boolean result, String detail) {
-        if (!isComplementarySoftVanillaStartupFallbackActive()) {
-            return;
-        }
-        IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
-        if (!shouldProbeSoftVanillaSpecialBlock(state, effectiveState, blockAccess, pos)) {
-            return;
-        }
-        String key = source
-                + "|" + safeDimensionId(blockAccess instanceof World world ? world : null)
-                + "|" + formatBlockPos(pos)
-                + "|" + String.valueOf(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer())
-                + "|" + stateName(state)
-                + "|" + stateName(effectiveState);
-        if (!softVanillaSpecialBlockProbeKeys.add(key)) {
-            return;
-        }
-        int count = ++softVanillaSpecialBlockProbeLogs;
-        if (count > MAX_SOFT_VANILLA_SPECIAL_BLOCK_PROBE_LOGS) {
-            return;
-        }
-        int delta = startVertex >= 0 && endVertex >= 0 ? endVertex - startVertex : -1;
-        MainMod.LOGGER.info(
-                "[AUSMSoftVanillaBlockProbe] call={} source={} dim={} pos={} layer={} frame={} phase={} state={} effective={} renderLayer={} effectiveRenderLayer={} emission={} effectiveEmission={} blockId={} effectiveBlockId={} start={} end={} delta={} result={} detail={}",
-                count,
-                source,
-                safeDimensionId(blockAccess instanceof World world ? world : null),
-                formatBlockPos(pos),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
-                pipelineFrameId,
-                getPhase(),
-                stateName(state),
-                stateName(effectiveState),
-                safeRenderLayer(state),
-                safeRenderLayer(effectiveState),
-                blockRenderEmission(state, blockAccess, pos),
-                blockRenderEmission(effectiveState, blockAccess, pos),
-                blockEntityId(state, blockAccess, pos),
-                blockEntityId(effectiveState, blockAccess, pos),
-                startVertex,
-                endVertex,
-                delta,
-                result,
-                detail
-        );
-    }
-
-    public void logCurrentProblemProbe(String source, IBlockState state, IBlockAccess blockAccess, BlockPos pos,
-                                       String detail) {
-        if (!debugProbeLoggingEnabled()) {
-            return;
-        }
-        if (!CURRENT_PROBLEM_PROBES_ENABLED) {
-            return;
-        }
-        IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
-        IBlockState inheritedState = inheritedBloomRenderState(state, blockAccess, pos);
-        boolean activeLightOrId = blockRenderEmission(state, blockAccess, pos) > 0
-                || blockRenderEmission(effectiveState, blockAccess, pos) > 0
-                || blockRenderEmission(inheritedState, blockAccess, pos) > 0
-                || blockEntityId(state, blockAccess, pos) != 0
-                || blockEntityId(effectiveState, blockAccess, pos) != 0
-                || blockEntityId(inheritedState, blockAccess, pos) != 0;
-        if (!activeLightOrId
-                && !isCurrentProblemProbeTarget(state)
-                && !isCurrentProblemProbeTarget(effectiveState)
-                && !isCurrentProblemProbeTarget(inheritedState)) {
-            return;
-        }
-
-        String key = source
-                + "|" + safeDimensionId(blockAccess instanceof World world ? world : null)
-                + "|" + formatBlockPos(pos)
-                + "|" + String.valueOf(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer())
-                + "|" + stateName(state)
-                + "|" + stateName(effectiveState)
-                + "|" + stateName(inheritedState)
-                + "|" + String.valueOf(detail);
-        if (!currentProblemProbeKeys.add(key)) {
-            return;
-        }
-        int count = activeLightOrId
-                ? activeLightOrIdProbeCount.incrementAndGet()
-                : currentProblemProbeCount.incrementAndGet();
-        int limit = activeLightOrId ? MAX_ACTIVE_LIGHT_OR_ID_PROBE_LOGS : MAX_CURRENT_PROBLEM_PROBE_LOGS;
-        if (count > limit) {
-            return;
-        }
-
-        MainMod.LOGGER.info(
-                "[AUSMCurrentProblemProbe] call={} source={} kind={} activeLightOrId={} dim={} pos={} layer={} bloomLayer={} state={} effective={} inherited={} emission={} inheritedEmission={} alpha={} blockId={} inheritedBlockId={} detail={}",
-                count,
-                source,
-                diagnosticBlockKind(state, effectiveState, blockAccess, pos),
-                activeLightOrId,
-                safeDimensionId(blockAccess instanceof World world ? world : null),
-                formatBlockPos(pos),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
-                AusmBloomLayer.layer(),
-                framedDiagnosticState("state", state, blockAccess, pos, com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer()),
-                framedDiagnosticState("effective", effectiveState, blockAccess, pos, com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer()),
-                framedDiagnosticState("inherited", inheritedState, blockAccess, pos, com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer()),
-                blockRenderEmission(state, blockAccess, pos),
-                blockRenderEmissionWithFramedInheritance(state, blockAccess, pos),
-                -1,
-                blockEntityId(state, blockAccess, pos),
-                blockEntityId(inheritedState, blockAccess, pos),
-                detail
-        );
-    }
-
-    public void logCurrentRenderContextProbe(String source, String detail) {
-        if (!debugProbeLoggingEnabled()) {
-            return;
-        }
-        if (!CURRENT_PROBLEM_PROBES_ENABLED) {
-            return;
-        }
-        String kind = BlockRenderContext.debugKind();
-        if (!"blockcraftery".equals(kind)
-                && !"architecturecraft".equals(kind)
-                && !"randomthings-luminous".equals(kind)
-                && !"emissive-name".equals(kind)
-                && !"active-light-or-id".equals(kind)) {
-            return;
-        }
-        if ("blockcraftery".equals(kind) && BlockRenderContext.blockEmission() <= 0 && BlockRenderContext.blockEntityId() == 0) {
-            return;
-        }
-
-        String key = source
-                + "|" + kind
-                + "|" + BlockRenderContext.debugState()
-                + "|" + BlockRenderContext.debugEffectiveState()
-                + "|" + String.valueOf(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer())
-                + "|" + String.valueOf(detail);
-        if (!currentProblemProbeKeys.add(key)) {
-            return;
-        }
-        boolean activeLightOrId = "active-light-or-id".equals(kind)
-                || BlockRenderContext.blockEmission() > 0
-                || BlockRenderContext.blockEntityId() != 0;
-        int count = activeLightOrId
-                ? activeLightOrIdProbeCount.incrementAndGet()
-                : currentProblemProbeCount.incrementAndGet();
-        int limit = activeLightOrId ? MAX_ACTIVE_LIGHT_OR_ID_PROBE_LOGS : MAX_CURRENT_PROBLEM_PROBE_LOGS;
-        if (count > limit) {
-            return;
-        }
-
-        MainMod.LOGGER.info(
-                "[AUSMCurrentProblemProbe] call={} source={} kind={} activeLightOrId={} layer={} state={} effective={} contextEmission={} contextAlpha={} blockId={} bloomMask={} detail={}",
-                count,
-                source,
-                kind,
-                activeLightOrId,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
-                BlockRenderContext.debugState(),
-                BlockRenderContext.debugEffectiveState(),
-                BlockRenderContext.blockEmission(),
-                BlockRenderContext.blockAlpha(),
-                BlockRenderContext.blockEntityId(),
-                BlockRenderContext.bloomMaskFallback(),
-                detail
-        );
-    }
-
-    public void probeShaderlessLightState(String stage) {
-        // Probe disabled.
-    }
-
-    private String shaderlessWorldLightSummary(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
-            return "none";
-        }
-        BlockPos feet = new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc));
-        BlockPos eye = new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) + com.l.ausm.impl.util.MinecraftReflectionCompat.eyeHeight(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)));
-        return "feet{" + shaderlessWorldLightAt(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), feet) + "}"
-                + ",eye{" + shaderlessWorldLightAt(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), eye) + "}";
-    }
-
-    private String shaderlessWorldLightAt(World world, BlockPos pos) {
-        if (world == null || pos == null) {
-            return "none";
-        }
-        try {
-            boolean loaded = com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos);
-            int combined = loaded ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((world), new String[] {"func_175626_b", "getCombinedLight"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class, int.class}, 0, (pos), (0)) : -1;
-            int sky = loaded ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.SKY, pos) : -1;
-            int block = loaded ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.BLOCK, pos) : -1;
-            boolean canSeeSky = loaded && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((world), new String[] {"func_175678_i", "canSeeSky"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, false, (pos));
-            int dynamic = DynamicLightManager.lightAt(pos);
-            return "pos=" + pos
-                    + ",loaded=" + loaded
-                    + ",sky=" + sky
-                    + ",block=" + block
-                    + ",combined=0x" + Integer.toHexString(combined)
-                    + ",canSeeSky=" + canSeeSky
-                    + ",dyn=" + dynamic;
-        } catch (RuntimeException | LinkageError e) {
-            return "pos=" + pos + ",error=" + e.getClass().getName();
-        }
-    }
-
-    public void probeShaderlessSkyGuiState(String stage) {
-        // Probe disabled.
-    }
-
-    public void freshSkyProbe(String stage, String detail) {
-        // Probe disabled.
-    }
-
-    private String freshSkySamples(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) <= 0) {
-            return "none";
-        }
-        try {
-            int width = com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc);
-            int height = com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc);
-            return "center=" + readFramebufferPixel(width / 2, height / 2)
-                    + ";upper=" + readFramebufferPixel(width / 2, Math.max(0, height * 3 / 4))
-                    + ";lower=" + readFramebufferPixel(width / 2, Math.max(0, height / 4));
-        } catch (RuntimeException | LinkageError e) {
-            return "error=" + e.getClass().getSimpleName();
-        }
-    }
-
-    private boolean shouldLogShaderedVoidSkyProbe() {
-        return false;
-    }
-
-    public void logVoidSkyStageProbe(String stage, String detail) {
-        // Probe disabled.
-    }
-
-    private void logShaderedVoidSkyTargetProbe(String stage, Framebuffer target) {
-        // Probe disabled.
-    }
-
-    private void logShaderedVoidSkyAttachmentProbe(String stage, String detail) {
-        // Probe disabled.
-    }
-
-    public void probeShaderedPresentationState(String stage) {
-        // Probe disabled.
-    }
-
-    private void logSkyDomeProbe(String stage, String detail, Framebuffer target) {
-        // Probe disabled.
-    }
-
-    private void logWorldPassSkyDomeProbe(String stage) {
-        // Probe disabled.
-    }
-
-    private boolean claimSkyDomeProbeBudget(Minecraft mc) {
-        String tier = skyProbeBudgetTier(mc);
-        if ("pause".equals(tier)) {
-            return skyDomePauseProbeLogs++ < MAX_SKY_DOME_PAUSE_PROBE_LOGS;
-        }
-        if ("gui".equals(tier)) {
-            return skyDomeGuiProbeLogs++ < MAX_SKY_DOME_GUI_PROBE_LOGS;
-        }
-        return skyDomeProbeLogs++ < MAX_SKY_DOME_WORLD_PROBE_LOGS;
-    }
-
-    private boolean claimWorldPassSkyDomeProbeBudget(Minecraft mc) {
-        String tier = skyProbeBudgetTier(mc);
-        if ("pause".equals(tier)) {
-            return worldPassSkyDomePauseProbeLogs++ < MAX_WORLD_PASS_SKY_DOME_PAUSE_PROBE_LOGS;
-        }
-        if ("gui".equals(tier)) {
-            return worldPassSkyDomeGuiProbeLogs++ < MAX_WORLD_PASS_SKY_DOME_GUI_PROBE_LOGS;
-        }
-        return worldPassSkyDomeProbeLogs++ < MAX_WORLD_PASS_SKY_DOME_WORLD_PROBE_LOGS;
-    }
-
-    private boolean claimShaderlessSolidTerrainSkyProbeBudget(Minecraft mc) {
-        String tier = skyProbeBudgetTier(mc);
-        if ("pause".equals(tier)) {
-            return shaderlessSolidTerrainSkyPauseProbeLogs++ < MAX_SHADERLESS_SOLID_TERRAIN_SKY_PAUSE_PROBE_LOGS;
-        }
-        if ("gui".equals(tier)) {
-            return shaderlessSolidTerrainSkyGuiProbeLogs++ < MAX_SHADERLESS_SOLID_TERRAIN_SKY_GUI_PROBE_LOGS;
-        }
-        return shaderlessSolidTerrainSkyProbeLogs++ < MAX_SHADERLESS_SOLID_TERRAIN_SKY_WORLD_PROBE_LOGS;
-    }
-
-    private String skyProbeBudgetTier(Minecraft mc) {
-        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc)) {
-            return "pause";
-        }
-        if (isGuiSkyProbeState(mc)) {
-            return "gui";
-        }
-        return "world";
-    }
-
-    private boolean isGuiSkyProbeState(Minecraft mc) {
-        return renderingGuiScreen()
-                || mc != null
-                && (com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)));
-    }
-
-    private void logShaderlessSolidTerrainSkyProbe(String stage) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (isPipelineActive
-                || mc == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) == null
-                || isIgnoredShaderlessSkyProbeScreen(mc)
-                || !isOverworldShaderEnvironment(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc))
-                || !claimShaderlessSolidTerrainSkyProbeBudget(mc)) {
-            return;
-        }
-
-        String budget = skyProbeBudgetTier(mc);
-        int drawFramebuffer = currentDrawFramebufferBinding();
-        int readFramebuffer = currentReadFramebufferBinding();
-        int drawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
-        int readBufferId = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        MainMod.LOGGER.info("[AUSMShaderlessSolidTerrainSkyProbe] stage={} budget={} active={} shaderless={} worldFrame={} pass={} phase={} gui={} screen={} hideGUI={} paused={} world={} sky={} camera={} rays={} gl={} mcTarget={} mcColor={} mcDepth={} drawFbo={} drawBuf={} drawColor={} drawDepth={} readFbo={} readBuf={} readColor={} readDepth={} terrainCounts=solid:{},cutoutMipped:{},cutout:{},translucent:{}",
                 stage,
-                budget,
                 isPipelineActive,
-                !isPipelineActive,
                 worldFrameActive,
-                activePass,
-                getPhase(),
-                renderingGuiScreen(),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc).getClass().getName() : "none",
-                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc),
-                skyProbeWorldSummary(),
-                skyDomeSceneSummary(mc),
-                skyDomeCameraSummary(mc),
-                shaderlessSolidTerrainSampleRays(mc),
-                skyDomeGlStateSummary(),
-                describeFramebufferTargetDetailed(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
-                framebufferSamples(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
-                framebufferDepthSamples(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
-                drawFramebuffer,
-                drawBuffer,
-                framebufferIdColorSamples(drawFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), normalizedReadBuffer(drawFramebuffer, drawBuffer)),
-                framebufferIdDepthSamples(drawFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), normalizedReadBuffer(drawFramebuffer, drawBuffer)),
-                readFramebuffer,
-                readBufferId,
-                framebufferIdColorSamples(readFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), normalizedReadBuffer(readFramebuffer, readBufferId)),
-                framebufferIdDepthSamples(readFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), normalizedReadBuffer(readFramebuffer, readBufferId)),
-                shaderlessTerrainSolidCount,
-                shaderlessTerrainCutoutMippedCount,
-                shaderlessTerrainCutoutCount,
-                shaderlessTerrainTranslucentCount);
-    }
-
-    private String shaderlessSolidTerrainSampleRays(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) <= 0) {
-            return "none";
-        }
-        Entity view = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        if (view == null) {
-            return "view=null";
-        }
-
-        int height = com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc);
-        int x = Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) / 2);
-        String[] names = {"bottomSky", "lower", "center", "upper", "topDome"};
-        int[] ys = {
-                Math.max(0, Math.min(height - 1, height / 16)),
-                Math.max(0, Math.min(height - 1, height * 3 / 16)),
-                Math.max(0, Math.min(height - 1, height / 2)),
-                Math.max(0, Math.min(height - 1, height * 13 / 16)),
-                Math.max(0, Math.min(height - 1, height * 15 / 16))
-        };
-        StringBuilder builder = new StringBuilder();
-        for (int i = 0; i < names.length; i++) {
-            if (builder.length() > 0) {
-                builder.append(';');
-            }
-            builder.append(names[i])
-                    .append('=')
-                    .append(x)
-                    .append(',')
-                    .append(ys[i])
-                    .append(',')
-                    .append(shaderlessSolidTerrainRayHit(mc, view, ys[i], height));
-        }
-        return builder.toString();
-    }
-
-    private String shaderlessSolidTerrainRayHit(Minecraft mc, Entity view, int y, int height) {
-        try {
-            float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
-            double eyeX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(view), partialTicks);
-            double eyeY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(view), partialTicks) + com.l.ausm.impl.util.MinecraftReflectionCompat.eyeHeight(view);
-            double eyeZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(view), partialTicks);
-            Vec3d start = new Vec3d(eyeX, eyeY, eyeZ);
-            Vec3d direction = shaderlessProbeScreenRayDirection(mc, view, y, height);
-            Vec3d end = com.l.ausm.impl.util.MinecraftReflectionCompat.vecAdd(start, com.l.ausm.impl.util.MinecraftReflectionCompat.vecScale(direction, 512.0D));
-            RayTraceResult hit = com.l.ausm.impl.util.MinecraftReflectionCompat.call((com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)), net.minecraft.util.math.RayTraceResult.class, null, new String[] {"func_147447_a", "rayTraceBlocks"},
-                new Class<?>[] {net.minecraft.util.math.Vec3d.class, net.minecraft.util.math.Vec3d.class, boolean.class, boolean.class, boolean.class},
-                (start), (end), (false), (true), (false));
-            if (hit == null || com.l.ausm.impl.util.MinecraftReflectionCompat.field((hit), net.minecraft.util.math.RayTraceResult.Type.class, null, "field_72313_a", "typeOfHit") != RayTraceResult.Type.BLOCK || com.l.ausm.impl.util.MinecraftReflectionCompat.rayTraceBlockPos(hit) == null) {
-                return "dir=" + formatVec3d(direction) + ",hit=miss";
-            }
-            BlockPos pos = com.l.ausm.impl.util.MinecraftReflectionCompat.rayTraceBlockPos(hit);
-            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), pos);
-            return "dir=" + formatVec3d(direction)
-                    + ",hit=" + formatBlockPos(pos)
-                    + ",side=" + com.l.ausm.impl.util.MinecraftReflectionCompat.field((hit), net.minecraft.util.EnumFacing.class, null, "field_178784_b", "sideHit")
-                    + ",block=" + registryName(state)
-                    + ",state=" + stateName(state)
-                    + ",dist=" + com.l.ausm.impl.util.MinecraftReflectionCompat.vecDistance(start, com.l.ausm.impl.util.MinecraftReflectionCompat.field((hit), net.minecraft.util.math.Vec3d.class, null, "field_72307_f", "hitVec"));
-        } catch (RuntimeException | LinkageError e) {
-            return "error=" + e.getClass().getSimpleName();
-        }
-    }
-
-    private Vec3d shaderlessProbeScreenRayDirection(Minecraft mc, Entity view, int y, int height) {
-        double ndcY = height <= 1 ? 0.0D : (y / (double) (height - 1)) * 2.0D - 1.0D;
-        double fov = com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.fieldFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)), 70.0F, "field_74334_X", "fovSetting") : 70.0D;
-        double verticalOffset = Math.toDegrees(Math.atan(ndcY * Math.tan(Math.toRadians(fov) * 0.5D)));
-        double pitch = com.l.ausm.impl.util.MinecraftReflectionCompat.rotationPitch(view) - verticalOffset;
-        double yaw = com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(view);
-        double yawRadians = Math.toRadians(yaw);
-        double pitchRadians = Math.toRadians(pitch);
-        double cosPitch = Math.cos(pitchRadians);
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.vecNormalize(new Vec3d(
-                -Math.sin(yawRadians) * cosPitch,
-                -Math.sin(pitchRadians),
-                Math.cos(yawRadians) * cosPitch));
-    }
-
-    private int normalizedReadBuffer(int framebuffer, int buffer) {
-        if (buffer == GL11.GL_NONE && framebuffer == 0) {
-            return GL11.GL_BACK;
-        }
-        return buffer;
-    }
-
-    private String skyDomeSceneSummary(Minecraft mc) {
-        World world = renderWorld(mc);
-        Entity view = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) : null;
-        if (world == null) {
-            return "world=null";
-        }
-        float partialTicks = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc) : 0.0F;
-        String skyColor = "none";
-        try {
-            Vec3d color = view != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_72833_a", "getSkyColor"},
-                new Class<?>[] {net.minecraft.entity.Entity.class, float.class}, (view), (partialTicks)) : null;
-            skyColor = color != null ? formatVec3d(color) : "null";
-        } catch (RuntimeException | LinkageError e) {
-            skyColor = "error=" + e.getClass().getSimpleName();
-        }
-        double horizon = Double.NaN;
-        float cloudHeight = Float.NaN;
-        try {
-            if (com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null) {
-                horizon = com.l.ausm.impl.util.MinecraftReflectionCompat.callDouble((com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)), new String[] {"func_76567_e", "getHorizon"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 63.0D);
-                cloudHeight = com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)), new String[] {"func_76571_f", "getCloudHeight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 128.0F);
-            }
-        } catch (RuntimeException | LinkageError ignored) {
-            horizon = Double.NaN;
-        }
-        return "skyColor=" + skyColor
-                + ",celestialPartial=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks)
-                + ",celestial0=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, 0.0F)
-                + ",sunBrightness=" + com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((world), new String[] {"func_72971_b", "getSunBrightness"},
-                new Class<?>[] {float.class}, 0.0F, (partialTicks))
-                + ",starBrightness=" + com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((world), new String[] {"func_72880_h", "getStarBrightness"},
-                new Class<?>[] {float.class}, 0.0F, (partialTicks))
-                + ",rain=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, partialTicks)
-                + ",thunder=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldThunderStrength(world, partialTicks)
-                + ",day=" + dayHelper(mc)
-                + ",night=" + nightHelper(mc)
-                + ",dawnDusk=" + ((1.0F - dayHelper(mc)) - nightHelper(mc))
-                + ",horizon=" + horizon
-                + ",cloudHeight=" + cloudHeight;
-    }
-
-    private String skyDomeCameraSummary(Minecraft mc) {
-        Entity view = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) : null;
-        if (view == null) {
-            return "view=null";
-        }
-        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
-        Vec3d look = com.l.ausm.impl.util.MinecraftReflectionCompat.look(view, partialTicks);
-        double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(view), partialTicks);
-        double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(view), partialTicks);
-        double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(view), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(view), partialTicks);
-        return "pos=" + x + "/" + y + "/" + z
-                + ",eye=" + (y + com.l.ausm.impl.util.MinecraftReflectionCompat.eyeHeight(view))
-                + ",yaw=" + com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(view)
-                + ",pitch=" + com.l.ausm.impl.util.MinecraftReflectionCompat.rotationPitch(view)
-                + ",prevYaw=" + com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationYaw(view)
-                + ",prevPitch=" + com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationPitch(view)
-                + ",look=" + formatVec3d(look)
-                + ",verticalDelta=" + cameraVerticalDelta()
-                + ",horizontalDelta=" + cameraHorizontalVelocityMagnitude();
-    }
-
-    private static String formatVec3d(Vec3d value) {
-        if (value == null) {
-            return "null";
-        }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(value) + "/" + com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(value) + "/" + com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(value);
-    }
-
-    private String skyDomeGlStateSummary() {
-        FloatBuffer clearColor = BufferUtils.createFloatBuffer(4);
-        IntBuffer viewport = BufferUtils.createIntBuffer(4);
-        ByteBuffer colorMask = BufferUtils.createByteBuffer(4);
-        GL11.glGetFloat(GL11.GL_COLOR_CLEAR_VALUE, clearColor);
-        GL11.glGetInteger(GL11.GL_VIEWPORT, viewport);
-        GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, colorMask);
-        return skyProbeGlStateSummary()
-                + ",program=" + GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
-                + ",viewport=" + viewport.get(0) + "/" + viewport.get(1) + "/" + viewport.get(2) + "/" + viewport.get(3)
-                + ",clear=" + clearColor.get(0) + "/" + clearColor.get(1) + "/" + clearColor.get(2) + "/" + clearColor.get(3)
-                + ",drawBuffer=" + GL11.glGetInteger(GL11.GL_DRAW_BUFFER)
-                + ",readBuffer=" + GL11.glGetInteger(GL11.GL_READ_BUFFER)
-                + ",depthTest=" + GL11.glIsEnabled(GL11.GL_DEPTH_TEST)
-                + ",depthMask=" + GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
-                + ",blend=" + GL11.glIsEnabled(GL11.GL_BLEND)
-                + ",alpha=" + GL11.glIsEnabled(GL11.GL_ALPHA_TEST)
-                + ",fog=" + GL11.glIsEnabled(GL11.GL_FOG)
-                + ",cull=" + GL11.glIsEnabled(GL11.GL_CULL_FACE)
-                + ",colorMask=" + (colorMask.get(0) != 0) + "/" + (colorMask.get(1) != 0) + "/" + (colorMask.get(2) != 0) + "/" + (colorMask.get(3) != 0);
-    }
-
-    private String framebufferSamples(Framebuffer framebuffer) {
-        if (framebuffer == null || com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer) <= 0) {
-            return "none";
-        }
-
-        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        try {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer));
-            GL11.glReadBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            int width = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer);
-            int height = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer);
-            return "center=" + readFramebufferPixel(width / 2, height / 2)
-                    + ";upper=" + readFramebufferPixel(width / 2, Math.max(0, height * 3 / 4))
-                    + ";lower=" + readFramebufferPixel(width / 2, Math.max(0, height / 4));
-        } catch (RuntimeException | LinkageError e) {
-            return "error=" + e.getClass().getSimpleName();
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
-        }
-    }
-
-    private String currentDrawFramebufferColorSamples(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) <= 0) {
-            return "none";
-        }
-        int drawFramebuffer = currentDrawFramebufferBinding();
-        int drawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
-        if (drawFramebuffer == 0 && drawBuffer == GL11.GL_NONE) {
-            drawBuffer = GL11.GL_BACK;
-        }
-        return framebufferIdColorSamples(drawFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), drawBuffer);
-    }
-
-    private String framebufferIdColorSamples(int framebuffer, int width, int height, int readBuffer) {
-        if (width <= 0 || height <= 0 || readBuffer == GL11.GL_NONE) {
-            return "invalid";
-        }
-
-        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        try {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebuffer);
-            GL11.glReadBuffer(readBuffer);
-            return sampleBoundReadFramebuffer(width, height, false);
-        } catch (RuntimeException | LinkageError e) {
-            return "error=" + e.getClass().getSimpleName();
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
-        }
-    }
-
-    private String framebufferDepthSamples(Framebuffer framebuffer) {
-        if (framebuffer == null || com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer) <= 0) {
-            return "none";
-        }
-        return framebufferIdDepthSamples(
-                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-    }
-
-    private String currentFramebufferDepthSamples(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) <= 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) <= 0) {
-            return "none";
-        }
-        int readFramebuffer = currentReadFramebufferBinding();
-        int readBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        if (readFramebuffer == 0 && readBuffer == GL11.GL_NONE) {
-            readBuffer = GL11.GL_BACK;
-        }
-        return framebufferIdDepthSamples(readFramebuffer, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), readBuffer);
-    }
-
-    private String deferredFramebufferColorSamples(DeferredFramebuffer framebuffer, Attachment attachment) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return "none";
-        }
-        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-        try {
-            int texture = framebuffer.getReadTexture(attachment);
-            if (texture <= 0) {
-                return "no-texture";
-            }
-            int probeFbo = GL30.glGenFramebuffers();
-            try {
-                GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, probeFbo);
-                GL30.glFramebufferTexture2D(
-                        GL30.GL_READ_FRAMEBUFFER,
-                        GL30.GL_COLOR_ATTACHMENT0,
-                        GL11.GL_TEXTURE_2D,
-                        texture,
-                        0
-                );
-                GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
-                return sampleBoundReadFramebuffer(
-                        Math.max(1, framebuffer.getAttachmentWidth(attachment)),
-                        Math.max(1, framebuffer.getAttachmentHeight(attachment)),
-                        false);
-            } finally {
-                GL30.glDeleteFramebuffers(probeFbo);
-            }
-        } catch (RuntimeException | LinkageError e) {
-            return "error=" + e.getClass().getSimpleName();
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(previousTexture);
-        }
-    }
-
-    private String deferredFramebufferRecoveryColorSamples(DeferredFramebuffer framebuffer) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return "none";
-        }
-        if (!framebuffer.hasRecoveryColorSnapshot()) {
-            return "no-snapshot";
-        }
-        int width = Math.max(1, framebuffer.getRecoveryColorWidth());
-        int height = Math.max(1, framebuffer.getRecoveryColorHeight());
-        int x = Math.max(0, Math.min(width - 1, width / 2));
-        int bottomSkyY = Math.max(0, Math.min(height - 1, height / 16));
-        int lowerY = Math.max(0, Math.min(height - 1, height * 3 / 16));
-        int centerY = Math.max(0, Math.min(height - 1, height / 2));
-        int upperY = Math.max(0, Math.min(height - 1, height * 13 / 16));
-        int topDomeY = Math.max(0, Math.min(height - 1, height * 15 / 16));
-        return "bottomSky=" + recoveryColorPixelSummary(framebuffer, x, bottomSkyY)
-                + ";lower=" + recoveryColorPixelSummary(framebuffer, x, lowerY)
-                + ";center=" + recoveryColorPixelSummary(framebuffer, x, centerY)
-                + ";upper=" + recoveryColorPixelSummary(framebuffer, x, upperY)
-                + ";topDome=" + recoveryColorPixelSummary(framebuffer, x, topDomeY);
-    }
-
-    private String recoveryColorPixelSummary(DeferredFramebuffer framebuffer, int x, int y) {
-        try {
-            float[] color = framebuffer.readRecoveryColorAt(x, y);
-            if (!isFiniteColor(color)) {
-                return x + "," + y + "=rgba(nan,nan,nan,nan)";
-            }
-            return x + "," + y + "=rgba("
-                    + recoveryColorByte(color[0]) + ','
-                    + recoveryColorByte(color[1]) + ','
-                    + recoveryColorByte(color[2]) + ','
-                    + recoveryColorByte(color[3]) + ')';
-        } catch (RuntimeException | LinkageError e) {
-            return x + "," + y + "=error=" + e.getClass().getSimpleName();
-        }
-    }
-
-    private static int recoveryColorByte(float value) {
-        if (!Float.isFinite(value)) {
-            return 0;
-        }
-        return Math.max(0, Math.min(255, Math.round(value * 255.0f)));
-    }
-
-    private String deferredFramebufferAttachmentSamples(DeferredFramebuffer framebuffer) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return "none";
-        }
-        StringBuilder summary = new StringBuilder();
-        for (Attachment attachment : Attachment.values()) {
-            if (summary.length() > 0) {
-                summary.append('|');
-            }
-            summary.append(attachment.name())
-                    .append('=')
-                    .append(deferredFramebufferColorSamples(framebuffer, attachment));
-        }
-        return summary.toString();
-    }
-
-    private String shaderedVoidSkyProgramSummary() {
-        PipelineProgram finalProgram = programs.get(RenderPass.FINAL);
-        return "compositeFixed=" + fullscreenProgramsSummary(ProgramArrayId.COMPOSITE)
-                + ", compositeIndexed=" + fullscreenArrayProgramsSummary(ProgramArrayId.COMPOSITE)
-                + ", final=" + describePipelineProgram(finalProgram)
-                + ", finalDrawBuffers=" + (finalProgram != null ? finalProgram.drawBuffers() : "none")
-                + ", finalComputes=" + finalComputePrograms.size();
-    }
-
-    private String fullscreenProgramsSummary(ProgramArrayId arrayId) {
-        FullscreenProgramArray array = fullscreenProgramArrays.get(arrayId);
-        if (array == null || array.fixedPasses().isEmpty()) {
-            return "none";
-        }
-        StringBuilder summary = new StringBuilder();
-        for (RenderPass pass : array.fixedPasses()) {
-            PipelineProgram program = programs.get(pass);
-            if (program == null || !program.hasOwnProgram()) {
-                continue;
-            }
-            if (summary.length() > 0) {
-                summary.append(',');
-            }
-            summary.append(pass).append(program.drawBuffers());
-        }
-        return summary.length() == 0 ? "none" : summary.toString();
-    }
-
-    private String fullscreenArrayProgramsSummary(ProgramArrayId arrayId) {
-        List<FullscreenArrayProgram> arrayPrograms = fullscreenArrayPrograms.getOrDefault(arrayId, List.of());
-        if (arrayPrograms.isEmpty()) {
-            return "none";
-        }
-        StringBuilder summary = new StringBuilder();
-        for (FullscreenArrayProgram program : arrayPrograms) {
-            if (program == null || !program.hasProgram()) {
-                continue;
-            }
-            if (summary.length() > 0) {
-                summary.append(',');
-            }
-            summary.append(program.name()).append(program.drawBuffers());
-        }
-        return summary.length() == 0 ? "none" : summary.toString();
-    }
-
-    private String framebufferIdDepthSamples(int framebuffer, int width, int height, int readBuffer) {
-        if (width <= 0 || height <= 0) {
-            return "invalid-size";
-        }
-
-        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        try {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebuffer);
-            if (readBuffer != GL11.GL_NONE) {
-                GL11.glReadBuffer(readBuffer);
-            }
-            return sampleBoundReadFramebuffer(width, height, true);
-        } catch (RuntimeException | LinkageError e) {
-            return "error=" + e.getClass().getSimpleName();
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
-        }
-    }
-
-    private String sampleBoundReadFramebuffer(int width, int height, boolean includeDepth) {
-        int x = Math.max(0, width / 2);
-        int bottomSkyY = Math.max(0, Math.min(height - 1, height / 16));
-        int lowerY = Math.max(0, Math.min(height - 1, height * 3 / 16));
-        int centerY = Math.max(0, Math.min(height - 1, height / 2));
-        int upperY = Math.max(0, Math.min(height - 1, height * 13 / 16));
-        int topDomeY = Math.max(0, Math.min(height - 1, height * 15 / 16));
-        return "bottomSky=" + readFramebufferPixelSummary(x, bottomSkyY, includeDepth)
-                + ";lower=" + readFramebufferPixelSummary(x, lowerY, includeDepth)
-                + ";center=" + readFramebufferPixelSummary(x, centerY, includeDepth)
-                + ";upper=" + readFramebufferPixelSummary(x, upperY, includeDepth)
-                + ";topDome=" + readFramebufferPixelSummary(x, topDomeY, includeDepth);
-    }
-
-    private String readFramebufferPixel(int x, int y) {
-        ByteBuffer pixel = BufferUtils.createByteBuffer(4);
-        GL11.glReadPixels(x, y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
-        return (pixel.get(0) & 0xFF) + "/" + (pixel.get(1) & 0xFF) + "/" + (pixel.get(2) & 0xFF) + "/" + (pixel.get(3) & 0xFF);
-    }
-
-    private int currentReadFramebufferBinding() {
-        return GLContext.getCapabilities().OpenGL30
-                ? GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING)
-                : GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
-    }
-
-    private boolean isIgnoredShaderlessSkyProbeScreen(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null) {
-            return false;
-        }
-        String screenClass = com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc).getClass().getName();
-        return "net.minecraft.client.gui.GuiChat".equals(screenClass);
-    }
-
-    private int currentDrawFramebufferBinding() {
-        return GLContext.getCapabilities().OpenGL30
-                ? GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
-                : GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
-    }
-
-    private void restoreReadBufferForFramebuffer(int framebuffer, int readBuffer) {
-        GL11.glReadBuffer(safeBufferForFramebuffer(framebuffer, readBuffer));
-    }
-
-    private void restoreDrawBufferForFramebuffer(int framebuffer, int drawBuffer) {
-        GL11.glDrawBuffer(safeBufferForFramebuffer(framebuffer, drawBuffer));
-    }
-
-    private int safeBufferForFramebuffer(int framebuffer, int buffer) {
-        if (buffer == GL11.GL_NONE) {
-            return GL11.GL_NONE;
-        }
-        boolean attachmentBuffer = buffer >= GL30.GL_COLOR_ATTACHMENT0 && buffer < GL30.GL_COLOR_ATTACHMENT0 + maxDrawBuffers();
-        return framebuffer == 0
-                ? attachmentBuffer ? GL11.GL_BACK : buffer
-                : attachmentBuffer ? buffer : GL30.GL_COLOR_ATTACHMENT0;
-    }
-
-    private void bindMinecraftFramebufferForGui(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null) {
-            return;
-        }
-        Framebuffer framebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
-        int framebufferObject = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(framebuffer, false);
-        restoreDrawBufferForFramebuffer(framebufferObject, GL30.GL_COLOR_ATTACHMENT0);
-        restoreReadBufferForFramebuffer(framebufferObject, GL30.GL_COLOR_ATTACHMENT0);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(
-                0,
-                0,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
-    }
-
-    private int boundTexture2D(int textureUnit) {
-        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
-        try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(textureUnit);
-            return GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-        } finally {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(previousActiveTexture);
-        }
-    }
-
-    private boolean texture2DEnabled(int textureUnit) {
-        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
-        try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(textureUnit);
-            return GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
-        } finally {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(previousActiveTexture);
-        }
-    }
-
-    private boolean textureCoordArrayEnabled(int textureUnit) {
-        int previousClientTexture = GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE);
-        try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(textureUnit);
-            return GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY);
-        } finally {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(previousClientTexture);
-        }
-    }
-
-    private String fogColorSummary() {
-        java.nio.FloatBuffer color = org.lwjgl.BufferUtils.createFloatBuffer(4);
-        GL11.glGetFloat(GL11.GL_FOG_COLOR, color);
-        return color.get(0) + "/" + color.get(1) + "/" + color.get(2) + "/" + color.get(3);
-    }
-
-    private String currentColorSummary() {
-        java.nio.FloatBuffer color = org.lwjgl.BufferUtils.createFloatBuffer(4);
-        GL11.glGetFloat(GL11.GL_CURRENT_COLOR, color);
-        return color.get(0) + "/" + color.get(1) + "/" + color.get(2) + "/" + color.get(3);
-    }
-
-    private String colorMaskSummary() {
-        java.nio.ByteBuffer colorMask = org.lwjgl.BufferUtils.createByteBuffer(16);
-        GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, colorMask);
-        return (colorMask.get(0) != 0)
-                + "/"
-                + (colorMask.get(1) != 0)
-                + "/"
-                + (colorMask.get(2) != 0)
-                + "/"
-                + (colorMask.get(3) != 0);
-    }
-
-    private String viewportSummary() {
-        viewportBuffer.clear();
-        GL11.glGetInteger(GL11.GL_VIEWPORT, viewportBuffer);
-        return viewportBuffer.get(0)
-                + ","
-                + viewportBuffer.get(1)
-                + ","
-                + viewportBuffer.get(2)
-                + "x"
-                + viewportBuffer.get(3);
-    }
-
-    public boolean shouldUseCrystalOnlyEmission(IBlockState state) {
-        return isAstralCrystalCluster(state);
-    }
-
-    public boolean shouldUseCrystalOnlyEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return shouldUseCrystalOnlyEmission(actualLightState(state, blockAccess, pos));
-    }
-
-    private int blockRenderEmissionForState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        int explicit = explicitShaderedBlockEmission(state, blockAccess, pos);
-        if (explicit > 0) {
-            return explicit;
-        }
-        return intrinsicBlockEmission(state);
-    }
-
-    private int explicitShaderedBlockEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        int blockcrafteryEmission = blockcrafteryLightEmission(state);
-        if (blockcrafteryEmission > 0) {
-            return blockcrafteryEmission;
-        }
-        int luminousEmission = randomThingsLuminousEmission(state);
-        if (luminousEmission > 0) {
-            return luminousEmission;
-        }
-        int astralEmission = astralCrystalEmission(state);
-        if (astralEmission > 0) {
-            return astralEmission;
-        }
-        return 0;
-    }
-
-    private int inheritedBlockRenderEmission(IBlockState state) {
-        int blockcrafteryEmission = blockcrafteryLightEmission(state);
-        if (blockcrafteryEmission > 0) {
-            return blockcrafteryEmission;
-        }
-        int luminousEmission = randomThingsLuminousEmission(state);
-        if (luminousEmission > 0) {
-            return luminousEmission;
-        }
-        int astralEmission = astralCrystalEmission(state);
-        if (astralEmission > 0) {
-            return astralEmission;
-        }
-        try {
-            return clampLightValue(com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state));
-        } catch (RuntimeException ignored) {
-            return 0;
-        }
-    }
-
-    public int blockIntrinsicEmission(IBlockState state) {
-        return state != null ? inheritedBlockRenderEmission(state) : 0;
-    }
-
-    private int blockcrafteryLightEmission(IBlockState state) {
-        if (!isBlockcrafteryEditableBlock(state)) {
-            return 0;
-        }
-        try {
-            for (Map.Entry<net.minecraft.block.properties.IProperty<?>, Comparable<?>> entry : com.l.ausm.impl.util.MinecraftReflectionCompat.stateProperties(state).entrySet()) {
-                net.minecraft.block.properties.IProperty<?> property = entry.getKey();
-                if (property != null
-                        && "light".equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.propertyName(property))
-                        && Boolean.TRUE.equals(entry.getValue())) {
-                    return 15;
-                }
-            }
-        } catch (RuntimeException ignored) {
-        }
-        return 0;
-    }
-
-    private IBlockState[] inheritedRenderStates(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null) {
-            return new IBlockState[0];
-        }
-
-        FramedMaterialState framedState = framedMaterialState(state, blockAccess, pos);
-        if (framedState != null) {
-            if (framedState.blockcrafteryActualState != null) {
-                return new IBlockState[]{framedState.blockcrafteryActualState};
-            }
-            IBlockState architectureBase = framedState.architectureBaseActualState;
-            IBlockState architectureSecondary = framedState.architectureSecondaryActualState;
-            if (architectureBase != null && architectureSecondary != null && architectureSecondary != architectureBase) {
-                return new IBlockState[]{architectureBase, architectureSecondary};
-            }
-            if (architectureBase != null) {
-                return new IBlockState[]{architectureBase};
-            }
-            if (architectureSecondary != null) {
-                return new IBlockState[]{architectureSecondary};
-            }
-        }
-
-        IBlockState pipelineState = actualLightState(state, blockAccess, pos);
-        return pipelineState != null && pipelineState != state ? new IBlockState[]{pipelineState} : new IBlockState[0];
-    }
-
-    private boolean isBloomOrEmissiveInheritedState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
-            return false;
-        }
-        if (isBlockcrafteryEditableBlock(state)) {
-            return false;
-        }
-        return blockShaderlessBloomEmission(state, blockAccess, pos) > 0;
-    }
-
-    private boolean stateHasBloomResourceGeometry(IBlockState state) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
-            return false;
-        }
-        if (isBlockcrafteryEditableBlock(state)) {
-            return false;
-        }
-        String key = stateName(state);
-        Boolean cached = bloomResourceGeometryStateCache.get(key);
-        if (cached != null) {
-            return cached;
-        }
-
-        if (!bloomResourceGeometryScansInProgress.add(key)) {
-            return false;
-        }
-        try {
-            boolean result = scanStateForBloomResourceGeometry(state);
-            bloomResourceGeometryStateCache.putIfAbsent(key, result);
-            return result;
-        } finally {
-            bloomResourceGeometryScansInProgress.remove(key);
-        }
-    }
-
-    private boolean scanStateForBloomResourceGeometry(IBlockState state) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        BlockRendererDispatcher dispatcher = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRendererDispatcher(mc);
-        if (dispatcher == null) {
-            return false;
-        }
-
-        net.minecraft.client.renderer.block.model.IBakedModel model;
-        try {
-            model = com.l.ausm.impl.util.MinecraftReflectionCompat.call((dispatcher), net.minecraft.client.renderer.block.model.IBakedModel.class, null, new String[] {"func_184389_a", "getModelForState"},
-                new Class<?>[] {net.minecraft.block.state.IBlockState.class}, (state));
-        } catch (RuntimeException | LinkageError ignored) {
-            return false;
-        }
-        if (model == null) {
-            return false;
-        }
-
-        BlockRenderLayer previousLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
-        try {
-            for (BlockRenderLayer layer : BlockRenderLayer.values()) {
-                if (AusmBloomLayer.isBloomLayer(layer) || !canRenderInLayer(state, layer)) {
-                    continue;
-                }
-                com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(layer);
-                if (modelQuadsHaveBloomSprite(model, state, null)) {
-                    return true;
-                }
-                for (EnumFacing side : EnumFacing.values()) {
-                    if (modelQuadsHaveBloomSprite(model, state, side)) {
-                        return true;
-                    }
-                }
-            }
-        } finally {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(previousLayer);
-        }
-        return false;
-    }
-
-    private boolean modelQuadsHaveBloomSprite(net.minecraft.client.renderer.block.model.IBakedModel model,
-                                              IBlockState state,
-                                              EnumFacing side) {
-        List<BakedQuad> quads;
-        try {
-            quads = com.l.ausm.impl.util.MinecraftReflectionCompat.bakedModelQuads(model, state, side, 0L);
-        } catch (RuntimeException | LinkageError ignored) {
-            return false;
-        }
-        if (quads == null || quads.isEmpty()) {
-            return false;
-        }
-        for (BakedQuad quad : quads) {
-            TextureAtlasSprite sprite = quad != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadSprite(quad) : null;
-            if (sprite != null && (isEmissiveSpriteName(com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite)) || bloomRenderer.hasBloomSprite(com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite)))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean isEmissiveSpriteName(String spriteName) {
-        if (spriteName == null) {
-            return false;
-        }
-        String normalized = spriteName.toLowerCase(java.util.Locale.ROOT);
-        return normalized.endsWith("_e")
-                || normalized.contains("_e/")
-                || normalized.contains("/emissive")
-                || normalized.contains("_emissive")
-                || normalized.contains("/glow")
-                || normalized.contains("_glow")
-                || normalized.contains("/bloom")
-                || normalized.contains("_bloom");
-    }
-
-    private boolean isExplicitBloomState(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null) {
-            return false;
-        }
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
-        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).toLowerCase(java.util.Locale.ROOT) : "";
-        String blockClass = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state).getClass().getName().toLowerCase(java.util.Locale.ROOT);
-        return namespace.contains("lumenized")
-                || path.contains("lumenized")
-                || path.contains("luminous")
-                || path.contains("emissive")
-                || path.contains("bloom")
-                || blockClass.contains("lumenized");
-    }
-
-    private boolean isLumenizedBloomState(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null) {
-            return false;
-        }
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
-        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).toLowerCase(java.util.Locale.ROOT) : "";
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        String blockClass = block != null
-                ? block.getClass().getName().toLowerCase(java.util.Locale.ROOT)
-                : "";
-        return namespace.contains("lumenized") || path.contains("lumenized") || blockClass.contains("lumenized");
-    }
-
-    private int nextFramedDiagnosticCount(IBlockState state, boolean priority) {
-        if (priority) {
-            int count = framedPriorityDiagnosticCount.incrementAndGet();
-            return count <= MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS ? count : -1;
-        }
-        if (isArchitectureCraftShapeBlock(state)) {
-            int count = architectureCraftDiagnosticCount.incrementAndGet();
-            return count <= MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS ? count : -1;
-        }
-        int count = blockcrafteryDiagnosticCount.incrementAndGet();
-        return count <= MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS ? count : -1;
-    }
-
-    private String framedDiagnosticKind(IBlockState state) {
-        if (isArchitectureCraftShapeBlock(state)) {
-            return "architecturecraft";
-        }
-        if (isBlockcrafteryEditableBlock(state)) {
-            return "blockcraftery";
-        }
-        return "unknown";
-    }
-
-    private boolean isPriorityFramedDiagnosticState(IBlockState state, IBlockAccess blockAccess, BlockPos pos,
-                                                   BlockRenderLayer bloomLayer) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
-            return false;
-        }
-        if (blockRenderEmissionForState(state, blockAccess, pos) > 0 || blockEntityId(state, blockAccess, pos) != 0) {
-            return true;
-        }
-        if (bloomLayer != null && canRenderInLayer(state, bloomLayer)) {
-            return true;
-        }
-        if (stateHasBloomLayerGeometry(state)) {
-            return true;
-        }
-        return isPriorityFramedDiagnosticName(state);
-    }
-
-    private boolean isPriorityFramedDiagnosticName(IBlockState state) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
-            return false;
-        }
-        ResourceLocation name = registryName(state);
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
-        String namespace = name != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).toLowerCase(java.util.Locale.ROOT) : "";
-        return path.contains("luminous")
-                || path.contains("emissive")
-                || path.contains("bloom")
-                || namespace.contains("randomthings")
-                || namespace.contains("lumenized");
-    }
-
-    private String framedDiagnosticInheritedStates(IBlockState state, IBlockAccess blockAccess, BlockPos pos,
-                                                   BlockRenderLayer currentLayer, BlockRenderLayer bloomLayer) {
-        IBlockState[] inheritedStates = inheritedRenderStates(state, blockAccess, pos);
-        if (inheritedStates.length == 0) {
-            return "[]";
-        }
-
-        StringBuilder builder = new StringBuilder("[");
-        for (int i = 0; i < inheritedStates.length; i++) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(framedDiagnosticState("inherited" + i, inheritedStates[i], blockAccess, pos,
-                    currentLayer, bloomLayer));
-        }
-        return builder.append(']').toString();
-    }
-
-    private String framedDiagnosticState(String label, IBlockState state, IBlockAccess blockAccess, BlockPos pos,
-                                         BlockRenderLayer currentLayer, BlockRenderLayer bloomLayer) {
-        if (state == null) {
-            return label + "{state=null}";
-        }
-
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        return label + "{"
-                + "name=" + stateName(state)
-                + ", state=" + state
-                + ", class=" + (block != null ? block.getClass().getName() : "null")
-                + ", renderType=" + safeRenderType(state)
-                + ", naturalLayer=" + safeRenderLayer(state)
-                + ", canCurrent=" + canRenderInLayer(state, currentLayer)
-                + ", canSolid=" + canRenderInLayer(state, BlockRenderLayer.SOLID)
-                + ", canCutoutMipped=" + canRenderInLayer(state, BlockRenderLayer.CUTOUT_MIPPED)
-                + ", canCutout=" + canRenderInLayer(state, BlockRenderLayer.CUTOUT)
-                + ", canTranslucent=" + canRenderInLayer(state, BlockRenderLayer.TRANSLUCENT)
-                + ", canBloom=" + (bloomLayer != null && canRenderInLayer(state, bloomLayer))
-                + ", emission=" + blockRenderEmissionForState(state, blockAccess, pos)
-                + ", lightAccess=" + safeLightValue(state, blockAccess, pos)
-                + ", lightRaw=" + safeLightValue(state, null, null)
-                + ", blockId=" + blockEntityId(state, blockAccess, pos)
-                + ", metadata=" + blockMetadata(state)
-                + ", opaque=" + safeOpaqueCube(state)
-                + ", full=" + safeFullCube(state)
-                + ", material=" + (com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(state) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(state) : "null")
-                + "}";
-    }
-
-    private static EnumBlockRenderType safeRenderType(IBlockState state) {
-        try {
-            return state != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderType(state) : null;
-        } catch (RuntimeException | LinkageError ignored) {
-            return null;
-        }
-    }
-
-    private static BlockRenderLayer safeRenderLayer(IBlockState state) {
-        try {
-            return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRenderLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state)) : null;
-        } catch (RuntimeException | LinkageError ignored) {
-            return null;
-        }
-    }
-
-    private static int safeLightValue(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        try {
-            if (state == null) {
-                return 0;
-            }
-            if (blockAccess != null && pos != null) {
-                return com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state, blockAccess, pos);
-            }
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state);
-        } catch (RuntimeException | LinkageError ignored) {
-            return -1;
-        }
-    }
-
-    private static boolean safeOpaqueCube(IBlockState state) {
-        try {
-            return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((state), new String[] {"func_185913_b", "isOpaqueCube"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
-        } catch (RuntimeException | LinkageError ignored) {
-            return false;
-        }
-    }
-
-    private static boolean safeFullCube(IBlockState state) {
-        try {
-            return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((state), new String[] {"func_185917_h", "isFullCube"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
-        } catch (RuntimeException | LinkageError ignored) {
-            return false;
-        }
-    }
-
-    private static boolean canRenderInLayer(IBlockState state, BlockRenderLayer layer) {
-        try {
-            Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-            return state != null && block != null && layer != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer);
-        } catch (RuntimeException | LinkageError ignored) {
-            return false;
-        }
-    }
-
-    private static int blockMetadata(IBlockState state) {
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        if (state == null || block == null) {
-            return 0;
-        }
-        try {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.blockMetaFromState(block, state);
-        } catch (RuntimeException ignored) {
-            return 0;
-        }
-    }
-
-    private int randomThingsLuminousEmission(IBlockState state) {
-        if (state == null) {
-            return 0;
-        }
-
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        if (!isRandomThingsLuminousBlock(state)) {
-            return 0;
-        }
-
-        Class<?> luminousBlockClass = randomThingsLuminousBlockClass();
-        if (block == null || luminousBlockClass == null || !luminousBlockClass.isInstance(block)) {
-            return 0;
-        }
-
-        Method shouldGlow = randomThingsShouldGlowMethod;
-        if (shouldGlow == null) {
-            return 0;
-        }
-
-        int metadata = 0;
-        try {
-            metadata = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((block), new String[] {"func_176201_c", "getMetaFromState"},
-                new Class<?>[] {net.minecraft.block.state.IBlockState.class}, 0, (state));
-        } catch (RuntimeException | LinkageError ignored) {
-        }
-
-        try {
-            Object result = shouldGlow.invoke(block, state, metadata);
-            return Boolean.TRUE.equals(result) ? 15 : 0;
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            return 0;
-        }
-    }
-
-    private Class<?> randomThingsLuminousBlockClass() {
-        if (!randomThingsLuminousBlockResolved) {
-            randomThingsLuminousBlockResolved = true;
-            try {
-                randomThingsLuminousBlockClass = Class.forName(RANDOM_THINGS_LUMINOUS_BLOCK_CLASS, false, PipelineContext.class.getClassLoader());
-                randomThingsShouldGlowMethod = randomThingsLuminousBlockClass.getMethod("shouldGlow", IBlockState.class, int.class);
-                randomThingsShouldGlowMethod.setAccessible(true);
-            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-                randomThingsLuminousBlockClass = null;
-                randomThingsShouldGlowMethod = null;
-            }
-        }
-        return randomThingsLuminousBlockClass;
-    }
-
-    private static boolean isRandomThingsLuminousBlock(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null) {
-            return false;
-        }
-        return "randomthings".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
-                && isRandomThingsLuminousPath(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name));
-    }
-
-    private static boolean isRandomThingsTranslucentLuminousBlock(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null) {
-            return false;
-        }
-        return "randomthings".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
-                && "translucentluminousblock".equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name));
-    }
-
-    private static boolean isRandomThingsLuminousPath(String path) {
-        return "luminousblock".equalsIgnoreCase(path)
-                || "translucentluminousblock".equalsIgnoreCase(path)
-                || "luminousstainedbrick".equalsIgnoreCase(path);
-    }
-
-    private static boolean startsWithNamespace(String fullName, String namespace) {
-        return fullName != null
-                && fullName.length() > namespace.length()
-                && fullName.regionMatches(true, 0, namespace, 0, namespace.length())
-                && fullName.charAt(namespace.length()) == ':';
-    }
-
-    private static String resourcePathFromString(String fullName) {
-        if (fullName == null) {
-            return "";
-        }
-        int separator = fullName.indexOf(':');
-        return separator >= 0 && separator + 1 < fullName.length() ? fullName.substring(separator + 1) : fullName;
-    }
-
-    private static int intrinsicBlockEmission(IBlockState state) {
-        try {
-            return clampLightValue(com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state));
-        } catch (RuntimeException | LinkageError ignored) {
-            return 0;
-        }
-    }
-
-    private static int astralCrystalEmission(IBlockState state) {
-        if (!isAstralCrystalCluster(state)) {
-            return 0;
-        }
-        ResourceLocation name = registryName(state);
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
-        if ("blockcelestialcrystals".equalsIgnoreCase(path)) {
-            int stage = parseIntProperty(state, "stage", 2);
-            return clampLightValue(6 + Math.max(0, Math.min(4, stage)));
-        }
-        if ("blockgemcrystals".equalsIgnoreCase(path)) {
-            String stage = propertyValue(state, "stage");
-            if ("stage_2_day".equalsIgnoreCase(stage)
-                    || "stage_2_night".equalsIgnoreCase(stage)
-                    || "stage_2_sky".equalsIgnoreCase(stage)) {
-                return 10;
-            }
-            if ("stage_1".equalsIgnoreCase(stage)) {
-                return 8;
-            }
-            return 6;
-        }
-        return 0;
-    }
-
-    private static boolean isAstralCrystalCluster(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null || !"astralsorcery".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))) {
-            return false;
-        }
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
-        return "blockcelestialcrystals".equalsIgnoreCase(path)
-                || "blockgemcrystals".equalsIgnoreCase(path);
-    }
-
-    private static int astralCrystalMaterialId(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null || !"astralsorcery".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))) {
-            return 0;
-        }
-
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
-        if ("blockcelestialcrystals".equalsIgnoreCase(path)) {
-            return 10914; // cool light blue
-        }
-        if ("blockgemcrystals".equalsIgnoreCase(path)) {
-            String stage = propertyValue(state, "stage");
-            if ("stage_2_day".equalsIgnoreCase(stage)) {
-                return 10904; // warm orange
-            }
-            if ("stage_2_night".equalsIgnoreCase(stage)) {
-                return 10916; // blue
-            }
-            return 10912; // cyan/sky
-        }
-        return 0;
-    }
-
-    private static int astralCrystalVoxelId(IBlockState state) {
-        return localActVoxelId(astralCrystalMaterialId(state));
-    }
-
-    private static int parseIntProperty(IBlockState state, String propertyName, int fallback) {
-        String value = propertyValue(state, propertyName);
-        if (value == null) {
-            return fallback;
-        }
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException ignored) {
-            return fallback;
-        }
-    }
-
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private static String propertyValue(IBlockState state, String propertyName) {
-        if (state == null || propertyName == null) {
-            return null;
-        }
-        for (Map.Entry<net.minecraft.block.properties.IProperty<?>, Comparable<?>> entry : com.l.ausm.impl.util.MinecraftReflectionCompat.stateProperties(state).entrySet()) {
-            net.minecraft.block.properties.IProperty property = entry.getKey();
-            if (property != null && propertyName.equals(com.l.ausm.impl.util.MinecraftReflectionCompat.propertyName(property))) {
-                return com.l.ausm.impl.util.MinecraftReflectionCompat.propertyValueName(property, entry.getValue());
-            }
-        }
-        return null;
-    }
-
-    private static boolean containsIgnoreCase(String value, String needle) {
-        if (value == null || needle == null) {
-            return false;
-        }
-        int max = value.length() - needle.length();
-        for (int i = 0; i <= max; i++) {
-            if (value.regionMatches(true, i, needle, 0, needle.length())) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static int clampLightValue(int value) {
-        return Math.max(0, Math.min(15, value));
-    }
-
-    public void recordSyntheticLightCandidate(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (pos == null) {
-            return;
-        }
-        if (isBetterPortalsExternalWorldTarget()) {
-            return;
-        }
-        if (!canTrackSyntheticLights() || state == null || blockAccess == null) {
-            syntheticLightCandidates.remove(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToLong(pos));
-            return;
-        }
-        SyntheticLightInfo lightInfo = syntheticLightInfo(state, blockAccess, pos);
-        if (lightInfo.voxelId <= 0 || lightInfo.emission <= 0) {
-            if (recordProjectRedSyntheticLightCandidate(blockAccess, pos, "block_render_te")) {
-                return;
-            }
-            auditSyntheticLight("block_render", pos, lightInfo, "skip:" + lightInfo.reason);
-            return;
-        }
-        putSyntheticLightCandidate(pos, false);
-        auditSyntheticLight("block_render", pos, lightInfo, "recorded");
-    }
-
-    public void refreshSyntheticLightCandidate(BlockPos pos) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        refreshSyntheticLightCandidate(mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null, pos);
-    }
-
-    public void refreshSyntheticLightCandidate(World world, BlockPos pos) {
-        if (pos == null) {
-            return;
-        }
-        long key = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToLong(pos);
-        syntheticLightCandidates.remove(key);
-        if (!canTrackSyntheticLights() || world == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos, false)) {
-            return;
-        }
-        IBlockState state;
-        try {
-            state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos);
-        } catch (RuntimeException ignored) {
-            return;
-        }
-        SyntheticLightInfo lightInfo = syntheticLightInfo(state, world, pos);
-        if (lightInfo.voxelId > 0 && lightInfo.emission > 0) {
-            putSyntheticLightCandidate(pos, true);
-            auditSyntheticLight("world_update", pos, lightInfo, "recorded");
-        } else {
-            auditSyntheticLight("world_update", pos, lightInfo, "skip:" + lightInfo.reason);
-        }
-        if (shouldProbeColoredLightTileEntity(state, lightInfo)) {
-            auditProjectRedTileEntity(world, pos, "world_update_te");
-        }
-    }
-
-    public void refreshSyntheticLightCandidates(World world, BlockPos from, BlockPos to) {
-        if (from == null || to == null) {
-            return;
-        }
-        int minX = Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(to)) - 1;
-        int minY = Math.max(0, Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(to)) - 1);
-        int minZ = Math.min(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(to)) - 1;
-        int maxX = Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(to)) + 1;
-        int maxY = Math.min(255, Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(to)) + 1);
-        int maxZ = Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(from), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(to)) + 1;
-        long volume = (long) (maxX - minX + 1) * (long) (maxY - minY + 1) * (long) (maxZ - minZ + 1);
-        if (volume > MAX_SYNTHETIC_LIGHT_RANGE_REFRESH_VOLUME) {
-            removeSyntheticLightCandidatesInRange(minX, minY, minZ, maxX, maxY, maxZ);
-            return;
-        }
-        for (int y = minY; y <= maxY; y++) {
-            for (int z = minZ; z <= maxZ; z++) {
-                for (int x = minX; x <= maxX; x++) {
-                    refreshSyntheticLightCandidate(world, new BlockPos(x, y, z));
-                }
-            }
-        }
-    }
-
-    public void removeSyntheticLightCandidate(BlockPos pos) {
-        if (pos != null) {
-            syntheticLightCandidates.remove(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToLong(pos));
-        }
-    }
-
-    private boolean canTrackSyntheticLights() {
-        return ENABLE_CPU_LIGHT_INJECTION
-                && ENABLE_GENERIC_CPU_SHADER_BLOCK_LIGHT_INJECTION
-                && isPipelineActive
-                && shaderImages.active()
-                && !shaderProperties.blockIds().isEmpty();
-    }
-
-    private int syntheticLightVoxelId(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return syntheticLightInfo(state, blockAccess, pos).voxelId;
-    }
-
-    private SyntheticLightInfo syntheticLightInfo(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null || blockAccess == null || pos == null) {
-            return new SyntheticLightInfo(state, state, 0, 0, 0, "missing_input");
-        }
-        if (shaderProperties.blockIds().isEmpty()) {
-            return new SyntheticLightInfo(state, state, 0, 0, 0, "no_block_ids");
-        }
-        IBlockState actualState = actualLightState(state, blockAccess, pos);
-        int shaderBlockId = shaderProperties.blockIds().idFor(actualState);
-        if (isRandomThingsLuminousColoredLightDisabled(actualState)) {
-            return new SyntheticLightInfo(state, actualState, shaderBlockId, 0, randomThingsLuminousEmission(actualState), "colored_light_disabled");
-        }
-        int voxelId = localActVoxelId(shaderBlockId);
-        if (voxelId <= 0) {
-            voxelId = compatSyntheticLightVoxelId(actualState);
-        }
-        int emission = blockRenderEmissionForState(actualState, null, null);
-        if (voxelId <= 0) {
-            return new SyntheticLightInfo(state, actualState, shaderBlockId, 0, emission, "no_colored_voxel_mapping");
-        }
-        if (emission <= 0) {
-            return new SyntheticLightInfo(state, actualState, shaderBlockId, voxelId, emission, "not_emissive");
-        }
-        return new SyntheticLightInfo(state, actualState, shaderBlockId, voxelId, emission, "ok");
-    }
-
-    private void putSyntheticLightCandidate(BlockPos pos, boolean force) {
-        long key = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToLong(pos);
-        if (syntheticLightCandidates.size() >= MAX_SYNTHETIC_LIGHT_CANDIDATES
-                && !syntheticLightCandidates.containsKey(key)) {
-            if (!force) {
-                return;
-            }
-            for (Long staleKey : syntheticLightCandidates.keySet()) {
-                syntheticLightCandidates.remove(staleKey);
-                break;
-            }
-        }
-        syntheticLightCandidates.put(key, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos));
-    }
-
-    private void removeSyntheticLightCandidatesInRange(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
-        for (Map.Entry<Long, BlockPos> entry : syntheticLightCandidates.entrySet()) {
-            BlockPos pos = entry.getValue();
-            if (pos == null) {
-                syntheticLightCandidates.remove(entry.getKey());
-                continue;
-            }
-            if (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) >= minX && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) <= maxX
-                    && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) >= minY && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) <= maxY
-                    && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) >= minZ && com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) <= maxZ) {
-                syntheticLightCandidates.remove(entry.getKey(), pos);
-            }
-        }
-    }
-
-    private void auditSyntheticLight(String source, BlockPos pos, SyntheticLightInfo lightInfo, String result) {
-        if (MAX_COLORED_LIGHT_AUDIT_LOGS <= 0) {
-            return;
-        }
-        if (lightInfo == null || !shouldAuditSyntheticLight(lightInfo)) {
-            return;
-        }
-        String key = source + "|" + result + "|" + pos + "|" + stateName(lightInfo.originalState)
-                + "|" + stateName(lightInfo.actualState) + "|" + lightInfo.shaderBlockId
-                + "|" + lightInfo.voxelId + "|" + lightInfo.emission;
-        if (!coloredLightAuditKeys.add(key)) {
-            return;
-        }
-        int count = coloredLightAuditCount.incrementAndGet();
-        if (count > MAX_COLORED_LIGHT_AUDIT_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[ColoredLightAudit] source={} pos={} state={} actual={} shaderBlockId={} voxel={} emission={} result={} candidates={}",
-                source,
-                formatBlockPos(pos),
-                stateName(lightInfo.originalState),
-                stateName(lightInfo.actualState),
-                lightInfo.shaderBlockId,
-                lightInfo.voxelId,
-                lightInfo.emission,
-                result,
-                syntheticLightCandidates.size()
-        );
-        if (count == MAX_COLORED_LIGHT_AUDIT_LOGS) {
-            MainMod.LOGGER.info("[ColoredLightAudit] Reached log cap {}; suppressing further colored-light audit lines.", MAX_COLORED_LIGHT_AUDIT_LOGS);
-        }
-    }
-
-    private void logDecoratedLightEmission(IBlockState originalState, IBlockState decoratedState,
-                                           IBlockAccess blockAccess, BlockPos pos, int emission) {
-        if (MAX_DECORATED_LIGHT_AUDIT_LOGS <= 0) {
-            return;
-        }
-        String key = safeDimensionId(blockAccess instanceof World world ? world : null)
-                + "|" + formatBlockPos(pos)
-                + "|" + stateName(originalState)
-                + "|" + stateName(decoratedState)
-                + "|" + emission;
-        if (!decoratedLightAuditKeys.add(key)) {
-            return;
-        }
-
-        int count = decoratedLightAuditCount.incrementAndGet();
-        if (count > MAX_DECORATED_LIGHT_AUDIT_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMDecoratedLight] call={} pos={} state={} decorated={} emission={} access={}",
-                count,
-                formatBlockPos(pos),
-                stateName(originalState),
-                stateName(decoratedState),
-                emission,
-                blockAccess != null ? blockAccess.getClass().getName() : "null"
-        );
-    }
-
-    private void auditProjectRedLight(TileEntity tileEntity, int[] voxelIds, int count, String result) {
-        String diagnosis = ProjectRedIlluminationCompat.diagnose(tileEntity);
-        if (diagnosis == null) {
-            return;
-        }
-        auditProjectRedDiagnosis(tileEntity, voxelIds, count, result, diagnosis);
-    }
-
-    private void auditProjectRedDiagnosis(TileEntity tileEntity, int[] voxelIds, int count, String result, String diagnosis) {
-        if (MAX_COLORED_LIGHT_AUDIT_LOGS <= 0) {
-            return;
-        }
-        BlockPos pos = tileEntity != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity) : null;
-        String key = "projectred|" + result + "|" + formatBlockPos(pos) + "|" + diagnosis;
-        if (!coloredLightAuditKeys.add(key)) {
-            return;
-        }
-        int logCount = coloredLightAuditCount.incrementAndGet();
-        if (logCount > MAX_COLORED_LIGHT_AUDIT_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[ColoredLightAudit] source=projectred pos={} count={} voxels={} result={} {}",
-                formatBlockPos(pos),
-                count,
-                formatVoxelIds(voxelIds, count),
-                result,
-                diagnosis
-        );
-        if (logCount == MAX_COLORED_LIGHT_AUDIT_LOGS) {
-            MainMod.LOGGER.info("[ColoredLightAudit] Reached log cap {}; suppressing further colored-light audit lines.", MAX_COLORED_LIGHT_AUDIT_LOGS);
-        }
-    }
-
-    private void auditProjectRedTileEntity(World world, BlockPos pos, String result) {
-        if (world == null || pos == null) {
-            return;
-        }
-        TileEntity tileEntity;
-        try {
-            tileEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.tileentity.TileEntity.class, null, new String[] {"func_175625_s", "getTileEntity"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, (pos));
-        } catch (RuntimeException ignored) {
-            return;
-        }
-        if (tileEntity == null) {
-            return;
-        }
-        int[] voxelIds = new int[8];
-        int count = ProjectRedIlluminationCompat.collectVoxelIds(tileEntity, voxelIds);
-        if (count > 0) {
-            putSyntheticLightCandidate(pos, true);
-        }
-        String diagnosis = ProjectRedIlluminationCompat.diagnoseHost(tileEntity);
-        if (diagnosis != null) {
-            auditProjectRedDiagnosis(tileEntity, voxelIds, count, result, diagnosis);
-        }
-    }
-
-    private boolean recordProjectRedSyntheticLightCandidate(IBlockAccess blockAccess, BlockPos pos, String result) {
-        TileEntity tileEntity = tileEntityAt(blockAccess, pos);
-        if (tileEntity == null) {
-            return false;
-        }
-
-        int[] voxelIds = new int[8];
-        int count = ProjectRedIlluminationCompat.collectVoxelIds(tileEntity, voxelIds);
-        if (count <= 0) {
-            return false;
-        }
-
-        putSyntheticLightCandidate(pos, true);
-        auditProjectRedLight(tileEntity, voxelIds, count, result);
-        return true;
-    }
-
-    private TileEntity tileEntityAt(IBlockAccess blockAccess, BlockPos pos) {
-        if (blockAccess == null || pos == null) {
-            return null;
-        }
-        try {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessTileEntity(blockAccess, pos);
-        } catch (RuntimeException ignored) {
-            return null;
-        }
-    }
-
-    private void resetColoredLightAudit() {
-        coloredLightAuditKeys.clear();
-        coloredLightAuditCount.set(0);
-    }
-
-    private boolean shouldAuditSyntheticLight(SyntheticLightInfo lightInfo) {
-        return lightInfo.voxelId > 0
-                || isKnownColoredLightAuditTarget(lightInfo.originalState)
-                || isKnownColoredLightAuditTarget(lightInfo.actualState);
-    }
-
-    private boolean shouldProbeColoredLightTileEntity(IBlockState state, SyntheticLightInfo lightInfo) {
-        return isProjectRedTileHost(state)
-                || lightInfo != null && isProjectRedTileHost(lightInfo.originalState)
-                || lightInfo != null && isProjectRedTileHost(lightInfo.actualState);
-    }
-
-    private boolean isProjectRedTileHost(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        return name != null
-                && (("projectred-illumination".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)))
-                || ("forgemultipartcbe".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)) && "multipart_block".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name))));
-    }
-
-    private boolean isKnownColoredLightAuditTarget(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null) {
-            return false;
-        }
-
-        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name);
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
-        if ("projectred-illumination".equals(namespace)
-                || ("forgemultipartcbe".equals(namespace) && "multipart_block".equals(path))) {
-            return true;
-        }
-        if ("thaumcraft".equals(namespace)) {
-            return path.startsWith("candle_") || path.startsWith("nitor_");
-        }
-        if ("bewitchment".equals(namespace)) {
-            return path.endsWith("_candle");
-        }
-        if ("tconstruct".equals(namespace)) {
-            return "seared_furnace_controller".equals(path);
-        }
-        if ("randomthings".equals(namespace)) {
-            return containsIgnoreCase(path, "luminous") || containsIgnoreCase(path, "runic");
-        }
-        if ("astralsorcery".equals(namespace)) {
-            return "blockcelestialcrystals".equalsIgnoreCase(path) || "blockgemcrystals".equalsIgnoreCase(path);
-        }
-        return false;
-    }
-
-    private static ResourceLocation registryName(IBlockState state) {
-        if (state == null) {
-            return null;
-        }
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        return block != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block) : null;
-    }
-
-    private static String stateName(IBlockState state) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.stateString(state);
-    }
-
-    private static String formatBlockPos(BlockPos pos) {
-        return pos != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + "," + com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + "," + com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) : "null";
-    }
-
-    private static String formatVoxelIds(int[] voxelIds, int count) {
-        if (voxelIds == null || count <= 0) {
-            return "[]";
-        }
-        StringBuilder builder = new StringBuilder("[");
-        int limit = Math.min(count, voxelIds.length);
-        for (int i = 0; i < limit; i++) {
-            if (i > 0) {
-                builder.append(',');
-            }
-            builder.append(voxelIds[i]);
-        }
-        return builder.append(']').toString();
-    }
-
-    private IBlockState actualLightState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null) {
-            return state;
-        }
-        if (blockAccess == null || pos == null) {
-            FramedMaterialState framedState = framedMaterialState(state, null, null);
-            return framedState != null ? framedState.actualLightState : state;
-        }
-        if (!isFramedMaterialCandidate(state)) {
-            return actualState(state, blockAccess, pos);
-        }
-        Map<FramedMaterialKey, IBlockState> cache = actualLightStateCompileCache.get();
-        FramedMaterialKey key = cache != null ? new FramedMaterialKey(blockAccess, pos, state) : null;
-        if (cache != null && cache.containsKey(key)) {
-            return cache.get(key);
-        }
-        IBlockState resolved;
-        FramedMaterialState framedState = framedMaterialState(state, blockAccess, pos);
-        resolved = framedState != null ? framedState.actualLightState : actualState(state, blockAccess, pos);
-        if (cache != null) {
-            cache.put(key, resolved);
-        }
-        return resolved;
-    }
-
-    private FramedMaterialState framedMaterialState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null || !isFramedMaterialCandidate(state)) {
-            return null;
-        }
-        Map<FramedMaterialKey, FramedMaterialState> cache = framedMaterialCompileCache.get();
-        if (cache == null || blockAccess == null || pos == null) {
-            return computeFramedMaterialState(state, blockAccess, pos);
-        }
-        FramedMaterialKey key = new FramedMaterialKey(blockAccess, pos, state);
-        FramedMaterialState cached = cache.get(key);
-        if (cached != null) {
-            return cached;
-        }
-        FramedMaterialState computed = computeFramedMaterialState(state, blockAccess, pos);
-        cache.put(key, computed);
-        return computed;
-    }
-
-    private FramedMaterialState computeFramedMaterialState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        IBlockState blockcrafteryDecoratedState = blockcrafteryDecoratedState(state, blockAccess, pos);
-        IBlockState architectureBaseState = null;
-        IBlockState architectureSecondaryState = null;
-        if (blockcrafteryDecoratedState == null) {
-            architectureBaseState = architectureCraftBaseState(state, blockAccess, pos);
-            architectureSecondaryState = architectureCraftSecondaryState(state, blockAccess, pos);
-        }
-
-        IBlockState renderState = blockcrafteryDecoratedState != null
-                ? blockcrafteryDecoratedState
-                : architectureBaseState != null ? architectureBaseState : state;
-        IBlockState actualLightState = blockAccess != null && pos != null
-                ? actualState(renderState, blockAccess, pos)
-                : renderState;
-        IBlockState blockcrafteryActualState = blockcrafteryDecoratedState != null
-                ? blockcrafteryActualState(blockcrafteryDecoratedState, blockAccess, pos)
-                : null;
-        IBlockState architectureBaseActualState = architectureBaseState != null
-                ? actualState(architectureBaseState, blockAccess, pos)
-                : null;
-        IBlockState architectureSecondaryActualState = architectureSecondaryState != null
-                ? actualState(architectureSecondaryState, blockAccess, pos)
-                : null;
-
-        return new FramedMaterialState(
-                actualLightState,
-                blockcrafteryDecoratedState,
-                blockcrafteryActualState,
-                architectureBaseState,
-                architectureBaseActualState,
-                architectureSecondaryState,
-                architectureSecondaryActualState
-        );
-    }
-
-    private static boolean isFramedMaterialCandidate(IBlockState state) {
-        return isBlockcrafteryEditableBlock(state) || isArchitectureCraftShapeBlock(state);
-    }
-
-    private IBlockState actualState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (state == null || blockAccess == null || pos == null) {
-            return state;
-        }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.actualState(state, blockAccess, pos);
-    }
-
-    private IBlockState blockcrafteryDecoratedState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (!isBlockcrafteryEditableBlock(state)) {
-            return null;
-        }
-
-        IBlockState tileDecoratedState = blockcrafteryTileDecoratedState(state, blockAccess, pos);
-        if (isValidBlockcrafteryDecoratedState(tileDecoratedState)) {
-            return tileDecoratedState;
-        }
-
-        IBlockState extendedDecoratedState = blockcrafteryExtendedDecoratedState(state);
-        if (isValidBlockcrafteryDecoratedState(extendedDecoratedState)) {
-            return extendedDecoratedState;
-        }
-
-        return null;
-    }
-
-    private IBlockState blockcrafteryActualState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (blockAccess == null) {
-            return state;
-        }
-        BlockcrafteryDecoratedBlockAccess wrapped = blockcrafteryBlockAccessCache.get();
-        IBlockAccess previous = wrapped.delegate;
-        wrapped.delegate = blockAccess;
-        try {
-            return actualState(state, wrapped, pos);
-        } finally {
-            wrapped.delegate = previous;
-        }
-    }
-
-    private IBlockState blockcrafteryTileDecoratedState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (!isBlockcrafteryEditableBlock(state) || blockAccess == null || pos == null) {
-            return null;
-        }
-        Class<?> tileClass = blockcrafteryTileClass();
-        Field stateField = blockcrafteryTileStateField;
-        if (tileClass == null || stateField == null) {
-            return null;
-        }
-
-        TileEntity tile;
-        try {
-            tile = com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessTileEntity(blockAccess, pos);
-        } catch (RuntimeException | LinkageError ignored) {
-            return null;
-        }
-
-        if (tile == null || !tileClass.isInstance(tile)) {
-            return null;
-        }
-
-        try {
-            Object value = stateField.get(tile);
-            if (!(value instanceof IBlockState decoratedState)
-                    || !isValidBlockcrafteryDecoratedState(decoratedState)) {
-                return null;
-            }
-            return decoratedState;
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            return null;
-        }
-    }
-
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private IBlockState blockcrafteryExtendedDecoratedState(IBlockState state) {
-        if (!(state instanceof IExtendedBlockState extendedState) || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
-            return null;
-        }
-
-        Method method = blockcrafteryStatePropertyMethod(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state).getClass());
-        if (method == null) {
-            return null;
-        }
-
-        try {
-            Object property = method.invoke(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state));
-            if (!(property instanceof IUnlistedProperty)) {
-                return null;
-            }
-            Object value = com.l.ausm.impl.util.MinecraftReflectionCompat.stateValue(extendedState, property);
-            return value instanceof IBlockState decoratedState ? decoratedState : null;
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            return null;
-        }
-    }
-
-    private boolean isValidBlockcrafteryDecoratedState(IBlockState decoratedState) {
-        return decoratedState != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(decoratedState) != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(decoratedState) != com.l.ausm.impl.util.MinecraftReflectionCompat.field(Blocks.class, Block.class, null, "field_150350_a", "AIR")
-                && !isBlockcrafteryEditableBlock(decoratedState);
-    }
-
-    private final class BlockcrafteryDecoratedBlockAccess implements IBlockAccess {
-        private IBlockAccess delegate;
-
-        private BlockcrafteryDecoratedBlockAccess(IBlockAccess delegate) {
-            this.delegate = delegate;
-        }
-
-        @Override
-        public TileEntity getTileEntity(BlockPos pos) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessTileEntity(delegate, pos);
-        }
-
-        @Override
-        public int getCombinedLight(BlockPos pos, int lightValue) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessCombinedLight(delegate, pos, lightValue);
-        }
-
-        @Override
-        public IBlockState getBlockState(BlockPos pos) {
-            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.call((delegate), net.minecraft.block.state.IBlockState.class, null, new String[] {"func_180495_p", "getBlockState"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, (pos));
-            IBlockState decoratedState = blockcrafteryDecoratedState(state, delegate, pos);
-            return decoratedState != null ? decoratedState : state;
-        }
-
-        @Override
-        public boolean isAirBlock(BlockPos pos) {
-            IBlockState state = getBlockState(pos);
-            try {
-                return state == null
-                        || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null
-                        || com.l.ausm.impl.util.MinecraftReflectionCompat.blockIsAir(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state), state, this, pos);
-            } catch (RuntimeException | LinkageError ignored) {
-                return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((delegate), new String[] {"func_175623_d", "isAirBlock"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, false, (pos));
-            }
-        }
-
-        @Override
-        public Biome getBiome(BlockPos pos) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.call((delegate), net.minecraft.world.biome.Biome.class, null, new String[] {"func_180494_b", "getBiome"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, (pos));
-        }
-
-        @Override
-        public int getStrongPower(BlockPos pos, EnumFacing direction) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((delegate), new String[] {"func_175627_a", "getStrongPower"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class, net.minecraft.util.EnumFacing.class}, 0, (pos), (direction));
-        }
-
-        @Override
-        public WorldType getWorldType() {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.call((delegate), net.minecraft.world.WorldType.class, net.minecraft.world.WorldType.DEFAULT,
-                new String[] {"func_175624_G", "getWorldType"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
-        }
-
-        @Override
-        public boolean isSideSolid(BlockPos pos, EnumFacing side, boolean defaultValue) {
-            IBlockState state = getBlockState(pos);
-            try {
-                return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != null
-                        ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockIsSideSolid(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state), state, this, pos, side, defaultValue)
-                        : defaultValue;
-            } catch (RuntimeException | LinkageError ignored) {
-                return com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((delegate), new String[] {"isSideSolid"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class, net.minecraft.util.EnumFacing.class, boolean.class}, (defaultValue), (pos), (side), (defaultValue));
-            }
-        }
-    }
-
-    private IBlockState architectureCraftBaseState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return architectureCraftMaterialState(state, blockAccess, pos, false);
-    }
-
-    private IBlockState architectureCraftSecondaryState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return architectureCraftMaterialState(state, blockAccess, pos, true);
-    }
-
-    private IBlockState architectureCraftMaterialState(IBlockState state, IBlockAccess blockAccess, BlockPos pos, boolean secondary) {
-        if (!isArchitectureCraftShapeBlock(state) || blockAccess == null || pos == null) {
-            return null;
-        }
-
-        Class<?> tileClass = architectureCraftTileClass();
-        Method method = secondary ? architectureCraftSecondaryStateMethod : architectureCraftBaseStateMethod;
-        if (tileClass == null || method == null) {
-            return null;
-        }
-
-        Object tile = architectureCraftTile(blockAccess, pos);
-        if (tile == null || !tileClass.isInstance(tile)) {
-            return null;
-        }
-
-        try {
-            Object value = method.invoke(tile);
-            if (!(value instanceof IBlockState materialState)
-                    || !isValidArchitectureCraftMaterialState(materialState)) {
-                return null;
-            }
-            return materialState;
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            return null;
-        }
-    }
-
-    private boolean isValidArchitectureCraftMaterialState(IBlockState materialState) {
-        return materialState != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(materialState) != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(materialState) != com.l.ausm.impl.util.MinecraftReflectionCompat.field(Blocks.class, Block.class, null, "field_150350_a", "AIR")
-                && !isBlockcrafteryEditableBlock(materialState)
-                && !isArchitectureCraftShapeBlock(materialState);
-    }
-
-    private Class<?> blockcrafteryTileClass() {
-        if (!blockcrafteryTileResolved) {
-            blockcrafteryTileResolved = true;
-            try {
-                blockcrafteryTileClass = Class.forName(BLOCKCRAFTERY_TILE_EDITABLE_BLOCK_CLASS, false, PipelineContext.class.getClassLoader());
-                blockcrafteryTileStateField = blockcrafteryTileClass.getField("state");
-                blockcrafteryTileStateField.setAccessible(true);
-            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-                blockcrafteryTileClass = null;
-                blockcrafteryTileStateField = null;
-            }
-        }
-        return blockcrafteryTileClass;
-    }
-
-    private Method blockcrafteryStatePropertyMethod(Class<?> blockClass) {
-        if (blockClass == null) {
-            return null;
-        }
-
-        Method cached = blockcrafteryStatePropertyMethods.get(blockClass);
-        if (cached != null) {
-            return cached;
-        }
-        if (blockcrafteryMissingStatePropertyMethods.contains(blockClass)) {
-            return null;
-        }
-
-        try {
-            Method method = blockClass.getMethod("getStateProperty");
-            method.setAccessible(true);
-            Method previous = blockcrafteryStatePropertyMethods.putIfAbsent(blockClass, method);
-            return previous != null ? previous : method;
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            blockcrafteryMissingStatePropertyMethods.add(blockClass);
-            return null;
-        }
-    }
-
-    private Class<?> architectureCraftTileClass() {
-        if (!architectureCraftTileResolved) {
-            architectureCraftTileResolved = true;
-            try {
-                architectureCraftTileClass = Class.forName(ARCHITECTURECRAFT_TILE_SHAPE_CLASS, false, PipelineContext.class.getClassLoader());
-                architectureCraftGetTileMethod = architectureCraftTileClass.getMethod("get", IBlockAccess.class, BlockPos.class);
-                architectureCraftGetTileMethod.setAccessible(true);
-                architectureCraftBaseStateMethod = architectureCraftTileClass.getMethod("getBaseBlockState");
-                architectureCraftBaseStateMethod.setAccessible(true);
-                architectureCraftSecondaryStateMethod = architectureCraftTileClass.getMethod("getSecondaryBlockState");
-                architectureCraftSecondaryStateMethod.setAccessible(true);
-            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-                architectureCraftTileClass = null;
-                architectureCraftGetTileMethod = null;
-                architectureCraftBaseStateMethod = null;
-                architectureCraftSecondaryStateMethod = null;
-            }
-        }
-        return architectureCraftTileClass;
-    }
-
-    private Object architectureCraftTile(IBlockAccess blockAccess, BlockPos pos) {
-        if (blockAccess == null || pos == null) {
-            return null;
-        }
-
-        try {
-            TileEntity tile = com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessTileEntity(blockAccess, pos);
-            if (tile != null && architectureCraftTileClass != null && architectureCraftTileClass.isInstance(tile)) {
-                return tile;
-            }
-        } catch (RuntimeException | LinkageError ignored) {
-        }
-
-        Method method = architectureCraftGetTileMethod;
-        if (method == null) {
-            return null;
-        }
-        try {
-            return method.invoke(null, blockAccess, pos);
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            return null;
-        }
-    }
-
-    private static boolean isBlockcrafteryEditableBlock(IBlockState state) {
-        Block block = state != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) : null;
-        if (block == null) {
-            return false;
-        }
-        Boolean cached = BLOCKCRAFTERY_EDITABLE_BLOCK_CACHE.get(block);
-        if (cached != null) {
-            return cached;
-        }
-        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block);
-        boolean result = name != null
-                && "blockcraftery".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name).startsWith("editable_");
-        Boolean existing = BLOCKCRAFTERY_EDITABLE_BLOCK_CACHE.putIfAbsent(block, result);
-        return existing != null ? existing : result;
-    }
-
-    private static boolean isArchitectureCraftShapeBlock(IBlockState state) {
-        Block block = state != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) : null;
-        if (block == null) {
-            return false;
-        }
-        Boolean cached = ARCHITECTURECRAFT_SHAPE_BLOCK_CACHE.get(block);
-        if (cached != null) {
-            return cached;
-        }
-        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(block);
-        boolean result = name != null && "architecturecraft".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name));
-        if (!result) {
-            result = block.getClass().getName().startsWith(ARCHITECTURECRAFT_BLOCK_PACKAGE);
-        }
-        Boolean existing = ARCHITECTURECRAFT_SHAPE_BLOCK_CACHE.putIfAbsent(block, result);
-        return existing != null ? existing : result;
-    }
-
-    public boolean shouldSeparateBlockAo(IBlockState state) {
-        if (!shouldSeparateAo() || state == null) {
-            return false;
-        }
-
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        return block != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.blockRenderLayer(block) == BlockRenderLayer.SOLID
-                && !isRandomThingsLuminousBlock(state);
-    }
-
-    public boolean shouldSeparateBlockAo(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return shouldSeparateBlockAo(actualLightState(state, blockAccess, pos));
-    }
-
-    public boolean shouldSeparateAo() {
-        return isPipelineActive && shaderProperties.renderSettings().separateAo();
-    }
-
-    public boolean shouldSeparateEntityDraws() {
-        return isPipelineActive && shaderProperties.renderSettings().separateEntityDraws();
-    }
-
-    public float ambientOcclusionLevel() {
-        return isPipelineActive ? shaderProperties.renderSettings().ambientOcclusionLevel() : 1.0f;
-    }
-
-    public boolean shouldDisableDirectionalShading() {
-        return isPipelineActive && !shaderProperties.renderSettings().oldLighting();
-    }
-
-    public boolean shouldRenderWeather() {
-        if (isPipelineActive && ENABLE_SAFE_TERRAIN_FALLBACKS && hardwareSafeVanillaTerrain) {
-            return false;
-        }
-        return !isPipelineActive || !shouldSkipAllMainGbufferRendering() && shaderProperties.renderSettings().weather();
-    }
-
-    public boolean shouldRenderWeatherParticles() {
-        if (isPipelineActive && ENABLE_SAFE_TERRAIN_FALLBACKS && hardwareSafeVanillaTerrain) {
-            return false;
-        }
-        return !isPipelineActive || shaderProperties.renderSettings().weatherParticles();
-    }
-
-    public boolean shouldRenderVignette() {
-        return !isPipelineActive || shaderProperties.renderSettings().vignette();
-    }
-
-    public boolean shouldRenderUnderwaterOverlay() {
-        if (!isPipelineActive) {
-            return true;
-        }
-        return shaderProperties.renderSettings().underwaterOverlay()
-                || eyeFluidState(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) == 1;
-    }
-
-    public boolean shouldRenderSkyDisc() {
-        return !isPipelineActive || shaderProperties.renderSettings().sky();
-    }
-
-    public boolean shouldSuppressVanillaUpperSkyGeometry() {
-        return shouldSuppressShaderlessSimpleVoidSkyBaseGeometry();
-    }
-
-    public boolean shouldSuppressVanillaSunGeometry() {
-        return false;
-    }
-
-    public boolean shouldSuppressVanillaMoonGeometry() {
-        return false;
-    }
-
-    private boolean shouldSuppressShaderedVoidCelestialGeometry() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        return isPipelineActive
-                && world != null
-                && isCustomVoidWorldSkyEnabled(world)
-                && !isRenderingBetterPortalsNestedView()
-                && !isRenderingBetterPortalsRenderPass();
-    }
-
-    public boolean shouldSuppressVanillaStarsGeometry() {
-        return isPipelineActive && !shaderProperties.renderSettings().stars();
-    }
-
-    public boolean shouldSuppressVanillaLowerSkyGeometry() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        return world != null
-                && ((isCustomVoidWorldSkyEnabled(world)
-                    || (isSimpleVoidWorld(world) && !isPipelineActive))
-                || shouldUseShaderedF1LowerSkyRepair(mc, world))
-                && !isRenderingBetterPortalsNestedView()
-                && !isRenderingBetterPortalsRenderPass();
-    }
-
-    private boolean areShaderpacksEnabled() {
-        return MainMod.getShaderPackManager() != null
-                && MainMod.getShaderPackManager().areShadersEnabled();
-    }
-
-    private boolean shouldUseShaderlessOwnedSky(Minecraft mc) {
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        return !isPipelineActive
-                && world != null
-                && shouldUseOwnedSkyOverrideWorld(world)
-                && !isRenderingBetterPortalsNestedView()
-                && !isRenderingBetterPortalsRenderPass();
-    }
-
-    public boolean shouldSuppressShaderlessOwnedSkyBaseGeometry() {
-        return shouldSuppressShaderlessSimpleVoidSkyBaseGeometry();
-    }
-
-    public boolean shouldSuppressBotaniaVoidSkyBaseGeometry() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        return world != null
-                && isSimpleVoidWorld(world)
-                && (shouldUseShaderlessOwnedSky(mc) || isPipelineActive)
-                && !isRenderingBetterPortalsNestedView()
-                && !isRenderingBetterPortalsRenderPass();
-    }
-
-    public boolean shouldSuppressVanillaSunsetGeometry() {
-        return false;
-    }
-
-    public boolean shouldSuppressVoidWorldCustomSkyRenderer(Object skyRenderer, WorldClient world) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        return skyRenderer != null
-                && world != null
-                && shouldUseShaderlessOwnedSky(mc)
-                && shouldUseOwnedSkyOverrideWorld(world)
-                && isSimpleVoidWorld(world)
-                && !isAstralSkyRenderer(skyRenderer);
-    }
-
-    private static boolean isAstralSkyRenderer(Object skyRenderer) {
-        if (skyRenderer == null) {
-            return false;
-        }
-        Class<?> type = skyRenderer.getClass();
-        while (type != null) {
-            if (ASTRAL_SKYBOX_CLASS.equals(type.getName())) {
-                return true;
-            }
-            type = type.getSuperclass();
-        }
-        return false;
-    }
-
-    public void renderShaderlessBotaniaVoidDetailsIfNeeded(float partialTicks, WorldClient world, Minecraft mc) {
-        if (mc == null
-                || world == null
-                || !shouldUseShaderlessOwnedSky(mc)
-                || !isSimpleVoidWorld(world)) {
-            return;
-        }
-        try {
-            renderShaderlessBotaniaVoidDetails(partialTicks, world, mc);
-        } catch (RuntimeException | LinkageError ignored) {
-            // Decorative only; preserve the owned sky if a texture/state call fails.
-        }
-    }
-
-    public boolean shouldSuppressShaderedAstralLowerSky() {
-        return shouldSuppressShaderedSimpleVoidSkyBaseGeometry();
-    }
-
-    public boolean shouldSuppressAstralUpperSkyGeometry() {
-        return shouldSuppressShaderedAstralLowerSky() || shouldSuppressShaderlessSimpleVoidSkyBaseGeometry();
-    }
-
-    public boolean shouldSuppressAstralLowerSkyGeometry() {
-        return shouldSuppressShaderedAstralLowerSky() || shouldSuppressShaderlessSimpleVoidSkyBaseGeometry();
-    }
-
-    private boolean shouldSuppressShaderlessSimpleVoidSkyBaseGeometry() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        return shouldUseShaderlessOwnedSky(mc) && isSimpleVoidWorld(world);
-    }
-
-    private boolean shouldSuppressShaderedSimpleVoidSkyBaseGeometry() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        return isPipelineActive
-                && world != null
-                && isCustomVoidWorldSkyEnabled(world)
-                && !isRenderingBetterPortalsNestedView()
-                && !isRenderingBetterPortalsRenderPass();
-    }
-
-    public boolean shouldForceShaderlessAstralVoidLowerSky(WorldClient world) {
-        return false;
-    }
-
-    public boolean shouldFlattenShaderlessVoidVanillaLowerSky(WorldClient world) {
-        return false;
-    }
-
-    public void logShaderlessVoidVanillaLowerSky(String stage, WorldClient world, float partialTicks, int pass, double originalHorizon, double adjustedHorizon, double eyeY) {
-        // Old sky probe intentionally disabled; use AUSMFreshSkyProbe instead.
-    }
-
-    public Vec3d forcedShaderlessAstralVoidBaseSkyColor() {
-        return null;
-    }
-
-    private Vec3d forcedShaderlessAstralVoidBaseSkyColor(WorldClient world) {
-        if (world == null) {
-            return null;
-        }
-        double time = (com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L) / 24000.0D;
-        double dayFactor = (Math.cos((time - 0.25D) * Math.PI * 2.0D) + 1.0D) * 0.5D;
-        dayFactor = Math.max(0.0D, Math.min(1.0D, dayFactor));
-        double smoothDay = dayFactor * dayFactor * (3.0D - 2.0D * dayFactor);
-        double red = 0.012D + 0.105D * smoothDay;
-        double green = 0.014D + 0.145D * smoothDay;
-        double blue = 0.030D + 0.235D * smoothDay;
-        return new Vec3d(red, green, blue);
-    }
-
-    public void logAstralVoidSkyRenderEntry(float partialTicks) {
-        // Old sky probe intentionally disabled; use AUSMFreshSkyProbe instead.
-    }
-
-    private void logShaderlessAstralSkyColor(String stage, WorldClient world, Entity entity, float partialTicks, Vec3d originalSkyColor, Vec3d effectiveSkyColor, double originalMax, boolean guiWorldRender) {
-        // Old sky probe intentionally disabled; use AUSMFreshSkyProbe instead.
-    }
-
-    private static String formatVec3(Vec3d value) {
-        if (value == null) {
-            return "null";
-        }
-        return String.format(Locale.ROOT, "%.3f,%.3f,%.3f",
-                com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(value),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(value),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(value));
-    }
-
-    private void logAstralVoidSkyProbe(String stage, WorldClient world, double originalHorizon, double adjustedHorizon, float partialTicks) {
-        // Probe disabled.
-}
-
-    public boolean shouldSanitizeShaderlessNothiriumFog() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        return !isPipelineActive
-                && mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
-                && !isRenderingBetterPortalsNestedView()
-                && !isRenderingBetterPortalsRenderPass();
-    }
-
-    public void beginShaderlessNothiriumTerrainFogGuard(String renderer, Object pass) {
-        if (!shouldDisableShaderlessNothiriumTerrainFog()) {
-            return;
-        }
-
-        if (shaderlessNothiriumTerrainFogGuardDepth++ == 0) {
-            shaderlessNothiriumTerrainFogPreviouslyEnabled = GL11.glIsEnabled(GL11.GL_FOG);
-            if (shaderlessNothiriumTerrainFogPreviouslyEnabled) {
-                GL11.glDisable(GL11.GL_FOG);
-            }
-            logNothiriumFogGuard(renderer, "begin", pass, shaderlessNothiriumTerrainFogPreviouslyEnabled);
-        }
-    }
-
-    public void endShaderlessNothiriumTerrainFogGuard(String renderer, Object pass) {
-        if (shaderlessNothiriumTerrainFogGuardDepth <= 0) {
-            return;
-        }
-
-        boolean restoreFog = shaderlessNothiriumTerrainFogPreviouslyEnabled;
-        shaderlessNothiriumTerrainFogGuardDepth--;
-        if (shaderlessNothiriumTerrainFogGuardDepth == 0) {
-            if (restoreFog) {
-                GL11.glEnable(GL11.GL_FOG);
-            }
-            logNothiriumFogGuard(renderer, "end", pass, restoreFog);
-            shaderlessNothiriumTerrainFogPreviouslyEnabled = false;
-        }
-    }
-
-    private boolean shouldDisableShaderlessNothiriumTerrainFog() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        return !isPipelineActive
-                && mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
-                && isOverworldShaderEnvironment(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc))
-                && !isRenderingBetterPortalsNestedView()
-                && !isRenderingBetterPortalsRenderPass();
-    }
-
-    private void logNothiriumFogGuard(String renderer, String stage, Object pass, boolean restoredOrDisabled) {
-        // Probe disabled.
-    }
-
-    public void logNothiriumFogProbe(
-            String stage,
-            boolean fogEnabled,
-            int fogMode,
-            float fogStart,
-            float fogEnd,
-            float fogDensity,
-            float[] originalColor,
-            float[] adjustedColor
-    ) {
-        // Probe disabled.
-    }
-
-    public void logNothiriumRenderProbe(String renderer, String stage, Object pass) {
-        // Probe disabled.
-    }
-
-    public int repairShaderlessVoidWorldPackedLight(IBlockAccess blockAccess, BlockPos pos, int packedLight) {
-        if (!shouldRepairShaderlessVoidWorldSkyLight(pos)) {
-            return packedLight;
-        }
-        int skyLight = packedLight >> 20 & 15;
-        if (skyLight >= 15) {
-            return packedLight;
-        }
-        int repaired = packedLight | 0x00F00000;
-        logShaderlessVoidLightRepair("packed", blockAccess, pos, packedLight, repaired, 0);
-        return repaired;
-    }
-
-    public int repairShaderlessVoidWorldCombinedLight(BlockPos pos, int lightValue, int packedLight) {
-        if (!shouldRepairShaderlessVoidWorldSkyLight(pos)) {
-            return packedLight;
-        }
-        int skyLight = packedLight >> 20 & 15;
-        int blockLight = packedLight >> 4 & 15;
-        int requestedBlockLight = clampInt(lightValue, 0, 15);
-        if (skyLight >= 15 && blockLight >= requestedBlockLight) {
-            return packedLight;
-        }
-        int repaired = packedLight | 0x00F00000;
-        if (requestedBlockLight > blockLight) {
-            repaired = (repaired & ~0xF0) | (requestedBlockLight << 4);
-        }
-        logShaderlessVoidLightRepair("combined", null, pos, packedLight, repaired, lightValue);
-        return repaired;
-    }
-
-    private boolean shouldRepairShaderlessVoidWorldSkyLight(BlockPos pos) {
-        if (isPipelineActive
-                || pos == null
-                || isRenderingBetterPortalsNestedView()
-                || isRenderingBetterPortalsRenderPass()) {
-            return false;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        if (world == null || !isOverworldShaderEnvironment(world)) {
-            return false;
-        }
-        try {
-            BlockPos skyProbePos = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosUp(pos);
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, skyProbePos)
-                    && com.l.ausm.impl.util.MinecraftReflectionCompat.worldCanSeeSky(world, skyProbePos);
-        } catch (RuntimeException | LinkageError ignored) {
-            return false;
-        }
-    }
-
-    private void logShaderlessVoidLightRepair(String source, IBlockAccess blockAccess, BlockPos pos, int before, int after, int lightValue) {
-        // Probe disabled.
-    }
-
-    public void probeShaderlessVoidSkyFramebufferPixels(String stage) {
-        // Probe disabled.
-    }
-
-    public void probeWorldPassSkyDome(String stage) {
-        logWorldPassSkyDomeProbe(stage);
-    }
-
-    public void probeShaderlessSolidTerrainSky(String stage) {
-        // Probe disabled.
-    }
-
-    public void captureShaderlessWorldFramebufferForUi() {
-        if (isPipelineActive || !shaderlessWorldPassActive || isRenderingBetterPortalsNestedView() || isRenderingBetterPortalsRenderPass()) {
-            return;
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
-            shaderlessWorldFramebufferForUi = 0;
-            shaderlessWorldFramebufferFrame = Long.MIN_VALUE;
-            return;
-        }
-
-        int drawFramebuffer = currentDrawFramebufferBinding();
-        if (drawFramebuffer <= 0) {
-            return;
-        }
-
-        shaderlessWorldFramebufferForUi = drawFramebuffer;
-        shaderlessWorldFramebufferWidth = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc));
-        shaderlessWorldFramebufferHeight = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc));
-        shaderlessWorldFramebufferFrame = clientRenderFrameNanos;
-        logShaderlessWorldFramebufferHandoff(
-                "capture",
-                "drawFramebuffer=" + drawFramebuffer
-                        + ", mcFramebuffer=" + describeFramebufferTarget(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)));
-    }
-
-    public void syncShaderlessWorldFramebufferBeforeGui() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (isPipelineActive
-                || mc == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null
-                || isRenderingBetterPortalsNestedView()
-                || isRenderingBetterPortalsRenderPass()
-                || shaderlessWorldFramebufferForUi <= 0
-                || shaderlessWorldFramebufferFrame != clientRenderFrameNanos) {
-            return;
-        }
-
-        Framebuffer target = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == shaderlessWorldFramebufferForUi) {
-            logShaderlessWorldFramebufferHandoff(
-                    "sync-skip-same-target",
-                    "target=" + describeFramebufferTarget(target));
-            return;
-        }
-
-        logShaderlessWorldFramebufferHandoff(
-                "sync-before-blit",
-                "source=" + shaderlessWorldFramebufferForUi
-                        + ", target=" + describeFramebufferTarget(target));
-        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
-        boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
-        ByteBuffer previousColorMask = BufferUtils.createByteBuffer(4);
-        GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, previousColorMask);
-        try {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, shaderlessWorldFramebufferForUi);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
-            GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
-            GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GL11.glColorMask(true, true, true, true);
-            GL11.glDepthMask(true);
-            GL30.glBlitFramebuffer(
-                    0,
-                    0,
-                    shaderlessWorldFramebufferWidth,
-                    shaderlessWorldFramebufferHeight,
-                    0,
-                    0,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target),
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target),
-                    GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT,
-                    GL11.GL_NEAREST
-            );
-            logShaderlessWorldFramebufferHandoff(
-                    "sync-after-blit-bound",
-                    "source=" + shaderlessWorldFramebufferForUi
-                            + ", target=" + describeFramebufferTarget(target));
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
-            restoreDrawBufferForFramebuffer(previousDrawFramebuffer, previousDrawBuffer);
-            GL11.glDepthMask(previousDepthMask);
-            GL11.glColorMask(
-                    previousColorMask.get(0) != 0,
-                    previousColorMask.get(1) != 0,
-                    previousColorMask.get(2) != 0,
-                    previousColorMask.get(3) != 0
-            );
-        }
-        logShaderlessWorldFramebufferHandoff(
-                "sync-after-blit-restored",
-                "source=" + shaderlessWorldFramebufferForUi
-                        + ", target=" + describeFramebufferTarget(target));
-    }
-
-    private void logShaderlessWorldFramebufferHandoff(String stage, String detail) {
-        // Probe disabled.
-    }
-
-    private String sampleFramebufferForHandoff(int framebuffer, int width, int height) {
-        if (framebuffer <= 0 || width <= 0 || height <= 0) {
-            return "invalid";
-        }
-        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        try {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebuffer);
-            GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
-            return sampleBoundReadFramebuffer(width, height, true);
-        } catch (RuntimeException | LinkageError ignored) {
-            return "unreadable";
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
-        }
-    }
-
-    public void repairShaderlessVoidSkyBeforeGui(float partialTicks) {
-        // Old sky repair/probe path intentionally disabled; use AUSMFreshSkyProbe instead.
-    }
-
-    private void renderShaderlessVoidSkyRepair(Minecraft mc, float partialTicks) {
-        // Probe disabled.
-    }
-
-    private VoidSkyRepairSamples sampleVoidSkyRepairPixels(int width, int height) {
-        if (width <= 0 || height <= 0) {
-            return new VoidSkyRepairSamples(false, "invalid-size");
-        }
-        int[] xs = new int[]{width / 4, width / 2, Math.max(0, width * 3 / 4)};
-        int[] ys = new int[]{height / 4, height / 2, Math.max(0, height * 3 / 4)};
-        StringBuilder summary = new StringBuilder();
-        boolean needsRepair = false;
-        for (int y : ys) {
-            for (int x : xs) {
-                VoidSkyRepairPixel pixel = readFramebufferRepairPixel(x, y);
-                if (summary.length() > 0) {
-                    summary.append(';');
-                }
-                summary.append(pixel.summary(x, y));
-                if (pixel.skyDepth() && pixel.brightness() <= 12) {
-                    needsRepair = true;
-                }
-            }
-        }
-        return new VoidSkyRepairSamples(needsRepair, summary.toString());
-    }
-
-    private VoidSkyRepairPixel readFramebufferRepairPixel(int x, int y) {
-        try {
-            IntBuffer color = BufferUtils.createIntBuffer(1);
-            FloatBuffer depth = BufferUtils.createFloatBuffer(1);
-            GL11.glReadPixels(x, y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, color);
-            GL11.glReadPixels(x, y, 1, 1, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, depth);
-            int rgba = color.get(0);
-            int r = rgba & 0xFF;
-            int g = rgba >> 8 & 0xFF;
-            int b = rgba >> 16 & 0xFF;
-            int a = rgba >> 24 & 0xFF;
-            float z = depth.get(0);
-            return new VoidSkyRepairPixel(r, g, b, a, z);
-        } catch (RuntimeException | LinkageError ignored) {
-            return new VoidSkyRepairPixel(-1, -1, -1, -1, -1.0F);
-        }
-    }
-
-    private void logShaderlessVoidSkyRepair(String stage, String detail) {
-        // Diagnostic disabled.
-}
-
-    private record VoidSkyRepairSamples(boolean needsRepair, String summary) {
-    }
-
-    private record VoidSkyRepairPixel(int r, int g, int b, int a, float depth) {
-        private boolean skyDepth() {
-            return depth >= 0.999F;
-        }
-
-        private int brightness() {
-            return Math.max(r, Math.max(g, b));
-        }
-
-        private String summary(int x, int y) {
-            return x + "," + y + "=rgba(" + r + "," + g + "," + b + "," + a + ") depth=" + depth;
-        }
-    }
-
-    private String readFramebufferPixelSummary(int x, int y) {
-        return readFramebufferPixelSummary(x, y, true);
-    }
-
-    private String readFramebufferPixelSummary(int x, int y, boolean includeDepth) {
-        try {
-            IntBuffer color = BufferUtils.createIntBuffer(1);
-            GL11.glReadPixels(x, y, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, color);
-            int rgba = color.get(0);
-            int r = rgba & 0xFF;
-            int g = rgba >> 8 & 0xFF;
-            int b = rgba >> 16 & 0xFF;
-            int a = rgba >> 24 & 0xFF;
-            if (!includeDepth) {
-                return x + "," + y + "=rgba(" + r + "," + g + "," + b + "," + a + ")";
-            }
-            FloatBuffer depth = BufferUtils.createFloatBuffer(1);
-            GL11.glReadPixels(x, y, 1, 1, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, depth);
-            return x + "," + y + "=rgba(" + r + "," + g + "," + b + "," + a + ") depth=" + depth.get(0);
-        } catch (RuntimeException | LinkageError ignored) {
-            return x + "," + y + "=unreadable";
-        }
-    }
-
-    private String formatFloatArray(float[] values) {
-        if (values == null || values.length < 4) {
-            return "null";
-        }
-        return values[0] + "," + values[1] + "," + values[2] + "," + values[3];
-    }
-
-    public boolean shouldRenderClouds() {
-        return !isPipelineActive || !shouldSkipAllMainGbufferRendering() && !"off".equals(shaderProperties.renderSettings().clouds());
-    }
-
-    public boolean shouldSkipAllMainGbufferRendering() {
-        return isPipelineActive
-                && !renderingShadowMap
-                && shaderProperties.renderSettings().skipAllRendering();
-    }
-
-    public void applyTerrainOcclusionCullingSetting() {
-        if (!isPipelineActive
-                || terrainOcclusionOverrideActive
-                || shaderProperties.renderSettings().occlusionCulling()) {
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null) {
-            return;
-        }
-        previousRenderChunksManyForOcclusion = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((mc), false, "field_175612_E", "renderChunksMany");
-        terrainOcclusionOverrideActive = true;
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setRenderChunksMany(mc, false);
-    }
-
-    public void restoreTerrainOcclusionCullingSetting() {
-        if (!terrainOcclusionOverrideActive) {
-            return;
-        }
-        terrainOcclusionOverrideActive = false;
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc != null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setRenderChunksMany(mc, previousRenderChunksManyForOcclusion);
-        }
-    }
-
-    public ICamera mainFrustumCullingCamera(ICamera camera) {
-        if (!isPipelineActive || shaderProperties.renderSettings().frustumCulling()) {
-            return camera;
-        }
-        return ALWAYS_VISIBLE_CAMERA;
-    }
-
-    public boolean shouldCullShadowTerrain() {
-        return !isPipelineActive || shaderProperties.renderSettings().shadowCulling();
-    }
-
-    public void applySkySunPathRotation() {
-        if (isPipelineActive && sunPathRotation != 0.0f) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179114_b", "rotate"},
-                new Class<?>[] {float.class, float.class, float.class, float.class}, (sunPathRotation), (0.0F), (0.0F), (1.0F));;
-        }
-    }
-
-    public void applyTerrainCulling(WorldRenderingPhase phase) {
-        if (!isPipelineActive || terrainCullOverrideActive || !shouldDisableCullForPhase(phase)) {
-            return;
-        }
-        previousTerrainCullEnabled = GL11.glIsEnabled(GL11.GL_CULL_FACE);
-        terrainCullOverrideActive = true;
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-    }
-
-    public void restoreTerrainCulling() {
-        if (!terrainCullOverrideActive) {
-            return;
-        }
-        terrainCullOverrideActive = false;
-        if (previousTerrainCullEnabled) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
-        } else {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-        }
-    }
-
-    public boolean shouldDisableNothiriumChunkCulling(BlockRenderLayer layer) {
-        if (!isPipelineActive || renderingShadowMap || layer == null) {
-            return false;
-        }
-        WorldRenderingPhase phase = getPhase();
-        return phase == WorldRenderingPhase.TERRAIN_SOLID
-                || phase == WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED
-                || phase == WorldRenderingPhase.TERRAIN_CUTOUT
-                || phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT;
-    }
-
-    private boolean shouldDisableCullForPhase(WorldRenderingPhase phase) {
-        if (phase == WorldRenderingPhase.TERRAIN_SOLID) {
-            return shaderProperties.renderSettings().backFaceSolid();
-        }
-        if (phase == WorldRenderingPhase.TERRAIN_CUTOUT) {
-            return shaderProperties.renderSettings().backFaceCutout();
-        }
-        if (phase == WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED) {
-            return shaderProperties.renderSettings().backFaceCutoutMipped();
-        }
-        return phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT
-                && shaderProperties.renderSettings().backFaceTranslucent();
-    }
-
-    public boolean shouldUsePipelineEntityFormat() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((mc), new String[] {"func_152345_ab", "isCallingFromMinecraftThread"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
-            return false;
-        }
-        RenderPass pass = activePass;
-        if (!isPipelineActive || !worldFrameActive || pass == null || renderingGuiScreen()) {
-            return false;
-        }
-        if (isBetweenlandsEntity(currentEntityKey) || currentEntityKey == null && isBetweenlandsRenderStack()) {
-            return false;
-        }
-        if (pass.stage() == ProgramStage.SHADOW) {
-            return true;
-        }
-        WorldRenderingPhase phase = getPhase();
-        if (phase != WorldRenderingPhase.NONE) {
-            return phase.usesEntityFormat();
-        }
-        return pass.stage() == ProgramStage.SHADOW
-                || pass == RenderPass.GBUFFERS_ITEM
-                || pass == RenderPass.GBUFFERS_ENTITIES
-                || pass == RenderPass.GBUFFERS_ENTITIES_GLOWING
-                || pass == RenderPass.GBUFFERS_HAND
-                || pass == RenderPass.GBUFFERS_HAND_WATER
-                || pass == RenderPass.GBUFFERS_BLOCK
-                || pass == RenderPass.GBUFFERS_BLOCK_TRANSLUCENT
-                || pass == RenderPass.GBUFFERS_ENTITIES_TRANSLUCENT;
-    }
-
-    public boolean shouldUsePipelineBlockFormat() {
-        return pipelineTerrainFormatSupported();
-    }
-
-    public boolean isPipelineActive() {
-        return isPipelineActive;
-    }
-
-    private boolean shouldUseShaderlessBloomVertexMetadata() {
-        return shouldUsePipelineBlockFormat()
-                && !isPipelineActive
-                && !AusmBloomLayer.shouldUseShaderlessNativeHook()
-                && bloomRenderer.hasBloomResources();
-    }
-
-    public boolean isShadowPassActive() {
-        return isPipelineActive && (renderingShadowMap || activePass != null && activePass.stage() == ProgramStage.SHADOW);
-    }
-
-    public WorldRenderingPhase getPhase() {
-        return overridePhase != null ? overridePhase : activePhase;
-    }
-
-    public void logSkyPipelineProbe(String stage) {
-        freshSkyProbe("sky-" + stage, "");
-    }
-
-    private String skyProbeWorldSummary() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        Entity view = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) : null;
-        if (world == null) {
-            return "null";
-        }
-        return "dim=" + safeDimensionId(world)
-                + ",time=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world)
-                + ",celestial=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, 0.0f)
-                + ",rain=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, 0.0f)
-                + ",thunder=" + com.l.ausm.impl.util.MinecraftReflectionCompat.worldThunderStrength(world, 0.0f)
-                + ",viewYaw=" + (view != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(view) : Float.NaN)
-                + ",viewPitch=" + (view != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.rotationPitch(view) : Float.NaN);
-    }
-
-    private static String skyProbeGlStateSummary() {
-        int activeTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
-        int activeTextureBinding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-        int texture0Binding = activeTextureBinding;
-        try {
-            GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            texture0Binding = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-        } finally {
-            GL13.glActiveTexture(activeTexture);
-        }
-        return glStateSummary()
-                + ",texActiveBinding=" + activeTextureBinding
-                + ",tex0Binding=" + texture0Binding;
-    }
-
-    public int renderNothiriumTerrainLayer(BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
-        if (!isPipelineActive || !worldFrameActive || renderingShadowMap || activePass == null || viewEntity == null) {
-            return -1;
-        }
-        if (ENABLE_SAFE_TERRAIN_FALLBACKS && hardwareSafeVanillaTerrain) {
-            return -1;
-        }
-        if (NothiriumBypass.shouldBypass()) {
-            return -1;
-        }
-
-        WorldRenderingPhase phase = getPhase();
-        if (phase != WorldRenderingPhase.TERRAIN_SOLID
-                && phase != WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED
-                && phase != WorldRenderingPhase.TERRAIN_CUTOUT
-                && phase != WorldRenderingPhase.TERRAIN_TRANSLUCENT) {
-            return -1;
-        }
-        if (!shouldUseNothiriumMainTerrainBridge()) {
-            return -1;
-        }
-
-        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        double fallbackDistance = nothiriumMainTerrainFallbackDistance();
-        if (shouldRefreshNothiriumNonSolidListsBeforeDraw(layer)) {
-            boolean setupLists = setupNothiriumShaderedMainTerrainLists(true);
-            logNothiriumMainSetupBridge(layer, setupLists, cameraX, cameraY, cameraZ);
-        }
-        beginWaterAttachmentDeltaProbe(layer);
-        int visibleCount = nothiriumShadowRenderer.renderVisibleLayer(
-                layer,
-                cameraX,
-                cameraY,
-                cameraZ,
-                nothiriumFallbackBlockEntityId(layer),
-                nothiriumFallbackRenderType(layer),
-                fallbackDistance
-        );
-        if (shouldRetrySparseNothiriumTerrainAfterSetup(layer, visibleCount)) {
-            boolean setupLists = setupNothiriumShaderedMainTerrainLists(false);
-            logNothiriumMainSetupBridge(layer, setupLists, cameraX, cameraY, cameraZ);
-            if (setupLists) {
-                int retryCount = nothiriumShadowRenderer.renderVisibleLayer(
-                        layer,
-                        cameraX,
-                        cameraY,
-                        cameraZ,
-                        nothiriumFallbackBlockEntityId(layer),
-                        nothiriumFallbackRenderType(layer),
-                        fallbackDistance
-                );
-                if (retryCount > visibleCount) {
-                    visibleCount = retryCount;
-                }
-            }
-        }
-        if (shouldRepairSparseNothiriumMainTerrain(layer, visibleCount)) {
-            NothiriumSparseMainRepairResult repair = repairSparseNothiriumMainTerrain(visibleCount, cameraX, cameraY, cameraZ);
-            if (repair.totalWork() > 0) {
-                enableNothiriumSparseMainProviderDraw();
-            }
-            if (repair.setup) {
-                int retryCount = nothiriumShadowRenderer.renderVisibleLayer(
-                        layer,
-                        cameraX,
-                        cameraY,
-                        cameraZ,
-                        nothiriumFallbackBlockEntityId(layer),
-                        nothiriumFallbackRenderType(layer),
-                        fallbackDistance
-                );
-                if (retryCount > visibleCount) {
-                    visibleCount = retryCount;
-                }
-            }
-        }
-        if (shouldDrawSparseNothiriumMainLayerFromProvider(layer, visibleCount)) {
-            int providerCount = nothiriumShadowRenderer.renderNearestProviderLayerSchedulingCompiles(
-                    layer,
-                    cameraX,
-                    cameraY,
-                    cameraZ,
-                    nothiriumSparseMainProviderDrawDistance(layer),
-                    nothiriumSparseMainProviderDrawMaxChunks(layer),
-                    nothiriumFallbackBlockEntityId(layer),
-                    nothiriumFallbackRenderType(layer),
-                    true,
-                    false
-            );
-            logNothiriumSparseMainProviderDraw(layer, visibleCount, providerCount, cameraX, cameraY, cameraZ);
-            if (providerCount > 0) {
-                visibleCount = Math.max(visibleCount, providerCount);
-                enableNothiriumSparseMainProviderDraw();
-            }
-        }
-        if (shouldRepairEmptyNothiriumNonSolidLayer(layer, visibleCount)) {
-            markNothiriumNonSolidRepairAttempt(layer);
-            int scheduled = nothiriumShadowRenderer.scheduleNearestLayerCompiles(
-                    layer,
-                    cameraX,
-                    cameraY,
-                    cameraZ,
-                    nothiriumNonSolidRepairDistance(layer),
-                    nothiriumNonSolidRepairMaxChunks(layer)
-            );
-            nothiriumShadowRenderer.drainUploads();
-            boolean setupLists = forceSetupNothiriumShaderedMainTerrainListsAfterRepair();
-            logNothiriumNonSolidRepair(layer, scheduled, setupLists, cameraX, cameraY, cameraZ);
-            if (setupLists) {
-                int retryCount = nothiriumShadowRenderer.renderVisibleLayer(
-                        layer,
-                        cameraX,
-                        cameraY,
-                        cameraZ,
-                        nothiriumFallbackBlockEntityId(layer),
-                        nothiriumFallbackRenderType(layer),
-                        fallbackDistance
-                );
-                if (retryCount > visibleCount) {
-                    visibleCount = retryCount;
-                }
-            }
-            if (scheduled > 0) {
-                enableNothiriumNonSolidProviderDraw(layer);
-            }
-        }
-        if (shouldDrawEmptyNothiriumNonSolidLayerFromProvider(layer, visibleCount)) {
-            int providerCount = nothiriumShadowRenderer.renderNearestProviderLayerSchedulingCompiles(
-                    layer,
-                    cameraX,
-                    cameraY,
-                    cameraZ,
-                    nothiriumNonSolidProviderDrawDistance(layer),
-                    nothiriumNonSolidProviderDrawMaxChunks(layer),
-                    nothiriumFallbackBlockEntityId(layer),
-                    nothiriumFallbackRenderType(layer),
-                    true,
-                    false
-            );
-            logNothiriumNonSolidProviderDraw(layer, providerCount, cameraX, cameraY, cameraZ);
-            if (providerCount > 0) {
-                visibleCount = providerCount;
-                enableNothiriumNonSolidProviderDraw(layer);
-            }
-        }
-        if (shouldSupplementSparseNothiriumTerrainFromProvider(layer, visibleCount)) {
-            int providerCount = nothiriumShadowRenderer.renderNearestProviderLayerSchedulingCompiles(
-                    layer,
-                    cameraX,
-                    cameraY,
-                    cameraZ,
-                    nothiriumProviderSparseTerrainDistance(layer),
-                    nothiriumProviderSparseTerrainMaxChunks(layer),
-                    nothiriumFallbackBlockEntityId(layer),
-                    nothiriumFallbackRenderType(layer),
-                    true,
-                    shouldScheduleNothiriumProviderSupplementCompiles(layer)
-            );
-            if (providerCount > 0) {
-                visibleCount = Math.max(visibleCount, 0) + providerCount;
-            }
-        }
-        if (layer == BlockRenderLayer.TRANSLUCENT && activePass == RenderPass.GBUFFERS_WATER) {
-            PipelineProgram waterProgram = programs.get(RenderPass.GBUFFERS_WATER);
-            finishWaterAttachmentDeltaProbe();
-            logWaterRoutingProbe(
-                    "after-nothirium-count=" + visibleCount,
-                    waterProgram,
-                    waterProgram != null ? effectiveDrawBuffersForCurrentPhase(waterProgram) : List.of()
-            );
-        }
-        if (visibleCount > 0) {
-            return visibleCount;
-        }
-        return 0;
-    }
-
-    private void beginWaterAttachmentDeltaProbe(BlockRenderLayer layer) {
-        waterAttachmentDeltaProbeActive = false;
-        if (layer != BlockRenderLayer.TRANSLUCENT
-                || activePass != RenderPass.GBUFFERS_WATER
-                || waterAttachmentDeltaProbeLogs >= MAX_WATER_ATTACHMENT_DELTA_PROBE_LOGS
-                || !pingPongManager.isInitialized()) {
-            return;
-        }
-        DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
-        PipelineProgram program = programs.get(RenderPass.GBUFFERS_WATER);
-        if (framebuffer == null || program == null) {
-            return;
-        }
-        List<Attachment> attachments = effectiveDrawBuffersForCurrentPhase(program);
-        int count = Math.min(waterAttachmentBefore.length, attachments.size());
-        for (int slot = count; slot < waterAttachmentBefore.length; slot++) {
-            waterAttachmentProbeWidths[slot] = 0;
-            waterAttachmentProbeHeights[slot] = 0;
-        }
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        try {
-            for (int slot = 0; slot < count; slot++) {
-                Attachment attachment = attachments.get(slot);
-                int width = framebuffer.getAttachmentWidth(attachment);
-                int height = framebuffer.getAttachmentHeight(attachment);
-                int bytes = width * height * 4;
-                ByteBuffer buffer = waterAttachmentBefore[slot];
-                if (buffer == null || buffer.capacity() < bytes) {
-                    buffer = BufferUtils.createByteBuffer(bytes);
-                    waterAttachmentBefore[slot] = buffer;
-                }
-                buffer.clear();
-                buffer.limit(bytes);
-                GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0 + slot);
-                GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer);
-                waterAttachmentProbeWidths[slot] = width;
-                waterAttachmentProbeHeights[slot] = height;
-            }
-            waterAttachmentDeltaProbeActive = count > 0;
-        } finally {
-            GL11.glReadBuffer(previousReadBuffer);
-        }
-    }
-
-    private void finishWaterAttachmentDeltaProbe() {
-        if (!waterAttachmentDeltaProbeActive) {
-            return;
-        }
-        waterAttachmentDeltaProbeActive = false;
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        StringBuilder result = new StringBuilder();
-        try {
-            for (int slot = 0; slot < waterAttachmentBefore.length; slot++) {
-                ByteBuffer before = waterAttachmentBefore[slot];
-                int width = waterAttachmentProbeWidths[slot];
-                int height = waterAttachmentProbeHeights[slot];
-                if (before == null || width <= 0 || height <= 0) {
-                    continue;
-                }
-                int bytes = width * height * 4;
-                ByteBuffer after = waterAttachmentAfter[slot];
-                if (after == null || after.capacity() < bytes) {
-                    after = BufferUtils.createByteBuffer(bytes);
-                    waterAttachmentAfter[slot] = after;
-                }
-                after.clear();
-                after.limit(bytes);
-                GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0 + slot);
-                GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, after);
-                long changedPixels = 0L;
-                long totalDelta = 0L;
-                int maxDelta = 0;
-                for (int pixel = 0; pixel < width * height; pixel++) {
-                    boolean changed = false;
-                    int base = pixel * 4;
-                    for (int channel = 0; channel < 4; channel++) {
-                        int delta = Math.abs((before.get(base + channel) & 0xFF) - (after.get(base + channel) & 0xFF));
-                        if (delta != 0) {
-                            changed = true;
-                            totalDelta += delta;
-                            maxDelta = Math.max(maxDelta, delta);
-                        }
-                    }
-                    if (changed) {
-                        changedPixels++;
-                    }
-                }
-                if (result.length() > 0) {
-                    result.append(';');
-                }
-                result.append("slot").append(slot)
-                        .append('=').append(width).append('x').append(height)
-                        .append(",changedPixels=").append(changedPixels)
-                        .append(",totalDelta=").append(totalDelta)
-                        .append(",maxDelta=").append(maxDelta);
-            }
-        } finally {
-            GL11.glReadBuffer(previousReadBuffer);
-        }
-        waterAttachmentDeltaProbeLogs++;
-        MainMod.LOGGER.warn("[AUSMWaterAttachmentDelta] call={} {} gl={}",
-                waterAttachmentDeltaProbeLogs, result, glStateSummary());
-    }
-
-    private boolean shouldRefreshNothiriumNonSolidListsBeforeDraw(BlockRenderLayer layer) {
-        return isNothiriumNonSolidTerrainLayer(layer)
-                && isNothiriumNonSolidMainTerrainPass(layer)
-                && nothiriumShaderedMainPostCompileSetupFrame != pipelineFrameId;
-    }
-
-    private boolean shouldRetrySparseNothiriumTerrainAfterSetup(BlockRenderLayer layer, int visibleCount) {
-        return layer != null
-                && visibleCount >= 0
-                && visibleCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
-                && nothiriumShaderedMainSetupFrame != pipelineFrameId;
-    }
-
-    private boolean shouldRepairSparseNothiriumMainTerrain(BlockRenderLayer layer, int visibleCount) {
-        if (!isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || visibleCount < 0
-                || visibleCount >= HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
-                || !isNothiriumSparseMainTerrainRepairPass(layer)) {
-            return false;
-        }
-        return nothiriumSparseMainRepairFrame == Long.MIN_VALUE
-                || pipelineFrameId - nothiriumSparseMainRepairFrame >= NOTHIRIUM_SPARSE_MAIN_REPAIR_COOLDOWN_FRAMES;
-    }
-
-    private boolean isNothiriumSparseMainTerrainRepairPass(BlockRenderLayer layer) {
-        return layer == BlockRenderLayer.SOLID
-                && getPhase() == WorldRenderingPhase.TERRAIN_SOLID
-                && (activePass == RenderPass.GBUFFERS_TERRAIN_SOLID
-                || activePass == RenderPass.GBUFFERS_TERRAIN);
-    }
-
-    private boolean shouldDrawSparseNothiriumMainLayerFromProvider(BlockRenderLayer layer, int visibleCount) {
-        return visibleCount >= 0
-                && visibleCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
-                && isNothiriumSparseMainProviderDrawPass(layer);
-    }
-
-    private boolean isNothiriumSparseMainProviderDrawPass(BlockRenderLayer layer) {
-        WorldRenderingPhase phase = getPhase();
-        if (layer == BlockRenderLayer.SOLID) {
-            return phase == WorldRenderingPhase.TERRAIN_SOLID
-                    && (activePass == RenderPass.GBUFFERS_TERRAIN_SOLID
-                    || activePass == RenderPass.GBUFFERS_TERRAIN);
-        }
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED) {
-            return phase == WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED
-                    && activePass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP;
-        }
-        if (layer == BlockRenderLayer.CUTOUT) {
-            return phase == WorldRenderingPhase.TERRAIN_CUTOUT
-                    && activePass == RenderPass.GBUFFERS_TERRAIN_CUTOUT;
-        }
-        return false;
-    }
-
-    private void enableNothiriumSparseMainProviderDraw() {
-        nothiriumSparseMainProviderDrawUntilFrame = Math.max(
-                nothiriumSparseMainProviderDrawUntilFrame,
-                pipelineFrameId + NOTHIRIUM_SPARSE_MAIN_PROVIDER_DRAW_FRAMES
-        );
-    }
-
-    private double nothiriumSparseMainProviderDrawDistance(BlockRenderLayer layer) {
-        return layer == BlockRenderLayer.SOLID
-                ? NOTHIRIUM_SPARSE_MAIN_PROVIDER_SOLID_DISTANCE
-                : NOTHIRIUM_SPARSE_MAIN_PROVIDER_CUTOUT_DISTANCE;
-    }
-
-    private int nothiriumSparseMainProviderDrawMaxChunks(BlockRenderLayer layer) {
-        if (layer == BlockRenderLayer.SOLID) {
-            return NOTHIRIUM_SPARSE_MAIN_PROVIDER_SOLID_MAX_CHUNKS;
-        }
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED || layer == BlockRenderLayer.CUTOUT) {
-            return NOTHIRIUM_SPARSE_MAIN_PROVIDER_CUTOUT_MAX_CHUNKS;
-        }
-        return 0;
-    }
-
-    private NothiriumSparseMainRepairResult repairSparseNothiriumMainTerrain(int visibleCount,
-                                                                             double cameraX,
-                                                                             double cameraY,
-                                                                             double cameraZ) {
-        nothiriumSparseMainRepairFrame = pipelineFrameId;
-        int solid = nothiriumShadowRenderer.scheduleNearestLayerCompiles(
-                BlockRenderLayer.SOLID,
-                cameraX,
-                cameraY,
-                cameraZ,
-                192.0D,
-                96
-        );
-        int cutoutMipped = nothiriumShadowRenderer.scheduleNearestLayerCompiles(
-                BlockRenderLayer.CUTOUT_MIPPED,
-                cameraX,
-                cameraY,
-                cameraZ,
-                160.0D,
-                64
-        );
-        int cutout = nothiriumShadowRenderer.scheduleNearestLayerCompiles(
-                BlockRenderLayer.CUTOUT,
-                cameraX,
-                cameraY,
-                cameraZ,
-                160.0D,
-                64
-        );
-        nothiriumShadowRenderer.drainUploads();
-        boolean setup = forceSetupNothiriumShaderedMainTerrainListsAfterRepair();
-        NothiriumSparseMainRepairResult result = new NothiriumSparseMainRepairResult(solid, cutoutMipped, cutout, setup);
-        logNothiriumSparseMainRepair(visibleCount, result, cameraX, cameraY, cameraZ);
-        return result;
-    }
-
-    private boolean shouldSupplementSparseNothiriumTerrainFromProvider(BlockRenderLayer layer, int visibleCount) {
-        if (!isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || !ENABLE_NOTHIRIUM_PROVIDER_SUPPLEMENT
-                || layer == null
-                || visibleCount < 0) {
-            return false;
-        }
-        if (layer == BlockRenderLayer.TRANSLUCENT) {
-            return visibleCount < Math.max(NOTHIRIUM_PROVIDER_SUPPLEMENT_SPARSE_TRANSLUCENT_DRAWS, 64);
-        }
-        return visibleCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS;
-    }
-
-    private double nothiriumProviderSparseTerrainDistance(BlockRenderLayer layer) {
-        return layer == BlockRenderLayer.TRANSLUCENT ? 128.0D : 192.0D;
-    }
-
-    private int nothiriumProviderSparseTerrainMaxChunks(BlockRenderLayer layer) {
-        if (layer == BlockRenderLayer.TRANSLUCENT) {
-            return 128;
-        }
-        if (layer == BlockRenderLayer.SOLID) {
-            return 384;
-        }
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED) {
-            return 256;
-        }
-        if (layer == BlockRenderLayer.CUTOUT) {
-            return 192;
-        }
-        return 0;
-    }
-
-    private boolean shouldScheduleNothiriumProviderSupplementCompiles(BlockRenderLayer layer) {
-        return layer == BlockRenderLayer.SOLID
-                || layer == BlockRenderLayer.CUTOUT_MIPPED
-                || layer == BlockRenderLayer.CUTOUT
-                || layer == BlockRenderLayer.TRANSLUCENT;
-    }
-
-    private boolean shouldRepairEmptyNothiriumNonSolidLayer(BlockRenderLayer layer, int visibleCount) {
-        if (!isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || visibleCount != 0
-                || !isNothiriumNonSolidTerrainLayer(layer)
-                || !isNothiriumNonSolidMainTerrainPass(layer)) {
-            return false;
-        }
-        long lastFrame = nothiriumNonSolidRepairFrame(layer);
-        return lastFrame == Long.MIN_VALUE
-                || pipelineFrameId - lastFrame >= NOTHIRIUM_NON_SOLID_REPAIR_COOLDOWN_FRAMES;
-    }
-
-    private static boolean isNothiriumNonSolidTerrainLayer(BlockRenderLayer layer) {
-        return layer == BlockRenderLayer.CUTOUT_MIPPED
-                || layer == BlockRenderLayer.CUTOUT
-                || layer == BlockRenderLayer.TRANSLUCENT;
-    }
-
-    private boolean isNothiriumNonSolidMainTerrainPass(BlockRenderLayer layer) {
-        WorldRenderingPhase phase = getPhase();
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED) {
-            return phase == WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED
-                    && activePass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP;
-        }
-        if (layer == BlockRenderLayer.CUTOUT) {
-            return phase == WorldRenderingPhase.TERRAIN_CUTOUT
-                    && activePass == RenderPass.GBUFFERS_TERRAIN_CUTOUT;
-        }
-        return layer == BlockRenderLayer.TRANSLUCENT
-                && phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT
-                && activePass == RenderPass.GBUFFERS_WATER;
-    }
-
-    private long nothiriumNonSolidRepairFrame(BlockRenderLayer layer) {
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED) {
-            return nothiriumNonSolidRepairCutoutMippedFrame;
-        }
-        if (layer == BlockRenderLayer.CUTOUT) {
-            return nothiriumNonSolidRepairCutoutFrame;
-        }
-        if (layer == BlockRenderLayer.TRANSLUCENT) {
-            return nothiriumNonSolidRepairTranslucentFrame;
-        }
-        return Long.MIN_VALUE;
-    }
-
-    private void markNothiriumNonSolidRepairAttempt(BlockRenderLayer layer) {
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED) {
-            nothiriumNonSolidRepairCutoutMippedFrame = pipelineFrameId;
-        } else if (layer == BlockRenderLayer.CUTOUT) {
-            nothiriumNonSolidRepairCutoutFrame = pipelineFrameId;
-        } else if (layer == BlockRenderLayer.TRANSLUCENT) {
-            nothiriumNonSolidRepairTranslucentFrame = pipelineFrameId;
-        }
-    }
-
-    private void enableNothiriumNonSolidProviderDraw(BlockRenderLayer layer) {
-        long untilFrame = pipelineFrameId + NOTHIRIUM_NON_SOLID_PROVIDER_DRAW_FRAMES;
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED) {
-            nothiriumNonSolidProviderDrawCutoutMippedUntilFrame = untilFrame;
-        } else if (layer == BlockRenderLayer.CUTOUT) {
-            nothiriumNonSolidProviderDrawCutoutUntilFrame = untilFrame;
-        } else if (layer == BlockRenderLayer.TRANSLUCENT) {
-            nothiriumNonSolidProviderDrawTranslucentUntilFrame = untilFrame;
-        }
-    }
-
-    private boolean shouldDrawEmptyNothiriumNonSolidLayerFromProvider(BlockRenderLayer layer, int visibleCount) {
-        return visibleCount == 0
-                && isNothiriumNonSolidTerrainLayer(layer)
-                && isNothiriumNonSolidMainTerrainPass(layer);
-    }
-
-    private long nothiriumNonSolidProviderDrawUntilFrame(BlockRenderLayer layer) {
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED) {
-            return nothiriumNonSolidProviderDrawCutoutMippedUntilFrame;
-        }
-        if (layer == BlockRenderLayer.CUTOUT) {
-            return nothiriumNonSolidProviderDrawCutoutUntilFrame;
-        }
-        if (layer == BlockRenderLayer.TRANSLUCENT) {
-            return nothiriumNonSolidProviderDrawTranslucentUntilFrame;
-        }
-        return Long.MIN_VALUE;
-    }
-
-    private double nothiriumNonSolidRepairDistance(BlockRenderLayer layer) {
-        return layer == BlockRenderLayer.TRANSLUCENT ? 128.0D : 160.0D;
-    }
-
-    private int nothiriumNonSolidRepairMaxChunks(BlockRenderLayer layer) {
-        if (layer == BlockRenderLayer.TRANSLUCENT) {
-            return 64;
-        }
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED || layer == BlockRenderLayer.CUTOUT) {
-            return 96;
-        }
-        return 0;
-    }
-
-    private double nothiriumNonSolidProviderDrawDistance(BlockRenderLayer layer) {
-        return layer == BlockRenderLayer.TRANSLUCENT ? 96.0D : 128.0D;
-    }
-
-    private int nothiriumNonSolidProviderDrawMaxChunks(BlockRenderLayer layer) {
-        if (layer == BlockRenderLayer.TRANSLUCENT) {
-            return 96;
-        }
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED || layer == BlockRenderLayer.CUTOUT) {
-            return 96;
-        }
-        return 0;
-    }
-
-    private void logNothiriumSparseMainRepair(int visibleCount, NothiriumSparseMainRepairResult repair,
-                                              double cameraX, double cameraY, double cameraZ) {
-        if (nothiriumSparseMainRepairLogs++ >= MAX_NOTHIRIUM_SPARSE_MAIN_REPAIR_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMNothiriumSparseMainRepair] call={} visible={} solidWork={} cutoutMippedWork={} cutoutWork={} setup={} frame={} activePass={} phase={} camera={}/{}/{} gl={}",
-                nothiriumSparseMainRepairLogs,
-                visibleCount,
-                repair.solidWork,
-                repair.cutoutMippedWork,
-                repair.cutoutWork,
-                repair.setup,
-                pipelineFrameId,
-                String.valueOf(activePass),
-                getPhase(),
-                cameraX,
-                cameraY,
-                cameraZ,
-                glStateSummary()
-        );
-    }
-
-    private void logNothiriumNonSolidRepair(BlockRenderLayer layer, int scheduled, boolean setup,
-                                            double cameraX, double cameraY, double cameraZ) {
-        if (nothiriumNonSolidRepairLogs++ >= MAX_NOTHIRIUM_NON_SOLID_REPAIR_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMNothiriumNonSolidRepair] call={} layer={} scheduled={} setup={} frame={} activePass={} phase={} camera={}/{}/{} maxChunks={} distance={} gl={}",
-                nothiriumNonSolidRepairLogs,
-                layer,
-                scheduled,
-                setup,
-                pipelineFrameId,
-                String.valueOf(activePass),
-                getPhase(),
-                cameraX,
-                cameraY,
-                cameraZ,
-                nothiriumNonSolidRepairMaxChunks(layer),
-                nothiriumNonSolidRepairDistance(layer),
-                glStateSummary()
-        );
-    }
-
-    private void logNothiriumNonSolidProviderDraw(BlockRenderLayer layer, int providerCount,
-                                                  double cameraX, double cameraY, double cameraZ) {
-        if (nothiriumNonSolidProviderDrawLogs++ >= MAX_NOTHIRIUM_NON_SOLID_PROVIDER_DRAW_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMNothiriumNonSolidProviderDraw] call={} layer={} providerCount={} frame={} activePass={} phase={} camera={}/{}/{} maxChunks={} distance={} untilFrame={} gl={}",
-                nothiriumNonSolidProviderDrawLogs,
-                layer,
-                providerCount,
-                pipelineFrameId,
-                String.valueOf(activePass),
-                getPhase(),
-                cameraX,
-                cameraY,
-                cameraZ,
-                nothiriumNonSolidProviderDrawMaxChunks(layer),
-                nothiriumNonSolidProviderDrawDistance(layer),
-                nothiriumNonSolidProviderDrawUntilFrame(layer),
-                glStateSummary()
-        );
-    }
-
-    private void logNothiriumSparseMainProviderDraw(BlockRenderLayer layer, int visibleCount, int providerCount,
-                                                    double cameraX, double cameraY, double cameraZ) {
-        if (nothiriumSparseMainProviderDrawLogs++ >= MAX_NOTHIRIUM_SPARSE_MAIN_PROVIDER_DRAW_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMNothiriumSparseMainProviderDraw] call={} layer={} visible={} providerCount={} frame={} activePass={} phase={} camera={}/{}/{} maxChunks={} distance={} untilFrame={} gl={}",
-                nothiriumSparseMainProviderDrawLogs,
-                layer,
-                visibleCount,
-                providerCount,
-                pipelineFrameId,
-                String.valueOf(activePass),
-                getPhase(),
-                cameraX,
-                cameraY,
-                cameraZ,
-                nothiriumSparseMainProviderDrawMaxChunks(layer),
-                nothiriumSparseMainProviderDrawDistance(layer),
-                nothiriumSparseMainProviderDrawUntilFrame,
-                glStateSummary()
-        );
-    }
-
-    private void logNothiriumMainSetupBridge(BlockRenderLayer layer, boolean setup, double cameraX, double cameraY, double cameraZ) {
-        if (!setup || nothiriumMainSetupBridgeLogs >= MAX_NOTHIRIUM_MAIN_SETUP_BRIDGE_LOGS) {
-            return;
-        }
-        nothiriumMainSetupBridgeLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMNothiriumMainSetupBridge] call={} setup={} layer={} frame={} activePass={} phase={} camera={}/{}/{} gl={}",
-                nothiriumMainSetupBridgeLogs,
-                setup,
-                layer,
-                pipelineFrameId,
-                String.valueOf(activePass),
-                getPhase(),
-                cameraX,
-                cameraY,
-                cameraZ,
-                glStateSummary()
-        );
-    }
-
-    private boolean setupNothiriumShaderedMainTerrainLists(boolean afterCompileUpload) {
-        if (!isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || activePass == null
-                || !shouldUseNothiriumMainTerrainBridge()) {
-            return false;
-        }
-        if (afterCompileUpload) {
-            if (nothiriumShaderedMainPostCompileSetupFrame == pipelineFrameId) {
-                return true;
-            }
-        } else if (nothiriumShaderedMainSetupFrame == pipelineFrameId) {
-            return true;
-        }
-
-        boolean setup = NothiriumBypass.setupForShaderedMainTerrainBridge();
-        if (setup) {
-            if (afterCompileUpload) {
-                nothiriumShaderedMainPostCompileSetupFrame = pipelineFrameId;
-            } else {
-                nothiriumShaderedMainSetupFrame = pipelineFrameId;
-            }
-        }
-        return setup;
-    }
-
-    private boolean forceSetupNothiriumShaderedMainTerrainListsAfterRepair() {
-        if (!isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || activePass == null
-                || !shouldUseNothiriumMainTerrainBridge()) {
-            return false;
-        }
-
-        boolean setup = NothiriumBypass.setupForShaderedMainTerrainBridge();
-        if (setup) {
-            nothiriumShaderedMainPostCompileSetupFrame = pipelineFrameId;
-            nothiriumShaderedMainSetupFrame = pipelineFrameId;
-        }
-        return setup;
-    }
-
-    private static final class NothiriumSparseMainRepairResult {
-        private final int solidWork;
-        private final int cutoutMippedWork;
-        private final int cutoutWork;
-        private final boolean setup;
-
-        private NothiriumSparseMainRepairResult(int solidWork, int cutoutMippedWork, int cutoutWork, boolean setup) {
-            this.solidWork = solidWork;
-            this.cutoutMippedWork = cutoutMippedWork;
-            this.cutoutWork = cutoutWork;
-            this.setup = setup;
-        }
-
-        private int totalWork() {
-            return Math.max(0, solidWork) + Math.max(0, cutoutMippedWork) + Math.max(0, cutoutWork);
-        }
-    }
-
-    private double nothiriumMainTerrainFallbackDistance() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) == null) {
-            return -1.0D;
-        }
-        int chunks = Math.max(2, com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc));
-        return chunks * 16.0D + 32.0D;
-    }
-
-    public boolean renderNothiriumRendererPass(Object chunkRenderPass) {
-        if (shouldBypassWorldPassRendering()
-                || BetterPortalsCompat.shouldUseVanillaRenderGlobalForNestedView()) {
-            return false;
-        }
-        boolean translucentPass = isNothiriumTranslucentPass(chunkRenderPass);
-        if (shouldCancelDuplicateNothiriumTranslucentPass(translucentPass)) {
-            return true;
-        }
-        if (!isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || activePass != RenderPass.GBUFFERS_WATER
-                || getPhase() != WorldRenderingPhase.TERRAIN_TRANSLUCENT
-                || renderingGuiScreen()
-                || !translucentPass) {
-            return false;
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null) {
-            return false;
-        }
-
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        if (viewEntity == null) {
-            return false;
-        }
-
-        int count = renderNothiriumTerrainLayer(
-                BlockRenderLayer.TRANSLUCENT,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc),
-                viewEntity
-        );
-        if (count < 0) {
-            return false;
-        }
-
-        markNothiriumPipelineTranslucentBridge(BlockRenderLayer.TRANSLUCENT);
-        recordTerrainLayerCount(BlockRenderLayer.TRANSLUCENT, count);
-        return true;
-    }
-
-    private boolean shouldCancelDuplicateNothiriumTranslucentPass(boolean translucentPass) {
-        return translucentPass && shouldSuppressDuplicatePipelineTranslucentLayer(BlockRenderLayer.TRANSLUCENT);
-    }
-
-    private static boolean isNothiriumTranslucentPass(Object chunkRenderPass) {
-        return chunkRenderPass instanceof Enum<?> pass && "TRANSLUCENT".equals(pass.name());
-    }
-
-    private int nothiriumFallbackBlockEntityId(BlockRenderLayer layer) {
-        if (layer != BlockRenderLayer.TRANSLUCENT) {
-            return 0;
-        }
-        int stillWater = blockEntityId(nothiriumFallbackWaterState("field_150355_j", "WATER"));
-        if (stillWater != 0) {
-            return stillWater;
-        }
-        return blockEntityId(nothiriumFallbackWaterState("field_150358_i", "FLOWING_WATER"));
-    }
-
-    private short nothiriumFallbackRenderType(BlockRenderLayer layer) {
-        if (layer != BlockRenderLayer.TRANSLUCENT) {
-            return 0;
-        }
-        return (short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(nothiriumFallbackWaterState("field_150355_j", "WATER"));
-    }
-
-    private IBlockState nothiriumFallbackWaterState(String srgName, String mcpName) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.blockDefaultState(com.l.ausm.impl.util.MinecraftReflectionCompat.field(Blocks.class, Block.class, null, srgName, mcpName));
-    }
-
-    public ShaderKey getShaderKey() {
-        return activeShaderKey;
-    }
-
-    public FogMode getFogMode() {
-        return activeShaderKey == null ? FogMode.OFF : activeShaderKey.fogMode();
-    }
-
-    public LightingModel getLightingModel() {
-        return activeShaderKey == null ? LightingModel.LIGHTMAP : activeShaderKey.lightingModel();
-    }
-
-    public void setPhase(WorldRenderingPhase phase) {
-        activePhase = phase == null ? WorldRenderingPhase.NONE : phase;
-    }
-
-    public void clearPhase(WorldRenderingPhase expectedPhase) {
-        if (expectedPhase == null || activePhase == expectedPhase) {
-            activePhase = WorldRenderingPhase.NONE;
-        }
-    }
-
-    public void setOverridePhase(WorldRenderingPhase phase) {
-        overridePhase = phase;
-    }
-
-    public void clearOverridePhase() {
-        overridePhase = null;
-    }
-
-    public int entityId(Entity entity) {
-        if (entity == null) {
-            return 0;
-        }
-
-        ResourceLocation entityKey = com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity);
-        if (entityKey != null) {
-            Integer alias = shaderProperties.entityIds().get(entityKey);
-            if (alias != null) {
-                return alias;
-            }
-        }
-
-        return 0;
-    }
-
-    public int currentEntityId() {
-        return currentEntityId;
-    }
-
-    private int vehicleId(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) == null) {
-            return 0;
-        }
-        return entityId(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)));
-    }
-
-    private boolean vehicleInWater(Minecraft mc) {
-        return mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc))), new String[] {"func_70090_H", "isInWater"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false);
-    }
-
-    private float[] vehicleLookVector(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) == null) {
-            return new float[]{0.0f, 0.0f, 0.0f};
-        }
-        return vec3(com.l.ausm.impl.util.MinecraftReflectionCompat.look(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)), com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc)));
-    }
-
-    private float[] relativeVehiclePosition(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) == null) {
-            return new float[]{0.0f, 0.0f, 0.0f};
-        }
-        Entity vehicle = com.l.ausm.impl.util.MinecraftReflectionCompat.entityRidingEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc));
-        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
-        double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosX(vehicle), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(vehicle), partialTicks);
-        double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosY(vehicle), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(vehicle), partialTicks);
-        double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosZ(vehicle), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(vehicle), partialTicks);
-        return new float[]{
-                (float) (cameraPositionUnshifted[0] - x),
-                (float) (cameraPositionUnshifted[1] - y),
-                (float) (cameraPositionUnshifted[2] - z)
-        };
-    }
-
-    private static float[] bodyVector(Entity entity) {
-        if (entity == null) {
-            return new float[]{0.0f, 0.0f, 0.0f};
-        }
-        return vec3(com.l.ausm.impl.util.MinecraftReflectionCompat.call((entity), net.minecraft.util.math.Vec3d.class, null, new String[] {"func_189651_aD", "getForward", "func_70040_Z", "getLookVec"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS));
-    }
-
-    private float[] lightningBoltPosition(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (mc == null || world == null) {
-            return new float[]{0.0f, 0.0f, 0.0f, 0.0f};
-        }
-        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
-        for (Entity entity : com.l.ausm.impl.util.MinecraftReflectionCompat.loadedEntityList(world)) {
-            if (entity instanceof EntityLightningBolt) {
-                double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosX(entity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity), partialTicks);
-                double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosY(entity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(entity), partialTicks);
-                double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosZ(entity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity), partialTicks);
-                return new float[]{
-                        (float) (x - cameraPositionUnshifted[0]),
-                        (float) (y - cameraPositionUnshifted[1]),
-                        (float) (z - cameraPositionUnshifted[2]),
-                        1.0f
-                };
-            }
-        }
-        return new float[]{0.0f, 0.0f, 0.0f, 0.0f};
-    }
-
-    private void updateEndFlashState(Minecraft mc) {
-        previousEndFlashIntensity = endFlashIntensity;
-        endFlashIntensity = 0.0f;
-        endFlashPosition[0] = 0.0f;
-        endFlashPosition[1] = 0.0f;
-        endFlashPosition[2] = 0.0f;
-
-        if (!shaderProperties.renderSettings().supportsEndFlash()) {
-            return;
-        }
-
-        World world = renderWorld(mc);
-        if (mc == null || world == null) {
-            return;
-        }
-        if (!isEndWorld(world)) {
-            return;
-        }
-
-        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
-        EntityDragon strongestDragon = null;
-        float strongestIntensity = 0.0f;
-        for (Entity entity : com.l.ausm.impl.util.MinecraftReflectionCompat.loadedEntityList(world)) {
-            if (!(entity instanceof EntityDragon dragon) || com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((dragon), 0, "field_70995_bG", "deathTicks") <= 0) {
-                continue;
-            }
-            float intensity = clamp01((com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((dragon), 0, "field_70995_bG", "deathTicks") + partialTicks) / 200.0f);
-            if (intensity > strongestIntensity) {
-                strongestIntensity = intensity;
-                strongestDragon = dragon;
-            }
-        }
-        if (strongestDragon == null) {
-            return;
-        }
-
-        double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosX(strongestDragon), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(strongestDragon), partialTicks) - cameraPositionUnshifted[0];
-        double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosY(strongestDragon), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(strongestDragon), partialTicks) - cameraPositionUnshifted[1];
-        double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.prevPosZ(strongestDragon), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(strongestDragon), partialTicks) - cameraPositionUnshifted[2];
-        double length = Math.sqrt(x * x + y * y + z * z);
-        if (length > 1.0e-4) {
-            double scale = 100.0 / length;
-            endFlashPosition[0] = (float) (x * scale);
-            endFlashPosition[1] = (float) (y * scale);
-            endFlashPosition[2] = (float) (z * scale);
-        } else {
-            endFlashPosition[1] = 100.0f;
-        }
-        endFlashYawDegrees = (float) Math.toDegrees(Math.atan2(x, z));
-        endFlashPitchDegrees = (float) Math.toDegrees(Math.atan2(y, Math.sqrt(x * x + z * z)));
-        endFlashIntensity = strongestIntensity;
-    }
-
-    private void resetEndFlashState() {
-        endFlashPosition[0] = 0.0f;
-        endFlashPosition[1] = 0.0f;
-        endFlashPosition[2] = 0.0f;
-        endFlashIntensity = 0.0f;
-        previousEndFlashIntensity = 0.0f;
-        endFlashYawDegrees = 0.0f;
-        endFlashPitchDegrees = 0.0f;
-    }
-
-    private boolean useEndFlashShadowLight(World world) {
-        return shaderProperties.renderSettings().supportsEndFlash()
-                && isEndWorld(world)
-                && endFlashIntensity > 0.0f;
-    }
-
-    private static boolean isEndWorld(World world) {
-        return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) == 1;
-    }
-
-    public void beginRenderedItem(ItemStack stack) {
-        renderedItemIdStack.push(currentRenderedItemId);
-        currentRenderedItemId = currentRenderedItemId(stack);
-        currentRenderedItemDebugName = renderedItemDebugName(stack);
-        uploadCurrentRenderedItemId();
-    }
-
-    public void endRenderedItem() {
-        currentRenderedItemId = renderedItemIdStack.isEmpty() ? -1 : renderedItemIdStack.pop();
-        currentRenderedItemDebugName = "";
-        uploadCurrentRenderedItemId();
-    }
-
-    private String renderedItemDebugName(ItemStack stack) {
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack)) {
-            return "empty";
-        }
-        Item item = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack);
-        ResourceLocation key = item != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.call((item), net.minecraft.util.ResourceLocation.class, null, new String[] {"getRegistryName"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS) : null;
-        return (key != null ? key.toString() : item != null ? item.getClass().getName() : "null")
-                + ":" + com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack);
-    }
-
-    private void uploadCurrentRenderedItemId() {
-        ShaderProgram program = activeProgram();
-        if (program != null) {
-            uniformRegistry.upload(program, "currentRenderedItemId");
-        }
-    }
-
-    public boolean shouldRenderEntityWithVanillaProgram(Entity entity) {
-        if (!isPipelineActive || !worldFrameActive || activePass == null || renderingShadowMap || renderingGuiScreen()) {
-            return false;
-        }
-        if (activePass.stage() != ProgramStage.GBUFFERS) {
-            return false;
-        }
-        return isBetweenlandsEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity));
-    }
-
-    private static boolean isBetweenlandsEntity(ResourceLocation entityKey) {
-        return entityKey != null && "thebetweenlands".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(entityKey));
-    }
-
-    private static boolean isBetweenlandsRenderStack() {
-        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
-        for (StackTraceElement element : stack) {
-            String className = element.getClassName();
-            if (className.startsWith("thebetweenlands.client.render.entity.")
-                    || className.startsWith("thebetweenlands.client.render.model.entity.")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private int heldItemId(ItemStack stack) {
-        return shaderProperties.itemIds().idFor(stack);
-    }
-
-    private int currentRenderedItemId(ItemStack stack) {
-        Integer explicitItemId = shaderProperties.itemIds().explicitIdFor(stack);
-        if (explicitItemId != null) {
-            return explicitItemId;
-        }
-        int blockItemId = currentRenderedBlockItemId(stack);
-        return blockItemId != 0 ? blockItemId : 0;
-    }
-
-    private int currentRenderedBlockItemId(ItemStack stack) {
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack)) {
-            return 0;
-        }
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.call(net.minecraft.block.Block.class, net.minecraft.block.Block.class, null, new String[] {"func_149634_a", "getBlockFromItem"},
-                new Class<?>[] {net.minecraft.item.Item.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack)));
-        if (block == null || block == com.l.ausm.impl.util.MinecraftReflectionCompat.field(Blocks.class, Block.class, null, "field_150350_a", "AIR")) {
-            return 0;
-        }
-        try {
-            int metadata = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack);
-            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.blockStateFromMeta(block, metadata);
-            if (state != null) {
-                return shaderProperties.blockIds().idFor(state);
-            }
-        } catch (RuntimeException ignored) {
-        }
-        return shaderProperties.blockIds().idFor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockDefaultState(block));
-    }
-
-    private ItemStack heldMainStack(Minecraft mc) {
-        EntityLivingBase player = com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc);
-        if (player == null) {
-            return null;
-        }
-
-        ItemStack mainHand = com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemMainhand(player);
-        if (!shaderProperties.renderSettings().oldHandLight()) {
-            return mainHand;
-        }
-
-        ItemStack offHand = com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemOffhand(player);
-        return heldBlockLightValue(offHand) > heldBlockLightValue(mainHand) ? offHand : mainHand;
-    }
-
-    private ItemStack heldOffhandStack(Minecraft mc) {
-        EntityLivingBase player = com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc);
-        return player != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemOffhand(player) : null;
-    }
-
-    private int heldBlockLightValue(ItemStack stack) {
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack)) {
-            return 0;
-        }
-
-        int shaderItemId = shaderProperties.itemIds().idFor(stack);
-        if (shaderItemId > 44000 && shaderItemId < 44100) {
-            return 15;
-        }
-
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.call(net.minecraft.block.Block.class, net.minecraft.block.Block.class, null, new String[] {"func_149634_a", "getBlockFromItem"},
-                new Class<?>[] {net.minecraft.item.Item.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack)));
-        int blockLight = block != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((block), new String[] {"getLightValue", "func_149750_m"},
-                new Class<?>[] {net.minecraft.block.state.IBlockState.class}, 0, (com.l.ausm.impl.util.MinecraftReflectionCompat.blockDefaultState(block))) : 0;
-        if (blockLight > 0) {
-            return blockLight;
-        }
-
-        return 0;
-    }
-
-    private float[] heldBlockLightColor(ItemStack stack) {
-        int lightValue = heldBlockLightValue(stack);
-        if (lightValue <= 0) {
-            return new float[]{0.0f, 0.0f, 0.0f};
-        }
-
-        int shaderItemId = shaderProperties.itemIds().idFor(stack);
-        float[] itemColor = compatLightColorForVoxelId(localActItemVoxelId(shaderItemId));
-        if (itemColor != null) {
-            return itemColor;
-        }
-
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.call(net.minecraft.block.Block.class, net.minecraft.block.Block.class, null, new String[] {"func_149634_a", "getBlockFromItem"},
-                new Class<?>[] {net.minecraft.item.Item.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack)));
-        if (block != null) {
-            int shaderBlockId = currentRenderedBlockItemId(stack);
-            float[] blockColor = compatLightColorForVoxelId(localActVoxelId(shaderBlockId));
-            if (blockColor != null) {
-                return blockColor;
-            }
-        }
-
-        return new float[]{1.0f, 1.0f, 1.0f};
-    }
-
-    private static int localActItemVoxelId(int itemId) {
-        if (itemId == 44024) {
-            return 24;
-        }
-        if (itemId >= 44070 && itemId <= 44080) {
-            return itemId - 44000;
-        }
-        return 0;
-    }
-
-    private static float[] compatLightColorForVoxelId(int voxelId) {
-        return switch (voxelId) {
-            case 24 -> new float[]{1.0f, 1.0f, 1.0f};
-            case 70 -> new float[]{1.0f, 0.12f, 0.08f};
-            case 71 -> new float[]{1.0f, 0.46f, 0.08f};
-            case 72 -> new float[]{1.0f, 0.88f, 0.16f};
-            case 73 -> new float[]{0.48f, 1.0f, 0.12f};
-            case 74 -> new float[]{0.12f, 0.80f, 0.20f};
-            case 75 -> new float[]{0.08f, 0.88f, 1.0f};
-            case 76 -> new float[]{0.36f, 0.66f, 1.0f};
-            case 77 -> new float[]{0.14f, 0.24f, 1.0f};
-            case 78 -> new float[]{0.58f, 0.20f, 1.0f};
-            case 79 -> new float[]{1.0f, 0.16f, 0.90f};
-            case 80 -> new float[]{1.0f, 0.48f, 0.74f};
-            case 110 -> new float[]{1.0f, 0.18f, 0.14f};
-            case 111 -> new float[]{1.0f, 0.48f, 0.16f};
-            case 112 -> new float[]{1.0f, 0.88f, 0.18f};
-            case 113 -> new float[]{0.46f, 1.0f, 0.18f};
-            case 114 -> new float[]{0.18f, 0.95f, 0.28f};
-            case 115 -> new float[]{0.12f, 0.9f, 1.0f};
-            case 116 -> new float[]{0.42f, 0.7f, 1.0f};
-            case 117 -> new float[]{0.18f, 0.3f, 1.0f};
-            case 118 -> new float[]{0.62f, 0.24f, 1.0f};
-            case 119 -> new float[]{1.0f, 0.2f, 0.92f};
-            case 120 -> new float[]{1.0f, 0.52f, 0.78f};
-            default -> null;
-        };
-    }
-
-    private float[] entityColor(Entity entity) {
-        if (entity instanceof EntityLivingBase living) {
-            int hurtTime = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((living), 0, "field_70737_aN", "hurtTime");
-            int deathTime = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((living), 0, "field_70725_aQ", "deathTime");
-            if (hurtTime > 0 || deathTime > 0) {
-                float hurtRatio = hurtTime / Math.max(1.0f, com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((living), 0, "field_70738_aO", "maxHurtTime"));
-                float deathRatio = Math.min(1.0f, deathTime / 20.0f);
-                float alpha = Math.max(hurtRatio, deathRatio) * 0.25f;
-                return new float[]{1.0f, 0.0f, 0.0f, alpha};
-            }
-        }
-        return new float[]{0.0f, 0.0f, 0.0f, 0.0f};
-    }
-
-    public void setCurrentEntity(Entity entity) {
-        currentEntityKey = com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity);
-        currentEntityId = entityId(entity);
-        currentEntityColor = entityColor(entity);
-        uploadEntityUniforms();
-    }
-
-    public void clearCurrentEntity() {
-        currentEntityKey = null;
-        currentEntityId = 0;
-        currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
-        uploadEntityUniforms();
-    }
-
-    public void applyWeatherRenderState() {
-        if (!isPipelineActive || shaderProperties.renderSettings().rainDepth()) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-    }
-
-    public void restoreWeatherRenderState() {
-        if (!isPipelineActive || shaderProperties.renderSettings().rainDepth()) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-    }
-
-    public void applyWaterRenderState() {
-        if (!isPipelineActive) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE_MINUS_SRC_ALPHA,
-                GL11.GL_ONE,
-                GL11.GL_ONE_MINUS_SRC_ALPHA
-        );
-        setIndexedBlend(Attachment.COLOR.getIndex(), true);
-        setIndexedBlend(Attachment.DEPTH.getIndex(), true);
-        setIndexedBlend(Attachment.NORMAL.getIndex(), false);
-        setIndexedBlend(Attachment.COMPOSITE.getIndex(), false);
-        setIndexedBlend(Attachment.AUX1.getIndex(), false);
-        setIndexedBlend(Attachment.AUX2.getIndex(), false);
-        setIndexedBlend(Attachment.AUX3.getIndex(), false);
-        setIndexedBlend(Attachment.AUX4.getIndex(), false);
-        // Final passes reconstruct the current water pixel from depthtex0, so
-        // water must update the live depth buffer.
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-    }
-
-    public void restoreWaterRenderState() {
-        if (!isPipelineActive) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-        resetIndexedBlendState();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE_MINUS_SRC_ALPHA,
-                GL11.GL_ZERO,
-                GL11.GL_ONE
-        );
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-    }
-
-    private void uploadEntityUniforms() {
-        ShaderProgram program = activeProgram();
-        if (program == null) {
-            return;
-        }
-
-        uniformRegistry.upload(program, "entityId");
-        uniformRegistry.upload(program, "entityColor");
-    }
-
-    public void applyChunkFade(RenderChunk renderChunk, BlockRenderLayer layer) {
-        if (renderChunk == null) {
-            return;
-        }
-        if (!ENABLE_CHUNK_FADE) {
-            resetChunkFadeUniform();
-            return;
-        }
-        if (shouldSuppressChunkFadeForBetterPortals()) {
-            resetChunkFadeUniform();
-            return;
-        }
-        if (!shouldUploadChunkFade(layer)) {
-            return;
-        }
-
-        BlockPos position = com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkPosition(renderChunk);
-        if (position == null) {
-            resetChunkFadeUniform();
-            return;
-        }
-
-        int dimensionId = safeDimensionId(renderChunkWorld(renderChunk));
-        if (dimensionId == Integer.MIN_VALUE) {
-            dimensionId = safeDimensionId(renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
-        }
-        applyChunkFade(dimensionId, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(position), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(position), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(position));
-    }
-
-    public void applyChunkFade(int blockX, int blockY, int blockZ) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = renderWorld(mc);
-        applyChunkFade(safeDimensionId(world), blockX, blockY, blockZ);
-    }
-
-    private void applyChunkFade(int dimensionId, int blockX, int blockY, int blockZ) {
-        if (!ENABLE_CHUNK_FADE) {
-            resetChunkFadeUniform();
-            return;
-        }
-        if (shouldSuppressChunkFadeForBetterPortals()) {
-            resetChunkFadeUniform();
-            return;
-        }
-        if (!shouldUploadChunkFade(null)) {
-            return;
-        }
-
-        currentChunkFade = chunkFadeValue(dimensionId, blockX, blockY, blockZ);
-        uploadChunkFadeUniform();
-    }
-
-    public void resetChunkFadeUniform() {
-        if (currentChunkFade == 1.0f) {
-            return;
-        }
-        currentChunkFade = 1.0f;
-        uploadChunkFadeUniform();
-    }
-
-    private boolean shouldUploadChunkFade(BlockRenderLayer layer) {
-        if (!isPipelineActive || activePass == null || activePass.stage() != ProgramStage.GBUFFERS || renderingShadowMap) {
-            return false;
-        }
-        if (layer != null && layer != BlockRenderLayer.SOLID
-                && layer != BlockRenderLayer.CUTOUT
-                && layer != BlockRenderLayer.CUTOUT_MIPPED
-                && layer != BlockRenderLayer.TRANSLUCENT) {
-            return false;
-        }
-        return isChunkFadePass(activePass);
-    }
-
-    private boolean shouldSuppressChunkFadeForBetterPortals() {
-        return BetterPortalsCompat.isInstalled()
-                && (isRenderingBetterPortalsNestedView()
-                || isRenderingBetterPortalsRenderPass()
-                || BetterPortalsCompat.isMainViewSwapRecoveryActive());
-    }
-
-    private static boolean isChunkFadePass(RenderPass pass) {
-        return pass == RenderPass.GBUFFERS_TERRAIN
-                || pass == RenderPass.GBUFFERS_TERRAIN_SOLID
-                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT
-                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP
-                || pass == RenderPass.GBUFFERS_DAMAGEDBLOCK
-                || pass == RenderPass.GBUFFERS_BLOCK
-                || pass == RenderPass.GBUFFERS_BLOCK_TRANSLUCENT
-                || pass == RenderPass.GBUFFERS_WATER;
-    }
-
-    private float chunkFadeValue(int dimensionId, int blockX, int blockY, int blockZ) {
-        if (dimensionId == Integer.MIN_VALUE) {
-            return 1.0f;
-        }
-
-        ChunkFadeKey key = new ChunkFadeKey(
-                dimensionId,
-                Math.floorDiv(blockX, 16),
-                // Vertical flight should not fade every newly-entered section of an already visible column.
-                0,
-                Math.floorDiv(blockZ, 16)
-        );
-        ChunkFadeState state = chunkFadeStates.get(key);
-        if (state == null) {
-            float initial = pipelineFrameId <= chunkFadeWarmupUntilFrame ? 1.0f : 0.0f;
-            state = new ChunkFadeState(initial, pipelineFrameId);
-            chunkFadeStates.put(key, state);
-            pruneChunkFadeStates();
-            return state.value;
-        }
-
-        if (state.lastFrameSeen != pipelineFrameId) {
-            state.value = clamp01(state.value + currentFrameTime / CHUNK_FADE_DURATION_SECONDS);
-            state.lastFrameSeen = pipelineFrameId;
-        }
-        return state.value;
-    }
-
-    private void uploadChunkFadeUniform() {
-        ShaderProgram program = activeProgram();
-        if (program != null) {
-            uniformRegistry.upload(program, "mc_chunkFade");
-        }
-    }
-
-    private void resetChunkFadeState(boolean warmExistingChunks) {
-        chunkFadeStates.clear();
-        currentChunkFade = 1.0f;
-        chunkFadeWarmupUntilFrame = warmExistingChunks ? pipelineFrameId + CHUNK_FADE_WARMUP_FRAMES : pipelineFrameId;
-    }
-
-    private void pruneChunkFadeStates() {
-        if (chunkFadeStates.size() <= MAX_CHUNK_FADE_STATES) {
-            return;
-        }
-
-        long staleBefore = pipelineFrameId - CHUNK_FADE_STALE_FRAMES;
-        Iterator<Map.Entry<ChunkFadeKey, ChunkFadeState>> iterator = chunkFadeStates.entrySet().iterator();
-        while (iterator.hasNext() && chunkFadeStates.size() > MAX_CHUNK_FADE_STATES) {
-            if (iterator.next().getValue().lastFrameSeen < staleBefore) {
-                iterator.remove();
-            }
-        }
-        iterator = chunkFadeStates.entrySet().iterator();
-        while (iterator.hasNext() && chunkFadeStates.size() > MAX_CHUNK_FADE_STATES) {
-            iterator.next();
-            iterator.remove();
-        }
-    }
-
-    public void beginPass(RenderPass pass) {
-        beginPass(pass, WorldRenderingPhase.NONE);
-    }
-
-    private void beginPass(RenderPass pass, WorldRenderingPhase phase) {
-        if (!isPipelineActive || !worldFrameActive) {
-            return;
-        }
-
-        RenderPass previousPass = activePass;
-        ShaderKey previousShaderKey = activeShaderKey;
-        WorldRenderingPhase previousPhase = activePhase;
-        boolean previousProgramTessellated = activeProgramTessellated;
-        boolean previousProgramGeometric = activeProgramGeometric;
-        activePhase = phase;
-        boolean bound = bindPass(pass);
-        passStack.push(new PassScope(bound, previousPass, previousShaderKey, previousPhase, previousProgramTessellated, previousProgramGeometric));
-    }
-
-    public boolean beginPhaseIfActive(WorldRenderingPhase phase) {
-        if (renderingGuiScreen()) {
-            return false;
-        }
-        RenderPass pass = passForPhase(phase);
-        if (pass == null) {
-            return false;
-        }
-        beginPass(pass, phase);
-        return true;
-    }
-
-    public void beginPhase(WorldRenderingPhase phase) {
-        beginPhaseIfActive(phase);
-    }
-
-    public WorldRenderingPhase blockEntityPhaseForCurrentForgePass() {
-        if (renderingShadowMap) {
-            return WorldRenderingPhase.BLOCK_ENTITIES;
-        }
-        return MinecraftReflectionCompat.forgeRenderPass() == 1
-                ? WorldRenderingPhase.BLOCK_ENTITIES_TRANSLUCENT
-                : WorldRenderingPhase.BLOCK_ENTITIES;
-    }
-
-    public void beginAstralConstellationPhase(Object constellation, WorldRenderingPhase phase) {
-        setAstralConstellationColors(constellation);
-        beginPhase(phase);
-    }
-
-    public void setAstralSolarEclipseFactor(float factor) {
-        currentAstralSolarEclipseFactor = Math.max(0.0f, Math.min(1.0f, factor));
-    }
-
-    public void endAstralConstellationPhase() {
-        endPass();
-        resetAstralConstellationColors();
-    }
-
-    private void setAstralConstellationColors(Object constellation) {
-        java.awt.Color tierColor = astralColor(constellation, "getTierRenderColor", java.awt.Color.WHITE);
-        java.awt.Color constellationColor = astralColor(constellation, "getConstellationColor", tierColor);
-        setColor(currentAstralConstellationColor, constellationColor);
-        setColor(currentAstralTierColor, tierColor);
-    }
-
-    private void resetAstralConstellationColors() {
-        setColor(currentAstralConstellationColor, null);
-        setColor(currentAstralTierColor, null);
-    }
-
-    private static java.awt.Color astralColor(Object constellation, String methodName, java.awt.Color fallback) {
-        if (constellation != null) {
-            try {
-                Method method = constellation.getClass().getMethod(methodName);
-                Object result = method.invoke(constellation);
-                if (result instanceof java.awt.Color color) {
-                    return color;
-                }
-            } catch (ReflectiveOperationException | RuntimeException ignored) {
-            }
-        }
-        return fallback;
-    }
-
-    private static void setColor(float[] target, java.awt.Color color) {
-        if (color == null) {
-            target[0] = 1.0f;
-            target[1] = 1.0f;
-            target[2] = 1.0f;
-            return;
-        }
-        target[0] = color.getRed() / 255.0f;
-        target[1] = color.getGreen() / 255.0f;
-        target[2] = color.getBlue() / 255.0f;
-    }
-
-    public boolean beginItemRenderPhase() {
-        if (!shouldRouteRenderItemThroughPipeline()) {
-            return false;
-        }
-        beginPhase(WorldRenderingPhase.ITEM);
-        return true;
-    }
-
-    public boolean beginItemGlintPhase() {
-        if (!shouldRouteItemGlintThroughPipeline()) {
-            return false;
-        }
-        beginPhase(WorldRenderingPhase.ARMOR_GLINT);
-        return true;
-    }
-
-    public void prepareHandItemRenderState() {
-        if (!isPipelineActive || !worldFrameActive || renderingGuiScreen()) {
-            return;
-        }
-        WorldRenderingPhase phase = getPhase();
-        if (phase != WorldRenderingPhase.HAND_SOLID) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-        resetIndexedBlendState();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-    }
-
-    public void prepareVanillaHandRenderState() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        disablePipelineVertexAttributes();
-        restoreVanillaClientRenderState();
-        unbindShaderImages();
-        unbindShaderStorageBuffers();
-        resetIndexedBlendState();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        GL11.glDisable(GL11.GL_SCISSOR_TEST);
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GL11.glPolygonOffset(0.0F, 0.0F);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-        restoreVanillaFixedFunctionTextureState(mc);
-    }
-
-    public void prepareUntexturedEmissiveWorldRenderState() {
-        if (!isPipelineActive || !worldFrameActive || renderingGuiScreen()) {
-            return;
-        }
-        TextureBinder.bindFallbackWhiteTexture();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.0F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE,
-                GL11.GL_ONE,
-                GL11.GL_ZERO
-        );
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-    }
-
-    public void prepareGuiItemRenderState() {
-        if (!isPipelineActive) {
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
-            return;
-        }
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        disablePipelineVertexAttributes();
-        restoreVanillaClientRenderState();
-        if (!shaderlessBloomExtractionActive) {
-            unbindShaderStorageBuffers();
-        }
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-    }
-
-    public void prepareFlatGuiBackgroundRenderState() {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        disablePipelineVertexAttributes();
-        restoreVanillaClientRenderState();
-        unbindShaderStorageBuffers();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        GL11.glDisable(GL11.GL_SCISSOR_TEST);
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GL11.glPolygonOffset(0.0F, 0.0F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
-        GL11.glDepthMask(false);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE_MINUS_SRC_ALPHA,
-                GL11.GL_ZERO,
-                GL11.GL_ONE
-        );
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-    }
-
-    public void prepareGuiEntityPreviewRenderState() {
-        if (!isPipelineActive) {
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
-            return;
-        }
-
-        GL11.glPushAttrib(GL11.GL_ENABLE_BIT
-                | GL11.GL_COLOR_BUFFER_BIT
-                | GL11.GL_DEPTH_BUFFER_BIT
-                | GL11.GL_SCISSOR_BIT
-                | GL11.GL_POLYGON_BIT
-                | GL11.GL_TEXTURE_BIT
-                | GL11.GL_LIGHTING_BIT
-                | GL11.GL_CURRENT_BIT
-                | GL11.GL_TRANSFORM_BIT
-                | GL11.GL_VIEWPORT_BIT);
-        guiEntityPreviewStateDepth++;
-
-        bindMinecraftFramebufferForGui(mc);
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.disableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-        disablePipelineVertexAttributes();
-        restoreVanillaClientRenderState();
-        unbindShaderImages();
-        unbindShaderStorageBuffers();
-        resetIndexedBlendState();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        GL11.glDisable(GL11.GL_SCISSOR_TEST);
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GL11.glPolygonOffset(0.0F, 0.0F);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        GL11.glDepthMask(true);
-        GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-        probeGuiEntityState("entity-prepared");
-    }
-
-    public void finishGuiEntityPreviewRenderState() {
-        if (guiEntityPreviewStateDepth <= 0) {
-            return;
-        }
-        probeGuiEntityState("entity-return");
-        guiEntityPreviewStateDepth--;
-        GL11.glPopAttrib();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-        disablePipelineVertexAttributes();
-        restoreVanillaClientRenderState();
-        unbindShaderStorageBuffers();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        if (isPipelineActive && isRenderingGuiScreen()) {
-            prepareGuiState();
-        } else {
-            restoreGuiSafeRenderState("gui-entity-preview");
-        }
-    }
-
-    public void probeGuiModelState(String stage) {
-        if (!isPipelineActive || guiModelStateProbeLogs >= MAX_GUI_MODEL_STATE_PROBE_LOGS) {
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        Object screen = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) : null;
-        if (!(screen instanceof net.minecraft.client.gui.inventory.GuiContainer)) {
-            return;
-        }
-        guiModelStateProbeLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMGuiModelState] call={} stage={} screen={} guiDepth={} entityDepth={} frontFace={} cullFace={} cullEnabled={} matrix={} gl={}",
-                guiModelStateProbeLogs,
-                stage,
-                screen != null ? screen.getClass().getName() : "null",
                 guiRenderDepth,
-                guiEntityPreviewStateDepth,
-                GL11.glGetInteger(GL11.GL_FRONT_FACE),
-                GL11.glGetInteger(GL11.GL_CULL_FACE_MODE),
-                GL11.glIsEnabled(GL11.GL_CULL_FACE),
-                guiModelMatrixSummary(),
+                screenName,
+                describeFramebufferTarget(framebuffer),
+                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
                 glStateSummary()
         );
-    }
-
-    public void beginGuiItemModelProbe(ItemStack stack, net.minecraft.client.renderer.block.model.IBakedModel model) {
-        String name = renderedItemDebugName(stack);
-        guiItemProbeNames.push(name);
-        probeGuiItemModel("item-scope", name, model);
-    }
-
-    public void endGuiItemModelProbe() {
-        if (!guiItemProbeNames.isEmpty()) {
-            guiItemProbeNames.pop();
-        }
-    }
-
-    public void probeGuiItemModel(String stage, ItemStack stack, net.minecraft.client.renderer.block.model.IBakedModel model) {
-        probeGuiItemModel(stage, renderedItemDebugName(stack), model);
-    }
-
-    private void probeGuiItemModel(String stage, String name, net.minecraft.client.renderer.block.model.IBakedModel model) {
-        if (!isPipelineActive
-                || !renderingGuiScreen()
-                || guiItemModelProbeLogs >= MAX_GUI_ITEM_MODEL_PROBE_LOGS
-                || name == null
-                || !name.startsWith("bloodmagic:")) {
-            return;
-        }
-
-        int quads = 0;
-        int diffuseQuads = 0;
-        java.util.LinkedHashSet<String> formats = new java.util.LinkedHashSet<>();
-        if (model != null) {
-            for (net.minecraft.util.EnumFacing face : net.minecraft.util.EnumFacing.values()) {
-                List<net.minecraft.client.renderer.block.model.BakedQuad> faceQuads = com.l.ausm.impl.util.MinecraftReflectionCompat.bakedModelQuads(model, null, face, 0L);
-                quads += faceQuads.size();
-                for (net.minecraft.client.renderer.block.model.BakedQuad quad : faceQuads) {
-                    if (com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadApplyDiffuseLighting(quad)) {
-                        diffuseQuads++;
-                    }
-                    formats.add(guiProbeFormatSummary(com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadFormat(quad)));
-                }
-            }
-            List<net.minecraft.client.renderer.block.model.BakedQuad> generalQuads = com.l.ausm.impl.util.MinecraftReflectionCompat.bakedModelQuads(model, null, null, 0L);
-            quads += generalQuads.size();
-            for (net.minecraft.client.renderer.block.model.BakedQuad quad : generalQuads) {
-                if (com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadApplyDiffuseLighting(quad)) {
-                    diffuseQuads++;
-                }
-                formats.add(guiProbeFormatSummary(com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadFormat(quad)));
-            }
-        }
-
-        guiItemModelProbeLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMGuiItemModel] call={} stage={} item={} model={} builtIn={} gui3d={} quads={} diffuseQuads={} formats={} lighting={} rescale={} normalize={} twoSided={} shadeModel={} frontFace={} cull={} gl={}",
-                guiItemModelProbeLogs,
-                stage,
-                name,
-                model != null ? model.getClass().getName() : "null",
-                model != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean(model, new String[] {"func_188618_c", "isBuiltInRenderer"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false),
-                model != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean(model, new String[] {"func_177555_b", "isGui3d"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false),
-                quads,
-                diffuseQuads,
-                formats,
-                GL11.glIsEnabled(GL11.GL_LIGHTING),
-                GL11.glIsEnabled(GL12.GL_RESCALE_NORMAL),
-                GL11.glIsEnabled(GL11.GL_NORMALIZE),
-                GL11.glGetBoolean(GL11.GL_LIGHT_MODEL_TWO_SIDE),
-                GL11.glGetInteger(GL11.GL_SHADE_MODEL),
-                GL11.glGetInteger(GL11.GL_FRONT_FACE),
-                GL11.glIsEnabled(GL11.GL_CULL_FACE),
-                glStateSummary()
-        );
-    }
-
-    public void probeGuiItemBufferDraw(BufferBuilder buffer, net.minecraft.client.renderer.vertex.VertexFormat format) {
-        String name = guiItemProbeNames.peek();
-        if (!isPipelineActive
-                || !renderingGuiScreen()
-                || guiItemModelProbeLogs >= MAX_GUI_ITEM_MODEL_PROBE_LOGS
-                || name == null
-                || !name.startsWith("bloodmagic:")) {
-            return;
-        }
-        guiItemModelProbeLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMGuiItemDraw] call={} item={} vertices={} drawMode={} format={} vertexArray={} colorArray={} normalArray={} texCoordArray={} lighting={} rescale={} frontFace={} cull={} gl={}",
-                guiItemModelProbeLogs,
-                name,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(buffer, -1, "field_179006_k", "drawMode"),
-                guiProbeFormatSummary(format),
-                GL11.glIsEnabled(GL11.GL_VERTEX_ARRAY),
-                GL11.glIsEnabled(GL11.GL_COLOR_ARRAY),
-                GL11.glIsEnabled(GL11.GL_NORMAL_ARRAY),
-                GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY),
-                GL11.glIsEnabled(GL11.GL_LIGHTING),
-                GL11.glIsEnabled(GL12.GL_RESCALE_NORMAL),
-                GL11.glGetInteger(GL11.GL_FRONT_FACE),
-                GL11.glIsEnabled(GL11.GL_CULL_FACE),
-                glStateSummary()
-        );
-    }
-
-    private static String guiProbeFormatSummary(net.minecraft.client.renderer.vertex.VertexFormat format) {
-        if (format == null) {
-            return "null";
-        }
-        return "size=" + ExtendedVertexFormats.size(format)
-                + ",elements=" + com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(format,
-                new String[] {"func_177345_h", "getElementCount"},
-                com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS,
-                -1)
-                + ",normal=" + ExtendedVertexFormats.hasNormal(format)
-                + ",uv1=" + ExtendedVertexFormats.hasUvOffset(format, 1);
-    }
-
-    private String guiModelMatrixSummary() {
-        guiModelMatrixProbe.clear();
-        GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, guiModelMatrixProbe);
-        float m00 = guiModelMatrixProbe.get(0);
-        float m01 = guiModelMatrixProbe.get(1);
-        float m02 = guiModelMatrixProbe.get(2);
-        float m10 = guiModelMatrixProbe.get(4);
-        float m11 = guiModelMatrixProbe.get(5);
-        float m12 = guiModelMatrixProbe.get(6);
-        float m20 = guiModelMatrixProbe.get(8);
-        float m21 = guiModelMatrixProbe.get(9);
-        float m22 = guiModelMatrixProbe.get(10);
-        float determinant = m00 * (m11 * m22 - m12 * m21)
-                - m10 * (m01 * m22 - m02 * m21)
-                + m20 * (m01 * m12 - m02 * m11);
-        return "diag=" + formatProbeFloat(m00) + '/' + formatProbeFloat(m11) + '/' + formatProbeFloat(m22)
-                + ",det=" + formatProbeFloat(determinant)
-                + ",translation=" + formatProbeFloat(guiModelMatrixProbe.get(12)) + '/'
-                + formatProbeFloat(guiModelMatrixProbe.get(13)) + '/'
-                + formatProbeFloat(guiModelMatrixProbe.get(14));
-    }
-
-    private void probeGuiEntityState(String stage) {
-        if (!isPipelineActive || guiEntityStateProbeLogs >= MAX_GUI_ENTITY_STATE_PROBE_LOGS) {
-            return;
-        }
-        guiEntityStateProbeLogs++;
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        Object screen = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) : null;
-        MainMod.LOGGER.info(
-                "[AUSMGuiEntityState] call={} stage={} screen={} guiDepth={} entityDepth={} frontFace={} cullFace={} cullEnabled={} matrix={} gl={}",
-                guiEntityStateProbeLogs,
-                stage,
-                screen != null ? screen.getClass().getName() : "null",
-                guiRenderDepth,
-                guiEntityPreviewStateDepth,
-                GL11.glGetInteger(GL11.GL_FRONT_FACE),
-                GL11.glGetInteger(GL11.GL_CULL_FACE_MODE),
-                GL11.glIsEnabled(GL11.GL_CULL_FACE),
-                guiModelMatrixSummary(),
-                glStateSummary()
-        );
-    }
-
-    public boolean beginGuiItemStateScope() {
-        if (!isPipelineActive) {
-            return false;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
-            return false;
-        }
-        GL11.glPushAttrib(GL11.GL_DEPTH_BUFFER_BIT | GL11.GL_ENABLE_BIT | GL11.GL_POLYGON_BIT);
-        GL11.glEnable(GL11.GL_DEPTH_TEST);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glDepthMask(true);
-        GL11.glDisable(GL11.GL_CULL_FACE);
-        GL11.glFrontFace(GL11.GL_CW);
-        return true;
-    }
-
-    public void endGuiItemStateScope() {
-        GL11.glPopAttrib();
-    }
-
-    public boolean beginGuiBuiltInItemStateScope() {
-        if (!isPipelineActive || !renderingGuiScreen()) {
-            return false;
-        }
-        GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_POLYGON_BIT);
-        GL11.glDisable(GL11.GL_CULL_FACE);
-        GL11.glFrontFace(GL11.GL_CW);
-        return true;
-    }
-
-    public void endGuiBuiltInItemStateScope() {
-        GL11.glPopAttrib();
-    }
-
-    public void prepareGuiItemGlintRenderState() {
-        if (!isPipelineActive) {
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
-            return;
-        }
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        disablePipelineVertexAttributes();
-        restoreVanillaClientRenderState();
-        unbindShaderImages();
-        unbindShaderStorageBuffers();
-        resetIndexedBlendState();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        GL11.glDisable(GL11.GL_SCISSOR_TEST);
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GL11.glPolygonOffset(0.0F, 0.0F);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-    }
-
-    public void prepareHandItemDrawState(String source) {
-        prepareHandItemRenderState();
-        if (!isPipelineActive || !worldFrameActive || renderingGuiScreen() || getPhase() != WorldRenderingPhase.HAND_SOLID) {
-            return;
-        }
-        uploadCurrentRenderedItemId();
-    }
-
-    public void probeHandGbufferAfterRender() {
-        // Disabled: this probe performs framebuffer readbacks and is too costly
-        // for regular gameplay.
-    }
-
-    private boolean shouldRouteRenderItemThroughPipeline() {
-        if (!isPipelineActive || !worldFrameActive || renderingShadowMap || renderingGuiScreen()) {
-            return false;
-        }
-        WorldRenderingPhase phase = getPhase();
-        return phase != WorldRenderingPhase.HAND_SOLID
-                && phase != WorldRenderingPhase.HAND_TRANSLUCENT
-                && phase != WorldRenderingPhase.ARMOR_GLINT
-                && phase != WorldRenderingPhase.BLOCK_ENTITIES
-                && phase != WorldRenderingPhase.BLOCK_ENTITIES_TRANSLUCENT;
-    }
-
-    private boolean shouldRouteItemGlintThroughPipeline() {
-        if (!isPipelineActive || !worldFrameActive || renderingShadowMap || renderingGuiScreen()) {
-            return false;
-        }
-        WorldRenderingPhase phase = getPhase();
-        return phase != WorldRenderingPhase.BLOCK_ENTITIES
-                && phase != WorldRenderingPhase.BLOCK_ENTITIES_TRANSLUCENT;
-    }
-
-    private boolean renderingGuiScreen() {
-        return renderingGui || guiRenderDepth > 0;
-    }
-
-    public boolean isRenderingGuiScreen() {
-        return renderingGuiScreen();
-    }
-
-    public boolean shouldDrawActiveProgramAsPatches() {
-        return hasBoundPipelineProgram()
-                && activeProgramTessellated
-                && (GLContext.getCapabilities().OpenGL40 || GLContext.getCapabilities().GL_ARB_tessellation_shader);
-    }
-
-    public int drawModeForActiveProgram(int drawMode) {
-        if (!shouldDrawActiveProgramAsPatches()) {
-            return drawMode;
-        }
-        if (drawMode == GL11.GL_QUADS || drawMode == GL40.GL_PATCHES) {
-            setPatchVertices(4);
-            return GL40.GL_PATCHES;
-        }
-        return drawMode;
-    }
-
-    public boolean shouldDrawFullscreenAsTriangles() {
-        return hasBoundPipelineProgram() && activeProgramGeometric && !shouldDrawActiveProgramAsPatches();
-    }
-
-    private boolean hasBoundPipelineProgram() {
-        if (!isPipelineActive || renderingGuiScreen() || activePass == null) {
-            return false;
-        }
-        PipelineProgram pipelineProgram = effectivePipelineProgram(activePass);
-        ShaderProgram shaderProgram = pipelineProgram != null ? pipelineProgram.shaderProgram() : null;
-        return shaderProgram != null && GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM) == shaderProgram.getId();
-    }
-
-    private static void setPatchVertices(int vertices) {
-        if (GLContext.getCapabilities().OpenGL40) {
-            GL40.glPatchParameteri(GL40.GL_PATCH_VERTICES, vertices);
-        } else if (GLContext.getCapabilities().GL_ARB_tessellation_shader) {
-            ARBTessellationShader.glPatchParameteri(ARBTessellationShader.GL_PATCH_VERTICES, vertices);
-        }
-    }
-
-    private RenderPass passForPhase(WorldRenderingPhase phase) {
-        return renderingShadowMap ? phase.shadowPass() : phase.mainPass();
-    }
-
-    private boolean bindPass(RenderPass pass) {
-        PipelineProgram pipelineProgram = programs.get(pass);
-        PipelineProgram bindingProgram = effectivePipelineProgram(pass);
-        if (bindingProgram == null) {
-            return false;
-        }
-
-        ShaderProgram program = bindingProgram.shaderProgram();
-        if (program == null) {
-            return false;
-        }
-
-        activeShaderKey = ShaderKey.fromRenderPass(pass);
-        activeProgramTessellated = program.isTessellated();
-        activeProgramGeometric = program.isGeometric();
-        applyAlphaTest(pass);
-        List<Attachment> drawBuffers = effectiveDrawBuffersForCurrentPhase(bindingProgram);
-        applyBlendMode(pass, drawBuffers);
-        applyOitDepthState(pass);
-        applyGbufferDepthState(pass);
-        applySkyDepthState(pass);
-        applyHandRenderState(pass);
-        applyBeaconBeamDepthState(pass);
-        applyBlockEntityTranslucentDepthState(pass);
-        configureGbufferDrawBuffers(bindingProgram, drawBuffers);
-        configureShadowDrawBuffers(bindingProgram, drawBuffers);
-        if (bindingProgram.stage() == ProgramStage.GBUFFERS) {
-            restoreVanillaWorldTextureBindings();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-            GL11.glColorMask(true, true, true, true);
-            boolean blockAtlasPass = usesBlockAtlas(pass);
-            if (blockAtlasPass) {
-                bindBlockAtlas();
-            }
-            TextureBinder.bindGbufferRenderTargetSamplers();
-            if (blockAtlasPass) {
-                bindBlockAtlas();
-            }
-        }
-        if (bindingProgram.stage().readsDeferredTextures()) {
-            TextureBinder.bindDeferredTextures();
-        } else {
-            TextureBinder.bindNoiseTexture();
-        }
-        if (bindingProgram.stage() != ProgramStage.SHADOW) {
-            TextureBinder.bindShadowTextures(bindingProgram.pass());
-        }
-        if (bindingProgram.stage() == ProgramStage.GBUFFERS) {
-            TextureBinder.bindMaterialFallbackTextures();
-        }
-
-        program.bind();
-        bindProgramResources(bindingProgram.pass(), program);
-        if (bindingProgram.stage() == ProgramStage.SHADOW && getPhase().usesBlockAtlas()) {
-            bindBlockAtlas();
-        }
-        activePass = pass;
-        if (pass == RenderPass.GBUFFERS_WATER) {
-            logWaterRoutingProbe("after-bind", bindingProgram, drawBuffers);
-        }
-        return true;
-    }
-
-    private PipelineProgram effectivePipelineProgram(RenderPass pass) {
-        RenderPass current = pass;
-        while (current != null) {
-            PipelineProgram program = programs.get(current);
-            if (program != null && program.enabled() && program.shaderProgram() != null) {
-                return program;
-            }
-            current = current.fallback();
-        }
-        return null;
-    }
-
-    private void bindProgramResources(RenderPass pass, ShaderProgram program) {
-        bindCustomTextures(pass, program);
-        shaderImages.bind(program);
-        shaderStorageBuffers.bind();
-        if (shaderStorageBuffers.active()) {
-            markShaderStorageBuffersBound();
-        }
-        uniformRegistry.uploadAll(program);
-        if (!packDirectives.customUniforms().isEmpty()) {
-            packDirectives.customUniforms().upload(program, uniformRegistry.scalarValuesInto(customUniformScalarScratch));
-        }
-    }
-
-    private List<Attachment> effectiveDrawBuffersForCurrentPhase(PipelineProgram pipelineProgram) {
-        List<Attachment> drawBuffers = pipelineProgram.effectiveDrawBuffers(programs);
-        if (pipelineProgram.stage() != ProgramStage.GBUFFERS || getPhase() != WorldRenderingPhase.STARS || !drawBuffers.contains(Attachment.AUX4)) {
-            return drawBuffers;
-        }
-
-        List<Attachment> filtered = new ArrayList<>(drawBuffers.size());
-        for (Attachment attachment : drawBuffers) {
-            if (attachment != Attachment.AUX4) {
-                filtered.add(attachment);
-            }
-        }
-        return filtered.isEmpty() ? drawBuffers : List.copyOf(filtered);
-    }
-
-    private boolean usesBlockAtlas(RenderPass pass) {
-        WorldRenderingPhase phase = getPhase();
-        if (phase != WorldRenderingPhase.NONE) {
-            return phase.usesBlockAtlas();
-        }
-        return pass == RenderPass.GBUFFERS_TERRAIN
-                || pass == RenderPass.GBUFFERS_TERRAIN_SOLID
-                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP
-                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT
-                || pass == RenderPass.GBUFFERS_WATER
-                || pass == RenderPass.GBUFFERS_DAMAGEDBLOCK
-                || pass == RenderPass.DH_TERRAIN
-                || pass == RenderPass.DH_WATER;
-    }
-
-    private void bindBlockAtlas() {
-        TextureBinder.restoreDefaultTextureUnit();
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        TextureManager textureManager = com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc);
-        if (textureManager == null) {
-            return;
-        }
-        ITextureObject texture = com.l.ausm.impl.util.MinecraftReflectionCompat.texture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
-        if (texture == null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
-            texture = com.l.ausm.impl.util.MinecraftReflectionCompat.texture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
-        }
-        if (texture != null) {
-            int textureId = com.l.ausm.impl.util.MinecraftReflectionCompat.glTextureId(texture);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(textureId);
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
-        } else {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
-        }
-        ShaderSamplerState.clampTextureAnisotropyIfNeeded(GL11.GL_TEXTURE_2D);
-    }
-
-    private void applyAlphaTest(RenderPass pass) {
-        PipelineProgram pipelineProgram = programs.get(pass);
-        ShaderAlphaTest alphaTest = pipelineProgram == null ? null : pipelineProgram.directives().alphaTestOverride();
-        if (alphaTest == null) {
-            alphaTest = defaultAlphaTest(pass);
-        }
-
-        currentAlphaTestReference = alphaTest.reference();
-        if (alphaTest.function() == GL11.GL_ALWAYS) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
-        } else {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(alphaTest.function(), alphaTest.reference());
-    }
-
-    private static ShaderAlphaTest defaultAlphaTest(RenderPass pass) {
-        PipelineProgram pipelineProgram = INSTANCE.programs.get(pass);
-        ShaderKey key = pipelineProgram == null ? ShaderKey.fromRenderPass(pass) : pipelineProgram.shaderKey();
-        return key == null ? ShaderAlphaTest.ALWAYS : key.alphaTest();
-    }
-
-    public void applyNonZeroAlphaTestForCurrentPass() {
-        if (!isPipelineActive || !worldFrameActive || renderingGuiScreen()) {
-            return;
-        }
-
-        ShaderAlphaTest alphaTest = ShaderAlphaTest.NON_ZERO_ALPHA;
-        currentAlphaTestReference = alphaTest.reference();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(alphaTest.function(), alphaTest.reference());
-
-        ShaderProgram program = activeProgram();
-        if (program != null) {
-            uniformRegistry.upload(program, "alphaTestRef");
-            uniformRegistry.upload(program, "iris_currentAlphaTest");
-        }
-    }
-
-    private void applyBlendMode(RenderPass pass, List<Attachment> drawBuffers) {
-        if (applyOitBlendMode(pass, drawBuffers)) {
-            return;
-        }
-
-        PipelineProgram pipelineProgram = programs.get(pass);
-        ShaderBlendMode blendMode = pipelineProgram == null ? null : pipelineProgram.directives().blendModeOverride();
-        Map<Attachment, ShaderBlendMode> attachmentModes = attachmentBlendModesFor(pass);
-        if (pass == RenderPass.GBUFFERS_WATER || pass == RenderPass.DH_WATER) {
-            applyWaterBlendMode(drawBuffers, blendMode == null ? WATER_BLEND_MODE : blendMode, attachmentModes);
-            return;
-        }
-        if (pass == RenderPass.GBUFFERS_BLOCK_TRANSLUCENT) {
-            applyWaterBlendMode(drawBuffers, blendMode == null ? BLOCK_ENTITY_TRANSLUCENT_BLEND : blendMode, attachmentModes);
-            return;
-        }
-        if (blendMode == null) {
-            blendMode = defaultBlendMode(pass);
-        }
-        if (blendMode == null && attachmentModes.isEmpty()) {
-            return;
-        }
-
-        if (blendMode != null && !blendMode.enabled()) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-            resetIndexedBlendState();
-            return;
-        }
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        if (blendMode != null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                    blendMode.srcRgb(),
-                    blendMode.dstRgb(),
-                    blendMode.srcAlpha(),
-                    blendMode.dstAlpha()
-            );
-        }
-        if (attachmentModes.isEmpty()) {
-            return;
-        }
-
-        for (int drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); drawBufferIndex++) {
-            Attachment attachment = drawBuffers.get(drawBufferIndex);
-            ShaderBlendMode attachmentMode = attachmentModes.get(attachment);
-            if (attachmentMode != null) {
-                applyIndexedBlendMode(drawBufferIndex, attachmentMode);
-            }
-        }
-    }
-
-    private void applyWaterBlendMode(List<Attachment> drawBuffers, ShaderBlendMode blendMode, Map<Attachment, ShaderBlendMode> attachmentModes) {
-        if (!blendMode.enabled()) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-            resetIndexedBlendState();
-            return;
-        }
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                blendMode.srcRgb(),
-                blendMode.dstRgb(),
-                blendMode.srcAlpha(),
-                blendMode.dstAlpha()
-        );
-        resetIndexedBlendState();
-
-        for (int drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); drawBufferIndex++) {
-            Attachment attachment = drawBuffers.get(drawBufferIndex);
-            ShaderBlendMode attachmentMode = attachmentModes.get(attachment);
-            if (attachmentMode != null) {
-                applyIndexedBlendMode(drawBufferIndex, attachmentMode);
-            } else if (defaultWaterBlendTarget(attachment)) {
-                applyIndexedBlendMode(drawBufferIndex, blendMode);
-            }
-        }
-    }
-
-    private static boolean defaultWaterBlendTarget(Attachment attachment) {
-        return attachment == Attachment.COLOR || attachment == Attachment.COMPOSITE;
-    }
-
-    private static ShaderBlendMode defaultBlendMode(RenderPass pass) {
-        if (pass == RenderPass.GBUFFERS_TERRAIN
-                || pass == RenderPass.GBUFFERS_TERRAIN_SOLID
-                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP
-                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT
-                || pass == RenderPass.DH_TERRAIN) {
-            return ShaderBlendMode.OFF;
-        }
-        if (pass == RenderPass.SHADOW
-                || pass == RenderPass.SHADOW_SOLID
-                || pass == RenderPass.SHADOW_CUTOUT
-                || pass == RenderPass.SHADOW_WATER
-                || pass == RenderPass.SHADOW_ENTITIES
-                || pass == RenderPass.SHADOW_LIGHTNING
-                || pass == RenderPass.SHADOW_BLOCK) {
-            return ShaderBlendMode.OFF;
-        }
-        if (pass == RenderPass.GBUFFERS_SPIDEREYES) {
-            return new ShaderBlendMode(true, GL11.GL_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE);
-        }
-        return null;
-    }
-
-    private Map<Attachment, ShaderBlendMode> attachmentBlendModesFor(RenderPass pass) {
-        PipelineProgram pipelineProgram = programs.get(pass);
-        Map<Attachment, ShaderBlendMode> attachmentModes = pipelineProgram == null ? null : pipelineProgram.directives().attachmentBlendModes();
-        return attachmentModes == null ? Map.of() : attachmentModes;
-    }
-
-    private boolean applyOitBlendMode(RenderPass pass, List<Attachment> drawBuffers) {
-        if (!isOitGbufferPass(pass) || drawBuffers.isEmpty()) {
-            return false;
-        }
-
-        ShaderOitSettings oitSettings = shaderProperties.oitSettings();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
-        for (int drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); drawBufferIndex++) {
-            Attachment attachment = drawBuffers.get(drawBufferIndex);
-            if (oitSettings.coefficientBuffer(attachment)) {
-                applyIndexedBlendMode(drawBufferIndex, OIT_COEFFICIENT_BLEND);
-            } else {
-                setIndexedBlend(drawBufferIndex, false);
-            }
-        }
-        return true;
-    }
-
-    private void applyHandRenderState(RenderPass pass) {
-        if (pass != RenderPass.GBUFFERS_HAND && pass != RenderPass.GBUFFERS_HAND_WATER) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-        resetIndexedBlendState();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-    }
-
-    private void applyOitDepthState(RenderPass pass) {
-        if (!isOitGbufferPass(pass)) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
-    }
-
-    private void applyGbufferDepthState(RenderPass pass) {
-        if (!isOpaqueTerrainPass(pass) && pass != RenderPass.GBUFFERS_WATER && pass != RenderPass.DH_WATER) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        GL11.glColorMask(true, true, true, true);
-    }
-
-    private void applySkyDepthState(RenderPass pass) {
-        if (pass != RenderPass.GBUFFERS_SKYBASIC && pass != RenderPass.GBUFFERS_SKYTEXTURED) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glColorMask(true, true, true, true);
-    }
-
-    private void applyBeaconBeamDepthState(RenderPass pass) {
-        if (shaderProperties.renderSettings().beaconBeamDepth()) {
-            return;
-        }
-        if (pass != RenderPass.GBUFFERS_BEACONBEAM && getPhase() != WorldRenderingPhase.BEACON_BEAM) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
-    }
-
-    private void applyBlockEntityTranslucentDepthState(RenderPass pass) {
-        if (pass != RenderPass.GBUFFERS_BLOCK_TRANSLUCENT || isOitGbufferPass(pass)) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
-        GL11.glColorMask(true, true, true, true);
-    }
-
-    private static boolean isOpaqueTerrainPass(RenderPass pass) {
-        return pass == RenderPass.GBUFFERS_TERRAIN
-                || pass == RenderPass.GBUFFERS_TERRAIN_SOLID
-                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT_MIP
-                || pass == RenderPass.GBUFFERS_TERRAIN_CUTOUT
-                || pass == RenderPass.DH_TERRAIN;
-    }
-
-    private boolean isOitGbufferPass(RenderPass pass) {
-        if (pass == null || pass.stage() != ProgramStage.GBUFFERS || !shaderProperties.oitSettings().activeForGbuffers()) {
-            return false;
-        }
-
-        WorldRenderingPhase phase = getPhase();
-        if (phase != WorldRenderingPhase.NONE) {
-            return isOitPhase(phase);
-        }
-        return pass == RenderPass.GBUFFERS_ENTITIES_TRANSLUCENT
-                || pass == RenderPass.GBUFFERS_BLOCK_TRANSLUCENT
-                || pass == RenderPass.GBUFFERS_PARTICLES_TRANSLUCENT
-                || pass == RenderPass.GBUFFERS_WEATHER
-                || pass == RenderPass.GBUFFERS_CLOUDS
-                || pass == RenderPass.GBUFFERS_LIGHTNING
-                || pass == RenderPass.GBUFFERS_BEACONBEAM;
-    }
-
-    private static boolean isOitPhase(WorldRenderingPhase phase) {
-        return switch (phase) {
-            case TRIPWIRE, ENTITIES_TRANSLUCENT, BLOCK_ENTITIES_TRANSLUCENT,
-                    PARTICLES_TRANSLUCENT, RAIN_SNOW, CLOUDS, LIGHTNING, BEACON_BEAM -> true;
-            default -> false;
-        };
-    }
-
-    private void applyIndexedBlendMode(int drawBufferIndex, ShaderBlendMode blendMode) {
-        if (drawBufferIndex < 0 || drawBufferIndex >= maxDrawBuffers()) {
-            return;
-        }
-        if (!blendMode.enabled()) {
-            setIndexedBlend(drawBufferIndex, false);
-            return;
-        }
-
-        setIndexedBlend(drawBufferIndex, true);
-        if (GLContext.getCapabilities().OpenGL40 || GLContext.getCapabilities().GL_ARB_draw_buffers_blend) {
-            ARBDrawBuffersBlend.glBlendFuncSeparateiARB(
-                    drawBufferIndex,
-                    blendMode.srcRgb(),
-                    blendMode.dstRgb(),
-                    blendMode.srcAlpha(),
-                    blendMode.dstAlpha()
-            );
-        } else {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                    blendMode.srcRgb(),
-                    blendMode.dstRgb(),
-                    blendMode.srcAlpha(),
-                    blendMode.dstAlpha()
-            );
-        }
-    }
-
-    private void configureGbufferDrawBuffers(PipelineProgram pipelineProgram, List<Attachment> drawBuffers) {
-        if (!pingPongManager.isInitialized() || pipelineProgram.stage() != ProgramStage.GBUFFERS) {
-            return;
-        }
-
-        if (!drawBuffers.isEmpty()) {
-            pingPongManager.bindForGbuffers(drawBuffers.toArray(new Attachment[0]));
-        }
-    }
-
-    public void restoreActiveGbufferRenderState() {
-        if (!isPipelineActive
-                || !pingPongManager.isInitialized()
-                || activePass == null) {
-            return;
-        }
-        PipelineProgram pipelineProgram = programs.get(activePass);
-        if (pipelineProgram == null || pipelineProgram.stage() != ProgramStage.GBUFFERS) {
-            return;
-        }
-        List<Attachment> drawBuffers = effectiveDrawBuffersForCurrentPhase(pipelineProgram);
-        boolean valid = !drawBuffers.isEmpty();
-        for (int slot = 0; valid && slot < drawBuffers.size(); slot++) {
-            valid = GL11.glGetInteger(GL20.GL_DRAW_BUFFER0 + slot) == GL30.GL_COLOR_ATTACHMENT0 + slot;
-        }
-        if (!valid) {
-            pingPongManager.forceGbufferDrawBuffers(drawBuffers.toArray(new Attachment[0]));
-        }
-        applyAlphaTest(activePass);
-        applyBlendMode(activePass, drawBuffers);
-        applyOitDepthState(activePass);
-        applyGbufferDepthState(activePass);
-    }
-
-    private void logWaterRoutingProbe(String stage, PipelineProgram pipelineProgram, List<Attachment> drawBuffers) {
-        if (!isPipelineActive
-                || !pingPongManager.isInitialized()
-                || waterRoutingProbeLogs >= MAX_WATER_ROUTING_PROBE_LOGS) {
-            return;
-        }
-        waterRoutingProbeLogs++;
-        DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
-        StringBuilder slots = new StringBuilder();
-        int slotCount = Math.min(8, Math.max(1, drawBuffers != null ? drawBuffers.size() : 0));
-        for (int slot = 0; slot < slotCount; slot++) {
-            if (slot > 0) {
-                slots.append(';');
-            }
-            int drawBuffer = GL11.glGetInteger(GL20.GL_DRAW_BUFFER0 + slot);
-            int texture = 0;
-            try {
-                texture = GL30.glGetFramebufferAttachmentParameteri(
-                        GL30.GL_DRAW_FRAMEBUFFER,
-                        GL30.GL_COLOR_ATTACHMENT0 + slot,
-                        GL30.GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME
-                );
-            } catch (RuntimeException | LinkageError ignored) {
-            }
-            slots.append(slot).append("=draw:").append(drawBuffer).append(",tex:").append(texture);
-        }
-        int depthTexture = 0;
-        try {
-            depthTexture = GL30.glGetFramebufferAttachmentParameteri(
-                    GL30.GL_DRAW_FRAMEBUFFER,
-                    GL30.GL_DEPTH_ATTACHMENT,
-                    GL30.GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME
-            );
-        } catch (RuntimeException | LinkageError ignored) {
-        }
-        MainMod.LOGGER.info(
-                "[AUSMWaterRouting] call={} stage={} program={} declared={} effective={} fbo={} slots={} depthAttachment={} textures={} colors={} depth0={} depth1={} gl={}",
-                waterRoutingProbeLogs,
-                stage,
-                pipelineProgram != null ? describePipelineProgram(pipelineProgram) : "null",
-                pipelineProgram != null ? pipelineProgram.drawBuffers() : "none",
-                drawBuffers,
-                framebuffer != null ? framebuffer.getFramebufferId() : -1,
-                slots,
-                depthTexture,
-                deferredBoundaryTextureSummary(framebuffer),
-                deferredBoundaryColorSummary(framebuffer),
-                deferredDepthSampleSummary(framebuffer, -1),
-                deferredDepthSampleSummary(framebuffer, DeferredFramebuffer.DEPTHTEX1_SNAPSHOT),
-                glStateSummary()
-        );
-    }
-
-    private void configureShadowDrawBuffers(PipelineProgram pipelineProgram, List<Attachment> drawBuffers) {
-        if (shadowFramebuffer == null || pipelineProgram.stage() != ProgramStage.SHADOW) {
-            return;
-        }
-        shadowFramebuffer.bindForProgramWrite(drawBuffers.toArray(new Attachment[0]));
-    }
-
-    public void endPass() {
-        if (!isPipelineActive || passStack.isEmpty()) {
-            return;
-        }
-
-        PassScope scope = passStack.pop();
-        activePhase = scope.previousPhase();
-        if (!scope.bound()) {
-            activeShaderKey = scope.previousShaderKey();
-            activeProgramTessellated = scope.previousProgramTessellated();
-            activeProgramGeometric = scope.previousProgramGeometric();
-            return;
-        }
-
-        PipelineProgram pipelineProgram = programs.get(activePass);
-        ShaderProgram program = pipelineProgram != null ? pipelineProgram.effectiveProgram(programs) : null;
-        if (program != null) {
-            program.unbind();
-        }
-
-        if (isOitGbufferPass(activePass)) {
-            resetOitRenderState();
-        }
-
-        activePass = null;
-        activeShaderKey = null;
-        activeProgramTessellated = false;
-        activeProgramGeometric = false;
-        if (scope.previousPass() != null) {
-            bindPass(scope.previousPass());
-        } else {
-            activeShaderKey = scope.previousShaderKey();
-            activeProgramTessellated = scope.previousProgramTessellated();
-            activeProgramGeometric = scope.previousProgramGeometric();
-        }
-    }
-
-    public void resize(int width, int height) {
-        if (!isPipelineActive) {
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
-            return;
-        }
-        resizeFramebuffer(width, height, true);
-    }
-
-    public void beginFrame() {
-        if (!isPipelineActive) {
-            externalWorldFramebufferTarget = null;
-            return;
-        }
-        currentWorldFrameStartNanos = System.nanoTime();
-        currentWorldFrameReadyNanos = Long.MIN_VALUE;
-        currentWorldFrameFinishStartNanos = Long.MIN_VALUE;
-        currentWorldFrameAfterNativeBloomNanos = Long.MIN_VALUE;
-        currentWorldFrameBlitStartNanos = Long.MIN_VALUE;
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
-            externalWorldFramebufferTarget = null;
-            return;
-        }
-        worldFrameActive = true;
-        externalWorldFramebufferTarget = BetterPortalsCompat.currentShaderRenderPassFramebuffer();
-        boolean betterPortalsExternalTarget = isBetterPortalsExternalWorldTarget();
-        int targetWidth = worldTargetWidth(mc);
-        int targetHeight = worldTargetHeight(mc);
-        logBetterPortalsPipeline("begin-frame:target", "target=" + targetWidth + "x" + targetHeight
-                + ", external=" + betterPortalsExternalTarget);
-        if (pingPongManager.width() != targetWidth || pingPongManager.height() != targetHeight) {
-            logBetterPortalsPipeline("begin-frame:resize", "old=" + pingPongManager.width() + "x" + pingPongManager.height()
-                    + ", new=" + targetWidth + "x" + targetHeight);
-            resizeFramebuffer(targetWidth, targetHeight, true);
-        }
-
-        if (betterPortalsExternalTarget) {
-            currentFrameTime = 0.0f;
-        } else {
-            long now = System.nanoTime();
-            currentFrameTime = Math.min(Math.max((now - lastPipelineFrameNanos) / 1_000_000_000.0f, 0.001f), 1.0f);
-            lastPipelineFrameNanos = now;
-            pipelineFrameId++;
-            frameTimeCounter += currentFrameTime;
-            if (frameTimeCounter >= 3600.0f) {
-                frameTimeCounter = 0.0f;
-            }
-        }
-        deferredPassesRenderedThisFrame = false;
-        preparePassesRenderedBeforeShadowThisFrame = false;
-        preTranslucentDepthCopiedThisFrame = false;
-        preHandDepthCopiedThisFrame = false;
-        clearDirectRecoveredWindowSource();
-        if (nothiriumShadowSuppressedFrames > 0) {
-            nothiriumShadowSuppressedFrames--;
-        }
-        clearShaderedNothiriumGlobalBypassState(false);
-        updateCameraPosition(mc);
-        refreshHardwareSafeVanillaTerrainForCamera(mc);
-        boolean resetTemporalHistory = shouldResetTemporalHistory(mc, betterPortalsExternalTarget);
-        if (betterPortalsExternalTarget) {
-            System.arraycopy(cameraPosition, 0, previousCameraPosition, 0, 3);
-            System.arraycopy(cameraPositionUnshifted, 0, previousCameraPositionUnshifted, 0, 3);
-        } else {
-            updateSmoothedFrameTime();
-            updateSmoothedEyeBrightness(mc);
-            updateSmoothedWetness(mc);
-            updateEndFlashState(mc);
-        }
-        pingPongManager.beginFrameWithInitialTarget(fallbackColorAttachment(), frameClearAttachments(resetTemporalHistory));
-        logTemporalHistoryResetIfNeeded(resetTemporalHistory);
-        runSetupComputesIfNeeded();
-        runFullscreenPasses(ProgramArrayId.BEGIN);
-        bindWorldFramebuffer();
-        currentWorldFrameReadyNanos = System.nanoTime();
-        logBetterPortalsPipeline("begin-frame:ready");
-    }
-
-    public void beginClientRenderFrame(long frameNanos) {
-        boolean newFrame = frameNanos != clientRenderFrameNanos;
-        if (newFrame) {
-            clientRenderFrameNanos = frameNanos;
-            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-            shaderlessCustomSkyBackingThisFrame = shouldRenderShaderlessCustomSkyBackingNow(mc);
-            bloomLayerRenderedThisWorldFrame = false;
-            shaderlessStyleBloomRenderedThisWorldFrame = false;
-            shaderlessBloomRenderedThisWorldFrame = false;
-            resetShaderlessTerrainLayerCounts();
-            if (vanillaParticleRecoveryFrames > 0) {
-                vanillaParticleRecoveryFrames--;
-            }
-            if (nothiriumHybridVanillaMaintenanceFrames > 0) {
-                nothiriumHybridVanillaMaintenanceFrames--;
-                if (nothiriumHybridVanillaMaintenanceFrames == 0) {
-                    nothiriumHybridVanillaMaintenanceReason = "";
-                }
-            }
-            if (nothiriumMainVanillaDrawPathFrames > 0) {
-                nothiriumMainVanillaDrawPathFrames--;
-                if (nothiriumMainVanillaDrawPathFrames == 0) {
-                    nothiriumMainVanillaDrawPathReason = "";
-                }
-            }
-        }
-    }
-
-    public void beginWorldPassRendering(int pass, float partialTicks) {
-        if (clientRenderFrameNanos == Long.MIN_VALUE) {
-            beginClientRenderFrame(System.nanoTime());
-        }
-        beginWorldPassDuplicateTracking();
-        currentWorldPass = pass;
-        currentWorldPartialTicks = partialTicks;
-        bloomLayerRenderedThisWorldPass = bloomLayerRenderedThisWorldFrame;
-        shaderlessStyleBloomRenderedThisWorldPass = shaderlessStyleBloomRenderedThisWorldFrame;
-        shaderlessBloomRenderedThisWorldPass = shaderlessBloomRenderedThisWorldFrame;
-        boolean bypass = computeShouldBypassWorldPassRendering();
-        worldPassBypassStack.push(bypass);
-        BetterPortalsCompat.logRenderStateDiagnostic("pipeline:world-pass-begin bypass=" + bypass);
-        logBetterPortalsPipeline("world-pass-begin", "pass=" + pass + ", bypass=" + bypass);
-        if (bypass) {
-            prepareBypassedWorldPassRendering();
-            return;
-        }
-
-        if (!isPipelineActive) {
-            beginShaderlessWorldPassRendering();
-            return;
-        }
-
-        beginFrame();
-    }
-
-    public void finishWorldPassRendering() {
-        boolean bypass = worldPassBypassStack.isEmpty()
-                ? computeShouldBypassWorldPassRendering()
-                : worldPassBypassStack.pop();
-        BetterPortalsCompat.logRenderStateDiagnostic("pipeline:world-pass-finish bypass=" + bypass);
-        logBetterPortalsPipeline("world-pass-finish", "bypass=" + bypass);
-        try {
-            if (bypass) {
-                finishBypassedWorldPassRendering();
-                return;
-            }
-
-            if (!isPipelineActive) {
-                finishShaderlessWorldPassRendering();
-                return;
-            }
-
-            currentWorldFrameFinishStartNanos = System.nanoTime();
-            renderNativeBloomLayerIfNeeded();
-            currentWorldFrameAfterNativeBloomNanos = System.nanoTime();
-            blitWorldFramebufferToMinecraft();
-        } finally {
-            finishWorldPassDuplicateTracking();
-        }
-    }
-
-    private void beginShaderlessWorldPassRendering() {
-        prepareInactiveVanillaFrame();
-        shaderlessWorldPassActive = true;
-        restoreVanillaWorldPassState(true, true);
-    }
-
-    private void finishShaderlessWorldPassRendering() {
-        restoreVanillaWorldPassState(false, true);
-        shaderlessWorldPassActive = false;
-    }
-
-    private void updateCameraPosition(Minecraft mc) {
-        System.arraycopy(cameraPosition, 0, previousCameraPosition, 0, 3);
-        System.arraycopy(cameraPositionUnshifted, 0, previousCameraPositionUnshifted, 0, 3);
-
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        if (viewEntity == null) {
-            cameraPosition[0] = 0.0f;
-            cameraPosition[1] = 0.0f;
-            cameraPosition[2] = 0.0f;
-            cameraPositionUnshifted[0] = 0.0;
-            cameraPositionUnshifted[1] = 0.0;
-            cameraPositionUnshifted[2] = 0.0;
-            return;
-        }
-
-        float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
-        Vec3d eyePosition = com.l.ausm.impl.util.MinecraftReflectionCompat.positionEyes(viewEntity, partialTicks);
-        double x = com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(eyePosition);
-        double y = com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(eyePosition);
-        double z = com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(eyePosition);
-        cameraPositionUnshifted[0] = x;
-        cameraPositionUnshifted[1] = y;
-        cameraPositionUnshifted[2] = z;
-        updateCameraOffset(viewEntity, x, y, z);
-
-        cameraPosition[0] = (float) (x + cameraShiftX);
-        cameraPosition[1] = (float) y;
-        cameraPosition[2] = (float) (z + cameraShiftZ);
-    }
-
-    private void updateCameraOffset(Entity viewEntity, double x, double y, double z) {
-        double adjustedX = x + cameraShiftX;
-        double adjustedZ = z + cameraShiftZ;
-        double adx = Math.abs(adjustedX - previousCameraPosition[0]);
-        double adz = Math.abs(adjustedZ - previousCameraPosition[2]);
-        double apx = Math.abs(adjustedX);
-        double apz = Math.abs(adjustedZ);
-        double shiftX = irisCameraShift(adjustedX, adx, apx);
-        double shiftZ = irisCameraShift(adjustedZ, adz, apz);
-        if (shiftX != 0.0 || shiftZ != 0.0) {
-            cameraShiftX += shiftX;
-            cameraShiftZ += shiftZ;
-            previousCameraPosition[0] += (float) shiftX;
-            previousCameraPosition[2] += (float) shiftZ;
-        }
-        if (Math.abs(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity) - x) > 1000.0 || Math.abs(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity) - z) > 1000.0) {
-            previousCameraPosition[0] = (float) (x + cameraShiftX);
-            previousCameraPosition[1] = (float) y;
-            previousCameraPosition[2] = (float) (z + cameraShiftZ);
-        }
-    }
-
-    public void prepareInactiveVanillaFrame() {
-        if (isPipelineActive || vanillaRecoveryFrames <= 0) {
-            return;
-        }
-        vanillaRecoveryFrames--;
-        resetPipelineState();
-    }
-
-    private void scheduleInactiveVanillaRecoveryFrame() {
-        if (!isPipelineActive) {
-            vanillaRecoveryFrames = Math.max(vanillaRecoveryFrames, 1);
-        }
-    }
-
-    private void restoreVanillaWorldPassState(boolean bindMinecraftFramebuffer, boolean resetPortalMasks) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (bindMinecraftFramebuffer && mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) != null) {
-            bindMinecraftFramebufferForGui(mc);
-        }
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        TextureBinder.restoreDefaultTextureUnit();
-        disablePipelineVertexAttributes();
-
-        GL11.glColorMask(true, true, true, true);
-        GL11.glDepthMask(true);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glPolygonOffset(0.0F, 0.0F);
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-
-        if (resetPortalMasks) {
-            resetPortalMaskState();
-        }
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        restoreVanillaFixedFunctionTextureState(mc);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-    }
-
-    public void prepareVanillaParticleRendering() {
-        if (isPipelineActive && !shouldBypassWorldPassRendering()) {
-            return;
-        }
-        prepareVanillaParticleRenderingState();
-    }
-
-    public boolean shouldRenderParticlesWithVanillaState() {
-        return vanillaParticleRecoveryFrames > 0;
-    }
-
-    public void clearClientParticles(String reason) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), Object.class, null, "field_71452_i", "effectRenderer") == null) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), Object.class, null, "field_71452_i", "effectRenderer")), new String[] {"func_78870_a", "clearEffects"}, new Class<?>[] {net.minecraft.world.World.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)));;
-        ThaumcraftParticleBridge.clearParticles(reason);
-        vanillaParticleRecoveryFrames = 0;
-        logTerrainDiagnostic("particles:clear", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "reason=" + reason);
-    }
-
-    public void prepareVanillaParticleRenderingState() {
-        // Probe disabled.
-}
-
-    private void startVanillaParticleRecovery() {
-        vanillaParticleRecoveryFrames = Math.max(vanillaParticleRecoveryFrames, PARTICLE_DIMENSION_RECOVERY_FRAMES);
-    }
-
-    private void restoreVanillaFixedFunctionTextureState(Minecraft mc) {
-        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.enableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
-        } else {
-            TextureBinder.restoreDefaultTextureUnit();
-        }
-        TextureBinder.restoreDefaultTextureUnit();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        bindBlockAtlas();
-        TextureBinder.restoreDefaultTextureUnit();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-    }
-
-    private static void restoreShaderlessTerrainClientTextureArrays() {
-        int previousClientTexture = GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
-        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(previousClientTexture);
-    }
-
-    private static double irisCameraShift(double adjusted, double delta, double absoluteAdjusted) {
-        final double walkRange = 30000.0;
-        final double teleportRange = 1000.0;
-        if (absoluteAdjusted > walkRange || delta > teleportRange) {
-            return -(adjusted - (adjusted % walkRange));
-        }
-        return 0.0;
-    }
-
-    private void resizeFramebuffer(int width, int height, boolean preservePersistentAttachments) {
-        if (width <= 0 || height <= 0) {
-            return;
-        }
-
-        clearCompositeInvalidFallbackSnapshot();
-        if (preservePersistentAttachments) {
-            pingPongManager.resize(width, height, packDirectives.renderTargets().clearDisabled());
-        } else {
-            pingPongManager.resize(width, height);
-        }
-        shaderImages.resize(width, height);
-        shaderStorageBuffers.resize(width, height);
-        setupComputePending = true;
-    }
-
-    private Attachment[] frameClearAttachments(boolean forcePersistentClear) {
-        java.util.Set<Attachment> clearDisabled = packDirectives.renderTargets().clearDisabled();
-        List<Attachment> attachments = new ArrayList<>();
-        for (Attachment attachment : Attachment.values()) {
-            if (forcePersistentClear || !clearDisabled.contains(attachment)) {
-                attachments.add(attachment);
-            }
-        }
-        return attachments.toArray(new Attachment[0]);
-    }
-
-    private boolean shouldResetTemporalHistory(Minecraft mc, boolean betterPortalsExternalTarget) {
-        temporalHistoryResetReason = "";
-        temporalHistoryResetVelocity = 0.0f;
-        temporalHistoryResetYaw = 0.0f;
-        temporalHistoryResetPitch = 0.0f;
-        if (betterPortalsExternalTarget || mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || !pingPongManager.isInitialized()) {
-            return false;
-        }
-
-        World world = renderWorld(mc);
-        int dimensionId = safeDimensionId(world);
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        if (viewEntity == null) {
-            resetTemporalHistoryTracking(dimensionId);
-            temporalHistoryResetReason = "missing-view-entity";
-            return true;
-        }
-
-        float yaw = interpolateAngle(com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationYaw(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(viewEntity), currentWorldPartialTicks);
-        float pitch = com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationPitch(viewEntity) + (com.l.ausm.impl.util.MinecraftReflectionCompat.rotationPitch(viewEntity) - com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationPitch(viewEntity)) * currentWorldPartialTicks;
-        float velocity = cameraVelocityMagnitude();
-
-        if (!temporalHistoryInitialized) {
-            resetTemporalHistoryTracking(dimensionId, yaw, pitch);
-            temporalHistoryResetReason = "initial";
-            return true;
-        }
-
-        float yawDelta = Math.abs(wrapDegrees(yaw - previousTemporalYaw));
-        float pitchDelta = Math.abs(pitch - previousTemporalPitch);
-        accumulatedTemporalYaw += yawDelta;
-        accumulatedTemporalPitch += pitchDelta;
-
-        previousTemporalYaw = yaw;
-        previousTemporalPitch = pitch;
-        temporalHistoryResetVelocity = velocity;
-        temporalHistoryResetYaw = accumulatedTemporalYaw;
-        temporalHistoryResetPitch = accumulatedTemporalPitch;
-
-        if (dimensionId != temporalHistoryDimensionId) {
-            resetTemporalHistoryTracking(dimensionId, yaw, pitch);
-            clearCompositeInvalidFallbackSnapshot();
-            temporalHistoryResetReason = "dimension";
-            return true;
-        }
-        int recoveryDimensionId = BetterPortalsCompat.mainViewSwapRecoveryDimensionId();
-        if (recoveryDimensionId != Integer.MIN_VALUE
-                && recoveryDimensionId != mainViewSwapTemporalResetDimensionId) {
-            mainViewSwapTemporalResetDimensionId = recoveryDimensionId;
-            resetTemporalHistoryTracking(dimensionId, yaw, pitch);
-            temporalHistoryResetReason = "betterportals-main-view-recovery";
-            return true;
-        }
-        if (recoveryDimensionId == Integer.MIN_VALUE) {
-            mainViewSwapTemporalResetDimensionId = Integer.MIN_VALUE;
-        }
-        if (accumulatedTemporalYaw > TEMPORAL_HISTORY_ACCUMULATED_YAW_RESET
-                || accumulatedTemporalPitch > TEMPORAL_HISTORY_ACCUMULATED_PITCH_RESET) {
-            // Normal mouse-look should not clear persistent shader history.
-            // Clearing temporal/deferred attachments during rotation looks like
-            // distant terrain/chunk flicker on packs that keep persistent history.
-            accumulatedTemporalYaw = 0.0f;
-            accumulatedTemporalPitch = 0.0f;
-        }
-        return false;
-    }
-
-    private void resetTemporalHistoryTracking(int dimensionId) {
-        resetTemporalHistoryTracking(dimensionId, 0.0f, 0.0f);
-    }
-
-    private void resetTemporalHistoryTracking(int dimensionId, float yaw, float pitch) {
-        temporalHistoryInitialized = true;
-        temporalHistoryDimensionId = dimensionId;
-        previousTemporalYaw = yaw;
-        previousTemporalPitch = pitch;
-        accumulatedTemporalYaw = 0.0f;
-        accumulatedTemporalPitch = 0.0f;
-    }
-
-    private float cameraVelocityMagnitude() {
-        float x = cameraPosition[0] - previousCameraPosition[0];
-        float y = cameraPosition[1] - previousCameraPosition[1];
-        float z = cameraPosition[2] - previousCameraPosition[2];
-        return (float) Math.sqrt(x * x + y * y + z * z);
-    }
-
-    private float cameraVerticalDelta() {
-        return cameraPosition[1] - previousCameraPosition[1];
-    }
-
-    private float cameraHorizontalVelocityMagnitude() {
-        float x = cameraPosition[0] - previousCameraPosition[0];
-        float z = cameraPosition[2] - previousCameraPosition[2];
-        return (float) Math.sqrt(x * x + z * z);
-    }
-
-    private static float interpolateAngle(float previous, float current, float partialTicks) {
-        return previous + wrapDegrees(current - previous) * partialTicks;
-    }
-
-    private static float wrapDegrees(float value) {
-        value %= 360.0f;
-        if (value >= 180.0f) {
-            value -= 360.0f;
-        }
-        if (value < -180.0f) {
-            value += 360.0f;
-        }
-        return value;
-    }
-
-    private void logTemporalHistoryResetIfNeeded(boolean resetTemporalHistory) {
-        if (!resetTemporalHistory || temporalHistoryResetLogs >= MAX_TEMPORAL_HISTORY_RESET_LOGS) {
-            return;
-        }
-        temporalHistoryResetLogs++;
-        MainMod.LOGGER.info("[Pipeline] Reset temporal history: reason={} dimension={} velocity={} accumulatedYaw={} accumulatedPitch={} persistentAttachments={}",
-                temporalHistoryResetReason,
-                temporalHistoryDimensionId,
-                temporalHistoryResetVelocity,
-                temporalHistoryResetYaw,
-                temporalHistoryResetPitch,
-                packDirectives.renderTargets().clearDisabled());
-    }
-
-    private void requestPersistentHistoryClear(String reason) {
-        if (packDirectives.renderTargets().clearDisabled().isEmpty()) {
-            return;
-        }
-        pendingPersistentHistoryClear = true;
-        pendingPersistentHistoryClearReason = reason == null || reason.isBlank() ? "unspecified" : reason;
-    }
-
-    private void clearPendingPersistentHistoryIfNeeded() {
-        if (!pendingPersistentHistoryClear || !pingPongManager.isInitialized()) {
-            return;
-        }
-
-        Attachment[] attachments = persistentHistoryAttachments();
-        pendingPersistentHistoryClear = false;
-        String reason = pendingPersistentHistoryClearReason;
-        pendingPersistentHistoryClearReason = "";
-        if (attachments.length == 0) {
-            return;
-        }
-
-        pingPongManager.clear(attachments);
-        pingPongManager.clearWrite(attachments);
-        bindWorldFramebuffer();
-        if (persistentHistoryClearLogs < MAX_TERRAIN_HISTORY_CLEAR_LOGS) {
-            persistentHistoryClearLogs++;
-            MainMod.LOGGER.info("[Pipeline] Cleared persistent history before deferred passes: reason={} attachments={}",
-                    reason,
-                    java.util.Arrays.toString(attachments));
-        }
-    }
-
-    private Attachment[] persistentHistoryAttachments() {
-        java.util.Set<Attachment> clearDisabled = packDirectives.renderTargets().clearDisabled();
-        if (clearDisabled.isEmpty()) {
-            return new Attachment[0];
-        }
-
-        List<Attachment> attachments = new ArrayList<>();
-        for (Attachment attachment : clearDisabled) {
-            // COLOR contains the current gbuffer terrain for this frame; clearing it mid-frame
-            // causes the white/blank terrain this recovery is meant to avoid.
-            if (attachment != Attachment.COLOR) {
-                attachments.add(attachment);
-            }
-        }
-        return attachments.toArray(new Attachment[0]);
-    }
-
-    private boolean hasActiveShadowProgram() {
-        Boolean shadowEnabled = shaderProperties.renderSettings().shadowEnabled();
-        if (shadowEnabled != null) {
-            return shadowEnabled;
-        }
-        for (PipelineProgram program : programs.values()) {
-            if (program.stage() == ProgramStage.SHADOW && program.effectiveProgram(programs) != null) {
-                return true;
-            }
-        }
-        if (!shadowComputePrograms.isEmpty()
-                || !computeProgramArrays.getOrDefault(ProgramArrayId.SHADOWCOMP, List.of()).isEmpty()
-                || !fullscreenArrayPrograms.getOrDefault(ProgramArrayId.SHADOWCOMP, List.of()).isEmpty()) {
-            return true;
-        }
-        return false;
-    }
-
-    public boolean shouldDisableVanillaEntityShadows() {
-        return isPipelineActive && shadowFramebuffer != null && hasActiveShadowProgram();
-    }
-
-    public boolean shouldRenderShadowMapBeforeTerrainSetup() {
-        if (isBetterPortalsExternalWorldTarget() || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
-            return false;
-        }
-        if ((ENABLE_SAFE_TERRAIN_FALLBACKS && hardwareSafeVanillaTerrain)
-                || shouldSuppressShadowMapForSoftVanillaStartupPack()) {
-            return false;
-        }
-        return !shouldUseNothiriumShadowBridge();
-    }
-
-    public boolean shouldRenderShadowMapAfterTerrainSetup() {
-        if (isBetterPortalsExternalWorldTarget() || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
-            return false;
-        }
-        return false;
-    }
-
-    public boolean shouldRenderShadowMapAfterOpaqueTerrain() {
-        if (isBetterPortalsExternalWorldTarget() || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
-            return false;
-        }
-        if (shouldSuppressShadowMapForSoftVanillaStartupPack()) {
-            return false;
-        }
-        return shouldUseNothiriumShadowBridge();
-    }
-
-    private boolean shouldUseNothiriumShadowBridge() {
-        return NothiriumShadowRenderer.isAvailable()
-                && !(ENABLE_SAFE_TERRAIN_FALLBACKS && hardwareSafeVanillaTerrain)
-                && !(ENABLE_SAFE_TERRAIN_FALLBACKS && softVanillaTerrainRenderer)
-                && !shouldSuppressNothiriumShadowTerrain()
-                && !NothiriumBypass.shouldBypass();
-    }
-
-    private boolean shouldUseNothiriumMainTerrainBridge() {
-        return NothiriumShadowRenderer.isAvailable()
-                && !(ENABLE_SAFE_TERRAIN_FALLBACKS && hardwareSafeVanillaTerrain)
-                && !(ENABLE_SAFE_TERRAIN_FALLBACKS && softVanillaTerrainRenderer)
-                && !NothiriumBypass.shouldBypass();
-    }
-
-    private boolean shouldSuppressNothiriumShadowTerrain() {
-        return false;
-    }
-
-    private boolean shouldReuseMainTerrainForShadowMap() {
-        return false;
-    }
-
-    public void ensureVanillaTerrainRenderer() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = BetterPortalsCompat.currentRenderPassWorld();
-        ensureVanillaTerrainRenderer(
-                world != null ? world : (mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null),
-                hardwareSafeVanillaTerrain || isPipelineActive
-        );
-    }
-
-    private void pushVanillaTerrainRendererState() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null || !(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor renderGlobal)) {
-            vanillaViewFrustumStateStack.push(new Object[]{null, null});
-            return;
-        }
-
-        vanillaViewFrustumStateStack.push(new Object[]{com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), renderGlobal.ausm$viewFrustum()});
-    }
-
-    private void popVanillaTerrainRendererState() {
-        Object[] state = vanillaViewFrustumStateStack.poll();
-        if (state == null || state.length < 2 || !(state[0] instanceof RenderGlobal savedRenderGlobal)
-                || !(savedRenderGlobal instanceof RenderGlobalAccessor renderGlobal)) {
-            return;
-        }
-        ViewFrustum savedViewFrustum = state[1] instanceof ViewFrustum viewFrustum ? viewFrustum : null;
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (BetterPortalsCompat.isMainViewSwapRecoveryActive()
-                && !BetterPortalsCompat.isRenderingNestedView()
-                && mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null) {
-            ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
-            activeVanillaViewFrustumRenderGlobal = null;
-            activeVanillaViewFrustumWorld = null;
-            activeVanillaViewFrustumRenderDistanceChunks = -1;
-            return;
-        }
-
-        if (savedViewFrustum == null) {
-            if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null && renderGlobal.ausm$viewFrustum() == null) {
-                ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
-            }
-            activeVanillaViewFrustumRenderGlobal = null;
-            activeVanillaViewFrustumWorld = null;
-            activeVanillaViewFrustumRenderDistanceChunks = -1;
-            return;
-        }
-
-        if (renderGlobal.ausm$viewFrustum() != savedViewFrustum) {
-            renderGlobal.ausm$setViewFrustum(savedViewFrustum);
-            renderGlobal.ausm$setDisplayListEntitiesDirty(true);
-        }
-        activeVanillaViewFrustumRenderGlobal = null;
-        activeVanillaViewFrustumWorld = null;
-        activeVanillaViewFrustumRenderDistanceChunks = -1;
-    }
-
-    public void ensureVanillaTerrainRenderer(World world) {
-        ensureVanillaTerrainRenderer(world, false);
-    }
-
-    public void ensureRenderGlobalViewFrustum(RenderGlobal renderGlobal) {
-        if (!(renderGlobal instanceof RenderGlobalAccessor accessor) || accessor.ausm$viewFrustum() != null) {
-            return;
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != renderGlobal) {
-            return;
-        }
-
-        logTerrainDiagnostic("ensure-render-global-view-frustum", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "missing-view-frustum=true");
-        ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
-    }
-
-    public void updateShaderlessVanillaViewFrustumForCamera() {
-        if (!shouldSyncShaderlessVanillaViewFrustumForCamera()) {
-            return;
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null
-                || !(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor renderGlobal)) {
-            return;
-        }
-
-        WorldClient renderPassWorld = BetterPortalsCompat.currentRenderPassWorld();
-        if (renderPassWorld != null && renderPassWorld != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) {
-            return;
-        }
-
-        boolean worldChanged = false;
-        World renderGlobalWorld = renderGlobal.ausm$world();
-        if (renderGlobalWorld != null && renderGlobalWorld != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) {
-            worldChanged = syncRenderGlobalWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
-        }
-        ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), false);
-
-        ViewFrustum viewFrustum = renderGlobal.ausm$viewFrustum();
-        if (viewFrustum == null) {
-            ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
-            viewFrustum = renderGlobal.ausm$viewFrustum();
-        }
-        if (viewFrustum == null) {
-            return;
-        }
-
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        updateVanillaViewFrustumChunkPositions(viewFrustum, viewEntity);
-        logCameraFrustumSyncIfChanged(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), viewFrustum, viewEntity, renderPassWorld != null, worldChanged);
-    }
-
-    private boolean shouldSyncShaderlessVanillaViewFrustumForCamera() {
-        return (BetterPortalsCompat.isInstalled()
-                && !isPipelineActive
-                && NothiriumBypass.shouldBypass())
-                || (isPipelineActive
-                && ENABLE_SAFE_TERRAIN_FALLBACKS
-                && (hardwareSafeVanillaTerrain || softVanillaTerrainRenderer));
-    }
-
-    private void logCameraFrustumSyncIfChanged(World world, ViewFrustum viewFrustum, Entity viewEntity,
-                                               boolean renderPass, boolean worldChanged) {
-        if (world == null || viewFrustum == null || viewEntity == null) {
-            return;
-        }
-
-        int chunkX = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity)) >> 4;
-        int chunkZ = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity)) >> 4;
-        if (lastCameraFrustumSyncWorld == world
-                && lastCameraFrustumSyncViewFrustum == viewFrustum
-                && lastCameraFrustumSyncChunkX == chunkX
-                && lastCameraFrustumSyncChunkZ == chunkZ
-                && !worldChanged) {
-            return;
-        }
-
-        lastCameraFrustumSyncWorld = world;
-        lastCameraFrustumSyncViewFrustum = viewFrustum;
-        lastCameraFrustumSyncChunkX = chunkX;
-        lastCameraFrustumSyncChunkZ = chunkZ;
-        if (cameraFrustumSyncLogs >= MAX_CAMERA_FRUSTUM_SYNC_LOGS) {
-            return;
-        }
-
-        cameraFrustumSyncLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMFrustumSync] call={} world={} chunk={},{} viewFrustum={} renderPass={} worldChanged={} bp={}",
-                cameraFrustumSyncLogs,
-                safeDimensionId(world),
-                chunkX,
-                chunkZ,
-                viewFrustumId(viewFrustum),
-                renderPass,
-                worldChanged,
-                BetterPortalsCompat.describeTransitionState()
-        );
-    }
-
-    public void handleBetterPortalsMainViewSwap() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
-            return;
-        }
-
-        logTerrainDiagnostic("bp-main-view-swap:start", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
-        startVanillaParticleRecovery();
-        if (!isPipelineActive) {
-            BetterPortalsCompat.clearMainViewSwapTransientState();
-            BetterPortalsCompat.cancelMainViewSwapRecovery();
-            clearScheduledWorldTerrainRefresh();
-            recoverShaderlessMainWorldTerrain(mc, "bp-main-view-swap");
-            logInactiveBetterPortalsTerrainSkip("main-view-swap", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
-            return;
-        }
-
-        boolean terrainTransition = beginTerrainTransition(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
-        logTerrainDiagnostic("bp-main-view-swap:transition", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "accepted=" + terrainTransition);
-        clearClientParticles("bp-main-view-swap");
-        BetterPortalsCompat.clearMainViewSwapTransientState();
-        BetterPortalsCompat.beginMainViewSwapHandling();
-        try {
-            BetterPortalsCompat.startMainViewSwapRecovery(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
-            BetterPortalsCompat.logMainViewSwapRecoveryIfNeeded(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
-            rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "bp-main-view-swap");
-            resetCameraFrustumSyncState();
-            scheduleDimensionSwitchTerrainRefresh();
-            scheduleBloomTerrainRefresh("bp-main-view-swap");
-            scheduleInactiveVanillaRecoveryFrame();
-            scheduleWorldLoadLightRecalculation();
-        } finally {
-            BetterPortalsCompat.endMainViewSwapHandling();
-        }
-        logTerrainDiagnostic("bp-main-view-swap:end", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "accepted=" + terrainTransition);
-    }
-
-    public void handleWorldDimensionSwitch(int previousDimensionId, int dimensionId) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
-            return;
-        }
-
-        logTerrainDiagnostic("dimension-switch:start", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "previous=" + previousDimensionId + ", current=" + dimensionId);
-        clearClientParticles("dimension-switch");
-        startVanillaParticleRecovery();
-        BetterPortalsCompat.clearMainViewSwapTransientState();
-        if (!isPipelineActive) {
-            BetterPortalsCompat.cancelMainViewSwapRecovery();
-            clearPendingShaderChunkRefreshes();
-            clearShaderlessBloomMetadata();
-            clearPendingBetterPortalsPortalBlockRefresh();
-            clearScheduledWorldTerrainRefresh();
-            clearScheduledBloomTerrainRefresh();
-            currentWorldPass = 0;
-            currentWorldPartialTicks = 0.0F;
-            recoverShaderlessMainWorldTerrain(mc, "dimension-switch");
-            logInactiveBetterPortalsTerrainSkip("dimension-switch", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
-            return;
-        }
-
-        boolean terrainTransition = beginTerrainTransition(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
-        if (!terrainTransition) {
-            clearPendingShaderChunkRefreshes();
-            clearPendingBetterPortalsPortalBlockRefresh();
-            scheduleWorldLoadLightRecalculation();
-            logTerrainDiagnostic("dimension-switch:debounced", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "previous=" + previousDimensionId + ", current=" + dimensionId);
-            return;
-        }
-
-        clearPendingShaderChunkRefreshes();
-        clearPendingBetterPortalsPortalBlockRefresh();
-        boolean betterPortalsRecovery = BetterPortalsCompat.isMainViewSwapRecoveryActive();
-        if (betterPortalsRecovery) {
-            rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "dimension-switch-bp-recovery");
-            resetCameraFrustumSyncState();
-            scheduleDimensionSwitchTerrainRefresh();
-            scheduleBloomTerrainRefresh("dimension-switch-bp-recovery");
-            scheduleInactiveVanillaRecoveryFrame();
-            scheduleWorldLoadLightRecalculation();
-            logTerrainDiagnostic("dimension-switch:bp-recovery-deferred", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
-                    "previous=" + previousDimensionId + ", current=" + dimensionId);
-            return;
-        }
-
-        clearShaderlessBloomMetadata();
-        resetPipelineState(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc));
-        currentWorldPass = 0;
-        currentWorldPartialTicks = 0.0F;
-
-        rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "dimension-switch");
-        resetCameraFrustumSyncState();
-        scheduleDimensionSwitchTerrainRefresh();
-        scheduleBloomTerrainRefresh("dimension switch");
-        scheduleInactiveVanillaRecoveryFrame();
-        scheduleWorldLoadLightRecalculation();
-        logTerrainDiagnostic("dimension-switch:scheduled", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "previous=" + previousDimensionId + ", current=" + dimensionId
-                + ", bpRecoveryWasActive=" + betterPortalsRecovery);
-    }
-
-    public void handleClientTeleportResync(int previousDimensionId, int currentDimensionId, double distanceSq, double horizontalDistanceSq) {
-        boolean dimensionChanged = previousDimensionId != Integer.MIN_VALUE
-                && currentDimensionId != Integer.MIN_VALUE
-                && previousDimensionId != currentDimensionId;
-        boolean longTeleport = horizontalDistanceSq >= CLIENT_TELEPORT_TERRAIN_REFRESH_DISTANCE_SQ;
-        if (!dimensionChanged && !longTeleport) {
-            return;
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
-            return;
-        }
-
-        String reason = dimensionChanged ? "client-teleport-dimension" : "client-teleport";
-        logTerrainDiagnostic(reason + ":start", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
-                "previous=" + previousDimensionId + ", current=" + currentDimensionId
-                        + ", distanceSq=" + distanceSq + ", horizontalDistanceSq=" + horizontalDistanceSq);
-        if (dimensionChanged) {
-            clearClientParticles(reason);
-        }
-        startVanillaParticleRecovery();
-
-        if (!dimensionChanged) {
-            clearPendingShaderChunkRefreshes();
-            clearPendingBetterPortalsPortalBlockRefresh();
-            currentWorldPass = 0;
-            currentWorldPartialTicks = 0.0F;
-            resetCameraFrustumSyncState();
-            scheduleWorldTerrainRefresh();
-            scheduleWorldLoadLightRecalculation();
-            if (!isPipelineActive) {
-                recoverShaderlessMainWorldTerrain(mc, reason);
-            } else {
-                scheduleInactiveVanillaRecoveryFrame();
-            }
-            logTerrainDiagnostic(reason + ":scheduled", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "preservedClientChunkQueue=true");
-            return;
-        }
-
-        BetterPortalsCompat.clearMainViewSwapTransientState();
-        BetterPortalsCompat.cancelMainViewSwapRecovery();
-        clearPendingShaderChunkRefreshes();
-        clearPendingBetterPortalsPortalBlockRefresh();
-        clearShaderlessBloomMetadata();
-        clearScheduledWorldTerrainRefresh();
-        clearScheduledBloomTerrainRefresh();
-        currentWorldPass = 0;
-        currentWorldPartialTicks = 0.0F;
-
-        if (!isPipelineActive) {
-            recoverShaderlessMainWorldTerrain(mc, reason);
-            scheduleWorldLoadLightRecalculation();
-            logTerrainDiagnostic(reason + ":shaderless", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
-            return;
-        }
-
-        resetPipelineState(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc));
-        rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), reason);
-        resetCameraFrustumSyncState();
-        scheduleFullWorldTerrainRefresh();
-        scheduleBloomTerrainRefresh(reason);
-        scheduleInactiveVanillaRecoveryFrame();
-        scheduleWorldLoadLightRecalculation();
-        logTerrainDiagnostic(reason + ":scheduled", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
-    }
-
-    private void recoverShaderlessMainWorldTerrain(Minecraft mc, String reason) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
-            return;
-        }
-        if (shouldLeaveShaderlessVanillaTerrainUntouched()) {
-            recoverShaderlessVanillaOwnerTerrain(mc, reason);
-            return;
-        }
-
-        boolean hardReset = shouldHardResetShaderlessNothirium(reason);
-        if (hardReset) {
-            clearCachedVanillaTerrainRendererReferences();
-        }
-
-        boolean ready = NothiriumBypass.ensureRendererReady();
-        boolean marked = hardReset ? NothiriumBypass.recreateRenderer() : NothiriumBypass.markAllChanged();
-        boolean setup = hardReset && (marked || ready) && NothiriumBypass.setupForIsolatedShaderlessMainPass();
-
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null) {
-            adoptMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), reason);
-        }
-
-        if (marked || ready || setup) {
-            scheduleInactiveVanillaRecoveryFrame();
-        }
-        scheduleWorldLoadLightRecalculation();
-        logShaderlessNothiriumLoadRendererReload(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), marked, reason);
-        logTerrainDiagnostic(reason + ":shaderless-recover", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
-                "ready=" + ready + ", marked=" + marked + ", setup=" + setup + ", hardReset=" + hardReset);
-    }
-
-    private void recoverShaderlessVanillaOwnerTerrain(Minecraft mc, String reason) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
-            return;
-        }
-
-        boolean transitionReset = shouldHardResetShaderlessNothirium(reason);
-        if (transitionReset && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null) {
-            rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), reason + "-vanilla-owner");
-            resetCameraFrustumSyncState();
-            scheduleInactiveVanillaRecoveryFrame();
-            logTerrainDiagnostic(reason + ":shaderless-vanilla-owner-rebuild", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
-        } else if (com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null) {
-            adoptMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), reason + "-vanilla-owner");
-            logTerrainDiagnostic(reason + ":shaderless-vanilla-owner-adopt", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
-        } else {
-            logTerrainDiagnostic(reason + ":shaderless-vanilla-owner-missing-render-global", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
-        }
-
-        scheduleWorldLoadLightRecalculation();
-    }
-
-    private void resetCameraFrustumSyncState() {
-        lastCameraFrustumSyncWorld = null;
-        lastCameraFrustumSyncViewFrustum = null;
-        lastCameraFrustumSyncChunkX = Integer.MIN_VALUE;
-        lastCameraFrustumSyncChunkZ = Integer.MIN_VALUE;
-        lastHardwareSafeVanillaTerrainRefreshWorld = null;
-        lastHardwareSafeVanillaTerrainRefreshChunkX = Integer.MIN_VALUE;
-        lastHardwareSafeVanillaTerrainRefreshChunkZ = Integer.MIN_VALUE;
-        lastHardwareSafeVanillaTerrainLoadedNearPlayer = false;
-    }
-
-    private boolean beginTerrainTransition(World world) {
-        int dimension = safeDimensionId(world);
-        long now = System.currentTimeMillis();
-        long elapsed = now - lastTerrainTransitionMillis;
-        if (world != null
-                && lastTerrainTransitionDimension == dimension
-                && elapsed >= 0L
-                && elapsed < WORLD_TERRAIN_TRANSITION_DEBOUNCE_MS) {
-            logTerrainDiagnostic("terrain-transition:debounced", world, "elapsedMs=" + elapsed + ", lastDim=" + lastTerrainTransitionDimension);
-            return false;
-        }
-
-        lastTerrainTransitionWorld = world;
-        lastTerrainTransitionDimension = dimension;
-        lastTerrainTransitionMillis = now;
-        logTerrainDiagnostic("terrain-transition:accepted", world, "elapsedMs=" + elapsed + ", lastDim=" + lastTerrainTransitionDimension);
-        return true;
-    }
-
-    public void queueBetterPortalsPortalBlockChanged(World world, BlockPos pos, IBlockState oldState, IBlockState newState) {
-        if (!BetterPortalsCompat.isInstalled() || world == null || pos == null) {
-            return;
-        }
-        if (sameBlockState(oldState, newState)) {
-            return;
-        }
-        if (shouldDebounceBetterPortalsPortalBlockRefresh(world, pos)) {
-            logTerrainDiagnostic("bp-portal-block:debounced", world, "pos=" + pos
-                    + ", old=" + blockName(oldState)
-                    + ", new=" + blockName(newState));
-            return;
-        }
-
-        pendingBetterPortalsPortalBlockWorld = world;
-        pendingBetterPortalsPortalBlockPos = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos);
-        pendingBetterPortalsPortalBlockOldState = oldState;
-        pendingBetterPortalsPortalBlockNewState = newState;
-        pendingBetterPortalsPortalBlockChangeCount++;
-        if (pendingBetterPortalsPortalBlockRefreshDelay < 0) {
-            pendingBetterPortalsPortalBlockRefreshDelay = 3;
-        }
-        logTerrainDiagnostic("bp-portal-block:queued", world, "pos=" + pos
-                + ", count=" + pendingBetterPortalsPortalBlockChangeCount
-                + ", old=" + blockName(oldState)
-                + ", new=" + blockName(newState));
-    }
-
-    private void clearPendingBetterPortalsPortalBlockRefresh() {
-        pendingBetterPortalsPortalBlockWorld = null;
-        pendingBetterPortalsPortalBlockPos = null;
-        pendingBetterPortalsPortalBlockOldState = null;
-        pendingBetterPortalsPortalBlockNewState = null;
-        pendingBetterPortalsPortalBlockChangeCount = 0;
-        pendingBetterPortalsPortalBlockRefreshDelay = -1;
-        lastBetterPortalsPortalBlockRefreshWorld = null;
-        lastBetterPortalsPortalBlockRefreshPos = null;
-        lastBetterPortalsPortalBlockRefreshDimension = Integer.MIN_VALUE;
-        lastBetterPortalsPortalBlockRefreshMillis = 0L;
-    }
-
-    public void runPendingBetterPortalsPortalBlockRefresh() {
-        if (pendingBetterPortalsPortalBlockRefreshDelay < 0) {
-            return;
-        }
-        if (pendingBetterPortalsPortalBlockRefreshDelay > 0) {
-            pendingBetterPortalsPortalBlockRefreshDelay--;
-            return;
-        }
-
-        World world = pendingBetterPortalsPortalBlockWorld;
-        BlockPos pos = pendingBetterPortalsPortalBlockPos;
-        IBlockState oldState = pendingBetterPortalsPortalBlockOldState;
-        IBlockState newState = pendingBetterPortalsPortalBlockNewState;
-        int changeCount = pendingBetterPortalsPortalBlockChangeCount;
-
-        pendingBetterPortalsPortalBlockWorld = null;
-        pendingBetterPortalsPortalBlockPos = null;
-        pendingBetterPortalsPortalBlockOldState = null;
-        pendingBetterPortalsPortalBlockNewState = null;
-        pendingBetterPortalsPortalBlockChangeCount = 0;
-        pendingBetterPortalsPortalBlockRefreshDelay = -1;
-
-        handleBetterPortalsPortalBlockChanged(world, pos, oldState, newState, changeCount);
-    }
-
-    public void handleBetterPortalsPortalBlockChanged(World world, BlockPos pos, IBlockState oldState, IBlockState newState) {
-        handleBetterPortalsPortalBlockChanged(world, pos, oldState, newState, 1);
-    }
-
-    private void handleBetterPortalsPortalBlockChanged(World world, BlockPos pos, IBlockState oldState, IBlockState newState, int changeCount) {
-        if (!BetterPortalsCompat.isInstalled() || world == null || pos == null) {
-            return;
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
-            return;
-        }
-
-        BetterPortalsCompat.beginMainViewSwapHandling();
-        try {
-            rememberBetterPortalsPortalBlockRefresh(world, pos);
-            markPortalChangeRenderRegion(world, pos);
-            logTerrainDiagnostic("bp-portal-block:refresh", world, "pos=" + pos
-                    + ", count=" + Math.max(1, changeCount)
-                    + ", old=" + blockName(oldState)
-                    + ", new=" + blockName(newState));
-            MainMod.LOGGER.debug("[BetterPortalsCompat] Refreshed portal terrain after {} coalesced block change(s): world={} pos={} old={} new={}",
-                    Math.max(1, changeCount),
-                    safeDimensionId(world),
-                    pos,
-                    oldState != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(oldState)) : "null",
-                    newState != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(newState)) : "null");
-        } catch (RuntimeException e) {
-            MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to refresh portal terrain after block change", e);
-        } finally {
-            BetterPortalsCompat.endMainViewSwapHandling();
-        }
-    }
-
-    private boolean sameBlockState(IBlockState oldState, IBlockState newState) {
-        return oldState == newState || (oldState != null && oldState.equals(newState));
-    }
-
-    private boolean shouldDebounceBetterPortalsPortalBlockRefresh(World world, BlockPos pos) {
-        long now = System.currentTimeMillis();
-        return lastBetterPortalsPortalBlockRefreshWorld == world
-                && lastBetterPortalsPortalBlockRefreshDimension == safeDimensionId(world)
-                && pos.equals(lastBetterPortalsPortalBlockRefreshPos)
-                && now - lastBetterPortalsPortalBlockRefreshMillis >= 0L
-                && now - lastBetterPortalsPortalBlockRefreshMillis < BETTER_PORTALS_PORTAL_BLOCK_REFRESH_DEBOUNCE_MS;
-    }
-
-    private void rememberBetterPortalsPortalBlockRefresh(World world, BlockPos pos) {
-        lastBetterPortalsPortalBlockRefreshWorld = world;
-        lastBetterPortalsPortalBlockRefreshPos = pos != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos) : null;
-        lastBetterPortalsPortalBlockRefreshDimension = safeDimensionId(world);
-        lastBetterPortalsPortalBlockRefreshMillis = System.currentTimeMillis();
-    }
-
-    private void markPortalChangeRenderRegion(World world, BlockPos pos) {
-        if (world == null || pos == null) {
-            return;
-        }
-
-        int radius = 8;
-        com.l.ausm.impl.util.MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(world,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) - radius,
-                Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) - radius),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) - radius,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + radius,
-                Math.min(255, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + radius),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + radius
-        );
-    }
-
-    private void ensureVanillaTerrainRenderer(World world, boolean force) {
-        boolean bypass = NothiriumBypass.shouldBypass();
-        if (!force && !bypass) {
-            logSteadyVanillaTerrainDiagnostic("ensure-vanilla:skip", world, "force=false, nothiriumBypass=false");
-            return;
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || world == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
-            return;
-        }
-
-        logSteadyVanillaTerrainDiagnostic("ensure-vanilla:start", world, "force=" + force + ", nothiriumBypass=" + bypass);
-        RenderGlobal currentRenderGlobal = com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc);
-        RenderGlobalAccessor renderGlobal = (RenderGlobalAccessor) currentRenderGlobal;
-        int requestedRenderDistanceChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc);
-        Integer activeRenderDistanceChunks = activeVanillaViewFrustumRenderDistanceChunks > 0
-                ? activeVanillaViewFrustumRenderDistanceChunks
-                : null;
-        int expectedRenderDistanceChunks = vanillaTerrainRenderDistanceChunks(
-                world,
-                activeRenderDistanceChunks,
-                requestedRenderDistanceChunks
-        );
-        if (canReuseActiveVanillaTerrainRenderer(renderGlobal, currentRenderGlobal, world, expectedRenderDistanceChunks)) {
-            updateVanillaViewFrustumChunkPositions(renderGlobal.ausm$viewFrustum(), com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc));
-            logSteadyVanillaTerrainDiagnostic("ensure-vanilla:reuse-active", world,
-                    "renderDistance=" + expectedRenderDistanceChunks + ", force=" + force);
-            return;
-        }
-
-        boolean rendererStateChanged = syncRenderGlobalWorld(currentRenderGlobal, world);
-        ViewFrustum activeViewFrustum = renderGlobal.ausm$viewFrustum();
-        pruneBetterPortalsVanillaViewFrustumCache(currentRenderGlobal, world);
-
-        boolean useVbo = com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean(net.minecraft.client.renderer.OpenGlHelper.class, new String[] {"func_176075_f", "useVbo"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, true);
-        if (renderGlobal.ausm$renderDispatcher() == null) {
-            logVanillaTerrainRendererCreation(world, force, "missing-dispatcher");
-            renderGlobal.ausm$setRenderDispatcher(new ChunkRenderDispatcher());
-            rendererStateChanged = true;
-        }
-        IRenderChunkFactory renderChunkFactory = renderGlobal.ausm$renderChunkFactory();
-        if (renderChunkFactory == null) {
-            renderChunkFactory = useVbo ? new VboChunkFactory() : new ListChunkFactory();
-            renderGlobal.ausm$setRenderChunkFactory(renderChunkFactory);
-            rendererStateChanged = true;
-        }
-        if (renderGlobal.ausm$renderContainer() == null) {
-            renderGlobal.ausm$setRenderContainer(useVbo ? new VboRenderList() : new RenderList());
-            rendererStateChanged = true;
-        }
-
-        Map<World, ViewFrustum> rendererViewFrustums = vanillaViewFrustums.computeIfAbsent(
-                currentRenderGlobal,
-                ignored -> new IdentityHashMap<>()
-        );
-        Map<World, Integer> rendererViewFrustumDistances = vanillaViewFrustumRenderDistances.computeIfAbsent(
-                currentRenderGlobal,
-                ignored -> new IdentityHashMap<>()
-        );
-        ViewFrustum viewFrustum = rendererViewFrustums.get(world);
-        Integer cachedRenderDistanceChunks = rendererViewFrustumDistances.get(world);
-        int renderDistanceChunks = vanillaTerrainRenderDistanceChunks(
-                world,
-                cachedRenderDistanceChunks,
-                requestedRenderDistanceChunks
-        );
-        if (viewFrustum != null && cachedRenderDistanceChunks != null && cachedRenderDistanceChunks != renderDistanceChunks) {
-            Set<ViewFrustum> removedViewFrustums = new HashSet<>();
-            removedViewFrustums.add(viewFrustum);
-            clearQueuedUpdatesForViewFrustums(renderGlobal, removedViewFrustums);
-            vanillaViewFrustumChunkPositionKeys.remove(viewFrustum);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(viewFrustum);
-            if (viewFrustum == activeViewFrustum) {
-                activeViewFrustum = null;
-            }
-            rendererViewFrustums.remove(world);
-            rendererViewFrustumDistances.remove(world);
-            viewFrustum = null;
-            if (activeVanillaViewFrustumRenderGlobal == currentRenderGlobal && activeVanillaViewFrustumWorld == world) {
-                activeVanillaViewFrustumRenderGlobal = null;
-                activeVanillaViewFrustumWorld = null;
-                activeVanillaViewFrustumRenderDistanceChunks = -1;
-            }
-            rendererStateChanged = true;
-            MainMod.LOGGER.info("[Pipeline] Rebuilt vanilla terrain renderer for render distance change: world={} old={} new={} requested={}",
-                    safeDimensionId(world),
-                    cachedRenderDistanceChunks,
-                    renderDistanceChunks,
-                    requestedRenderDistanceChunks);
-        }
-        if (viewFrustum == null) {
-            if (activeVanillaViewFrustumRenderGlobal == currentRenderGlobal
-                    && activeVanillaViewFrustumWorld == world
-                    && activeViewFrustum != null) {
-                viewFrustum = activeViewFrustum;
-            } else {
-                viewFrustum = new ViewFrustum(
-                        world,
-                        renderDistanceChunks,
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc),
-                        renderChunkFactory
-                );
-            }
-            rendererViewFrustums.put(world, viewFrustum);
-            rendererViewFrustumDistances.put(world, renderDistanceChunks);
-            rendererStateChanged = true;
-        } else if (cachedRenderDistanceChunks == null) {
-            rendererViewFrustumDistances.put(world, renderDistanceChunks);
-        }
-
-        updateVanillaViewFrustumChunkPositions(viewFrustum, com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc));
-        if (activeViewFrustum != viewFrustum) {
-            renderGlobal.ausm$setViewFrustum(viewFrustum);
-            rendererStateChanged = true;
-        }
-        activeVanillaViewFrustumRenderGlobal = currentRenderGlobal;
-        activeVanillaViewFrustumWorld = world;
-        activeVanillaViewFrustumRenderDistanceChunks = renderDistanceChunks;
-        rememberStableMainWorldVanillaRenderDistance(world, renderDistanceChunks);
-        if (rendererStateChanged) {
-            renderGlobal.ausm$setDisplayListEntitiesDirty(true);
-        }
-        String detail = "force=" + force
-                + ", activeViewBefore=" + viewFrustumId(activeViewFrustum)
-                + ", activeViewAfter=" + viewFrustumId(renderGlobal.ausm$viewFrustum())
-                + ", cachedView=" + viewFrustumId(viewFrustum)
-                + ", renderDistance=" + renderDistanceChunks
-                + (requestedRenderDistanceChunks != renderDistanceChunks
-                        ? ", requestedRenderDistance=" + requestedRenderDistanceChunks
-                        : "");
-        if (rendererStateChanged) {
-            logTerrainDiagnostic("ensure-vanilla:changed", world, detail);
-        } else {
-            logSteadyVanillaTerrainDiagnostic("ensure-vanilla:unchanged", world, detail);
-        }
-    }
-
-    private int vanillaTerrainRenderDistanceChunks(World world, Integer cachedRenderDistanceChunks,
-                                                   int requestedRenderDistanceChunks) {
-        if (shouldUseBetterPortalsPortalRenderDistance(world)) {
-            return Math.min(requestedRenderDistanceChunks, BETTER_PORTALS_VANILLA_RENDER_DISTANCE_CAP);
-        }
-        if (shouldUseStableMainWorldRenderDistance(world)) {
-            if (cachedRenderDistanceChunks != null && cachedRenderDistanceChunks > 0) {
-                return cachedRenderDistanceChunks;
-            }
-            if (lastStableMainWorldVanillaRenderDistanceChunks > 0) {
-                return lastStableMainWorldVanillaRenderDistanceChunks;
-            }
-        }
-        return requestedRenderDistanceChunks;
-    }
-
-    private boolean shouldUseBetterPortalsPortalRenderDistance(World world) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        return BetterPortalsCompat.isInstalled()
-                && BetterPortalsCompat.isRenderingRenderPass()
-                && mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
-                && world != null
-                && world != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
-    }
-
-    private boolean canReuseActiveVanillaTerrainRenderer(RenderGlobalAccessor renderGlobal,
-                                                         RenderGlobal currentRenderGlobal,
-                                                         World world,
-                                                         int renderDistanceChunks) {
-        if (renderGlobal == null
-                || currentRenderGlobal == null
-                || world == null
-                || renderDistanceChunks <= 0
-                || activeVanillaViewFrustumRenderGlobal != currentRenderGlobal
-                || activeVanillaViewFrustumWorld != world
-                || activeVanillaViewFrustumRenderDistanceChunks != renderDistanceChunks) {
-            return false;
-        }
-        if (countCachedVanillaViewFrustums() > 2) {
-            return false;
-        }
-        return renderGlobal.ausm$world() == world
-                && renderGlobal.ausm$viewFrustum() != null
-                && renderGlobal.ausm$renderDispatcher() != null
-                && renderGlobal.ausm$renderChunkFactory() != null
-                && renderGlobal.ausm$renderContainer() != null;
-    }
-
-    private boolean shouldUseStableMainWorldRenderDistance(World world) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        WorldClient renderPassWorld = BetterPortalsCompat.currentRenderPassWorld();
-        return BetterPortalsCompat.isInstalled()
-                && !isPipelineActive
-                && BetterPortalsCompat.isRenderingRenderPass()
-                && !BetterPortalsCompat.isMainViewSwapRecoveryActive()
-                && mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
-                && renderPassWorld == com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)
-                && world == com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
-    }
-
-    private void rememberStableMainWorldVanillaRenderDistance(World world, int renderDistanceChunks) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || world != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) || renderDistanceChunks <= 0) {
-            return;
-        }
-        if (BetterPortalsCompat.isRenderingRenderPass() || BetterPortalsCompat.isRenderingNestedView()) {
-            return;
-        }
-        lastStableMainWorldVanillaRenderDistanceChunks = renderDistanceChunks;
-    }
-
-    public void handleRenderGlobalLoadRenderers(RenderGlobal renderGlobal) {
-        handleShaderlessMainWorldNothiriumReload(renderGlobal);
-        logRenderGlobalLoadRenderers(renderGlobal);
-    }
-
-    public void handleRenderGlobalLoadRenderersComplete(RenderGlobal renderGlobal) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        String caller = externalRenderCaller();
-        boolean manualChunkReload = isManualChunkReloadCaller(caller);
-        if (renderGlobal == null
-                || mc == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != renderGlobal
-                || !isStableMainWorldLoadRenderersCaller(caller)
-                || isPipelineActive
-                || BetterPortalsCompat.isRenderingRenderPass()
-                || BetterPortalsCompat.isRenderingNestedView()
-                || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
-            return;
-        }
-
-        World renderGlobalWorld = renderGlobal instanceof RenderGlobalAccessor accessor ? accessor.ausm$world() : null;
-        if (renderGlobalWorld != null && renderGlobalWorld != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) {
-            return;
-        }
-
-        if (shouldLeaveShaderlessVanillaTerrainUntouched()) {
-            if (manualChunkReload) {
-                rebuildMainWorldVanillaViewFrustum(renderGlobal, com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "manual-reload-vanilla-owner");
-            } else {
-                adoptMainWorldVanillaViewFrustum(renderGlobal, com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "main-load-vanilla-owner");
-            }
-            clearShaderlessBloomMetadata();
-            scheduleWorldLoadLightRecalculation();
-            return;
-        }
-
-        adoptMainWorldVanillaViewFrustum(renderGlobal, com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), manualChunkReload ? "manual-reload" : "main-load");
-        markShaderlessMainWorldNothiriumReload(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), manualChunkReload ? "manual-load-renderers" : "main-load-renderers");
-        clearShaderlessBloomMetadata();
-        scheduleInactiveVanillaRecoveryFrame();
-    }
-
-    private void handleShaderlessMainWorldNothiriumReload(RenderGlobal renderGlobal) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        String caller = externalRenderCaller();
-        if (renderGlobal == null
-                || mc == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != renderGlobal
-                || !isManualChunkReloadCaller(caller)
-                || isPipelineActive
-                || NothiriumBypass.shouldBypass()
-                || BetterPortalsCompat.isRenderingRenderPass()
-                || BetterPortalsCompat.isRenderingNestedView()
-                || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
-            return;
-        }
-
-        World renderGlobalWorld = renderGlobal instanceof RenderGlobalAccessor accessor ? accessor.ausm$world() : null;
-        if (renderGlobalWorld != null && renderGlobalWorld != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) {
-            return;
-        }
-
-        markShaderlessMainWorldNothiriumReload(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "manual-load-renderers");
-    }
-
-    private void markShaderlessMainWorldNothiriumReload(World world, String reason) {
-        if (world == null) {
-            return;
-        }
-        if (shouldLeaveShaderlessVanillaTerrainUntouched()) {
-            return;
-        }
-
-        int dimension = safeDimensionId(world);
-        long now = System.currentTimeMillis();
-        boolean debounced = dimension == lastShaderlessNothiriumLoadRendererReloadDimension
-                && now - lastShaderlessNothiriumLoadRendererReloadMillis < 1000L;
-        if (debounced) {
-            logShaderlessNothiriumLoadRendererReload(world, false, "debounced");
-            return;
-        }
-
-        lastShaderlessNothiriumLoadRendererReloadDimension = dimension;
-        lastShaderlessNothiriumLoadRendererReloadMillis = now;
-        boolean hardReset = shouldHardResetShaderlessNothirium(reason);
-        if (hardReset) {
-            clearCachedVanillaTerrainRendererReferences();
-        }
-
-        boolean marked = hardReset ? NothiriumBypass.recreateRenderer() : NothiriumBypass.markAllChanged();
-        boolean setup = hardReset && marked && NothiriumBypass.setupForIsolatedShaderlessMainPass();
-        if (marked || setup) {
-            scheduleInactiveVanillaRecoveryFrame();
-        }
-        logShaderlessNothiriumLoadRendererReload(world, marked, reason);
-        if (setup) {
-            logTerrainDiagnostic(reason + ":shaderless-reload-setup", world, "marked=" + marked);
-        }
-    }
-
-    private boolean shouldHardResetShaderlessNothirium(String reason) {
-        if (!BetterPortalsCompat.isInstalled() || isPipelineActive || reason == null) {
-            return false;
-        }
-        return "dimension-switch".equals(reason)
-                || "bp-main-view-swap".equals(reason)
-                || "manual-load-renderers".equals(reason);
-    }
-
-    private boolean shouldLeaveShaderlessVanillaTerrainUntouched() {
-        return BetterPortalsCompat.isInstalled()
-                && !isPipelineActive
-                && NothiriumBypass.shouldBypass()
-                && !BetterPortalsCompat.isRenderingRenderPass()
-                && !BetterPortalsCompat.isRenderingNestedView()
-                && !BetterPortalsCompat.isMainViewSwapRecoveryActive();
-    }
-
-    private static boolean isManualChunkReloadCaller(String caller) {
-        return caller != null && caller.startsWith("net.minecraft.client.Minecraft#func_184122_c:");
-    }
-
-    private static boolean isStableMainWorldLoadRenderersCaller(String caller) {
-        return isManualChunkReloadCaller(caller)
-                || caller != null && caller.startsWith("net.minecraft.client.Minecraft#func_71353_a:");
-    }
-
-    private void adoptMainWorldVanillaViewFrustum(RenderGlobal renderGlobal, World world, String stagePrefix) {
-        if (!(renderGlobal instanceof RenderGlobalAccessor accessor) || world == null) {
-            return;
-        }
-
-        pruneBetterPortalsVanillaViewFrustumCache(renderGlobal, world);
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        int renderDistanceChunks = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc) : -1;
-        ViewFrustum viewFrustum = accessor.ausm$viewFrustum();
-        if (viewFrustum == null) {
-            ensureVanillaTerrainRenderer(world, true);
-            viewFrustum = accessor.ausm$viewFrustum();
-            if (viewFrustum == null) {
-                deleteCachedVanillaTerrainRenderer(world);
-                vanillaViewFrustumStateStack.clear();
-                activeVanillaViewFrustumRenderGlobal = null;
-                activeVanillaViewFrustumWorld = null;
-                activeVanillaViewFrustumRenderDistanceChunks = -1;
-                logTerrainDiagnostic(stagePrefix + ":missing-view-frustum", world, "");
-                return;
-            }
-            logTerrainDiagnostic(stagePrefix + ":created-view-frustum", world,
-                    "current=" + viewFrustumId(viewFrustum)
-                            + ", renderDistance=" + renderDistanceChunks);
-        }
-
-        Map<World, ViewFrustum> rendererViewFrustums = vanillaViewFrustums.computeIfAbsent(
-                renderGlobal,
-                ignored -> new IdentityHashMap<>()
-        );
-        ViewFrustum previous = rendererViewFrustums.put(world, viewFrustum);
-        if (previous != null && previous != viewFrustum) {
-            Set<ViewFrustum> removedViewFrustums = new HashSet<>();
-            removedViewFrustums.add(previous);
-            clearQueuedUpdatesForViewFrustums(accessor, removedViewFrustums);
-            vanillaViewFrustumChunkPositionKeys.remove(previous);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(previous);
-        }
-
-        vanillaViewFrustumRenderDistances
-                .computeIfAbsent(renderGlobal, ignored -> new IdentityHashMap<>())
-                .put(world, renderDistanceChunks);
-        rememberStableMainWorldVanillaRenderDistance(world, renderDistanceChunks);
-        vanillaViewFrustumStateStack.clear();
-        activeVanillaViewFrustumRenderGlobal = renderGlobal;
-        activeVanillaViewFrustumWorld = world;
-        activeVanillaViewFrustumRenderDistanceChunks = renderDistanceChunks;
-        if (mc != null) {
-            updateVanillaViewFrustumChunkPositions(viewFrustum, com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc));
-        }
-        accessor.ausm$setDisplayListEntitiesDirty(true);
-        logTerrainDiagnostic(stagePrefix + ":adopt-view-frustum", world,
-                "previous=" + viewFrustumId(previous)
-                        + ", current=" + viewFrustumId(viewFrustum)
-                        + ", renderDistance=" + renderDistanceChunks);
-    }
-
-    private void rebuildMainWorldVanillaViewFrustum(RenderGlobal renderGlobal, World world, String stagePrefix) {
-        if (!(renderGlobal instanceof RenderGlobalAccessor accessor) || world == null) {
-            return;
-        }
-
-        pruneBetterPortalsVanillaViewFrustumCache(renderGlobal, world);
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) == null) {
-            return;
-        }
-
-        boolean worldChanged = syncRenderGlobalWorld(renderGlobal, world);
-        boolean useVbo = com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean(net.minecraft.client.renderer.OpenGlHelper.class, new String[] {"func_176075_f", "useVbo"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, true);
-        if (accessor.ausm$renderDispatcher() == null) {
-            accessor.ausm$setRenderDispatcher(new ChunkRenderDispatcher());
-        }
-        IRenderChunkFactory renderChunkFactory = accessor.ausm$renderChunkFactory();
-        if (renderChunkFactory == null) {
-            renderChunkFactory = useVbo ? new VboChunkFactory() : new ListChunkFactory();
-            accessor.ausm$setRenderChunkFactory(renderChunkFactory);
-        }
-        if (accessor.ausm$renderContainer() == null) {
-            accessor.ausm$setRenderContainer(useVbo ? new VboRenderList() : new RenderList());
-        }
-
-        int renderDistanceChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc);
-        ViewFrustum previousActive = accessor.ausm$viewFrustum();
-        Set<ViewFrustum> removedViewFrustums = new HashSet<>();
-        if (previousActive != null) {
-            removedViewFrustums.add(previousActive);
-        }
-        for (Map<World, ViewFrustum> rendererViewFrustums : vanillaViewFrustums.values()) {
-            ViewFrustum removed = rendererViewFrustums.remove(world);
-            if (removed != null) {
-                removedViewFrustums.add(removed);
-            }
-        }
-        for (Map<World, Integer> rendererViewFrustumDistances : vanillaViewFrustumRenderDistances.values()) {
-            rendererViewFrustumDistances.remove(world);
-        }
-
-        ViewFrustum freshViewFrustum = new ViewFrustum(
-                world,
-                renderDistanceChunks,
-                renderGlobal,
-                renderChunkFactory
-        );
-        accessor.ausm$setViewFrustum(freshViewFrustum);
-
-        vanillaViewFrustums
-                .computeIfAbsent(renderGlobal, ignored -> new IdentityHashMap<>())
-                .put(world, freshViewFrustum);
-        vanillaViewFrustumRenderDistances
-                .computeIfAbsent(renderGlobal, ignored -> new IdentityHashMap<>())
-                .put(world, renderDistanceChunks);
-        rememberStableMainWorldVanillaRenderDistance(world, renderDistanceChunks);
-        vanillaViewFrustumStateStack.clear();
-        activeVanillaViewFrustumRenderGlobal = renderGlobal;
-        activeVanillaViewFrustumWorld = world;
-        activeVanillaViewFrustumRenderDistanceChunks = renderDistanceChunks;
-
-        int scheduledChunks = scheduleAllFreshViewFrustumChunks(accessor, freshViewFrustum, world);
-        forceUpdateVanillaViewFrustumChunkPositions(freshViewFrustum, com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc), world, stagePrefix);
-        accessor.ausm$setDisplayListEntitiesDirty(true);
-
-        clearQueuedUpdatesForViewFrustums(accessor, removedViewFrustums);
-        for (ViewFrustum removedViewFrustum : removedViewFrustums) {
-            if (removedViewFrustum != null && removedViewFrustum != freshViewFrustum) {
-                vanillaViewFrustumChunkPositionKeys.remove(removedViewFrustum);
-                com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(removedViewFrustum);
-            }
-        }
-
-        logTerrainDiagnostic(stagePrefix + ":rebuild-view-frustum", world,
-                "previous=" + viewFrustumId(previousActive)
-                        + ", current=" + viewFrustumId(freshViewFrustum)
-                        + ", renderDistance=" + renderDistanceChunks
-                        + ", scheduledChunks=" + scheduledChunks
-                        + ", worldChanged=" + worldChanged);
-    }
-
-    private int scheduleAllFreshViewFrustumChunks(RenderGlobalAccessor renderGlobal, ViewFrustum viewFrustum, World world) {
-        RenderChunk[] renderChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.viewFrustumRenderChunks(viewFrustum);
-        if (renderGlobal == null || renderChunks == null) {
-            return 0;
-        }
-
-        Set<RenderChunk> chunksToUpdate = renderGlobal.ausm$chunksToUpdate();
-        if (chunksToUpdate == null) {
-            return 0;
-        }
-
-        chunksToUpdate.clear();
-        int scheduled = 0;
-        for (RenderChunk renderChunk : renderChunks) {
-            if (renderChunk == null) {
-                continue;
-            }
-            assignRenderChunkWorld(renderChunk, world);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((renderChunk), new String[] {"func_178575_a", "setNeedsUpdate"}, new Class<?>[] {boolean.class}, (true));;
-            chunksToUpdate.add(renderChunk);
-            scheduled++;
-        }
-        return scheduled;
-    }
-
-    private void clearQueuedUpdatesForViewFrustums(RenderGlobalAccessor renderGlobal, Set<ViewFrustum> viewFrustums) {
-        if (renderGlobal == null || viewFrustums == null || viewFrustums.isEmpty()) {
-            return;
-        }
-
-        Set<RenderChunk> chunksToUpdate = renderGlobal.ausm$chunksToUpdate();
-        if (chunksToUpdate == null || chunksToUpdate.isEmpty()) {
-            return;
-        }
-
-        Set<RenderChunk> removedChunks = new HashSet<>();
-        for (ViewFrustum viewFrustum : viewFrustums) {
-            RenderChunk[] renderChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.viewFrustumRenderChunks(viewFrustum);
-            if (renderChunks == null) {
-                continue;
-            }
-            for (RenderChunk renderChunk : renderChunks) {
-                if (renderChunk != null) {
-                    removedChunks.add(renderChunk);
-                }
-            }
-        }
-        if (!removedChunks.isEmpty()) {
-            chunksToUpdate.removeAll(removedChunks);
-        }
-    }
-
-    private void forceUpdateVanillaViewFrustumChunkPositions(ViewFrustum viewFrustum, Entity viewEntity, World world, String stagePrefix) {
-        if (viewFrustum == null || viewEntity == null) {
-            return;
-        }
-
-        try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((viewFrustum), new String[] {"func_178163_a", "updateChunkPositions"},
-                new Class<?>[] {double.class, double.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity)), (com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity)));;
-            rememberVanillaViewFrustumChunkPosition(viewFrustum, viewEntity);
-        } catch (NullPointerException e) {
-            if (!BetterPortalsCompat.isInstalled()) {
-                throw e;
-            }
-            logTerrainDiagnostic(stagePrefix + ":deferred-chunk-positions", world, e.getClass().getSimpleName());
-        }
-    }
-
-    private void logSteadyVanillaTerrainDiagnostic(String stage, World world, String detail) {
-        if (steadyVanillaTerrainDiagnosticLogs >= MAX_STEADY_VANILLA_TERRAIN_DIAGNOSTIC_LOGS) {
-            return;
-        }
-        steadyVanillaTerrainDiagnosticLogs++;
-        logTerrainDiagnostic(stage, world, detail);
-    }
-
-    private void logShaderlessNothiriumLoadRendererReload(World world, boolean marked, String reason) {
-        if (shaderlessNothiriumLoadRendererReloadLogs >= MAX_RENDER_GLOBAL_LOAD_RENDERER_LOGS) {
-            return;
-        }
-        shaderlessNothiriumLoadRendererReloadLogs++;
-
-        MainMod.LOGGER.info(
-                "[AUSMNothiriumReload] loadRenderers bridge call={} reason={} world={} marked={} active={} bypass={} nested={} renderPass={} caller={}",
-                shaderlessNothiriumLoadRendererReloadLogs,
-                reason,
-                safeDimensionId(world),
-                marked,
-                isPipelineActive,
-                NothiriumBypass.shouldBypass(),
-                BetterPortalsCompat.isRenderingNestedView(),
-                BetterPortalsCompat.isRenderingRenderPass(),
-                externalRenderCaller()
-        );
-    }
-
-    public void logRenderGlobalLoadRenderers(RenderGlobal renderGlobal) {
-        if (renderGlobalLoadRendererLogs >= MAX_RENDER_GLOBAL_LOAD_RENDERER_LOGS) {
-            return;
-        }
-        renderGlobalLoadRendererLogs++;
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World renderGlobalWorld = renderGlobal instanceof RenderGlobalAccessor accessor ? accessor.ausm$world() : null;
-        MainMod.LOGGER.info(
-                "[AUSMRenderGlobal] loadRenderers call={} frame={} renderGlobalWorld={} clientWorld={} active={} bypass={} nested={} renderPass={} recovery={} pendingAttempts={} pendingDelay={} pendingDim={} pendingReset={} pendingFullReset={} pendingVanillaReload={} bpState={} caller={}",
-                renderGlobalLoadRendererLogs,
-                pipelineFrameId,
-                safeDimensionId(renderGlobalWorld),
-                mc != null ? safeDimensionId(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) : Integer.MIN_VALUE,
-                isPipelineActive,
-                NothiriumBypass.shouldBypass(),
-                BetterPortalsCompat.isRenderingNestedView(),
-                BetterPortalsCompat.isRenderingRenderPass(),
-                BetterPortalsCompat.isMainViewSwapRecoveryActive(),
-                pendingWorldTerrainRefreshAttempts,
-                pendingWorldTerrainRefreshDelay,
-                pendingWorldTerrainRefreshDimension,
-                pendingWorldTerrainRendererReset,
-                pendingWorldTerrainFullRendererReset,
-                pendingWorldTerrainVanillaReload,
-                BetterPortalsCompat.describeTransitionState(),
-                externalRenderCaller()
-        );
-    }
-
-    private void logTerrainDiagnostic(String stage, World world, String detail) {
-        // Diagnostic disabled.
-}
-
-    private void logVanillaTerrainRendererCreation(World world, boolean force, String reason) {
-        if (vanillaTerrainRendererCreationLogs >= MAX_RENDER_GLOBAL_LOAD_RENDERER_LOGS) {
-            return;
-        }
-        vanillaTerrainRendererCreationLogs++;
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        MainMod.LOGGER.info(
-                "[AUSMRenderGlobal] created vanilla ChunkRenderDispatcher call={} reason={} force={} world={} clientWorld={} active={} bypass={} nested={} renderPass={} recovery={} caller={}",
-                vanillaTerrainRendererCreationLogs,
-                reason,
-                force,
-                safeDimensionId(world),
-                mc != null ? safeDimensionId(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) : Integer.MIN_VALUE,
-                isPipelineActive,
-                NothiriumBypass.shouldBypass(),
-                BetterPortalsCompat.isRenderingNestedView(),
-                BetterPortalsCompat.isRenderingRenderPass(),
-                BetterPortalsCompat.isMainViewSwapRecoveryActive(),
-                externalRenderCaller()
-        );
-    }
-
-    private static String viewFrustumId(ViewFrustum viewFrustum) {
-        return viewFrustum != null ? Integer.toHexString(System.identityHashCode(viewFrustum)) : "null";
-    }
-
-    private static String blockName(IBlockState state) {
-        return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != null ? String.valueOf(com.l.ausm.impl.util.MinecraftReflectionCompat.blockRegistryName(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state))) : "null";
-    }
-
-    private String externalRenderCaller() {
-        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
-        for (StackTraceElement frame : stack) {
-            String className = frame.getClassName();
-            if (className.equals(Thread.class.getName())
-                    || className.equals(PipelineContext.class.getName())
-                    || className.equals("com.l.ausm.impl.mixin.pipeline.RenderSkyMixin")
-                    || className.equals("net.minecraft.client.renderer.RenderGlobal")) {
-                continue;
-            }
-            return className + "#" + frame.getMethodName() + ":" + frame.getLineNumber();
-        }
-        return "unknown";
-    }
-
-    private void updateVanillaViewFrustumChunkPositions(ViewFrustum viewFrustum, Entity viewEntity) {
-        if (viewFrustum == null || viewEntity == null) {
-            return;
-        }
-
-        if (!shouldUpdateVanillaViewFrustumChunkPositions(viewFrustum, viewEntity)) {
-            return;
-        }
-
-        if (BetterPortalsCompat.isMainViewSwapHandling()) {
-            return;
-        }
-
-        if (BetterPortalsCompat.isInstalled() && !BetterPortalsCompat.isRenderingRenderPass()) {
-            return;
-        }
-
-        try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((viewFrustum), new String[] {"func_178163_a", "updateChunkPositions"},
-                new Class<?>[] {double.class, double.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity)), (com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity)));;
-            rememberVanillaViewFrustumChunkPosition(viewFrustum, viewEntity);
-        } catch (NullPointerException e) {
-            if (!BetterPortalsCompat.isInstalled()) {
-                throw e;
-            }
-            if (!betterPortalsViewFrustumUpdateWarningLogged) {
-                betterPortalsViewFrustumUpdateWarningLogged = true;
-                MainMod.LOGGER.warn("[BetterPortalsCompat] Deferred vanilla ViewFrustum chunk-position update because Better Portals has no active render pass", e);
-            }
-        }
-    }
-
-    private boolean shouldUpdateVanillaViewFrustumChunkPositions(ViewFrustum viewFrustum, Entity viewEntity) {
-        Long previous = vanillaViewFrustumChunkPositionKeys.get(viewFrustum);
-        if (previous == null) {
-            return true;
-        }
-        return previous.longValue() != vanillaViewFrustumChunkPositionKey(viewEntity);
-    }
-
-    private void rememberVanillaViewFrustumChunkPosition(ViewFrustum viewFrustum, Entity viewEntity) {
-        if (viewFrustum == null || viewEntity == null) {
-            return;
-        }
-        vanillaViewFrustumChunkPositionKeys.put(viewFrustum, vanillaViewFrustumChunkPositionKey(viewEntity));
-    }
-
-    private long vanillaViewFrustumChunkPositionKey(Entity viewEntity) {
-        int chunkX = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity)) >> 4;
-        int chunkZ = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity)) >> 4;
-        return ((long) chunkX << 32) ^ (chunkZ & 0xFFFFFFFFL);
-    }
-
-    private void deleteCachedVanillaTerrainRenderers() {
-        if (vanillaViewFrustums.isEmpty()) {
-            vanillaViewFrustumRenderDistances.clear();
-            vanillaViewFrustumChunkPositionKeys.clear();
-            activeVanillaViewFrustumRenderGlobal = null;
-            activeVanillaViewFrustumWorld = null;
-            activeVanillaViewFrustumRenderDistanceChunks = -1;
-            lastStableMainWorldVanillaRenderDistanceChunks = -1;
-            return;
-        }
-
-        Set<ViewFrustum> uniqueViewFrustums = new HashSet<>();
-        for (Map.Entry<RenderGlobal, Map<World, ViewFrustum>> rendererEntry : vanillaViewFrustums.entrySet()) {
-            Map<World, ViewFrustum> rendererViewFrustums = rendererEntry.getValue();
-            if (rendererEntry.getKey() instanceof RenderGlobalAccessor accessor && rendererViewFrustums != null) {
-                clearQueuedUpdatesForViewFrustums(accessor, new HashSet<>(rendererViewFrustums.values()));
-            }
-            if (rendererViewFrustums == null) {
-                continue;
-            }
-            uniqueViewFrustums.addAll(rendererViewFrustums.values());
-        }
-        for (ViewFrustum viewFrustum : uniqueViewFrustums) {
-            if (viewFrustum != null) {
-                vanillaViewFrustumChunkPositionKeys.remove(viewFrustum);
-                com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(viewFrustum);
-            }
-        }
-        vanillaViewFrustums.clear();
-        vanillaViewFrustumRenderDistances.clear();
-        vanillaViewFrustumChunkPositionKeys.clear();
-        activeVanillaViewFrustumRenderGlobal = null;
-        activeVanillaViewFrustumWorld = null;
-        activeVanillaViewFrustumRenderDistanceChunks = -1;
-        lastStableMainWorldVanillaRenderDistanceChunks = -1;
-    }
-
-    private void clearCachedVanillaTerrainRendererReferences() {
-        vanillaViewFrustums.clear();
-        vanillaViewFrustumRenderDistances.clear();
-        vanillaViewFrustumChunkPositionKeys.clear();
-        clearShaderlessBloomMetadata();
-        vanillaViewFrustumStateStack.clear();
-        activeVanillaViewFrustumRenderGlobal = null;
-        activeVanillaViewFrustumWorld = null;
-        activeVanillaViewFrustumRenderDistanceChunks = -1;
-    }
-
-    private void deleteCachedVanillaTerrainRenderer(World world) {
-        if (world == null || vanillaViewFrustums.isEmpty()) {
-            if (world == null) {
-                vanillaViewFrustumRenderDistances.clear();
-            }
-            if (activeVanillaViewFrustumWorld == world) {
-                activeVanillaViewFrustumRenderGlobal = null;
-                activeVanillaViewFrustumWorld = null;
-                activeVanillaViewFrustumRenderDistanceChunks = -1;
-            }
-            return;
-        }
-
-        for (Map.Entry<RenderGlobal, Map<World, ViewFrustum>> rendererEntry : vanillaViewFrustums.entrySet()) {
-            Map<World, ViewFrustum> rendererViewFrustums = rendererEntry.getValue();
-            if (rendererViewFrustums == null) {
-                continue;
-            }
-            ViewFrustum removed = rendererViewFrustums.remove(world);
-            if (removed != null) {
-                if (rendererEntry.getKey() instanceof RenderGlobalAccessor accessor) {
-                    Set<ViewFrustum> removedViewFrustums = new HashSet<>();
-                    removedViewFrustums.add(removed);
-                    clearQueuedUpdatesForViewFrustums(accessor, removedViewFrustums);
-                }
-                vanillaViewFrustumChunkPositionKeys.remove(removed);
-                com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(removed);
-            }
-        }
-        for (Map<World, Integer> rendererViewFrustumDistances : vanillaViewFrustumRenderDistances.values()) {
-            rendererViewFrustumDistances.remove(world);
-        }
-        if (activeVanillaViewFrustumWorld == world) {
-            activeVanillaViewFrustumRenderGlobal = null;
-            activeVanillaViewFrustumWorld = null;
-            activeVanillaViewFrustumRenderDistanceChunks = -1;
-        }
-    }
-
-    private void pruneBetterPortalsVanillaViewFrustumCache(RenderGlobal currentRenderGlobal, World primaryWorld) {
-        if (!BetterPortalsCompat.isInstalled()
-                || currentRenderGlobal == null
-                || primaryWorld == null
-                || vanillaViewFrustums.isEmpty()) {
-            return;
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World mainWorld = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        if (countCachedVanillaViewFrustums() <= 2) {
-            return;
-        }
-        if (BetterPortalsCompat.isRenderingRenderPass() || BetterPortalsCompat.isRenderingNestedView()) {
-            return;
-        }
-
-        ViewFrustum activeViewFrustum = currentRenderGlobal instanceof RenderGlobalAccessor accessor
-                ? accessor.ausm$viewFrustum()
-                : null;
-        Set<ViewFrustum> removedViewFrustums = new HashSet<>();
-
-        Iterator<Map.Entry<RenderGlobal, Map<World, ViewFrustum>>> rendererIterator =
-                vanillaViewFrustums.entrySet().iterator();
-        while (rendererIterator.hasNext()) {
-            Map.Entry<RenderGlobal, Map<World, ViewFrustum>> rendererEntry = rendererIterator.next();
-            Map<World, ViewFrustum> rendererViewFrustums = rendererEntry.getValue();
-            if (rendererViewFrustums == null || rendererViewFrustums.isEmpty()) {
-                rendererIterator.remove();
-                continue;
-            }
-
-            Iterator<Map.Entry<World, ViewFrustum>> worldIterator = rendererViewFrustums.entrySet().iterator();
-            while (worldIterator.hasNext()) {
-                Map.Entry<World, ViewFrustum> worldEntry = worldIterator.next();
-                World cachedWorld = worldEntry.getKey();
-                if (cachedWorld == primaryWorld
-                        || cachedWorld == mainWorld
-                        || cachedWorld == activeVanillaViewFrustumWorld) {
-                    continue;
-                }
-
-                ViewFrustum removed = worldEntry.getValue();
-                if (removed != null && removed != activeViewFrustum) {
-                    removedViewFrustums.add(removed);
-                }
-                worldIterator.remove();
-            }
-
-            if (rendererViewFrustums.isEmpty()) {
-                rendererIterator.remove();
-            }
-        }
-
-        Iterator<Map.Entry<RenderGlobal, Map<World, Integer>>> distanceRendererIterator =
-                vanillaViewFrustumRenderDistances.entrySet().iterator();
-        while (distanceRendererIterator.hasNext()) {
-            Map.Entry<RenderGlobal, Map<World, Integer>> rendererEntry = distanceRendererIterator.next();
-            Map<World, Integer> rendererViewFrustumDistances = rendererEntry.getValue();
-            if (rendererViewFrustumDistances == null || rendererViewFrustumDistances.isEmpty()) {
-                distanceRendererIterator.remove();
-                continue;
-            }
-
-            rendererViewFrustumDistances.keySet().removeIf(cachedWorld ->
-                    cachedWorld != primaryWorld
-                            && cachedWorld != mainWorld
-                            && cachedWorld != activeVanillaViewFrustumWorld
-            );
-            if (rendererViewFrustumDistances.isEmpty()) {
-                distanceRendererIterator.remove();
-            }
-        }
-
-        if (currentRenderGlobal instanceof RenderGlobalAccessor accessor) {
-            clearQueuedUpdatesForViewFrustums(accessor, removedViewFrustums);
-        }
-        for (ViewFrustum removedViewFrustum : removedViewFrustums) {
-            vanillaViewFrustumChunkPositionKeys.remove(removedViewFrustum);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.deleteViewFrustumGlResources(removedViewFrustum);
-        }
-
-        if (!removedViewFrustums.isEmpty()) {
-            if (activeVanillaViewFrustumWorld != primaryWorld
-                    && activeVanillaViewFrustumRenderGlobal != currentRenderGlobal) {
-                activeVanillaViewFrustumRenderGlobal = null;
-                activeVanillaViewFrustumWorld = null;
-                activeVanillaViewFrustumRenderDistanceChunks = -1;
-            }
-            logTerrainDiagnostic("prune-vanilla-frustums", primaryWorld,
-                    "removed=" + removedViewFrustums.size()
-                            + ", mainWorld=" + safeDimensionId(mainWorld)
-                            + ", primaryWorld=" + safeDimensionId(primaryWorld));
-        }
-    }
-
-    private int countCachedVanillaViewFrustums() {
-        Set<ViewFrustum> uniqueViewFrustums = new HashSet<>();
-        for (Map<World, ViewFrustum> rendererViewFrustums : vanillaViewFrustums.values()) {
-            if (rendererViewFrustums != null) {
-                uniqueViewFrustums.addAll(rendererViewFrustums.values());
-            }
-        }
-        return uniqueViewFrustums.size();
-    }
-
-    private void refreshBetterPortalsMainViewTerrain(Minecraft mc, String reason) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
-            return;
-        }
-        if (!isPipelineActive) {
-            logInactiveBetterPortalsTerrainSkip("refresh-main-view-terrain", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
-            return;
-        }
-
-        try {
-            logTerrainDiagnostic("bp-refresh-main-view:start", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "");
-            boolean worldChanged = syncRenderGlobalWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc));
-            adoptMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), reason);
-            resetCameraFrustumSyncState();
-            logTerrainDiagnostic("bp-refresh-main-view:end", com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "worldChanged=" + worldChanged);
-        } catch (RuntimeException e) {
-            MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to refresh terrain after main view swap", e);
-        }
-    }
-
-    private void adoptCurrentRenderGlobalViewFrustum(World world) {
-        if (!isPipelineActive) {
-            return;
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null
-                || world == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null
-                || !(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor renderGlobal)) {
-            return;
-        }
-
-        ViewFrustum viewFrustum = renderGlobal.ausm$viewFrustum();
-        if (viewFrustum == null) {
-            logTerrainDiagnostic("adopt-view-frustum:missing", world, "");
-            return;
-        }
-
-        vanillaViewFrustums
-                .computeIfAbsent(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), ignored -> new IdentityHashMap<>())
-                .put(world, viewFrustum);
-        vanillaViewFrustumRenderDistances
-                .computeIfAbsent(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), ignored -> new IdentityHashMap<>())
-                .put(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc));
-        rememberStableMainWorldVanillaRenderDistance(world, com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc));
-        activeVanillaViewFrustumRenderGlobal = com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc);
-        activeVanillaViewFrustumWorld = world;
-        activeVanillaViewFrustumRenderDistanceChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc);
-        logTerrainDiagnostic("adopt-view-frustum", world, "viewFrustum=" + viewFrustumId(viewFrustum)
-                + ", renderDistance=" + com.l.ausm.impl.util.MinecraftReflectionCompat.renderDistanceChunks(mc));
-    }
-
-    private void logInactiveBetterPortalsTerrainSkip(String reason, World world) {
-        if (inactiveBetterPortalsTerrainSkipLogs >= MAX_RENDER_GLOBAL_LOAD_RENDERER_LOGS) {
-            return;
-        }
-        inactiveBetterPortalsTerrainSkipLogs++;
-        MainMod.LOGGER.info("[AUSMShaderless] Skipping AUSM Better Portals terrain recovery reason={} world={} nothiriumBypass={} recovery={}",
-                reason,
-                safeDimensionId(world),
-                NothiriumBypass.shouldBypass(),
-                BetterPortalsCompat.isMainViewSwapRecoveryActive());
-    }
-
-    private boolean syncRenderGlobalWorld(RenderGlobal renderGlobal, World world) {
-        if (!(renderGlobal instanceof RenderGlobalAccessor accessor) || !(world instanceof WorldClient worldClient)) {
-            return false;
-        }
-
-        if (accessor.ausm$world() != worldClient) {
-            World previous = accessor.ausm$world();
-            accessor.ausm$setWorld(worldClient);
-            accessor.ausm$setDisplayListEntitiesDirty(true);
-            logTerrainDiagnostic("sync-render-global-world", world, "previous=" + safeDimensionId(previous)
-                    + ", current=" + safeDimensionId(worldClient));
-            return true;
-        }
-        return false;
-    }
-
-    public void renderShadowMap(float partialTicks) {
-        if (!isPipelineActive || shadowFramebuffer == null || lastShadowFrameId == pipelineFrameId) {
-            return;
-        }
-        if (!hasActiveShadowProgram()) {
-            return;
-        }
-        if (ENABLE_SAFE_TERRAIN_FALLBACKS && hardwareSafeVanillaTerrain) {
-            lastShadowFrameId = pipelineFrameId;
-            shadowMapPopulated = false;
-            shadowMapUsable = false;
-            shadowMapSparseForSampling = true;
-            shadowMapCoverageStableFrames = 0;
-            if (shadowMapSuppressedLogs < 16) {
-                shadowMapSuppressedLogs++;
-                MainMod.LOGGER.info(
-                        "[ShadowHealth] Skipping shadow terrain setup while hardware-safe terrain fallback is active. reason={} frame={}",
-                        hardwareSafeVanillaTerrainReason,
-                        pipelineFrameId
-                );
-            }
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null) {
-            return;
-        }
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        World world = renderWorld(mc);
-        if (world == null || viewEntity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
-            return;
-        }
-        if (shouldSkipStationaryShadowMap(world, viewEntity, partialTicks)) {
-            lastShadowFrameId = pipelineFrameId;
-            return;
-        }
-
-        runPreparePassesBeforeShadowIfRequested();
-        BetterPortalsCompat.logRenderStateDiagnostic("pipeline:shadow-begin world=" + safeDimensionId(world));
-        lastShadowFrameId = pipelineFrameId;
-        viewportBuffer.clear();
-        GL11.glGetInteger(GL11.GL_VIEWPORT, viewportBuffer);
-        int previousFramebuffer = GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING);
-        boolean previousCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
-        boolean previousRenderChunksMany = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((mc), false, "field_175612_E", "renderChunksMany");
-
-        GL11.glMatrixMode(GL11.GL_PROJECTION);
-        GL11.glPushMatrix();
-        GL11.glMatrixMode(GL11.GL_MODELVIEW);
-        GL11.glPushMatrix();
-
-        try {
-            setupShadowCamera(viewEntity, partialTicks);
-            ICamera shadowCamera = createShadowCamera(viewEntity, partialTicks);
-            // Iris disables chunk occlusion culling while building the shadow terrain list.
-            // The 1.12 equivalent is renderChunksMany; leaving it enabled lets the normal
-            // camera visibility graph leak into the light-space pass.
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setRenderChunksMany(mc, false);
-            boolean useNothiriumShadowBridge = shouldUseNothiriumShadowBridge();
-            if (!useNothiriumShadowBridge) {
-                ensureVanillaTerrainRenderer();
-                com.l.ausm.impl.util.MinecraftReflectionCompat.setupTerrain(
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc),
-                        viewEntity,
-                        partialTicks,
-                        shadowCamera,
-                        nextShadowFrameCount(),
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc))
-                );
-            }
-
-            clearColoredLightImages();
-            boolean renderShadowTerrain = shaderProperties.renderSettings().shadowTerrain()
-                    && hasShadowTerrainCandidates(mc, viewEntity, partialTicks);
-            if (useNothiriumShadowBridge) {
-                nothiriumShadowRenderer.drainUploads();
-            }
-
-            shadowFramebuffer.bindForRendering();
-            shadowFramebuffer.clear();
-            configureShadowTerrainRenderState();
-            if (shadowPolygonOffset) {
-                GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-                GL11.glPolygonOffset(shadowPolygonOffsetFactor, shadowPolygonOffsetUnits);
-            }
-            TextureBinder.restoreDefaultTextureUnit();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
-
-            renderingShadowMap = true;
-            int solidCount = -1;
-            int cutoutMippedCount = -1;
-            int cutoutCount = -1;
-            int translucentCount = -1;
-            int blockEntityCount = -1;
-            if (renderShadowTerrain) {
-                solidCount = renderShadowTerrainLayer(mc, WorldRenderingPhase.TERRAIN_SOLID, BlockRenderLayer.SOLID, partialTicks, viewEntity);
-                cutoutMippedCount = renderShadowTerrainLayer(mc, WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED, BlockRenderLayer.CUTOUT_MIPPED, partialTicks, viewEntity);
-                cutoutCount = renderShadowTerrainLayer(mc, WorldRenderingPhase.TERRAIN_CUTOUT, BlockRenderLayer.CUTOUT, partialTicks, viewEntity);
-            }
-            if (shaderProperties.renderSettings().shadowEntities()
-                    || shaderProperties.renderSettings().shadowPlayer()) {
-                beginPhase(WorldRenderingPhase.ENTITIES);
-                // RenderLib replaces RenderGlobal.renderEntities with a queued renderer
-                // that is only prepared during the normal world pass. The shadow pass
-                // has its own camera, so render entities directly here.
-                renderShadowEntitiesDirect(mc, viewEntity, shadowCamera, partialTicks);
-                endPass();
-            }
-            if (shaderProperties.renderSettings().shadowBlockEntities()
-                    || shaderProperties.renderSettings().shadowLightBlockEntities()) {
-                beginPhase(WorldRenderingPhase.BLOCK_ENTITIES);
-                blockEntityCount = renderShadowBlockEntitiesDirect(mc, viewEntity, shadowCamera, partialTicks);
-                endPass();
-            }
-            shadowFramebuffer.copyDepthToSnapshot();
-            if (renderShadowTerrain && shaderProperties.renderSettings().shadowTranslucent()) {
-                translucentCount = renderShadowTerrainLayer(mc, WorldRenderingPhase.TERRAIN_TRANSLUCENT, BlockRenderLayer.TRANSLUCENT, partialTicks, viewEntity);
-            }
-            injectMappedTileEntityVoxels(mc);
-            applyShaderImageTextureBarrier();
-            shadowFramebuffer.generateShadowColorMipmaps();
-            updateShadowMapUsability(solidCount, cutoutMippedCount, cutoutCount, translucentCount, blockEntityCount);
-            runComputePrograms(shadowComputePrograms, RenderPass.SHADOW);
-            runFullscreenPasses(ProgramArrayId.SHADOWCOMP);
-            if (shadowMapUsable) {
-                rememberShadowMapRender(world, viewEntity, partialTicks);
-            } else {
-                resetShadowRenderCache();
-            }
-        } finally {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setRenderChunksMany(mc, previousRenderChunksMany);
-            renderingShadowMap = false;
-            activePass = null;
-            activeShaderKey = null;
-            activePhase = WorldRenderingPhase.NONE;
-            overridePhase = null;
-            passStack.clear();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-            GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-            GL11.glColorMask(true, true, true, true);
-            if (previousCull) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
-            } else {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-            }
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-            GL11.glDepthFunc(GL11.GL_LEQUAL);
-
-            GL11.glMatrixMode(GL11.GL_MODELVIEW);
-            GL11.glPopMatrix();
-            GL11.glMatrixMode(GL11.GL_PROJECTION);
-            GL11.glPopMatrix();
-            GL11.glMatrixMode(GL11.GL_MODELVIEW);
-
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), previousFramebuffer);
-            viewportBuffer.position(0);
-            GL11.glViewport(viewportBuffer.get(0), viewportBuffer.get(1), viewportBuffer.get(2), viewportBuffer.get(3));
-            TextureBinder.restoreDefaultTextureUnit();
-            BetterPortalsCompat.logRenderStateDiagnostic("pipeline:shadow-end world=" + safeDimensionId(world));
-        }
-    }
-
-    private boolean shouldSkipStationaryShadowMap(World world, Entity viewEntity, float partialTicks) {
-        if (!shadowMapPopulated || shaderProperties == null
-                || shaderProperties.renderSettings().shadowEntities()
-                || shaderProperties.renderSettings().shadowPlayer()) {
-            return false;
-        }
-        int dimensionId = safeDimensionId(world);
-        Object time = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
-                world,
-                new String[] {"func_82737_E", "getTotalWorldTime"},
-                new Class<?>[0]
-        );
-        long worldTime = time instanceof Number ? ((Number) time).longValue() : 0L;
-        if (dimensionId != lastShadowRenderDimensionId || worldTime != lastShadowRenderWorldTime) {
-            return false;
-        }
-        double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-        double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-        double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        double dx = x - lastShadowRenderX;
-        double dy = y - lastShadowRenderY;
-        double dz = z - lastShadowRenderZ;
-        return dx * dx + dy * dy + dz * dz < 0.0001D;
-    }
-
-    private void rememberShadowMapRender(World world, Entity viewEntity, float partialTicks) {
-        lastShadowRenderDimensionId = safeDimensionId(world);
-        Object time = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
-                world,
-                new String[] {"func_82737_E", "getTotalWorldTime"},
-                new Class<?>[0]
-        );
-        lastShadowRenderWorldTime = time instanceof Number ? ((Number) time).longValue() : 0L;
-        lastShadowRenderX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-        lastShadowRenderY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-        lastShadowRenderZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-    }
-
-    private void resetShadowRenderCache() {
-        lastShadowRenderDimensionId = Integer.MIN_VALUE;
-        lastShadowRenderWorldTime = Long.MIN_VALUE;
-        lastShadowRenderX = Double.NaN;
-        lastShadowRenderY = Double.NaN;
-        lastShadowRenderZ = Double.NaN;
-    }
-
-    private int positiveShadowCount(int count) {
-        return Math.max(0, count);
-    }
-
-    private void injectMappedTileEntityVoxels(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (!ENABLE_CPU_LIGHT_INJECTION || !shaderImages.active() || world == null) {
-            return;
-        }
-
-        int[] dimensions = shaderImages.dimensions("voxel_img", "voxelimg", "voxel_sampler", "voxeltex");
-        if (dimensions == null) {
-            return;
-        }
-
-        int cameraFloorX = (int) Math.floor(cameraPositionUnshifted[0]);
-        int cameraFloorY = (int) Math.floor(cameraPositionUnshifted[1]);
-        int cameraFloorZ = (int) Math.floor(cameraPositionUnshifted[2]);
-        int injected = 0;
-        int[] projectRedVoxelIds = cpuLightProjectRedVoxelIds;
-        Set<Long> writtenVoxels = cpuLightWrittenVoxels;
-        writtenVoxels.clear();
-
-        List<TileEntity> loadedTileEntities = cpuLightTileEntitySnapshot(world);
-        int tileEntityCount = loadedTileEntities.size();
-        int scanCount = Math.min(tileEntityCount, MAX_CPU_LIGHT_TILE_ENTITY_SCANS_PER_FRAME);
-        for (int scan = 0; scan < scanCount; scan++) {
-            if (injected >= MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME) {
-                break;
-            }
-            if (tileEntityCount <= 0) {
-                break;
-            }
-            if (cpuLightTileEntityScanCursor >= tileEntityCount) {
-                cpuLightTileEntityScanCursor = 0;
-            }
-            TileEntity tileEntity = loadedTileEntities.get(cpuLightTileEntityScanCursor++);
-            if (tileEntity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityInvalid(tileEntity)) {
-                continue;
-            }
-
-            BlockPos pos = com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity);
-            if (!isInsideVoxelVolume(pos, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ)) {
-                continue;
-            }
-
-            int projectRedCount = ProjectRedIlluminationCompat.collectVoxelIds(tileEntity, projectRedVoxelIds);
-            auditProjectRedLight(tileEntity, projectRedVoxelIds, projectRedCount, "scan");
-            if (projectRedCount > 0) {
-                for (int i = 0; i < projectRedCount && injected < MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME; i++) {
-                    if (injectVoxelAt(pos, projectRedVoxelIds[i], dimensions, cameraFloorX, cameraFloorY, cameraFloorZ, writtenVoxels)) {
-                        injected++;
-                        auditProjectRedLight(tileEntity, projectRedVoxelIds, projectRedCount, "injected:" + projectRedVoxelIds[i]);
-                    } else {
-                        auditProjectRedLight(tileEntity, projectRedVoxelIds, projectRedCount, "write_failed:" + projectRedVoxelIds[i]);
-                    }
-                }
-                continue;
-            }
-
-            // Generic shader block-id lights are handled by the shaderpack shadow voxelizer.
-            // Keep this CPU path restricted to ProjectRed tile entities to avoid global tint leaks.
-        }
-
-        if (ENABLE_GENERIC_CPU_SHADER_BLOCK_LIGHT_INJECTION) {
-            injected += injectRecordedSyntheticLightVoxels(
-                    world,
-                    dimensions,
-                    cameraFloorX,
-                    cameraFloorY,
-                    cameraFloorZ,
-                    writtenVoxels,
-                    MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME - injected
-            );
-
-            injected += injectVoxelizedLightBlockVoxels(
-                    world,
-                    dimensions,
-                    cameraFloorX,
-                    cameraFloorY,
-                    cameraFloorZ,
-                    writtenVoxels,
-                    MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME - injected
-            );
-        }
-
-        if (injected > 0 && GLContext.getCapabilities().OpenGL42) {
-            GL42.glMemoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
-        }
-    }
-
-    private List<TileEntity> cpuLightTileEntitySnapshot(World world) {
-        if (world == null) {
-            cpuLightTileEntitySnapshotWorld = null;
-            cpuLightTileEntitySnapshot = java.util.Collections.emptyList();
-            cpuLightTileEntitySnapshotFrame = Long.MIN_VALUE;
-            cpuLightTileEntityScanCursor = 0;
-            return cpuLightTileEntitySnapshot;
-        }
-
-        boolean worldChanged = cpuLightTileEntitySnapshotWorld != world;
-        boolean refresh = worldChanged
-                || cpuLightTileEntitySnapshotFrame == Long.MIN_VALUE
-                || pipelineFrameId - cpuLightTileEntitySnapshotFrame >= CPU_LIGHT_TILE_ENTITY_SNAPSHOT_INTERVAL_FRAMES;
-        if (refresh) {
-            cpuLightTileEntitySnapshotWorld = world;
-            cpuLightTileEntitySnapshotFrame = pipelineFrameId;
-            cpuLightTileEntitySnapshot = new ArrayList<>(com.l.ausm.impl.util.MinecraftReflectionCompat.worldLoadedTileEntities(world));
-            if (worldChanged || cpuLightTileEntitySnapshot.isEmpty()) {
-                cpuLightTileEntityScanCursor = 0;
-            } else {
-                cpuLightTileEntityScanCursor = Math.floorMod(cpuLightTileEntityScanCursor, cpuLightTileEntitySnapshot.size());
-            }
-        }
-        return cpuLightTileEntitySnapshot;
-    }
-
-    private int injectVoxelizedLightBlockVoxels(World world, int[] dimensions, int cameraFloorX, int cameraFloorY, int cameraFloorZ,
-                                                Set<Long> writtenVoxels, int remainingBudget) {
-        if (remainingBudget <= 0 || !shaderProperties.renderSettings().voxelizeLightBlocks()) {
-            return 0;
-        }
-        if (world == null || dimensions == null || dimensions.length < 3) {
-            return 0;
-        }
-        if (cpuLightBlockScanWorld != world) {
-            cpuLightBlockScanWorld = world;
-            cpuLightBlockScanCursor = 0;
-        }
-
-        int scanWidth = Math.max(1, Math.min(dimensions[0], MAX_CPU_LIGHT_BLOCK_SCAN_WIDTH));
-        int scanHeight = Math.max(1, Math.min(dimensions[1], MAX_CPU_LIGHT_BLOCK_SCAN_HEIGHT));
-        int scanDepth = Math.max(1, Math.min(dimensions[2], MAX_CPU_LIGHT_BLOCK_SCAN_WIDTH));
-        int scanVolume = scanWidth * scanHeight * scanDepth;
-        int scanBudget = Math.min(MAX_CPU_LIGHT_BLOCK_SCANS_PER_FRAME, scanVolume);
-        int injected = 0;
-
-        for (int scan = 0; scan < scanBudget && injected < remainingBudget; scan++) {
-            if (cpuLightBlockScanCursor >= scanVolume) {
-                cpuLightBlockScanCursor = 0;
-            }
-            int cursor = cpuLightBlockScanCursor++;
-            int localX = cursor % scanWidth;
-            int localY = (cursor / scanWidth) % scanHeight;
-            int localZ = cursor / (scanWidth * scanHeight);
-            BlockPos pos = new BlockPos(
-                    cameraFloorX + localX - scanWidth / 2,
-                    cameraFloorY + localY - scanHeight / 2,
-                    cameraFloorZ + localZ - scanDepth / 2
-            );
-            if (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) < 0 || com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) > 255 || !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos, false)) {
-                continue;
-            }
-
-            IBlockState state;
-            try {
-                state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos);
-            } catch (RuntimeException ignored) {
-                continue;
-            }
-            SyntheticLightInfo lightInfo = syntheticLightInfo(state, world, pos);
-            if (lightInfo.voxelId <= 0 || lightInfo.emission <= 0) {
-                continue;
-            }
-            if (injectVoxelAt(pos, lightInfo.voxelId, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ, writtenVoxels)) {
-                injected++;
-                auditSyntheticLight("voxelize_light_blocks", pos, lightInfo, "injected");
-            }
-        }
-
-        return injected;
-    }
-
-    private int injectRecordedSyntheticLightVoxels(World world, int[] dimensions, int cameraFloorX, int cameraFloorY, int cameraFloorZ,
-                                                   Set<Long> writtenVoxels, int remainingBudget) {
-        if (remainingBudget <= 0 || syntheticLightCandidates.isEmpty()) {
-            return 0;
-        }
-
-        int injected = 0;
-        for (Map.Entry<Long, BlockPos> entry : syntheticLightCandidates.entrySet()) {
-            if (injected >= remainingBudget) {
-                break;
-            }
-            BlockPos pos = entry.getValue();
-            if (pos == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos, false)) {
-                if (isWellOutsideVoxelVolume(pos, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ)) {
-                    syntheticLightCandidates.remove(entry.getKey(), pos);
-                }
-                continue;
-            }
-            if (!isInsideVoxelVolume(pos, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ)) {
-                if (isWellOutsideVoxelVolume(pos, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ)) {
-                    syntheticLightCandidates.remove(entry.getKey(), pos);
-                }
-                continue;
-            }
-
-            TileEntity tileEntity;
-            try {
-                tileEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.tileentity.TileEntity.class, null, new String[] {"func_175625_s", "getTileEntity"},
-                new Class<?>[] {net.minecraft.util.math.BlockPos.class}, (pos));
-            } catch (RuntimeException ignored) {
-                tileEntity = null;
-            }
-            int[] projectRedVoxelIds = new int[8];
-            int projectRedCount = ProjectRedIlluminationCompat.collectVoxelIds(tileEntity, projectRedVoxelIds);
-            if (projectRedCount > 0) {
-                for (int i = 0; i < projectRedCount && injected < remainingBudget; i++) {
-                    if (injectVoxelAt(pos, projectRedVoxelIds[i], dimensions, cameraFloorX, cameraFloorY, cameraFloorZ, writtenVoxels)) {
-                        injected++;
-                        auditProjectRedLight(tileEntity, projectRedVoxelIds, projectRedCount, "candidate_injected:" + projectRedVoxelIds[i]);
-                    } else {
-                        auditProjectRedLight(tileEntity, projectRedVoxelIds, projectRedCount, "candidate_write_failed:" + projectRedVoxelIds[i]);
-                    }
-                }
-                continue;
-            }
-
-            IBlockState state = actualLightState(com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos), world, pos);
-            SyntheticLightInfo lightInfo = syntheticLightInfo(state, world, pos);
-            if (lightInfo.voxelId <= 0 || lightInfo.emission <= 0) {
-                syntheticLightCandidates.remove(entry.getKey(), pos);
-                auditSyntheticLight("cpu_inject", pos, lightInfo, "drop:" + lightInfo.reason);
-                continue;
-            }
-
-            if (injectVoxelAt(pos, lightInfo.voxelId, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ, writtenVoxels)) {
-                injected++;
-                auditSyntheticLight("cpu_inject", pos, lightInfo, "injected");
-            } else {
-                auditSyntheticLight("cpu_inject", pos, lightInfo, "write_failed");
-            }
-        }
-        return injected;
-    }
-
-    private boolean isWellOutsideVoxelVolume(BlockPos pos, int[] dimensions, int cameraFloorX, int cameraFloorY, int cameraFloorZ) {
-        if (pos == null || dimensions == null || dimensions.length < 3) {
-            return false;
-        }
-        return Math.abs(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) - cameraFloorX) > dimensions[0]
-                || Math.abs(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) - cameraFloorY) > dimensions[1]
-                || Math.abs(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) - cameraFloorZ) > dimensions[2];
-    }
-
-    private boolean isInsideVoxelVolume(BlockPos pos, int[] dimensions, int cameraFloorX, int cameraFloorY, int cameraFloorZ) {
-        if (pos == null || dimensions == null || dimensions.length < 3) {
-            return false;
-        }
-        int x = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + 0.5 - cameraFloorX + dimensions[0] * 0.5);
-        int y = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + 0.5 - cameraFloorY + dimensions[1] * 0.5);
-        int z = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + 0.5 - cameraFloorZ + dimensions[2] * 0.5);
-        return x >= 0 && y >= 0 && z >= 0
-                && x < dimensions[0] && y < dimensions[1] && z < dimensions[2];
-    }
-
-    private boolean injectVoxelAt(BlockPos pos, int voxelId, int[] dimensions, int cameraFloorX, int cameraFloorY, int cameraFloorZ,
-                                  Set<Long> writtenVoxels) {
-        if (voxelId <= 0) {
-            return false;
-        }
-
-        int x = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + 0.5 - cameraFloorX + dimensions[0] * 0.5);
-        int y = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + 0.5 - cameraFloorY + dimensions[1] * 0.5);
-        int z = (int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + 0.5 - cameraFloorZ + dimensions[2] * 0.5);
-        if (x < 0 || y < 0 || z < 0 || x >= dimensions[0] || y >= dimensions[1] || z >= dimensions[2]) {
-            return false;
-        }
-        if (writtenVoxels != null) {
-            writtenVoxels.add(packedVoxelKey(x, y, z));
-        }
-        return shaderImages.writeRedInteger3D(x, y, z, voxelId, "voxel_img", "voxelimg", "voxel_sampler", "voxeltex");
-    }
-
-    private static long packedVoxelKey(int x, int y, int z) {
-        return ((long) x << 42) ^ ((long) y << 21) ^ z;
-    }
-
-    private static int localActVoxelId(int materialId) {
-        if (materialId == 12003 || materialId == 12283) {
-            return 3;
-        }
-        if (materialId == 10900 || materialId == 12024) {
-            return 24;
-        }
-        if (materialId >= 10902 && materialId <= 10922 && (materialId & 1) == 0) {
-            return 69 + (materialId - 10900) / 2;
-        }
-        if (materialId >= 12070 && materialId <= 12080) {
-            return materialId - 12000;
-        }
-        if (materialId >= 12270 && materialId <= 12280) {
-            return materialId - 12160;
-        }
-        return 0;
-    }
-
-    private static int compatSyntheticLightVoxelId(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null) {
-            return 0;
-        }
-        if ("tconstruct".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
-                && "seared_furnace_controller".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name))
-                && stateName(state).contains("active=true")) {
-            return 71;
-        }
-        if ("aether_legacy".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
-                && "aether_portal".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name))) {
-            return localActVoxelId(10914); // Aether sky blue.
-        }
-        int astralVoxel = astralCrystalVoxelId(state);
-        if (astralVoxel > 0) {
-            return astralVoxel;
-        }
-        return 0;
-    }
-
-    private static boolean isRandomThingsLuminousColoredLightDisabled(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null || !"randomthings".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))) {
-            return false;
-        }
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
-        return "luminousblock".equalsIgnoreCase(path)
-                || "translucentluminousblock".equalsIgnoreCase(path)
-                || "luminousstainedbrick".equalsIgnoreCase(path);
-    }
-
-    private void clearColoredLightImages() {
-        shaderImages.clearSmallImages();
-        shaderImages.clearNamedImages(
-                "voxel_img", "voxelimg", "voxel_sampler", "voxeltex"
-        );
-    }
-
-    private boolean hasShadowTerrainCandidates(Minecraft mc, Entity viewEntity, float partialTicks) {
-        if (shouldUseNothiriumShadowBridge()) {
-            return true;
-        }
-
-        if (mc == null || viewEntity == null || !(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor renderGlobal)) {
-            return true;
-        }
-        ViewFrustum viewFrustum = renderGlobal.ausm$viewFrustum();
-        RenderChunk[] renderChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.viewFrustumRenderChunks(viewFrustum);
-        if (renderChunks == null) {
-            return true;
-        }
-
-        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        double maxDistance = shadowRenderCullDistance();
-        double maxDistanceSquared = maxDistance * maxDistance;
-
-        for (RenderChunk renderChunk : renderChunks) {
-            if (renderChunk == null) {
-                continue;
-            }
-            BlockPos position = com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkPosition(renderChunk);
-            double dx = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(position) + 8.0D - cameraX;
-            double dy = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(position) + 8.0D - cameraY;
-            double dz = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(position) + 8.0D - cameraZ;
-            if (maxDistanceSquared >= 0.0D && dx * dx + dy * dy + dz * dz > maxDistanceSquared) {
-                continue;
-            }
-            if (!com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, BlockRenderLayer.SOLID)
-                    || !com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, BlockRenderLayer.CUTOUT_MIPPED)
-                    || !com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, BlockRenderLayer.CUTOUT)
-                    || (shaderProperties.renderSettings().shadowTranslucent()
-                    && !com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, BlockRenderLayer.TRANSLUCENT))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static void configureShadowTerrainRenderState() {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glColorMask(true, true, true, true);
-        resetPortalMaskState();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-    }
-
-    private static void resetPortalMaskState() {
-        GL11.glStencilMask(0xFF);
-        GL11.glStencilFunc(GL11.GL_ALWAYS, 0, 0xFF);
-        GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_KEEP);
-        GL11.glDisable(GL11.GL_STENCIL_TEST);
-        GL11.glDisable(GL11.GL_SCISSOR_TEST);
-        for (int i = 0; i < 6; i++) {
-            GL11.glDisable(GL11.GL_CLIP_PLANE0 + i);
-        }
-        GL11.glPolygonOffset(0.0F, 0.0F);
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-    }
-
-    private int renderShadowTerrainLayer(Minecraft mc, WorldRenderingPhase phase, BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
-        beginPhase(phase);
-        configureShadowTerrainRenderState();
-        boolean previousPolygonOffset = GL11.glIsEnabled(GL11.GL_POLYGON_OFFSET_FILL);
-        boolean previousBlend = GL11.glIsEnabled(GL11.GL_BLEND);
-        int previousDepthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
-        if (phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT && previousPolygonOffset) {
-            GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        }
-        if (phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-            GL11.glDepthFunc(GL11.GL_ALWAYS);
-        }
-        try {
-            int count = renderShadowBlockLayer(mc, layer, partialTicks, viewEntity);
-            return count;
-        } finally {
-            GL11.glDepthFunc(previousDepthFunc);
-            if (previousBlend) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-            } else {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-            }
-            if (previousPolygonOffset) {
-                GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-            } else {
-                GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-            }
-            endPass();
-        }
-    }
-
-    private int renderShadowBlockLayer(Minecraft mc, BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
-        if (mc == null || viewEntity == null) {
-            return 0;
-        }
-        if (shouldUseNothiriumShadowBridge()) {
-            double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-            double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-            double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-            return nothiriumShadowRenderer.renderLayer(layer, cameraX, cameraY, cameraZ, shadowRenderCullDistance());
-        }
-
-        RenderGlobal renderGlobal = com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc);
-        if (renderGlobal == null) {
-            return 0;
-        }
-        int count = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, 2, viewEntity);
-        if (count != 0) {
-            return count;
-        }
-        return renderShadowBlockLayerFromViewFrustum(mc, layer, partialTicks, viewEntity);
-    }
-
-    private void updateShadowMapUsability(int solidCount, int cutoutMippedCount, int cutoutCount, int translucentCount, int blockEntityCount) {
-        if (shadowFramebuffer == null) {
-            shadowMapPopulated = false;
-            shadowMapUsable = false;
-            shadowMapSparseForSampling = false;
-            shadowMapCoverageStableFrames = 0;
-            return;
-        }
-        ShadowFramebuffer.DepthStats stats = shadowFramebuffer.readDepthStats(4);
-        boolean terrainPopulated = solidCount > 0
-                || cutoutMippedCount > 0
-                || cutoutCount > 0
-                || translucentCount > 0;
-        boolean drawPopulated = terrainPopulated || blockEntityCount > 0;
-        boolean populated = terrainPopulated
-                || (!shouldUseNothiriumShadowBridge() && stats.nonClear() > 0);
-        shadowMapPopulated = populated || drawPopulated;
-        int terrainDrawCount = positiveShadowCount(solidCount)
-                + positiveShadowCount(cutoutMippedCount)
-                + positiveShadowCount(cutoutCount)
-                + positiveShadowCount(translucentCount);
-        World renderWorld = renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
-        int dimensionId = safeDimensionId(renderWorld);
-        float verticalDelta = cameraVerticalDelta();
-        boolean upwardMotion = verticalDelta > SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION;
-        boolean useNothiriumShadowBridge = shouldUseNothiriumShadowBridge();
-        boolean nothiriumTerrainCoverageReady = !useNothiriumShadowBridge
-                || (terrainDrawCount >= SPARSE_SHADOW_MIN_TERRAIN_DRAWS
-                && stats.nonClear() >= SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES);
-        if (nothiriumTerrainCoverageReady) {
-            shadowMapCoverageStableFrames = Math.min(SPARSE_SHADOW_STABLE_FRAMES, shadowMapCoverageStableFrames + 1);
-        } else {
-            shadowMapCoverageStableFrames = 0;
-        }
-        boolean nothiriumTerrainStable = !useNothiriumShadowBridge
-                || shadowMapCoverageStableFrames >= SPARSE_SHADOW_STABLE_FRAMES;
-        boolean sparseNothiriumShadow = !nothiriumTerrainCoverageReady || !nothiriumTerrainStable;
-        boolean unstableSparseShadow = sparseNothiriumShadow && upwardMotion;
-        shadowMapSparseForSampling = sparseNothiriumShadow;
-        shadowMapUsable = stats.nonClear() > 0
-                && !sparseNothiriumShadow
-                && !unstableSparseShadow;
-        if (useNothiriumShadowBridge && !shadowMapUsable && drawPopulated) {
-            nothiriumShadowInvalidFrames++;
-            if (nothiriumShadowInvalidFrames >= NOTHIRIUM_SHADOW_SUPPRESS_AFTER_INVALID_FRAMES) {
-                nothiriumShadowInvalidFrames = 0;
-                nothiriumShadowSuppressedFrames = Math.max(nothiriumShadowSuppressedFrames, NOTHIRIUM_SHADOW_SUPPRESS_FRAMES);
-                if (nothiriumShadowSuppressionLogs < 0) {
-                    nothiriumShadowSuppressionLogs++;
-                    MainMod.LOGGER.info(
-                            "[ShadowHealth] Suppressing Nothirium shadow terrain after repeated invalid output. nonClear={}/{} terrainDraws={} blockEntities={} suppressFrames={} dim={}",
-                            stats.nonClear(),
-                            stats.total(),
-                            terrainDrawCount,
-                            blockEntityCount,
-                            nothiriumShadowSuppressedFrames,
-                            dimensionId
-                    );
-                }
-            }
-        } else if (shadowMapUsable) {
-            nothiriumShadowInvalidFrames = 0;
-            nothiriumShadowSuppressedFrames = 0;
-        }
-
-        if (!shadowHealthLogged && shadowHealthLogAttempts < 0) {
-            shadowHealthLogAttempts++;
-            shadowHealthLogged = populated && shadowMapUsable;
-            MainMod.LOGGER.info(
-                    "[ShadowHealth] depth center={} min={} max={} nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} terrainDraws={} minTerrainDraws={} minNonClear={} stableFrames={}/{} blockEntities={} dim={} sparseNothirium={} verticalDelta={} usable={}",
-                    stats.center(),
-                    stats.min(),
-                    stats.max(),
-                    stats.nonClear(),
-                    stats.total(),
-                    solidCount,
-                    cutoutMippedCount,
-                    cutoutCount,
-                    translucentCount,
-                    terrainDrawCount,
-                    SPARSE_SHADOW_MIN_TERRAIN_DRAWS,
-                    SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES,
-                    shadowMapCoverageStableFrames,
-                    SPARSE_SHADOW_STABLE_FRAMES,
-                    blockEntityCount,
-                    dimensionId,
-                    sparseNothiriumShadow,
-                    verticalDelta,
-                    shadowMapUsable
-            );
-        }
-        if (stats.nonClear() > 0
-                && (sparseNothiriumShadow || unstableSparseShadow)
-                && shadowMapSuppressedLogs < 0) {
-            shadowMapSuppressedLogs++;
-            MainMod.LOGGER.info(
-                    "[ShadowHealth] Sparse Nothirium shadow map observed; keeping real shadow textures bound. reason={} dim={} nonClear={}/{} minNonClear={} terrainDraws={} minTerrainDraws={} stableFrames={}/{} verticalDelta={} upwardThreshold={} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
-                    nothiriumTerrainCoverageReady ? "warming-up" : (unstableSparseShadow ? "sparse-terrain-upward-camera-motion" : "sparse-terrain"),
-                    dimensionId,
-                    stats.nonClear(),
-                    stats.total(),
-                    SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES,
-                    terrainDrawCount,
-                    SPARSE_SHADOW_MIN_TERRAIN_DRAWS,
-                    shadowMapCoverageStableFrames,
-                    SPARSE_SHADOW_STABLE_FRAMES,
-                    verticalDelta,
-                    SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION,
-                    solidCount,
-                    cutoutMippedCount,
-                    cutoutCount,
-                    translucentCount,
-                    blockEntityCount
-            );
-        }
-        if (drawPopulated && !shadowMapUsable && shadowMapInvalidLogs < 0) {
-            shadowMapInvalidLogs++;
-            MainMod.LOGGER.info(
-                    "[ShadowHealth] Shadow map draw produced clear/sparse depth; keeping real shadow textures bound. nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
-                    stats.nonClear(),
-                    stats.total(),
-                    solidCount,
-                    cutoutMippedCount,
-                    cutoutCount,
-                    translucentCount,
-                    blockEntityCount
-            );
-        }
-    }
-
-    private int renderShadowBlockLayerFromViewFrustum(Minecraft mc, BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
-        if (mc == null || viewEntity == null || !(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor renderGlobal)) {
-            return 0;
-        }
-        ViewFrustum viewFrustum = renderGlobal.ausm$viewFrustum();
-        ChunkRenderContainer renderContainer = renderGlobal.ausm$renderContainer();
-        RenderChunk[] renderChunks = com.l.ausm.impl.util.MinecraftReflectionCompat.viewFrustumRenderChunks(viewFrustum);
-        if (renderChunks == null || renderContainer == null) {
-            return 0;
-        }
-
-        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        double maxDistance = shadowRenderCullDistance();
-        double maxDistanceSquared = maxDistance * maxDistance;
-
-        renderContainer.initialize(cameraX, cameraY, cameraZ);
-        int fallbackCount = 0;
-        for (RenderChunk renderChunk : renderChunks) {
-            if (renderChunk == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, layer)) {
-                continue;
-            }
-            BlockPos position = com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkPosition(renderChunk);
-            double dx = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(position) + 8.0D - cameraX;
-            double dy = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(position) + 8.0D - cameraY;
-            double dz = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(position) + 8.0D - cameraZ;
-            if (maxDistanceSquared >= 0.0D && dx * dx + dy * dy + dz * dz > maxDistanceSquared) {
-                continue;
-            }
-            renderContainer.addRenderChunk(renderChunk, layer);
-            fallbackCount++;
-        }
-
-        if (fallbackCount > 0) {
-            renderContainer.renderChunkLayer(layer);
-        }
-        return fallbackCount;
-    }
-
-    private double shadowRenderCullDistance() {
-        if (!shouldCullShadowTerrain()) {
-            return -1.0D;
-        }
-        if (shaderProperties.renderSettings().shadowCullingReversed()) {
-            return Math.max(32.0D, Math.max(shadowMapDistance, voxelDistance));
-        }
-        if (shadowDistanceRenderMul < 0.0f) {
-            return -1.0D;
-        }
-        return Math.max(32.0D, shadowMapDistance * shadowDistanceRenderMul + 32.0D);
-    }
-
-    private int nextShadowFrameCount() {
-        if (shadowFrameCount == Integer.MAX_VALUE) {
-            shadowFrameCount = 1_000_000;
-        }
-        return shadowFrameCount++;
-    }
-
-    private void setupShadowCamera(Entity viewEntity, float partialTicks) {
-        double x = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-        double y = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-        double z = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-
-        GL11.glMatrixMode(GL11.GL_PROJECTION);
-        GL11.glLoadIdentity();
-        float shadowDepthRange = Math.max(256.0F, shadowMapDistance * 2.0F);
-        float shadowDepthCenter = shadowDepthRange * 0.5F;
-        GL11.glOrtho(
-                -shadowMapDistance,
-                shadowMapDistance,
-                -shadowMapDistance,
-                shadowMapDistance,
-                0.05F,
-                shadowDepthRange
-        );
-
-        GL11.glMatrixMode(GL11.GL_MODELVIEW);
-        GL11.glLoadIdentity();
-        GL11.glTranslatef(0.0F, 0.0F, -shadowDepthCenter);
-
-        World world = renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
-        if (world != null && useEndFlashShadowLight(world)) {
-            GL11.glRotatef(90.0F - endFlashPitchDegrees, 1.0F, 0.0F, 0.0F);
-            GL11.glRotatef(endFlashYawDegrees, 0.0F, 1.0F, 0.0F);
-        } else {
-            GL11.glRotatef(90.0F, 1.0F, 0.0F, 0.0F);
-            float celestialAngle = world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks) : 0.0F;
-            float sunAngle = celestialAngle < 0.75F ? celestialAngle + 0.25F : celestialAngle - 0.75F;
-            float angle = celestialAngle * -360.0F;
-            if (sunAngle <= 0.5F) {
-                GL11.glRotatef(angle, 0.0F, 0.0F, 1.0F);
-            } else {
-                GL11.glRotatef(angle + 180.0F, 0.0F, 0.0F, 1.0F);
-            }
-            GL11.glRotatef(sunPathRotation, 1.0F, 0.0F, 0.0F);
-        }
-
-        double interval = Math.max(0.001F, shadowIntervalSize);
-        double snapX = centeredRemainder(x, interval);
-        double snapY = centeredRemainder(y, interval);
-        double snapZ = centeredRemainder(z, interval);
-        GL11.glTranslatef((float) snapX, (float) snapY, (float) snapZ);
-        MatrixState.captureShadowMatrices();
-    }
-
-    private static float shadowAngle(float partialTicks) {
-        World world = renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
-        float celestialAngle = world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks) : 0.0F;
-        float angle = celestialAngle + 0.25F;
-        if (angle >= 1.0F) {
-            angle -= 1.0F;
-        }
-        return angle;
-    }
-
-    private ICamera createShadowCamera(Entity viewEntity, float partialTicks) {
-        ICamera celeritasCamera = createCeleritasShadowCamera(viewEntity, partialTicks);
-        if (celeritasCamera != null) {
-            return celeritasCamera;
-        }
-        return createVanillaShadowCamera();
-    }
-
-    private ICamera createVanillaShadowCamera() {
-        return ALWAYS_VISIBLE_CAMERA;
-    }
-
-    private ICamera createCeleritasShadowCamera(Entity viewEntity, float partialTicks) {
-        try {
-            if (!resolveCeleritasShadowCameraReflection()) {
-                return null;
-            }
-
-            double[] position = {
-                    interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks),
-                    interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks),
-                    interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks)
-            };
-            InvocationHandler handler = (proxy, method, args) -> {
-                String name = method.getName();
-                if ("sodium$createViewport".equals(name)) {
-                    Object cameraPosition = celeritasVectorConstructor.newInstance(position[0], position[1], position[2]);
-                    return celeritasViewportConstructor.newInstance(celeritasAlwaysVisibleFrustum, cameraPosition);
-                }
-                if ("isBoundingBoxInFrustum".equals(name) || "func_78546_a".equals(name)) {
-                    return true;
-                }
-                if ("setPosition".equals(name) || "func_78547_a".equals(name)) {
-                    if (args != null && args.length == 3) {
-                        position[0] = ((Number) args[0]).doubleValue();
-                        position[1] = ((Number) args[1]).doubleValue();
-                        position[2] = ((Number) args[2]).doubleValue();
-                    }
-                    return null;
-                }
-                if ("toString".equals(name)) {
-                    return "AUSM Celeritas shadow camera";
-                }
-                if ("hashCode".equals(name)) {
-                    return System.identityHashCode(proxy);
-                }
-                if ("equals".equals(name)) {
-                    return args != null && args.length == 1 && proxy == args[0];
-                }
-                return null;
-            };
-
-            return (ICamera) Proxy.newProxyInstance(
-                    PipelineContext.class.getClassLoader(),
-                    new Class<?>[]{ICamera.class, celeritasViewportProviderClass},
-                    handler
-            );
-        } catch (ReflectiveOperationException | LinkageError | IllegalArgumentException e) {
-            if (!celeritasShadowCameraWarningLogged) {
-                celeritasShadowCameraWarningLogged = true;
-                MainMod.LOGGER.warn("[Pipeline] Failed to create Celeritas-compatible shadow camera; falling back to vanilla camera", e);
-            }
-            return null;
-        }
-    }
-
-    private boolean resolveCeleritasShadowCameraReflection() throws ReflectiveOperationException {
-        if (celeritasShadowCameraResolved) {
-            return celeritasViewportProviderClass != null;
-        }
-        celeritasShadowCameraResolved = true;
-
-        ClassLoader loader = PipelineContext.class.getClassLoader();
-        try {
-            celeritasViewportProviderClass = Class.forName(
-                    "org.embeddedt.embeddium.impl.render.viewport.ViewportProvider", false, loader);
-            Class<?> viewportClass = Class.forName(
-                    "org.embeddedt.embeddium.impl.render.viewport.Viewport", false, loader);
-            Class<?> frustumClass = Class.forName(
-                    "org.embeddedt.embeddium.impl.render.viewport.frustum.Frustum", false, loader);
-            Class<?> vector3dClass = Class.forName(
-                    "org.embeddedt.embeddium.impl.shadow.joml.Vector3d", false, loader);
-            celeritasViewportConstructor = viewportClass.getConstructor(frustumClass, vector3dClass);
-            celeritasVectorConstructor = vector3dClass.getConstructor(double.class, double.class, double.class);
-            celeritasAlwaysVisibleFrustum = Proxy.newProxyInstance(
-                    loader,
-                    new Class<?>[]{frustumClass},
-                    (proxy, method, args) -> boolean.class.equals(method.getReturnType()) ? Boolean.TRUE : null
-            );
-            return true;
-        } catch (ClassNotFoundException e) {
-            celeritasViewportProviderClass = null;
-            celeritasViewportConstructor = null;
-            celeritasVectorConstructor = null;
-            celeritasAlwaysVisibleFrustum = null;
-            return false;
-        }
-    }
-
-    private void renderShadowEntitiesDirect(Minecraft mc, Entity viewEntity, ICamera shadowCamera, float partialTicks) {
-        if (!shaderProperties.renderSettings().shadowEntities() && !shaderProperties.renderSettings().shadowPlayer()) {
-            return;
-        }
-
-        World world = renderWorld(mc);
-        if (mc == null || world == null || viewEntity == null || shadowCamera == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) == null) {
-            return;
-        }
-        RenderManager renderManager = com.l.ausm.impl.util.MinecraftReflectionCompat.renderManager(mc);
-        if (renderManager == null) {
-            return;
-        }
-        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerCacheActiveRenderInfo(renderManager, world, com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc), viewEntity, com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.entity.Entity.class, null, "field_147125_j", "pointedEntity"), com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc), partialTicks);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerSetRenderPosition(renderManager, cameraX, cameraY, cameraZ);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.enableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
-        com.l.ausm.impl.util.MinecraftReflectionCompat.enableStandardItemLighting();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-
-        List<Entity> loadedEntities = com.l.ausm.impl.util.MinecraftReflectionCompat.loadedEntityList(world);
-        if (loadedEntities == null) {
-            return;
-        }
-        for (Entity entity : loadedEntities) {
-            if (!shouldRenderEntityInShadowMap(mc, world, renderManager, entity, viewEntity, shadowCamera, cameraX, cameraY, cameraZ)) {
-                continue;
-            }
-
-            com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerRenderEntityStatic(renderManager, entity, partialTicks, false);
-            if (com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerIsRenderMultipass(renderManager, entity)) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerRenderMultipass(renderManager, entity, partialTicks);
-            }
-        }
-    }
-
-    private int renderShadowBlockEntitiesDirect(Minecraft mc, Entity viewEntity, ICamera shadowCamera, float partialTicks) {
-        if (!shaderProperties.renderSettings().shadowBlockEntities()
-                && !shaderProperties.renderSettings().shadowLightBlockEntities()) {
-            return 0;
-        }
-
-        World world = renderWorld(mc);
-        if (mc == null || world == null || viewEntity == null || shadowCamera == null) {
-            return 0;
-        }
-
-        TileEntityRendererDispatcher dispatcher = com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityRendererDispatcher();
-        if (dispatcher == null) {
-            return 0;
-        }
-
-        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        double maxDistance = shadowRenderCullDistance();
-        double maxDistanceSquared = maxDistance * maxDistance;
-        List<TileEntity> tileEntities = cpuLightTileEntitySnapshot(world);
-        refreshShadowBlockEntityBoundsCache(world, tileEntities);
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityRendererPrepare(
-                dispatcher,
-                world,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc),
-                viewEntity,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.util.math.RayTraceResult.class, null, "field_71476_x", "objectMouseOver"),
-                partialTicks
-        );
-        com.l.ausm.impl.util.MinecraftReflectionCompat.enableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
-        com.l.ausm.impl.util.MinecraftReflectionCompat.enableStandardItemLighting();
-        configureShadowTerrainRenderState();
-
-        int rendered = 0;
-        for (TileEntity tileEntity : tileEntities) {
-            BlockPos pos = com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity);
-            if (!shouldRenderBlockEntityInShadowMap(
-                    world, tileEntity, pos, shadowCamera, cameraX, cameraY, cameraZ, maxDistanceSquared)) {
-                continue;
-            }
-
-            com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityRendererRender(
-                    dispatcher,
-                    tileEntity,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) - cameraX,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) - cameraY,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) - cameraZ,
-                    partialTicks,
-                    -1,
-                    1.0F
-            );
-            rendered++;
-        }
-        return rendered;
-    }
-
-    private boolean shouldRenderBlockEntityInShadowMap(World world, TileEntity tileEntity, BlockPos pos, ICamera shadowCamera,
-                                                       double cameraX, double cameraY, double cameraZ,
-                                                       double maxDistanceSquared) {
-        if (world == null || tileEntity == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityInvalid(tileEntity)) {
-            return false;
-        }
-
-        if (pos == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, pos, false)) {
-            return false;
-        }
-        if (!shaderProperties.renderSettings().shadowBlockEntities()
-                && !isLightEmittingBlockEntity(world, tileEntity, pos)) {
-            return false;
-        }
-
-        double dx = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + 0.5D - cameraX;
-        double dy = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + 0.5D - cameraY;
-        double dz = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + 0.5D - cameraZ;
-        if (maxDistanceSquared >= 0.0D && dx * dx + dy * dy + dz * dz > maxDistanceSquared) {
-            return false;
-        }
-
-        AxisAlignedBB box = cachedShadowBlockEntityFrustumBox(tileEntity, pos);
-        return box == null || com.l.ausm.impl.util.MinecraftReflectionCompat.cameraIsBoundingBoxInFrustum(shadowCamera, box);
-    }
-
-    private void refreshShadowBlockEntityBoundsCache(World world, List<TileEntity> tileEntities) {
-        if (shadowBlockEntityBoundsCacheWorld != world) {
-            shadowBlockEntityBoundsCacheWorld = world;
-            shadowBlockEntityBoundsCache.clear();
-            return;
-        }
-        int expectedSize = tileEntities != null ? tileEntities.size() : 0;
-        if (shadowBlockEntityBoundsCache.size() > expectedSize * 2 + 256) {
-            shadowBlockEntityBoundsCache.clear();
-        }
-    }
-
-    private AxisAlignedBB cachedShadowBlockEntityFrustumBox(TileEntity tileEntity, BlockPos pos) {
-        if (tileEntity == null || pos == null) {
-            return null;
-        }
-        int x = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos);
-        int y = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos);
-        int z = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos);
-        ShadowBlockEntityBounds cached = shadowBlockEntityBoundsCache.get(tileEntity);
-        if (cached != null && cached.x() == x && cached.y() == y && cached.z() == z) {
-            return cached.bounds();
-        }
-
-        AxisAlignedBB bounds = new AxisAlignedBB(x - 1.0D, y - 1.0D, z - 1.0D, x + 2.0D, y + 2.0D, z + 2.0D);
-        shadowBlockEntityBoundsCache.put(tileEntity, new ShadowBlockEntityBounds(x, y, z, bounds));
-        return bounds;
-    }
-
-    private record ShadowBlockEntityBounds(int x, int y, int z, AxisAlignedBB bounds) {
-    }
-
-    private static boolean isLightEmittingBlockEntity(World world, TileEntity tileEntity, BlockPos pos) {
-        try {
-            IBlockState state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos);
-            return state != null && com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state, world, pos) > 0;
-        } catch (RuntimeException ignored) {
-            return false;
-        }
-    }
-
-    private boolean shouldRenderEntityInShadowMap(Minecraft mc, World world, RenderManager renderManager, Entity entity, Entity viewEntity,
-                                                  ICamera shadowCamera, double cameraX, double cameraY, double cameraZ) {
-        if (mc == null || world == null || renderManager == null || entity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((entity), false, "field_70128_L", "isDead") || !com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, 0)) {
-            return false;
-        }
-        if (BetterPortalsCompat.isPortalEntity(entity)) {
-            return false;
-        }
-        if (entity instanceof AbstractClientPlayer player && com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(player)) {
-            return false;
-        }
-        if (entity == viewEntity
-                && !shaderProperties.renderSettings().shadowEntities()
-                && !shaderProperties.renderSettings().shadowPlayer()) {
-            return false;
-        }
-        if (entity != viewEntity && !shaderProperties.renderSettings().shadowEntities()) {
-            return false;
-        }
-        if (!com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerShouldRender(renderManager, entity, shadowCamera, cameraX, cameraY, cameraZ)
-                && (com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.entityIsRidingOrBeingRiddenBy(entity, com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)))) {
-            return false;
-        }
-        double entityY = com.l.ausm.impl.util.MinecraftReflectionCompat.posY(entity);
-        if (entityY >= 0.0D && entityY < 256.0D && !com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, new BlockPos(
-                com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity),
-                entityY,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity)))) {
-            return false;
-        }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.entityIsInRangeToRender3d(entity, cameraX, cameraY, cameraZ);
-    }
-
-    private static double interpolate(double previous, double current, float partialTicks) {
-        return previous + (current - previous) * partialTicks;
-    }
-
-    private static int eyeFluidState(Minecraft mc) {
-        if (mc == null) {
-            return 0;
-        }
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        World world = renderWorld(mc);
-        if (world == null || viewEntity == null) {
-            return 0;
-        }
-
-        IBlockState cameraState = com.l.ausm.impl.util.MinecraftReflectionCompat.blockStateAtEntityViewpoint(world, viewEntity, com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsWater(cameraState)) {
-            return 1;
-        }
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(cameraState) == com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.block.material.Material.class, net.minecraft.block.material.Material.class, null, "field_151587_i", "LAVA") && !com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc))) {
-            return 2;
-        }
-        return 0;
-    }
-
-    private static double centeredRemainder(double value, double interval) {
-        if (!Double.isFinite(value) || !Double.isFinite(interval) || interval <= 0.0D) {
-            return 0.0D;
-        }
-        double remainder = value % interval;
-        if (remainder > interval * 0.5D) {
-            remainder -= interval;
-        }
-        if (remainder < -interval * 0.5D) {
-            remainder += interval;
-        }
-        return remainder;
-    }
-
-    public void bindWorldFramebuffer() {
-        if (!isPipelineActive || !pingPongManager.isInitialized()) {
-            return;
-        }
-
-        pingPongManager.bindForGbuffers(fallbackColorAttachment());
-        restoreVanillaWorldTextureBindings();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        GL11.glEnable(GL11.GL_DEPTH_TEST);
-        GL11.glDepthMask(true);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glColorMask(true, true, true, true);
-        resetPortalMaskState();
-    }
-
-    private int currentPipelineWorldFramebufferId() {
-        DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
-        return framebuffer != null ? framebuffer.getFramebufferId() : 0;
-    }
-
-    public boolean shouldUseDistantHorizonsFramebufferOverride() {
-        if (renderingDistantHorizonsPresentation && distantHorizonsPresentationTarget != null) {
-            return true;
-        }
-        return ENABLE_DISTANT_HORIZONS_DIRECT_SHADER_RENDER
-                && isPipelineActive
-                && worldFrameActive
-                && pingPongManager.isInitialized()
-                && !renderingShadowMap
-                && !renderingGuiScreen()
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) != null;
-    }
-
-    private boolean shouldCompositeDistantHorizonsFramebuffer() {
-        return isPipelineActive
-                && worldFrameActive
-                && pingPongManager.isInitialized()
-                && !renderingShadowMap
-                && !renderingGuiScreen()
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) != null;
-    }
-
-    public boolean shouldSuppressDistantHorizonsMinecraftApply() {
-        return shouldUseDistantHorizonsFramebufferOverride() || shouldProtectDistantHorizonsNativeApply();
-    }
-
-    private boolean shouldProtectDistantHorizonsNativeApply() {
-        return MainMod.getShaderPackManager() != null
-                && MainMod.getShaderPackManager().shouldProtectDistantHorizonsNativeApply()
-                && isPipelineActive
-                && worldFrameActive
-                && pingPongManager.isInitialized()
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) != null;
-    }
-
-    public void logDistantHorizonsApiCallback(String method, String detail) {
-        logDistantHorizonsDiagnostic("api-" + method, detail + ", " + distantHorizonsProbeState(null));
-    }
-
-    public void logDistantHorizonsHook(String stage, Object renderParam) {
-        updateDistantHorizonsRenderPass(renderParam);
-        logDistantHorizonsDiagnostic(stage, distantHorizonsProbeState(renderParam));
-    }
-
-    public void renderDistantHorizonsLods(float partialTicks) {
-    }
-
-    public void resetDistantHorizonsDiagnostics(String reason) {
-        distantHorizonsDiagnosticLogs = 0;
-        logDistantHorizonsDiagnostic("probe-reset", reason + ", " + distantHorizonsProbeState(null));
-    }
-
-    public boolean applyDistantHorizonsToPipeline(Object renderParam) {
-        if (shouldUseDistantHorizonsFramebufferOverride() || !shouldCompositeDistantHorizonsFramebuffer()) {
-            logDistantHorizonsDiagnostic("native-apply-bypass", distantHorizonsProbeState(renderParam));
-            return false;
-        }
-
-        updateDistantHorizonsRenderPass(renderParam);
-        int colorTexture = activeDistantHorizonsTextureId("getActiveColorTextureId");
-        int depthTexture = activeDistantHorizonsTextureId("getActiveDepthTextureId");
-        if (colorTexture <= 0 || depthTexture <= 0) {
-            logDistantHorizonsDiagnostic("native-apply-skip", "color=" + colorTexture + ", depth=" + depthTexture);
-            return false;
-        }
-
-        distantHorizonsFramebufferId = 0;
-        distantHorizonsColorTextureId = colorTexture;
-        distantHorizonsDepthTextureId = depthTexture;
-        distantHorizonsTexturesOwned = false;
-        distantHorizonsFramebufferWidth = Math.max(1, pingPongManager.width());
-        distantHorizonsFramebufferHeight = Math.max(1, pingPongManager.height());
-        distantHorizonsFramebufferPendingComposite = true;
-        return true;
-    }
-
-    private void updateDistantHorizonsRenderPass(Object renderParam) {
-        if (renderParam == null) {
-            return;
-        }
-        try {
-            Object renderPass = renderParam.getClass().getField("renderPass").get(renderParam);
-            currentDistantHorizonsPass = renderPass != null && "TRANSPARENT".equals(renderPass.toString())
-                    ? RenderPass.DH_WATER
-                    : RenderPass.DH_TERRAIN;
-        } catch (ReflectiveOperationException | RuntimeException ignored) {
-        }
-    }
-
-    private int activeDistantHorizonsTextureId(String getterName) {
-        try {
-            Class<?> metaRendererClass = Class.forName("com.seibel.distanthorizons.common.render.openGl.GlDhMetaRenderer");
-            Object instance = metaRendererClass.getField("INSTANCE").get(null);
-            Object value = metaRendererClass.getMethod(getterName).invoke(instance);
-            return value instanceof Number number ? number.intValue() : 0;
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            return 0;
-        }
-    }
-
-    public int distantHorizonsFramebufferId() {
-        if (renderingDistantHorizonsPresentation && distantHorizonsPresentationTarget != null) {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(distantHorizonsPresentationTarget);
-        }
-        return shouldUseDistantHorizonsFramebufferOverride() ? currentPipelineWorldFramebufferId() : 0;
-    }
-
-    public int distantHorizonsFramebufferStatus() {
-        if (!shouldUseDistantHorizonsFramebufferOverride()) {
-            return GL30.GL_FRAMEBUFFER_COMPLETE;
-        }
-
-        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        try {
-            bindDistantHorizonsFramebuffer();
-            return GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER);
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-        }
-    }
-
-    public void bindDistantHorizonsFramebuffer() {
-        if (!shouldUseDistantHorizonsFramebufferOverride()) {
-            return;
-        }
-
-        if (renderingDistantHorizonsPresentation && distantHorizonsPresentationTarget != null) {
-            Framebuffer target = distantHorizonsPresentationTarget;
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
-            GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GL11.glReadBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, framebufferWidth(target, com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()), framebufferHeight(target, com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
-            GL11.glColorMask(true, true, true, true);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
-            GL11.glEnable(GL11.GL_DEPTH_TEST);
-            GL11.glDepthFunc(GL11.GL_LEQUAL);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-            logDistantHorizonsDiagnostic("bind-presentation", distantHorizonsProbeState(null));
-            return;
-        }
-
-        pingPongManager.bindForGbuffers(fallbackColorAttachment());
-        restoreVanillaWorldTextureBindings();
-        GL11.glColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        GL11.glEnable(GL11.GL_DEPTH_TEST);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        distantHorizonsFramebufferPendingComposite = false;
-        distantHorizonsColorTextureId = 0;
-        distantHorizonsDepthTextureId = 0;
-        logDistantHorizonsDiagnostic("bind-world", distantHorizonsProbeState(null));
-    }
-
-    public void compositeDistantHorizonsFramebuffer() {
-        compositeDistantHorizonsFramebuffer(null);
-    }
-
-    private void compositeDistantHorizonsFramebuffer(Framebuffer target) {
-        if (!distantHorizonsFramebufferPendingComposite
-                || !shouldCompositeDistantHorizonsFramebuffer()
-                || distantHorizonsColorTextureId == 0
-                || distantHorizonsDepthTextureId == 0
-                || !ensureDistantHorizonsCompositeProgram()) {
-            return;
-        }
-
-        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
-        int previousDepthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
-        boolean previousDepthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
-        boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
-        boolean previousBlend = GL11.glIsEnabled(GL11.GL_BLEND);
-        boolean previousAlpha = GL11.glIsEnabled(GL11.GL_ALPHA_TEST);
-        boolean previousCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
-        try {
-            String sample = sampleDistantHorizonsColorTexture();
-            if (target != null) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, framebufferWidth(target, com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()), framebufferHeight(target, com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
-            } else {
-                pingPongManager.bindForGbuffers(fallbackColorAttachment());
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, pingPongManager.width(), pingPongManager.height());
-            }
-            GL11.glDrawBuffer(target != null && com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GL11.glReadBuffer(target != null && com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
-            GL11.glColorMask(true, true, true, true);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-            GL11.glDepthFunc(GL11.GL_LEQUAL);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                    GL11.GL_SRC_ALPHA,
-                    GL11.GL_ONE_MINUS_SRC_ALPHA,
-                    GL11.GL_ONE,
-                    GL11.GL_ONE_MINUS_SRC_ALPHA
-            );
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(distantHorizonsCompositeProgramId);
-            GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(distantHorizonsColorTextureId);
-            if (distantHorizonsCompositeTextureUniform >= 0) {
-                GL20.glUniform1i(distantHorizonsCompositeTextureUniform, 0);
-            }
-            GL13.glActiveTexture(GL13.GL_TEXTURE1);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(distantHorizonsDepthTextureId);
-            if (distantHorizonsCompositeDepthUniform >= 0) {
-                GL20.glUniform1i(distantHorizonsCompositeDepthUniform, 1);
-            }
-            drawDistantHorizonsCompositeQuad();
-            String targetSample = sampleDistantHorizonsCompositeTarget(target);
-            distantHorizonsFramebufferPendingComposite = false;
-            logDistantHorizonsDiagnostic("composite", "pass=" + currentDistantHorizonsPass
-                    + ", texture=" + distantHorizonsColorTextureId
-                    + ", sample=" + sample
-                    + ", targetSample=" + targetSample);
-        } finally {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(previousProgram);
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
-            if (previousDepthTest) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-            } else {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
-            }
-            GL11.glDepthFunc(previousDepthFunc);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(previousDepthMask);
-            if (previousBlend) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-            } else {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-            }
-            if (previousAlpha) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-            } else {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
-            }
-            if (previousCull) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
-            } else {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-            }
-            TextureBinder.restoreDefaultTextureUnit();
-        }
-    }
-
-    private void drawDistantHorizonsCompositeQuad() {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER, "field_176089_P", "GL_ARRAY_BUFFER"), 0);
-        if (GLContext.getCapabilities().OpenGL30) {
-            GL30.glBindVertexArray(0);
-        }
-        for (int attribute = 0; attribute < 16; attribute++) {
-            GL20.glDisableVertexAttribArray(attribute);
-        }
-        GL11.glBegin(GL11.GL_QUADS);
-        GL11.glTexCoord2f(0.0F, 0.0F);
-        GL11.glVertex2f(-1.0F, -1.0F);
-        GL11.glTexCoord2f(1.0F, 0.0F);
-        GL11.glVertex2f(1.0F, -1.0F);
-        GL11.glTexCoord2f(1.0F, 1.0F);
-        GL11.glVertex2f(1.0F, 1.0F);
-        GL11.glTexCoord2f(0.0F, 1.0F);
-        GL11.glVertex2f(-1.0F, 1.0F);
-        GL11.glEnd();
-    }
-
-    private boolean ensureDistantHorizonsFramebuffer() {
-        int width = Math.max(1, pingPongManager.width());
-        int height = Math.max(1, pingPongManager.height());
-        if (distantHorizonsFramebufferId != 0
-                && distantHorizonsFramebufferWidth == width
-                && distantHorizonsFramebufferHeight == height) {
-            return true;
-        }
-
-        distantHorizonsFramebufferWidth = width;
-        distantHorizonsFramebufferHeight = height;
-        distantHorizonsFramebufferId = com.l.ausm.impl.util.MinecraftReflectionCompat.glGenFramebuffers();
-        distantHorizonsColorTextureId = GL11.glGenTextures();
-        distantHorizonsDepthTextureId = GL11.glGenTextures();
-        distantHorizonsTexturesOwned = true;
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(distantHorizonsColorTextureId);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
-        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, width, height, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, (java.nio.ByteBuffer) null);
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(distantHorizonsDepthTextureId);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
-        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_DEPTH_COMPONENT, width, height, 0, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, (FloatBuffer) null);
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), distantHorizonsFramebufferId);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, distantHorizonsColorTextureId, 0);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), GL30.GL_DEPTH_ATTACHMENT, GL11.GL_TEXTURE_2D, distantHorizonsDepthTextureId, 0);
-        GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
-        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
-        boolean complete = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER) == GL30.GL_FRAMEBUFFER_COMPLETE;
-        if (!complete) {
-            MainMod.LOGGER.warn("[DistantHorizons] AUSM intermediate framebuffer is incomplete.");
-            }
-        TextureBinder.restoreDefaultTextureUnit();
-        return complete;
-    }
-
-    private void clearDistantHorizonsFramebuffer() {
-        GL11.glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateClearDepth(1.0D);
-        GL11.glColorMask(true, true, true, true);
-        GL11.glDepthMask(true);
-        GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
-    }
-
-    private String sampleDistantHorizonsColorTexture() {
-        if (distantHorizonsFramebufferWidth <= 0
-                || distantHorizonsFramebufferHeight <= 0
-                || distantHorizonsColorTextureId == 0
-                || distantHorizonsDiagnosticLogs >= MAX_DISTANT_HORIZONS_DIAGNOSTIC_LOGS) {
-            return "skipped";
-        }
-
-        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        try {
-            int readFramebuffer = distantHorizonsFramebufferId;
-            if (readFramebuffer == 0) {
-                readFramebuffer = ensureDistantHorizonsTextureReadbackFramebuffer();
-                GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFramebuffer);
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, distantHorizonsColorTextureId, 0);
-            } else {
-                GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, readFramebuffer);
-            }
-            GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
-            int status = GL30.glCheckFramebufferStatus(GL30.GL_READ_FRAMEBUFFER);
-            if (status != GL30.GL_FRAMEBUFFER_COMPLETE) {
-                return "read-fbo-incomplete:" + status;
-            }
-            int[][] points = new int[][]{
-                    {distantHorizonsFramebufferWidth / 2, distantHorizonsFramebufferHeight / 2},
-                    {distantHorizonsFramebufferWidth / 2, Math.max(0, distantHorizonsFramebufferHeight / 4)},
-                    {distantHorizonsFramebufferWidth / 2, Math.max(0, distantHorizonsFramebufferHeight * 3 / 4)}
-            };
-            StringBuilder builder = new StringBuilder();
-            for (int i = 0; i < points.length; i++) {
-                distantHorizonsReadbackPixel.clear();
-                GL11.glReadPixels(points[i][0], points[i][1], 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, distantHorizonsReadbackPixel);
-                int r = distantHorizonsReadbackPixel.get(0) & 0xFF;
-                int g = distantHorizonsReadbackPixel.get(1) & 0xFF;
-                int b = distantHorizonsReadbackPixel.get(2) & 0xFF;
-                int a = distantHorizonsReadbackPixel.get(3) & 0xFF;
-                if (i > 0) {
-                    builder.append(';');
-                }
-                builder.append(points[i][0]).append(',').append(points[i][1])
-                        .append('=').append(r).append('/').append(g).append('/').append(b).append('/').append(a);
-            }
-            return builder.toString();
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
-        }
-    }
-
-    private int ensureDistantHorizonsTextureReadbackFramebuffer() {
-        if (distantHorizonsTextureReadbackFramebufferId == 0) {
-            distantHorizonsTextureReadbackFramebufferId = com.l.ausm.impl.util.MinecraftReflectionCompat.glGenFramebuffers();
-        }
-        return distantHorizonsTextureReadbackFramebufferId;
-    }
-
-    private String sampleDistantHorizonsCompositeTarget(Framebuffer target) {
-        if (distantHorizonsDiagnosticLogs >= MAX_DISTANT_HORIZONS_DIAGNOSTIC_LOGS) {
-            return "skipped";
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        int framebuffer = target != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) : GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        int readBuffer = target != null && com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0;
-        int width = target != null ? framebufferWidth(target, mc) : pingPongManager.width();
-        int height = target != null ? framebufferHeight(target, mc) : pingPongManager.height();
-        if (width <= 0 || height <= 0) {
-            return "invalid-size";
-        }
-
-        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        try {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebuffer);
-            GL11.glReadBuffer(readBuffer);
-            int[][] points = new int[][]{
-                    {width / 2, height / 2},
-                    {width / 2, Math.max(0, height / 4)},
-                    {width / 2, Math.max(0, height * 3 / 4)}
-            };
-            StringBuilder builder = new StringBuilder();
-            for (int i = 0; i < points.length; i++) {
-                distantHorizonsReadbackPixel.clear();
-                GL11.glReadPixels(points[i][0], points[i][1], 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, distantHorizonsReadbackPixel);
-                int r = distantHorizonsReadbackPixel.get(0) & 0xFF;
-                int g = distantHorizonsReadbackPixel.get(1) & 0xFF;
-                int b = distantHorizonsReadbackPixel.get(2) & 0xFF;
-                int a = distantHorizonsReadbackPixel.get(3) & 0xFF;
-                if (i > 0) {
-                    builder.append(';');
-                }
-                builder.append(points[i][0]).append(',').append(points[i][1])
-                        .append('=').append(r).append('/').append(g).append('/').append(b).append('/').append(a);
-            }
-            return builder.toString();
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
-            restoreReadBufferForFramebuffer(previousReadFramebuffer, previousReadBuffer);
-        }
-    }
-
-    private boolean clearDistantHorizonsFramebufferIfNeeded() {
-        long frameKey = currentDistantHorizonsFrameKey();
-        if (distantHorizonsFramebufferClearFrame == frameKey) {
-            return false;
-        }
-
-        clearDistantHorizonsFramebuffer();
-        distantHorizonsFramebufferClearFrame = frameKey;
-        return true;
-    }
-
-    private long currentDistantHorizonsFrameKey() {
-        if (clientRenderFrameNanos != Long.MIN_VALUE) {
-            return clientRenderFrameNanos;
-        }
-        return pipelineFrameId;
-    }
-
-    private String distantHorizonsProbeState(Object renderParam) {
-        String renderParamSummary = distantHorizonsRenderParamSummary(renderParam);
-        return "pass=" + currentDistantHorizonsPass
-                + ", override=" + shouldUseDistantHorizonsFramebufferOverride()
-                + ", suppressApply=" + shouldSuppressDistantHorizonsMinecraftApply()
-                + ", active=" + isPipelineActive
-                + ", worldFrame=" + worldFrameActive
-                + ", shadow=" + renderingShadowMap
-                + ", gui=" + renderingGuiScreen()
-                + ", pingpong=" + pingPongManager.isInitialized()
-                + ", ausmFbo=" + currentPipelineWorldFramebufferId()
-                + ", fallbackAttachment=" + fallbackColorAttachment()
-                + ", size=" + pingPongManager.width() + "x" + pingPongManager.height()
-                + ", storedColorTex=" + distantHorizonsColorTextureId
-                + ", storedDepthTex=" + distantHorizonsDepthTextureId
-                + ", activeColorTex=" + activeDistantHorizonsTextureId("getActiveColorTextureId")
-                + ", activeDepthTex=" + activeDistantHorizonsTextureId("getActiveDepthTextureId")
-                + ", pendingComposite=" + distantHorizonsFramebufferPendingComposite
-                + ", frame=" + currentDistantHorizonsFrameKey()
-                + ", renderParam=" + renderParamSummary
-                + ", gl={" + distantHorizonsGlStateSummary() + "}";
-    }
-
-    private String distantHorizonsRenderParamSummary(Object renderParam) {
-        if (renderParam == null) {
-            return "null";
-        }
-        StringBuilder builder = new StringBuilder(renderParam.getClass().getName());
-        try {
-            Object renderPass = renderParam.getClass().getField("renderPass").get(renderParam);
-            builder.append(":renderPass=").append(renderPass);
-        } catch (ReflectiveOperationException | RuntimeException ignored) {
-        }
-        try {
-            Object worldYOffset = renderParam.getClass().getField("worldYOffset").get(renderParam);
-            builder.append(":worldYOffset=").append(worldYOffset);
-        } catch (ReflectiveOperationException | RuntimeException ignored) {
-        }
-        return builder.toString();
-    }
-
-    private String distantHorizonsGlStateSummary() {
-        try {
-            viewportBuffer.clear();
-            GL11.glGetInteger(GL11.GL_VIEWPORT, viewportBuffer);
-            int viewportX = viewportBuffer.get(0);
-            int viewportY = viewportBuffer.get(1);
-            int viewportWidth = viewportBuffer.get(2);
-            int viewportHeight = viewportBuffer.get(3);
-            return "drawFbo=" + GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
-                    + ", readFbo=" + GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING)
-                    + ", drawBuffer=" + GL11.glGetInteger(GL11.GL_DRAW_BUFFER)
-                    + ", readBuffer=" + GL11.glGetInteger(GL11.GL_READ_BUFFER)
-                    + ", program=" + GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
-                    + ", vao=" + GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING)
-                    + ", arrayBuffer=" + GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING)
-                    + ", depthTest=" + GL11.glIsEnabled(GL11.GL_DEPTH_TEST)
-                    + ", depthMask=" + GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
-                    + ", depthFunc=" + GL11.glGetInteger(GL11.GL_DEPTH_FUNC)
-                    + ", blend=" + GL11.glIsEnabled(GL11.GL_BLEND)
-                    + ", cull=" + GL11.glIsEnabled(GL11.GL_CULL_FACE)
-                    + ", viewport=" + viewportX + "/" + viewportY + "/" + viewportWidth + "/" + viewportHeight;
-        } catch (RuntimeException | LinkageError exception) {
-            return "unavailable:" + exception.getClass().getSimpleName();
-        }
-    }
-
-    private void logDistantHorizonsDiagnostic(String stage, String detail) {
-        // Diagnostic disabled.
-    }
-
-    public void prepareExternalWorldOverlayRender() {
-        if (!isPipelineActive || !pingPongManager.isInitialized()) {
-            return;
-        }
-
-        if (worldFrameActive) {
-            pingPongManager.bindForGbuffers(fallbackColorAttachment());
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        resetIndexedBlendState();
-        disablePipelineVertexAttributes();
-        unbindShaderStorageBuffers();
-        TextureBinder.restoreDefaultTextureUnit();
-        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-        GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
-        GL11.glColorMask(true, true, true, true);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-    }
-
-    private void restoreVanillaWorldTextureBindings() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
-            DynamicTexture lightmapTexture = ((EntityRendererAccessor) com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc)).ausm$getLightmapTexture();
-            restoreVanillaLightmapTexture(mc);
-            if (lightmapTexture != null) {
-                int irisLightmapTextureId = irisLightmapTexture.updateFrom(lightmapTexture);
-                if (irisLightmapTextureId > 0) {
-                    TextureBinder.bindIrisLightmap(irisLightmapTextureId);
-                } else {
-                    TextureBinder.bindIrisLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.glTextureId(lightmapTexture));
-                }
-            } else {
-                TextureBinder.mirrorVanillaLightmapToIrisUnit();
-            }
-        } else {
-            TextureBinder.mirrorVanillaLightmapToIrisUnit();
-        }
-        TextureBinder.restoreDefaultTextureUnit();
-    }
-
-    public void renderPreparePass() {
-        if (!isPipelineActive || !pingPongManager.isInitialized()) {
-            return;
-        }
-
-        if (shaderProperties.renderSettings().prepareBeforeShadow()) {
-            runPreparePassesBeforeShadowIfRequested();
-            return;
-        }
-
-        runFullscreenPasses(ProgramArrayId.PREPARE);
-    }
-
-    private void runPreparePassesBeforeShadowIfRequested() {
-        if (!isPipelineActive
-                || !pingPongManager.isInitialized()
-                || !shaderProperties.renderSettings().prepareBeforeShadow()
-                || preparePassesRenderedBeforeShadowThisFrame) {
-            return;
-        }
-
-        preparePassesRenderedBeforeShadowThisFrame = true;
-        runFullscreenPasses(ProgramArrayId.PREPARE);
-    }
-
-    public void snapshotOpaqueTerrainDepth() {
-        if (!isPipelineActive || !pingPongManager.isInitialized()) {
-            return;
-        }
-        logColorBufferProbe("after-opaque-terrain");
-        logDeferredBoundaryProbe("after-opaque-terrain", "beforeDepthSnapshot=true");
-        copyPreTranslucentDepth();
-        logDeferredBoundaryProbe("after-pre-translucent-depth-copy", "preDepthCopied=" + preTranslucentDepthCopiedThisFrame);
-        if (!ENABLE_SYNCHRONOUS_CENTER_DEPTH_READBACK) {
-            return;
-        }
-
-        DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
-        if (framebuffer == null) {
-            return;
-        }
-        centerDepth = framebuffer.readCenterDepth();
-        if (Float.isFinite(centerDepth)) {
-            centerDepthSmooth += (centerDepth - centerDepthSmooth) * smoothingFactor(centerDepthHalfLife, currentFrameTime);
-            if (Math.abs(centerDepth - centerDepthSmooth) < 0.00001f) {
-                centerDepthSmooth = centerDepth;
-            }
-            updateCenterDepthSmoothTexture();
-        }
-    }
-
-    private void snapshotCompositeInvalidFallbackSource() {
-        clearCompositeInvalidFallbackSnapshot();
-    }
-
-    private boolean snapshotCompositeInvalidFallbackSource(DeferredFramebuffer framebuffer,
-                                                           Attachment attachment,
-                                                           boolean allowColorOnly,
-                                                           String stage) {
-        clearCompositeInvalidFallbackSnapshot();
-        return false;
-    }
-
-    private boolean hasCompositeInvalidFallbackSnapshot(DeferredFramebuffer framebuffer) {
-        return false;
-    }
-
-    private boolean recoveryColorSnapshotHasPresentableContent(DeferredFramebuffer framebuffer) {
-        if (framebuffer == null || !framebuffer.hasRecoveryColorSnapshot()) {
-            return false;
-        }
-        int width = Math.max(1, framebuffer.getRecoveryColorWidth());
-        int height = Math.max(1, framebuffer.getRecoveryColorHeight());
-        int presentable = 0;
-        for (int[] point : compositeFallbackProbePoints(width, height)) {
-            float[] color = safeReadRecoveryColor(framebuffer, point[0], point[1]);
-            if (isRecoverableColorOnlySceneColor(color)) {
-                presentable++;
-            }
-        }
-        return presentable >= 2;
-    }
-
-    private boolean isCompositeInvalidFallbackSnapshotRecent() {
-        if (!compositeInvalidFallbackSnapshotHasScene) {
-            return false;
-        }
-        long age = pipelineFrameId - compositeInvalidFallbackSnapshotFrame;
-        if (age < 0L || age > COMPOSITE_INVALID_FALLBACK_MAX_SNAPSHOT_AGE_FRAMES) {
-            return false;
-        }
-        return true;
-    }
-
-    private void clearCompositeInvalidFallbackSnapshot() {
-        compositeInvalidFallbackFrames = 0;
-        compositeInvalidFallbackSnapshotFrame = Long.MIN_VALUE;
-        compositeInvalidFallbackSnapshotHasScene = false;
-        DeferredFramebuffer framebuffer = pingPongManager != null ? pingPongManager.getReadBuffer() : null;
-        if (framebuffer != null) {
-            framebuffer.clearRecoveryColorSnapshot();
-        }
-    }
-
-    private boolean restoreCompositeInvalidSnapshotToPresentationAttachment(DeferredFramebuffer framebuffer,
-                                                                            Attachment attachment,
-                                                                            String reason) {
-        clearCompositeInvalidFallbackSnapshot();
-        return false;
-    }
-
-    private boolean shouldForceCompositeInvalidPresentation(String reason) {
-        return reason != null
-                && !shouldSuppressCompositeRecoveryForSparseNothiriumTerrain()
-                && reason.contains("after-composite")
-                && terrainOpaqueDrawCount >= HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS;
-    }
-
-    private boolean shouldSuppressCompositeRecoveryForSparseNothiriumTerrain() {
-        if (!isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || !isNothiriumLoaded()) {
-            return false;
-        }
-        if (hasSparseNothiriumMainTerrainEvidence()) {
-            return true;
-        }
-        return shouldUseNothiriumMainTerrainBridge()
-                && terrainOpaqueLayerCount >= 3
-                && terrainOpaqueDrawCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS;
-    }
-
-    private boolean hasSparseNothiriumMainTerrainEvidence() {
-        return isCurrentOrRecentSparseNothiriumMainTerrainFrame()
-                || (terrainLayerCountFrame == pipelineFrameId
-                && terrainOpaqueLayerCount > 0
-                && terrainOpaqueDrawCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS);
-    }
-
-    private boolean isCurrentOrRecentSparseNothiriumMainTerrainFrame() {
-        if (nothiriumSparseMainTerrainFrame == Long.MIN_VALUE) {
-            return false;
-        }
-        long age = pipelineFrameId - nothiriumSparseMainTerrainFrame;
-        return age >= 0L && age <= 2L;
-    }
-
-    private void markSparseNothiriumMainTerrainFrame(boolean nothiriumMainTerrain) {
-        if (nothiriumMainTerrain
-                && !softVanillaTerrainRenderer
-                && worldFrameActive
-                && !renderingShadowMap
-                && isNothiriumLoaded()
-                && terrainLayerCountFrame == pipelineFrameId
-                && terrainOpaqueLayerCount > 0
-                && terrainOpaqueDrawCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS) {
-            nothiriumSparseMainTerrainFrame = pipelineFrameId;
-            clearCompositeInvalidFallbackSnapshot();
-        }
-    }
-
-    private boolean restoreCompositeInvalidFinalSourceAttachment(DeferredFramebuffer framebuffer,
-                                                                 Attachment primaryAttachment,
-                                                                 String reason) {
-        PipelineProgram finalProgram = programs.get(RenderPass.FINAL);
-        if (framebuffer == null
-                || primaryAttachment == Attachment.COMPOSITE
-                || finalProgram == null
-                || !finalProgram.hasOwnProgram()
-                || reason == null
-                || !reason.contains("before-final")) {
-            return false;
-        }
-        // Complementary's final pass reads colortex3/COMPOSITE. If composite
-        // flattened that buffer, restoring only colortex0 leaves final sampling
-        // the flat neutral/white buffer even though COLOR was recovered.
-        if (deferredBufferHasSceneContent(framebuffer, Attachment.COMPOSITE)) {
-            return false;
-        }
-        return pingPongManager.restoreRecoveryColorToReadAttachment(Attachment.COMPOSITE);
-    }
-
-    private boolean shouldRestoreCompositeInvalidDepth(DeferredFramebuffer framebuffer) {
-        return framebuffer != null
-                && !deferredLiveDepthHasSceneContent(framebuffer)
-                && deferredDepthSnapshotHasSceneContent(framebuffer, DeferredFramebuffer.DEPTHTEX1_SNAPSHOT);
-    }
-
-    private boolean deferredLiveDepthHasSceneContent(DeferredFramebuffer framebuffer) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return false;
-        }
-        int width = Math.max(1, framebuffer.getWidth());
-        int height = Math.max(1, framebuffer.getHeight());
-        for (int[] point : compositeFallbackProbePoints(width, height)) {
-            float depth = safeReadDeferredDepth(framebuffer, point[0], point[1], width, height);
-            if (Float.isFinite(depth) && depth < 0.99999f) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean deferredDepthSnapshotHasSceneContent(DeferredFramebuffer framebuffer, int snapshotIndex) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return false;
-        }
-        int width = Math.max(1, framebuffer.getWidth());
-        int height = Math.max(1, framebuffer.getHeight());
-        for (int[] point : compositeFallbackProbePoints(width, height)) {
-            float depth = safeReadDeferredDepthSnapshot(framebuffer, snapshotIndex, point[0], point[1]);
-            if (Float.isFinite(depth) && depth < 0.99999f) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void logCompositeInvalidRestore(DeferredFramebuffer framebuffer, Attachment attachment, String reason, boolean depthRestored) {
-        if (compositeInvalidRestoreLogs++ >= MAX_COMPOSITE_INVALID_RESTORE_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMCompositeRecovery] action=restore-cached-scene reason={} source={} target={} depthRestored={} currentColor={} preservedColor={} depth={} depthtex1={}",
-                reason,
-                COMPOSITE_INVALID_FALLBACK_SOURCE,
-                attachment,
-                depthRestored,
-                deferredFramebufferColorSamples(framebuffer, attachment),
-                deferredFramebufferRecoveryColorSamples(framebuffer),
-                framebuffer != null ? framebufferIdDepthSamples(framebuffer.getFramebufferId(), framebuffer.getWidth(), framebuffer.getHeight(), GL30.GL_COLOR_ATTACHMENT0) : "none",
-                deferredDepthSampleSummary(framebuffer, DeferredFramebuffer.DEPTHTEX1_SNAPSHOT)
-        );
-    }
-
-    private void logColorBufferProbe(String stage) {
-        logColorBufferProbe(stage, false);
-    }
-
-    private void logColorBufferProbe(String stage, boolean force) {
-        if (!isPipelineActive || !pingPongManager.isInitialized()) {
-            return;
-        }
-        boolean finalStage = stage != null && stage.contains("final");
-        if (!force) {
-            if (finalStage) {
-                if (finalColorProbeLogs >= MAX_FINAL_COLOR_PROBE_LOGS) {
-                    return;
-                }
-                finalColorProbeLogs++;
-            } else {
-                if (terrainColorProbeLogs >= MAX_TERRAIN_COLOR_PROBE_LOGS) {
-                    return;
-                }
-                terrainColorProbeLogs++;
-            }
-        } else if (finalStage) {
-            if (finalColorProbeLogs >= MAX_FINAL_COLOR_PROBE_LOGS + MAX_POSITIVE_VANILLA_TERRAIN_PROBE_LOGS) {
-                return;
-            }
-            finalColorProbeLogs++;
-        } else {
-            if (terrainColorProbeLogs >= MAX_TERRAIN_COLOR_PROBE_LOGS + MAX_POSITIVE_VANILLA_TERRAIN_PROBE_LOGS) {
-                return;
-            }
-            terrainColorProbeLogs++;
-        }
-
-        DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
-        String color = deferredFramebufferColorSamples(readBuffer, fallbackColorAttachment());
-        String normal = deferredFramebufferColorSamples(readBuffer, Attachment.NORMAL);
-        String depth = readBuffer != null && readBuffer.isUsable()
-                ? framebufferIdDepthSamples(readBuffer.getFramebufferId(), readBuffer.getWidth(), readBuffer.getHeight(), GL30.GL_COLOR_ATTACHMENT0)
-                : "none";
-        MainMod.LOGGER.info(
-                "[AUSMColorProbe] stage={} color={} normal={} depth={} activePass={} phase={} safeVanilla={} reason='{}' read={} gl={}",
-                stage,
-                color,
-                normal,
-                depth,
-                activePass,
-                getPhase(),
-                hardwareSafeVanillaTerrain,
-                hardwareSafeVanillaTerrainReason,
-                describeDeferredFramebuffer(readBuffer),
-                glStateSummary()
-        );
-        logTerrainGridProbe(stage, readBuffer);
-    }
-
-    private void logCompositeChainProbe(String stage, String detail) {
-        if (!isPipelineActive || !pingPongManager.isInitialized()
-                || compositeChainProbeLogs >= MAX_COMPOSITE_CHAIN_PROBE_LOGS) {
-            return;
-        }
-        compositeChainProbeLogs++;
-
-        DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
-        MainMod.LOGGER.info(
-                "[AUSMCompositeChainProbe] call={} stage={} detail={} read={} textures={} samples={} depth={} gl={}",
-                compositeChainProbeLogs,
-                stage,
-                detail,
-                describeDeferredFramebuffer(readBuffer),
-                compositeChainTextureSummary(readBuffer),
-                compositeChainSampleSummary(readBuffer),
-                readBuffer != null && readBuffer.isUsable()
-                        ? framebufferIdDepthSamples(readBuffer.getFramebufferId(), readBuffer.getWidth(), readBuffer.getHeight(), GL30.GL_COLOR_ATTACHMENT0)
-                        : "none",
-                glStateSummary()
-        );
-    }
-
-    private void logDeferredBoundaryProbe(String stage, String detail) {
-        if (!isPipelineActive || !pingPongManager.isInitialized()
-                || deferredBoundaryProbeLogs >= MAX_DEFERRED_BOUNDARY_PROBE_LOGS) {
-            return;
-        }
-        deferredBoundaryProbeLogs++;
-
-        DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
-        MainMod.LOGGER.info(
-                "[AUSMDeferredBoundaryProbe] call={} stage={} detail={} frame={} deferredRendered={} preDepthCopied={} activePass={} phase={} terrainCounts=opaque:{}/draw:{} read={} textures={} colors={} depth0={} depth1={} depth2={} gl={}",
-                deferredBoundaryProbeLogs,
-                stage,
-                detail,
-                pipelineFrameId,
-                deferredPassesRenderedThisFrame,
-                preTranslucentDepthCopiedThisFrame,
-                activePass,
-                getPhase(),
-                terrainOpaqueLayerCount,
-                terrainOpaqueDrawCount,
-                describeDeferredFramebuffer(readBuffer),
-                deferredBoundaryTextureSummary(readBuffer),
-                deferredBoundaryColorSummary(readBuffer),
-                deferredDepthSampleSummary(readBuffer, -1),
-                deferredDepthSampleSummary(readBuffer, DeferredFramebuffer.DEPTHTEX1_SNAPSHOT),
-                deferredDepthSampleSummary(readBuffer, DeferredFramebuffer.DEPTHTEX2_SNAPSHOT),
-                glStateSummary()
-        );
-    }
-
-    private String deferredBoundaryTextureSummary(DeferredFramebuffer framebuffer) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return "none";
-        }
-        return "COLOR=" + framebuffer.getReadTexture(Attachment.COLOR) + "/" + framebuffer.getWriteTexture(Attachment.COLOR)
-                + ";NORMAL=" + framebuffer.getReadTexture(Attachment.NORMAL) + "/" + framebuffer.getWriteTexture(Attachment.NORMAL)
-                + ";COMPOSITE=" + framebuffer.getReadTexture(Attachment.COMPOSITE) + "/" + framebuffer.getWriteTexture(Attachment.COMPOSITE)
-                + ";AUX2=" + framebuffer.getReadTexture(Attachment.AUX2) + "/" + framebuffer.getWriteTexture(Attachment.AUX2)
-                + ";AUX6=" + framebuffer.getReadTexture(Attachment.AUX6) + "/" + framebuffer.getWriteTexture(Attachment.AUX6)
-                + ";depth=" + framebuffer.getDepthTexture()
-                + ";depth1=" + framebuffer.getDepthSamplerTexture(DeferredFramebuffer.DEPTHTEX1_SNAPSHOT)
-                + ";depth2=" + framebuffer.getDepthSamplerTexture(DeferredFramebuffer.DEPTHTEX2_SNAPSHOT);
-    }
-
-    private String deferredBoundaryColorSummary(DeferredFramebuffer framebuffer) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return "none";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (Attachment attachment : deferredBoundaryProbeAttachments()) {
-            if (builder.length() > 0) {
-                builder.append(" | ");
-            }
-            builder.append("colortex")
-                    .append(attachment.getIndex())
-                    .append('=')
-                    .append(deferredFramebufferColorSamples(framebuffer, attachment));
-        }
-        return builder.toString();
-    }
-
-    private List<Attachment> deferredBoundaryProbeAttachments() {
-        return List.of(
-                Attachment.COLOR,
-                Attachment.NORMAL,
-                Attachment.COMPOSITE,
-                Attachment.AUX2,
-                Attachment.AUX6
-        );
-    }
-
-    private String deferredDepthSampleSummary(DeferredFramebuffer framebuffer, int snapshotIndex) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return "none";
-        }
-        int width = Math.max(1, framebuffer.getWidth());
-        int height = Math.max(1, framebuffer.getHeight());
-        int total = 0;
-        int filled = 0;
-        float minDepth = 1.0F;
-        float maxDepth = 0.0F;
-        StringBuilder samples = new StringBuilder();
-        for (int[] point : compositeFallbackProbePoints(width, height)) {
-            total++;
-            float depth = snapshotIndex < 0
-                    ? safeReadDeferredDepth(framebuffer, point[0], point[1], width, height)
-                    : safeReadDeferredDepthSnapshot(framebuffer, snapshotIndex, point[0], point[1]);
-            if (!Float.isFinite(depth)) {
-                continue;
-            }
-            minDepth = Math.min(minDepth, depth);
-            maxDepth = Math.max(maxDepth, depth);
-            if (depth < 0.999F) {
-                filled++;
-            }
-            if (samples.length() < 180) {
-                if (samples.length() > 0) {
-                    samples.append(';');
-                }
-                samples.append(point[0]).append(',').append(point[1]).append('=').append(formatProbeFloat(depth));
-            }
-        }
-        return "filled=" + filled + "/" + total
-                + ",min=" + formatProbeFloat(minDepth)
-                + ",max=" + formatProbeFloat(maxDepth)
-                + ",samples=" + samples;
-    }
-
-    private String compositeChainTextureSummary(DeferredFramebuffer framebuffer) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return "none";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (Attachment attachment : compositeChainProbeAttachments()) {
-            if (builder.length() > 0) {
-                builder.append(';');
-            }
-            builder.append(attachment)
-                    .append('=')
-                    .append(framebuffer.getReadTexture(attachment))
-                    .append('/')
-                    .append(framebuffer.getWriteTexture(attachment));
-        }
-        return builder.toString();
-    }
-
-    private String compositeChainSampleSummary(DeferredFramebuffer framebuffer) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return "none";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (Attachment attachment : compositeChainProbeAttachments()) {
-            if (builder.length() > 0) {
-                builder.append(" | ");
-            }
-            builder.append("colortex")
-                    .append(attachment.getIndex())
-                    .append('=')
-                    .append(deferredFramebufferColorSamples(framebuffer, attachment));
-        }
-        return builder.toString();
-    }
-
-    private List<Attachment> compositeChainProbeAttachments() {
-        return List.of(
-                Attachment.COLOR,
-                Attachment.COMPOSITE,
-                Attachment.AUX3,
-                Attachment.AUX4,
-                Attachment.AUX5,
-                Attachment.AUX6
-        );
-    }
-
-    private void logTerrainGridProbe(String stage, DeferredFramebuffer readBuffer) {
-        if (terrainGridProbeLogs >= MAX_TERRAIN_GRID_PROBE_LOGS || readBuffer == null || !readBuffer.isUsable()) {
-            return;
-        }
-        terrainGridProbeLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMTerrainGridProbe] stage={} activePass={} phase={} safeVanilla={} reason='{}' read={} textures={} gl={} grid={}",
-                stage,
-                activePass,
-                getPhase(),
-                hardwareSafeVanillaTerrain,
-                hardwareSafeVanillaTerrainReason,
-                describeDeferredFramebuffer(readBuffer),
-                terrainProbeTextureSummary(readBuffer),
-                terrainProbeGlStateSummary(),
-                terrainGridProbeSummary(readBuffer)
-        );
-    }
-
-    private String terrainProbeTextureSummary(DeferredFramebuffer framebuffer) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
-            return "none";
-        }
-        Attachment colorAttachment = fallbackColorAttachment();
-        return "color=" + colorAttachment
-                + ":" + framebuffer.getReadTexture(colorAttachment) + "/" + framebuffer.getWriteTexture(colorAttachment)
-                + ", normal=" + framebuffer.getReadTexture(Attachment.NORMAL) + "/" + framebuffer.getWriteTexture(Attachment.NORMAL)
-                + ", depth=" + framebuffer.getDepthTexture();
-    }
-
-    private String terrainGridProbeSummary(DeferredFramebuffer framebuffer) {
-        String errorBefore = drainGlErrorsForProbe();
-        StringBuilder builder = new StringBuilder();
-        builder.append("logical");
-        Set<Attachment> attachments = new LinkedHashSet<>();
-        attachments.add(fallbackColorAttachment());
-        attachments.add(Attachment.AUX3);
-        attachments.add(Attachment.AUX1);
-        attachments.add(Attachment.NORMAL);
-        attachments.add(Attachment.COMPOSITE);
-        for (Attachment attachment : attachments) {
-            builder.append(' ').append(attachment).append('=')
-                    .append(terrainGridReadAttachmentSummary(framebuffer, attachment, attachment == fallbackColorAttachment()));
-        }
-        builder.append(",probeErr=").append(errorBefore).append('/').append(drainGlErrorsForProbe());
-        return builder.toString();
-    }
-
-    private String terrainGridReadAttachmentSummary(DeferredFramebuffer framebuffer, Attachment attachment, boolean includeDepth) {
-        if (framebuffer == null || attachment == null) {
-            return "invalid";
-        }
-        int width = Math.max(1, framebuffer.getAttachmentWidth(attachment));
-        int height = Math.max(1, framebuffer.getAttachmentHeight(attachment));
-        int colorNonZero = 0;
-        int alphaNonZero = 0;
-        int depthFilled = 0;
-        float minDepth = 1.0F;
-        float maxDepth = 0.0F;
-        StringBuilder examples = new StringBuilder();
-        int sampleCount = 0;
-        for (int row = 0; row < TERRAIN_GRID_PROBE_ROWS; row++) {
-            int y = gridProbeCoordinate(row, TERRAIN_GRID_PROBE_ROWS, height);
-            for (int column = 0; column < TERRAIN_GRID_PROBE_COLUMNS; column++) {
-                int x = gridProbeCoordinate(column, TERRAIN_GRID_PROBE_COLUMNS, width);
-                sampleCount++;
-                float[] color = safeReadDeferredColor(framebuffer, attachment, x, y);
-                if (!isFiniteColor(color)) {
-                    continue;
-                }
-                int r = probeColorByte(color[0]);
-                int g = probeColorByte(color[1]);
-                int b = probeColorByte(color[2]);
-                int a = probeColorByte(color[3]);
-                if (r != 0 || g != 0 || b != 0) {
-                    colorNonZero++;
-                }
-                if (a != 0) {
-                    alphaNonZero++;
-                }
-                float depth = 1.0F;
-                boolean filledDepth = false;
-                if (includeDepth) {
-                    depth = safeReadDeferredDepth(framebuffer, x, y, width, height);
-                    if (Float.isFinite(depth)) {
-                        minDepth = Math.min(minDepth, depth);
-                        maxDepth = Math.max(maxDepth, depth);
-                        filledDepth = depth < 0.999F;
-                        if (filledDepth) {
-                            depthFilled++;
-                        }
-                    }
-                }
-                if ((filledDepth || examples.length() == 0) && examples.length() < 160) {
-                    if (examples.length() > 0) {
-                        examples.append('|');
-                    }
-                    examples.append(x).append(',').append(y)
-                            .append(":rgba(").append(r).append('/').append(g).append('/').append(b).append('/').append(a).append(')');
-                    if (includeDepth) {
-                        examples.append(":d=").append(formatProbeFloat(depth));
-                    }
-                }
-            }
-        }
-        return "nz=" + colorNonZero + "/" + sampleCount
-                + ",a=" + alphaNonZero + "/" + sampleCount
-                + (includeDepth
-                ? ",depthFilled=" + depthFilled + "/" + sampleCount
-                + ",depthRange=" + formatProbeFloat(minDepth) + ".." + formatProbeFloat(maxDepth)
-                : "")
-                + ",examples=" + (examples.length() > 0 ? examples : "none");
-    }
-
-    private static int probeColorByte(float value) {
-        if (!Float.isFinite(value)) {
-            return 0;
-        }
-        return Math.max(0, Math.min(255, Math.round(value * 255.0F)));
-    }
-
-    private String drainGlErrorsForProbe() {
-        StringBuilder builder = new StringBuilder();
-        int count = 0;
-        int error;
-        while ((error = GL11.glGetError()) != GL11.GL_NO_ERROR && count < 8) {
-            if (builder.length() > 0) {
-                builder.append('+');
-            }
-            builder.append(glErrorName(error));
-            count++;
-        }
-        if (error != GL11.GL_NO_ERROR) {
-            builder.append("+more");
-        }
-        return builder.length() > 0 ? builder.toString() : "ok";
-    }
-
-    private void drainPausedPostRenderGlErrors(String stage) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (!shouldDrainPausedPostRenderGlErrors(mc)) {
-            return;
-        }
-
-        StringBuilder builder = new StringBuilder();
-        int count = 0;
-        int error;
-        while ((error = GL11.glGetError()) != GL11.GL_NO_ERROR && count < 16) {
-            if (builder.length() > 0) {
-                builder.append('+');
-            }
-            builder.append(glErrorName(error));
-            count++;
-        }
-        if (error != GL11.GL_NO_ERROR) {
-            builder.append("+more");
-        }
-        if (count > 0 && pausedPostRenderGlErrorLogs < 8) {
-            pausedPostRenderGlErrorLogs++;
-            MainMod.LOGGER.info("[AUSMPausedGlDrain] stage={} errors={} screen={}",
-                    stage,
-                    builder,
-                    pausedScreenName(mc));
-        }
-    }
-
-    private boolean shouldDrainPausedPostRenderGlErrors(Minecraft mc) {
-        if (mc == null) {
-            return false;
-        }
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc)) {
-            return true;
-        }
-        net.minecraft.client.gui.GuiScreen screen = com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc);
-        return screen != null || renderingGui;
-    }
-
-    private String pausedScreenName(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null) {
-            return "none";
-        }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc).getClass().getName();
-    }
-
-    private int gridProbeCoordinate(int index, int count, int size) {
-        if (size <= 1) {
-            return 0;
-        }
-        int value = (int) (((long) (index + 1) * size) / (count + 1));
-        return Math.max(0, Math.min(size - 1, value));
-    }
-
-    private String terrainProbeGlStateSummary() {
-        try {
-            viewportBuffer.clear();
-            GL11.glGetInteger(GL11.GL_VIEWPORT, viewportBuffer);
-            int viewportX = viewportBuffer.get(0);
-            int viewportY = viewportBuffer.get(1);
-            int viewportWidth = viewportBuffer.get(2);
-            int viewportHeight = viewportBuffer.get(3);
-            viewportBuffer.clear();
-            GL11.glGetInteger(GL11.GL_SCISSOR_BOX, viewportBuffer);
-            int scissorX = viewportBuffer.get(0);
-            int scissorY = viewportBuffer.get(1);
-            int scissorWidth = viewportBuffer.get(2);
-            int scissorHeight = viewportBuffer.get(3);
-            terrainProbeBooleanBuffer.clear();
-            GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, terrainProbeBooleanBuffer);
-            return "drawFbo=" + GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
-                    + ", readFbo=" + GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING)
-                    + ", drawBuffer=" + GL11.glGetInteger(GL11.GL_DRAW_BUFFER)
-                    + ", readBuffer=" + GL11.glGetInteger(GL11.GL_READ_BUFFER)
-                    + ", drawBuffers=" + drawBuffersProbeSummary()
-                    + ", program=" + GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
-                    + ", vao=" + GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING)
-                    + ", arrayBuffer=" + GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING)
-                    + ", elementArrayBuffer=" + GL11.glGetInteger(GL15.GL_ELEMENT_ARRAY_BUFFER_BINDING)
-                    + ", activeTex=" + GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE)
-                    + ", tex2d=" + GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D)
-                    + ", blend=" + GL11.glIsEnabled(GL11.GL_BLEND)
-                    + ", alpha=" + GL11.glIsEnabled(GL11.GL_ALPHA_TEST)
-                    + ", depth=" + GL11.glIsEnabled(GL11.GL_DEPTH_TEST)
-                    + ", depthMask=" + GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
-                    + ", depthFunc=" + GL11.glGetInteger(GL11.GL_DEPTH_FUNC)
-                    + ", colorMask=" + (terrainProbeBooleanBuffer.get(0) != 0)
-                    + "/" + (terrainProbeBooleanBuffer.get(1) != 0)
-                    + "/" + (terrainProbeBooleanBuffer.get(2) != 0)
-                    + "/" + (terrainProbeBooleanBuffer.get(3) != 0)
-                    + ", cull=" + GL11.glIsEnabled(GL11.GL_CULL_FACE)
-                    + ", frontFace=" + GL11.glGetInteger(GL11.GL_FRONT_FACE)
-                    + ", scissor=" + GL11.glIsEnabled(GL11.GL_SCISSOR_TEST)
-                    + ":" + scissorX + "/" + scissorY + "/" + scissorWidth + "/" + scissorHeight
-                    + ", polygonOffset=" + GL11.glIsEnabled(GL11.GL_POLYGON_OFFSET_FILL)
-                    + ", viewport=" + viewportX + "/" + viewportY + "/" + viewportWidth + "/" + viewportHeight;
-        } catch (RuntimeException | LinkageError exception) {
-            return "unavailable:" + exception.getClass().getSimpleName();
-        }
-    }
-
-    private String drawBuffersProbeSummary() {
-        if (!GLContext.getCapabilities().OpenGL20) {
-            return "none";
-        }
-        StringBuilder builder = new StringBuilder();
-        int slots = Math.min(4, maxDrawBuffers());
-        for (int i = 0; i < slots; i++) {
-            if (i > 0) {
-                builder.append('/');
-            }
-            builder.append(GL11.glGetInteger(GL20.GL_DRAW_BUFFER0 + i));
-        }
-        return builder.toString();
-    }
-
-    private static String framebufferStatusName(int status) {
-        if (status == GL30.GL_FRAMEBUFFER_COMPLETE) {
-            return "complete";
-        }
-        if (status == GL30.GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT) {
-            return "incomplete-attachment";
-        }
-        if (status == GL30.GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT) {
-            return "missing-attachment";
-        }
-        if (status == GL30.GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER) {
-            return "incomplete-draw-buffer";
-        }
-        if (status == GL30.GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER) {
-            return "incomplete-read-buffer";
-        }
-        if (status == GL30.GL_FRAMEBUFFER_UNSUPPORTED) {
-            return "unsupported";
-        }
-        return String.valueOf(status);
-    }
-
-    private static String glErrorName(int error) {
-        if (error == GL11.GL_NO_ERROR) {
-            return "ok";
-        }
-        if (error == GL11.GL_INVALID_ENUM) {
-            return "invalid-enum";
-        }
-        if (error == GL11.GL_INVALID_VALUE) {
-            return "invalid-value";
-        }
-        if (error == GL11.GL_INVALID_OPERATION) {
-            return "invalid-operation";
-        }
-        if (error == GL11.GL_STACK_OVERFLOW) {
-            return "stack-overflow";
-        }
-        if (error == GL11.GL_STACK_UNDERFLOW) {
-            return "stack-underflow";
-        }
-        if (error == GL11.GL_OUT_OF_MEMORY) {
-            return "out-of-memory";
-        }
-        return String.valueOf(error);
-    }
-
-    private void logDistantHorizonsColorProbe(String stage) {
-        // Probe disabled.
-    }
-
-    private void logDistantHorizonsPassColorProbe(String stage, RenderPass pass) {
-        // Probe disabled.
-    }
-
-    private static boolean isDistantHorizonsProbeMarker(float[] aux3) {
-        return aux3 != null
-                && aux3.length >= 3
-                && aux3[2] > 0.5f
-                && aux3[0] < 0.2f
-                && aux3[1] < 0.2f;
-    }
-
-    private static String formatProbeColor(float[] color) {
-        if (color == null || color.length < 4) {
-            return "(nan,nan,nan,nan)";
-        }
-        return "("
-                + formatProbeFloat(color[0]) + ','
-                + formatProbeFloat(color[1]) + ','
-                + formatProbeFloat(color[2]) + ','
-                + formatProbeFloat(color[3]) + ')';
-    }
-
-    private static String formatProbeFloat(float value) {
-        if (!Float.isFinite(value)) {
-            return "nan";
-        }
-        return String.format(Locale.ROOT, "%.4f", value);
-    }
-
-    public int renderWorldBlockLayer(RenderGlobal renderGlobal, BlockRenderLayer layer, double partialTicks, int pass, Entity viewEntity) {
-        if (renderGlobal == null) {
-            logWorldLayerDiag("skip-null-render-global", layer, pass, 0, viewEntity);
-            return 0;
-        }
-        if (shouldSkipAllMainGbufferRendering()) {
-            recordTerrainLayerCount(layer, 0);
-            logWorldLayerDiag("skip-all-rendering", layer, pass, 0, viewEntity);
-            return 0;
-        }
-        if (shouldSuppressDuplicatePipelineTranslucentLayer(layer)) {
-            logWorldLayerDiag("skip-duplicate-translucent", layer, pass, 0, viewEntity);
-            return 0;
-        }
-
-        boolean prepareVanillaState = shouldPrepareShaderlessBlockLayerState();
-        if (prepareVanillaState) {
-            prepareShaderlessBlockLayerState(layer);
-        }
-
-        try {
-            if (!isPipelineActive && NothiriumShadowRenderer.isAvailable()) {
-                int count = nothiriumShadowRenderer.renderNativeLayer(layer);
-                if (count <= 0 && NothiriumBypass.setupForIsolatedShaderlessMainPass()) {
-                    int retryCount = nothiriumShadowRenderer.renderNativeLayer(layer);
-                    if (retryCount > count) {
-                        count = retryCount;
-                    }
-                }
-                if (count > 0) {
-                    recordTerrainLayerCount(layer, count);
-                    recordShaderlessTerrainLayerCount(layer, count);
-                    logWorldLayerDiag("nothirium-native", layer, pass, count, viewEntity);
-                    return count;
-                }
-                int vanillaCount = renderForcedVanillaTerrainLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
-                recordTerrainLayerCount(layer, vanillaCount);
-                recordShaderlessTerrainLayerCount(layer, vanillaCount);
-                probePositiveVanillaTerrainDraw(layer, vanillaCount);
-                logWorldLayerDiag("nothirium-native-zero-vanilla", layer, pass, vanillaCount, viewEntity);
-                return vanillaCount;
-            }
-
-            boolean forceVanillaRenderer = shouldForceVanillaTerrainRenderer();
-            int nothiriumCount = forceVanillaRenderer
-                    ? -1
-                    : renderNothiriumTerrainLayer(layer, (float) partialTicks, viewEntity);
-            if (nothiriumCount >= 0) {
-                if (nothiriumCount > 0) {
-                    markNothiriumPipelineTranslucentBridge(layer);
-                }
-                recordTerrainLayerCount(layer, nothiriumCount, true);
-                recordShaderlessTerrainLayerCount(layer, nothiriumCount);
-                probePositiveNothiriumTerrainDraw(layer, nothiriumCount);
-                logWorldLayerDiag("nothirium", layer, pass, nothiriumCount, viewEntity);
-                return nothiriumCount;
-            }
-            if (NothiriumShadowRenderer.isAvailable()) {
-                recordTerrainLayerCount(layer, 0);
-                recordShaderlessTerrainLayerCount(layer, 0);
-                logWorldLayerDiag("nothirium-no-vanilla-fallback", layer, pass, 0, viewEntity);
-                return 0;
-            }
-
-            boolean forceVanillaFallback = isPipelineActive
-                    && (forceVanillaRenderer || NothiriumBypass.shouldBypass());
-            if (forceVanillaFallback) {
-                int count = renderForcedVanillaTerrainLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
-                recordTerrainLayerCount(layer, count);
-                recordShaderlessTerrainLayerCount(layer, count);
-                probePositiveVanillaTerrainDraw(layer, count);
-                logWorldLayerDiag("vanilla-forced-bypass", layer, pass, count, viewEntity);
-                return count;
-            }
-            int count;
-            count = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
-            recordTerrainLayerCount(layer, count);
-            recordShaderlessTerrainLayerCount(layer, count);
-            logWorldLayerDiag("vanilla", layer, pass, count, viewEntity);
-            return count;
-        } finally {
-            if (prepareVanillaState) {
-                finishShaderlessBlockLayerState(layer);
-            }
-        }
-    }
-
-    private int renderForcedVanillaTerrainLayer(RenderGlobal renderGlobal, BlockRenderLayer layer, double partialTicks,
-                                                int pass, Entity viewEntity) {
-        boolean timingProbe = isComplementarySoftVanillaStartupFallbackActive();
-        long startNanos = timingProbe ? System.nanoTime() : 0L;
-        long afterEnsureNanos = startNanos;
-        long afterRebindNanos = startNanos;
-        int count = Integer.MIN_VALUE;
-        ensureVanillaTerrainRenderer(renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()), false);
-        if (timingProbe) {
-            afterEnsureNanos = System.nanoTime();
-        }
-        if (!shouldUseHardwareSafeVanillaBlockLayerState()) {
-            rebindActiveTerrainPassForForcedVanillaFallback();
-        }
-        if (timingProbe) {
-            afterRebindNanos = System.nanoTime();
-        }
-        NothiriumBypass.pushForcedBypass();
-        try {
-            count = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
-            return count;
-        } finally {
-            NothiriumBypass.popForcedBypass();
-            if (timingProbe) {
-                logSoftVanillaLayerTiming(layer, pass, count, startNanos, afterEnsureNanos, afterRebindNanos, System.nanoTime(), viewEntity);
-            }
-        }
-    }
-
-    private void logSoftVanillaLayerTiming(BlockRenderLayer layer, int pass, int count, long startNanos,
-                                           long afterEnsureNanos, long afterRebindNanos, long endNanos,
-                                           Entity viewEntity) {
-        if (!isComplementarySoftVanillaStartupFallbackActive()
-                || softVanillaLayerTimingLogs >= MAX_SOFT_VANILLA_LAYER_TIMING_LOGS) {
-            return;
-        }
-        double totalMs = nanosToMillis(endNanos - startNanos);
-        if (softVanillaLayerTimingLogs >= 32 && totalMs < 8.0D) {
-            return;
-        }
-        softVanillaLayerTimingLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMSoftVanillaTiming] call={} stage=renderBlockLayer layer={} pass={} count={} totalMs={} ensureMs={} rebindMs={} drawMs={} frame={} frameTime={} opaqueLayers={} opaqueDraws={} view={} glProgram={}",
-                softVanillaLayerTimingLogs,
-                layer,
-                pass,
-                count,
-                formatMillis(totalMs),
-                formatMillis(nanosToMillis(afterEnsureNanos - startNanos)),
-                formatMillis(nanosToMillis(afterRebindNanos - afterEnsureNanos)),
-                formatMillis(nanosToMillis(endNanos - afterRebindNanos)),
-                pipelineFrameId,
-                formatMillis(currentFrameTime * 1000.0D),
-                terrainOpaqueLayerCount,
-                terrainOpaqueDrawCount,
-                viewEntity != null ? viewEntity.getClass().getName() : "null",
-                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
-        );
-    }
-
-    private void probePositiveVanillaTerrainDraw(BlockRenderLayer layer, int count) {
-        if (!(shaderedNothiriumGlobalBypass || nothiriumMainVanillaDrawPathFrames > 0)
-                || count <= 0
-                || positiveVanillaTerrainProbeLogs >= MAX_POSITIVE_VANILLA_TERRAIN_PROBE_LOGS
-                || layer == null
-                || layer == BlockRenderLayer.TRANSLUCENT) {
-            return;
-        }
-        positiveVanillaTerrainProbeLogs++;
-        logColorBufferProbe("after-positive-vanilla-" + layer, true);
-    }
-
-    private void probePositiveNothiriumTerrainDraw(BlockRenderLayer layer, int count) {
-        if (!isPipelineActive
-                || count <= 0
-                || positiveNothiriumTerrainProbeLogs >= MAX_POSITIVE_VANILLA_TERRAIN_PROBE_LOGS
-                || layer == null
-                || layer == BlockRenderLayer.TRANSLUCENT) {
-            return;
-        }
-        positiveNothiriumTerrainProbeLogs++;
-        logColorBufferProbe("after-positive-nothirium-" + layer, true);
-    }
-
-    private void rebindActiveTerrainPassForForcedVanillaFallback() {
-        if (!isPipelineActive || !worldFrameActive || activePass == null || activePass.stage() != ProgramStage.GBUFFERS) {
-            return;
-        }
-        WorldRenderingPhase phase = getPhase();
-        if (phase == WorldRenderingPhase.NONE || !phase.usesBlockAtlas()) {
-            return;
-        }
-        bindPass(activePass);
-    }
-
-    private void rebindActiveTerrainPassAfterNothiriumNativeDraw() {
-        if (!isPipelineActive || !worldFrameActive || activePass == null || activePass.stage() != ProgramStage.GBUFFERS) {
-            return;
-        }
-        bindPass(activePass);
-    }
-
-    private void logWorldLayerDiag(String stage, BlockRenderLayer layer, int pass, int count, Entity viewEntity) {
-        if (worldLayerDiagLogs >= MAX_WORLD_LAYER_DIAG_LOGS) {
-            return;
-        }
-        if (!isPipelineActive && !"skip-null-render-global".equals(stage)) {
-            return;
-        }
-        if (!stage.startsWith("vanilla") && !"nothirium".equals(stage) && !"skip-all-rendering".equals(stage)) {
-            return;
-        }
-        worldLayerDiagLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMWorldLayer] call={} stage={} layer={} pass={} count={} active={} safeVanilla={} reason='{}' nothiriumBypass={} activePass={} phase={} frame={} worldFrame={} view={} gl={}",
-                worldLayerDiagLogs,
-                stage,
-                layer,
-                pass,
-                count,
-                isPipelineActive,
-                hardwareSafeVanillaTerrain,
-                hardwareSafeVanillaTerrainReason,
-                NothiriumBypass.shouldBypass(),
-                activePass,
-                getPhase(),
-                pipelineFrameId,
-                worldFrameActive,
-                viewEntity != null ? viewEntity.getClass().getName() : "null",
-                glStateSummary()
-        );
-    }
-
-    private void markNothiriumPipelineTranslucentBridge(BlockRenderLayer layer) {
-        if (layer != BlockRenderLayer.TRANSLUCENT
-                || !isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || activePass != RenderPass.GBUFFERS_WATER
-                || getPhase() != WorldRenderingPhase.TERRAIN_TRANSLUCENT) {
-            return;
-        }
-
-        nothiriumPipelineTranslucentFrame = pipelineFrameId;
-        nothiriumPipelineTranslucentWorldPassSerial = currentWorldPassSerial;
-        nothiriumPipelineTranslucentDrawnFrame = pipelineFrameId;
-    }
-
-    private boolean shouldSuppressDuplicatePipelineTranslucentLayer(BlockRenderLayer layer) {
-        boolean sameWorldPass = currentWorldPassSerial != Long.MIN_VALUE
-                && nothiriumPipelineTranslucentWorldPassSerial == currentWorldPassSerial
-                && nothiriumPipelineTranslucentFrame == pipelineFrameId;
-        boolean samePipelineFrame = nothiriumPipelineTranslucentDrawnFrame == pipelineFrameId;
-        return layer == BlockRenderLayer.TRANSLUCENT
-                && isPipelineActive
-                && !renderingShadowMap
-                && !renderingGuiScreen()
-                && (worldFrameActive || samePipelineFrame)
-                && (sameWorldPass || samePipelineFrame)
-                && !isPipelineTranslucentTerrainPhase();
-    }
-
-    private boolean isPipelineTranslucentTerrainPhase() {
-        return activePass == RenderPass.GBUFFERS_WATER
-                && getPhase() == WorldRenderingPhase.TERRAIN_TRANSLUCENT;
-    }
-
-    private void clearNothiriumPipelineTranslucentBridge() {
-        nothiriumPipelineTranslucentFrame = Long.MIN_VALUE;
-        nothiriumPipelineTranslucentWorldPassSerial = Long.MIN_VALUE;
-    }
-
-    private void beginWorldPassDuplicateTracking() {
-        worldPassSerialStack.push(currentWorldPassSerial);
-        nothiriumPipelineTranslucentFrameStack.push(nothiriumPipelineTranslucentFrame);
-        nothiriumPipelineTranslucentWorldPassSerialStack.push(nothiriumPipelineTranslucentWorldPassSerial);
-        currentWorldPassSerial = ++nextWorldPassSerial;
-        clearNothiriumPipelineTranslucentBridge();
-    }
-
-    private void finishWorldPassDuplicateTracking() {
-        currentWorldPassSerial = worldPassSerialStack.isEmpty() ? Long.MIN_VALUE : worldPassSerialStack.pop();
-        nothiriumPipelineTranslucentFrame = nothiriumPipelineTranslucentFrameStack.isEmpty()
-                ? Long.MIN_VALUE
-                : nothiriumPipelineTranslucentFrameStack.pop();
-        nothiriumPipelineTranslucentWorldPassSerial = nothiriumPipelineTranslucentWorldPassSerialStack.isEmpty()
-                ? Long.MIN_VALUE
-                : nothiriumPipelineTranslucentWorldPassSerialStack.pop();
-    }
-
-    private boolean shouldPrepareShaderlessBlockLayerState() {
-        return !isPipelineActive || shouldBypassWorldPassRendering() || shouldUseHardwareSafeVanillaBlockLayerState();
-    }
-
-    private boolean shouldUseHardwareSafeVanillaBlockLayerState() {
-        return isPipelineActive
-                && ENABLE_SAFE_TERRAIN_FALLBACKS
-                && hardwareSafeVanillaTerrain
-                && worldFrameActive
-                && !renderingShadowMap
-                && !renderingGuiScreen();
-    }
-
-    private void prepareShaderlessBlockLayerState(BlockRenderLayer layer) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (!shaderlessBloomExtractionActive) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        }
-        if (shouldUseHardwareSafeVanillaBlockLayerState() && pingPongManager.isInitialized()) {
-            pingPongManager.bindForGbuffers(fallbackColorAttachment());
-        }
-        TextureBinder.restoreDefaultTextureUnit();
-        resetIndexedBlendState();
-        if (!shaderlessBloomExtractionActive) {
-            disablePipelineVertexAttributes();
-        }
-        unbindShaderStorageBuffers();
-        GL11.glDisable(GL11.GL_SCISSOR_TEST);
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GL11.glPolygonOffset(0.0F, 0.0F);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        restoreVanillaFixedFunctionTextureState(mc);
-        restoreShaderlessTerrainClientTextureArrays();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-
-        if (shouldRenderLayerWithTranslucentState(layer)) {
-            FixedFunctionGlState.prepareTranslucentDepthBlendState();
-            FixedFunctionGlState.forceTranslucentBlockLayer();
-            return;
-        }
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-        if (layer == BlockRenderLayer.SOLID) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
-        } else {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        }
-    }
-
-    private void finishShaderlessBlockLayerState(BlockRenderLayer layer) {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glDisable(GL11.GL_SCISSOR_TEST);
-        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        if (shouldRenderLayerWithTranslucentState(layer)) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
-        }
-    }
-
-    private void beginShaderlessTerrainLightmapCoords() {
-        if (isPipelineActive || shaderlessTerrainLightmapCoordsSaved) {
-            return;
-        }
-        shaderlessTerrainPreviousLightmapX = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldFloat(net.minecraft.client.renderer.OpenGlHelper.class, 0.0F, "lastBrightnessX", "lastBrightnessX");
-        shaderlessTerrainPreviousLightmapY = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldFloat(net.minecraft.client.renderer.OpenGlHelper.class, 0.0F, "lastBrightnessY", "lastBrightnessY");
-        shaderlessTerrainLightmapCoordsSaved = true;
-        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.OpenGlHelper.class, new String[] {"func_77475_a", "setLightmapTextureCoords"},
-                new Class<?>[] {int.class, float.class, float.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit()), (0.0F), (240.0F));;
-    }
-
-    private void restoreShaderlessTerrainLightmapCoords() {
-        if (!shaderlessTerrainLightmapCoordsSaved) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.OpenGlHelper.class, new String[] {"func_77475_a", "setLightmapTextureCoords"},
-                new Class<?>[] {int.class, float.class, float.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit()), (shaderlessTerrainPreviousLightmapX), (shaderlessTerrainPreviousLightmapY));;
-        shaderlessTerrainLightmapCoordsSaved = false;
-    }
-
-    private static boolean shouldRenderLayerWithTranslucentState(BlockRenderLayer layer) {
-        return layer == BlockRenderLayer.TRANSLUCENT || AusmBloomLayer.isBloomLayer(layer);
-    }
-
-    private void recordTerrainLayerCount(BlockRenderLayer layer, int count) {
-        recordTerrainLayerCount(layer, count, false);
-    }
-
-    private void recordTerrainLayerCount(BlockRenderLayer layer, int count, boolean nothiriumMainTerrain) {
-        if (!isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || layer == null
-                || isRenderingBetterPortalsRenderPass()) {
-            return;
-        }
-
-        if (terrainLayerCountFrame != pipelineFrameId) {
-            terrainLayerCountFrame = pipelineFrameId;
-            terrainOpaqueLayerCount = 0;
-            terrainOpaqueDrawCount = 0;
-        }
-
-        if (layer == BlockRenderLayer.SOLID
-                || layer == BlockRenderLayer.CUTOUT_MIPPED
-                || layer == BlockRenderLayer.CUTOUT) {
-            terrainOpaqueLayerCount++;
-            terrainOpaqueDrawCount += Math.max(0, count);
-            if (count > 0) {
-                zeroOpaqueTerrainFrames = 0;
-                zeroOpaqueTerrainRecoveryRequested = false;
-            }
-        }
-
-        if (ENABLE_SAFE_TERRAIN_FALLBACKS && hardwareSafeVanillaTerrain) {
-            zeroOpaqueTerrainFrames = 0;
-            sparseOpaqueTerrainFrames = 0;
-            return;
-        }
-
-        if (layer == BlockRenderLayer.CUTOUT
-                && terrainOpaqueLayerCount >= 3
-                && terrainOpaqueDrawCount == 0) {
-            if (hasLoadedTerrainNearPlayer()) {
-                markSparseNothiriumMainTerrainFrame(nothiriumMainTerrain);
-                zeroOpaqueTerrainFrames++;
-                logHardwareTerrainFallback(
-                        "zero-opaque-frame",
-                        "frames=" + zeroOpaqueTerrainFrames
-                                + ", activePass=" + activePass
-                                + ", phase=" + getPhase()
-                                + ", bypass=" + NothiriumBypass.shouldBypass()
-                );
-                if (zeroOpaqueTerrainFrames >= HARDWARE_TERRAIN_FALLBACK_ZERO_FRAMES) {
-                    zeroOpaqueTerrainFrames = 0;
-                    if (!ENABLE_SAFE_TERRAIN_FALLBACKS) {
-                        zeroOpaqueTerrainRecoveryRequested = true;
-                        logHardwareTerrainFallback(
-                                "zero-opaque-nothirium-only",
-                                "safe terrain fallback disabled; keeping Nothirium-only terrain path"
-                        );
-                        return;
-                    }
-                    if (softVanillaTerrainRenderer) {
-                        logHardwareTerrainFallback(
-                                "zero-opaque-soft-vanilla-failed",
-                                "soft vanilla terrain still produced zero opaque draws; escalating to hardware-safe vanilla terrain"
-                        );
-                        activateHardwareSafeVanillaTerrain("soft-vanilla-zero-opaque");
-                        return;
-                    }
-                    zeroOpaqueTerrainRecoveryRequested = true;
-                    logHardwareTerrainFallback(
-                            "zero-opaque-soft-vanilla",
-                            "switching main terrain away from Nothirium after repeated zero opaque shader frames"
-                    );
-                    activateSoftVanillaTerrainRenderer("zero-opaque-nothirium-main");
-                    return;
-                }
-                if (nothiriumMainTerrain && !softVanillaTerrainRenderer) {
-                    sparseOpaqueTerrainFrames++;
-                    if (sparseOpaqueTerrainFrames >= HARDWARE_TERRAIN_FALLBACK_SPARSE_FRAMES) {
-                        logHardwareTerrainFallback(
-                                "zero-sparse-opaque-soft-vanilla",
-                                "switching main terrain away from zero/sparse Nothirium after weak frames="
-                                        + sparseOpaqueTerrainFrames
-                        );
-                        sparseOpaqueTerrainFrames = 0;
-                        activateSoftVanillaTerrainRenderer("zero-sparse-opaque-nothirium-main");
-                        return;
-                    }
-                } else if (!softVanillaTerrainRenderer) {
-                    sparseOpaqueTerrainFrames = 0;
-                }
-            } else {
-                sparseOpaqueTerrainFrames = 0;
-                logHardwareTerrainFallback("zero-opaque-no-loaded-terrain", "world=" + describeWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) : null));
-            }
-        } else if (layer == BlockRenderLayer.CUTOUT
-                && terrainOpaqueLayerCount >= 3
-                && (nothiriumMainTerrain || softVanillaTerrainRenderer)
-                && terrainOpaqueDrawCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
-                && hasLoadedTerrainNearPlayer()) {
-            markSparseNothiriumMainTerrainFrame(nothiriumMainTerrain);
-            if (softVanillaTerrainRenderer
-                    && isComplementarySoftVanillaStartupPack()
-                    && terrainOpaqueDrawCount > 0) {
-                sparseOpaqueTerrainFrames = 0;
-                return;
-            }
-            sparseOpaqueTerrainFrames++;
-            logHardwareTerrainFallback(
-                    softVanillaTerrainRenderer ? "sparse-opaque-soft-vanilla-frame" : "sparse-opaque-frame",
-                    "frames=" + sparseOpaqueTerrainFrames
-                            + ", opaqueDraws=" + terrainOpaqueDrawCount
-                            + ", minOpaqueDraws=" + HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
-                            + ", activePass=" + activePass
-                            + ", phase=" + getPhase()
-                            + ", bypass=" + NothiriumBypass.shouldBypass()
-            );
-            if (sparseOpaqueTerrainFrames >= HARDWARE_TERRAIN_FALLBACK_SPARSE_FRAMES) {
-                if (!ENABLE_SAFE_TERRAIN_FALLBACKS) {
-                    sparseOpaqueTerrainFrames = 0;
-                    logHardwareTerrainFallback(
-                            "sparse-opaque-nothirium-only",
-                            "safe terrain fallback disabled; keeping Nothirium-only terrain path"
-                    );
-                    return;
-                }
-                if (softVanillaTerrainRenderer) {
-                    logHardwareTerrainFallback(
-                            "sparse-opaque-soft-vanilla-failed",
-                            "soft vanilla terrain stayed sparse after frames="
-                                    + sparseOpaqueTerrainFrames
-                                    + ", opaqueDraws=" + terrainOpaqueDrawCount
-                                    + "; escalating to hardware-safe vanilla terrain"
-                    );
-                    sparseOpaqueTerrainFrames = 0;
-                    activateHardwareSafeVanillaTerrain("soft-vanilla-sparse-opaque");
-                    return;
-                }
-                logHardwareTerrainFallback(
-                        "sparse-opaque-soft-vanilla",
-                        "switching main terrain away from sparse Nothirium after frames="
-                                + sparseOpaqueTerrainFrames
-                                + ", opaqueDraws=" + terrainOpaqueDrawCount
-                );
-                sparseOpaqueTerrainFrames = 0;
-                activateSoftVanillaTerrainRenderer("sparse-opaque-nothirium-main");
-            }
-        } else if (layer == BlockRenderLayer.CUTOUT && terrainOpaqueLayerCount >= 3) {
-            sparseOpaqueTerrainFrames = 0;
-        }
-    }
-
-    public boolean shouldUseNothiriumHybridVanillaMaintenance() {
-        return isPipelineActive
-                && worldFrameActive
-                && !renderingShadowMap
-                && !renderingGuiScreen()
-                && !(ENABLE_SAFE_TERRAIN_FALLBACKS && hardwareSafeVanillaTerrain)
-                && !(ENABLE_SAFE_TERRAIN_FALLBACKS && softVanillaTerrainRenderer)
-                && nothiriumHybridVanillaMaintenanceFrames > 0;
-    }
-
-    public String nothiriumHybridVanillaMaintenanceReason() {
-        return nothiriumHybridVanillaMaintenanceReason;
-    }
-
-    private void startNothiriumHybridVanillaMaintenance(String reason) {
-        if (!isPipelineActive
-                || renderingShadowMap
-                || (ENABLE_SAFE_TERRAIN_FALLBACKS && (hardwareSafeVanillaTerrain || softVanillaTerrainRenderer))) {
-            return;
-        }
-        int previous = nothiriumHybridVanillaMaintenanceFrames;
-        nothiriumHybridVanillaMaintenanceFrames = Math.max(
-                nothiriumHybridVanillaMaintenanceFrames,
-                NOTHIRIUM_HYBRID_VANILLA_MAINTENANCE_FRAMES
-        );
-        nothiriumHybridVanillaMaintenanceReason = reason != null ? reason : "";
-        if (previous > 0 || nothiriumHybridVanillaMaintenanceLogs >= MAX_NOTHIRIUM_HYBRID_MAINTENANCE_LOGS) {
-            return;
-        }
-        nothiriumHybridVanillaMaintenanceLogs++;
-        MainMod.LOGGER.warn(
-                "[AUSMNothiriumHybrid] stage=activate-maintenance frames={} reason='{}' frame={} world={} gl={}",
-                nothiriumHybridVanillaMaintenanceFrames,
-                nothiriumHybridVanillaMaintenanceReason,
-                pipelineFrameId,
-                describeWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) : null),
-                glStateSummary()
-        );
-    }
-
-    private boolean shouldUseNothiriumMainVanillaDrawPath(BlockRenderLayer layer) {
-        return false;
-    }
-
-    private boolean shouldPreferShaderedVanillaMainTerrain() {
-        return false;
-    }
-
-    private void startNothiriumMainVanillaDrawPath(String reason) {
-        nothiriumMainVanillaDrawPathFrames = 0;
-        nothiriumMainVanillaDrawPathReason = "";
-    }
-
-    private void primeNothiriumMainVanillaDrawPath(String reason) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
-            ensureVanillaTerrainRenderer();
-            return;
-        }
-        rebuildMainWorldVanillaViewFrustum(
-                com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
-                "nothirium-main-vanilla-draw"
-        );
-        ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
-        NothiriumBypass.markAllChanged();
-        scheduleWorldTerrainRefresh(true, true, 0);
-        scheduleInactiveVanillaRecoveryFrame();
-        logHardwareTerrainFallback("prime-main-vanilla-draw", reason);
-    }
-
-    private void activateShaderedNothiriumGlobalBypass(String reason) {
-        clearShaderedNothiriumGlobalBypassState(true);
-    }
-
-    private void resetShaderlessTerrainLayerCounts() {
-        shaderlessTerrainSolidCount = -1;
-        shaderlessTerrainCutoutMippedCount = -1;
-        shaderlessTerrainCutoutCount = -1;
-        shaderlessTerrainTranslucentCount = -1;
-        shaderlessTerrainBloomCount = -1;
-    }
-
-    private void recordShaderlessTerrainLayerCount(BlockRenderLayer layer, int count) {
-        if (isPipelineActive || layer == null || renderingShadowMap || renderingGuiScreen()) {
-            return;
-        }
-        int safeCount = Math.max(0, count);
-        if (layer == BlockRenderLayer.SOLID) {
-            shaderlessTerrainSolidCount = safeCount;
-        } else if (layer == BlockRenderLayer.CUTOUT_MIPPED) {
-            shaderlessTerrainCutoutMippedCount = safeCount;
-        } else if (layer == BlockRenderLayer.CUTOUT) {
-            shaderlessTerrainCutoutCount = safeCount;
-        } else if (layer == BlockRenderLayer.TRANSLUCENT) {
-            shaderlessTerrainTranslucentCount = safeCount;
-        } else if (AusmBloomLayer.isBloomLayer(layer)) {
-            shaderlessTerrainBloomCount = safeCount;
-        }
-    }
-
-    private boolean shouldRenderShaderlessExtractionLayer(BlockRenderLayer layer) {
-        return true;
-    }
-
-    private int shaderlessTerrainLayerCount(BlockRenderLayer layer) {
-        if (layer == BlockRenderLayer.SOLID) {
-            return shaderlessTerrainSolidCount;
-        }
-        if (layer == BlockRenderLayer.CUTOUT_MIPPED) {
-            return shaderlessTerrainCutoutMippedCount;
-        }
-        if (layer == BlockRenderLayer.CUTOUT) {
-            return shaderlessTerrainCutoutCount;
-        }
-        if (layer == BlockRenderLayer.TRANSLUCENT) {
-            return shaderlessTerrainTranslucentCount;
-        }
-        if (AusmBloomLayer.isBloomLayer(layer)) {
-            return shaderlessTerrainBloomCount;
-        }
-        return -1;
-    }
-
-    private boolean hasLoadedTerrainNearPlayer() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
-            return false;
-        }
-
-        int playerChunkX = ((int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)))) >> 4;
-        int playerChunkZ = ((int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)))) >> 4;
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.call((com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)), net.minecraft.client.multiplayer.ChunkProviderClient.class, null, new String[] {"func_72863_F", "getChunkProvider"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS) instanceof ChunkProviderClient provider) {
-            for (int dz = -1; dz <= 1; dz++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    Chunk chunk = com.l.ausm.impl.util.MinecraftReflectionCompat.call((provider), net.minecraft.world.chunk.Chunk.class, null, new String[] {"func_186026_b", "getLoadedChunk"},
-                new Class<?>[] {int.class, int.class}, (playerChunkX + dx), (playerChunkZ + dz));
-                    if (chunk != null && !com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((chunk), new String[] {"func_76621_g", "isEmpty"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(
-                com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc),
-                new BlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc))
-        );
-    }
-
-    private void activateHardwareSafeVanillaTerrain(String reason) {
-        if (!ENABLE_SAFE_TERRAIN_FALLBACKS) {
-            logHardwareTerrainFallback("skip-hardware-safe-disabled", reason);
-            return;
-        }
-        if (hardwareSafeVanillaTerrain) {
-            refreshHardwareSafeVanillaTerrain(reason, true);
-            return;
-        }
-        hardwareSafeVanillaTerrain = true;
-        hardwareSafeVanillaTerrainReason = reason;
-        softVanillaTerrainRenderer = false;
-        softVanillaTerrainRendererReason = "";
-        zeroOpaqueTerrainFrames = 0;
-        sparseOpaqueTerrainFrames = 0;
-        logHardwareTerrainFallback(
-                "activate",
-                reason + ", maxAttribs=" + safeGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS)
-                        + ", renderer='" + safeGetString(GL11.GL_RENDERER) + "'"
-        );
-        updateNothiriumPipelineBlockFormatMode();
-        refreshHardwareSafeVanillaTerrain(reason, true);
-        scheduleInactiveVanillaRecoveryFrame();
-    }
-
-    private void activateSoftVanillaTerrainRenderer(String reason) {
-        if (!ENABLE_SAFE_TERRAIN_FALLBACKS) {
-            logHardwareTerrainFallback("skip-soft-vanilla-disabled", reason);
-            return;
-        }
-        if (softVanillaTerrainRenderer) {
-            return;
-        }
-        softVanillaTerrainRenderer = true;
-        softVanillaTerrainRendererReason = reason;
-        ensureVanillaTerrainRenderer();
-        NothiriumBypass.markAllChanged();
-        scheduleWorldTerrainRefresh(true, true, 0);
-        scheduleInactiveVanillaRecoveryFrame();
-        logHardwareTerrainFallback(
-                "activate-soft-vanilla",
-                reason + ", shaderBlockLayerOverrides=true"
-        );
-    }
-
-    private void refreshHardwareSafeVanillaTerrainForCamera(Minecraft mc) {
-        if (!ENABLE_SAFE_TERRAIN_FALLBACKS
-                || !isPipelineActive
-                || (!hardwareSafeVanillaTerrain && !softVanillaTerrainRenderer)
-                || mc == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
-            lastHardwareSafeVanillaTerrainRefreshWorld = null;
-            lastHardwareSafeVanillaTerrainRefreshChunkX = Integer.MIN_VALUE;
-            lastHardwareSafeVanillaTerrainRefreshChunkZ = Integer.MIN_VALUE;
-            lastHardwareSafeVanillaTerrainLoadedNearPlayer = false;
-            hardwareSafeVanillaTerrainRefreshCooldown = 0;
-            return;
-        }
-        if (hardwareSafeVanillaTerrainRefreshCooldown > 0) {
-            hardwareSafeVanillaTerrainRefreshCooldown--;
-        }
-
-        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        if (viewEntity == null) {
-            return;
-        }
-        int chunkX = ((int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity))) >> 4;
-        int chunkZ = ((int) Math.floor(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity))) >> 4;
-        boolean loadedNearPlayer = hasLoadedTerrainNearPlayer();
-        boolean changed = lastHardwareSafeVanillaTerrainRefreshWorld != com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)
-                || lastHardwareSafeVanillaTerrainRefreshChunkX != chunkX
-                || lastHardwareSafeVanillaTerrainRefreshChunkZ != chunkZ
-                || (loadedNearPlayer && !lastHardwareSafeVanillaTerrainLoadedNearPlayer);
-
-        lastHardwareSafeVanillaTerrainRefreshWorld = com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
-        lastHardwareSafeVanillaTerrainRefreshChunkX = chunkX;
-        lastHardwareSafeVanillaTerrainRefreshChunkZ = chunkZ;
-        lastHardwareSafeVanillaTerrainLoadedNearPlayer = loadedNearPlayer;
-
-        if (changed && loadedNearPlayer) {
-            refreshHardwareSafeVanillaTerrain(
-                    hardwareSafeVanillaTerrain ? "camera-frustum-change" : "soft-vanilla-camera-frustum-change",
-                    false
-            );
-        }
-    }
-
-    private void refreshHardwareSafeVanillaTerrain(String reason, boolean hardReset) {
-        if (!hardReset && hardwareSafeVanillaTerrainRefreshCooldown > 0) {
-            return;
-        }
-        hardwareSafeVanillaTerrainRefreshCooldown = HARDWARE_TERRAIN_FALLBACK_REFRESH_COOLDOWN_FRAMES;
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null) {
-            if (hardReset) {
-                deleteCachedVanillaTerrainRenderers();
-                vanillaViewFrustumStateStack.clear();
-                activeVanillaViewFrustumRenderGlobal = null;
-                activeVanillaViewFrustumWorld = null;
-                activeVanillaViewFrustumRenderDistanceChunks = -1;
-                rebuildMainWorldVanillaViewFrustum(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), "hardware-safe-vanilla");
-            }
-            ensureVanillaTerrainRenderer(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc), true);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.loadRenderers(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc));
-        } else {
-            ensureVanillaTerrainRenderer();
-        }
-        sparseOpaqueTerrainFrames = 0;
-        zeroOpaqueTerrainRecoveryRequested = false;
-        scheduleInactiveVanillaRecoveryFrame();
-        logHardwareTerrainFallback(
-                "refresh",
-                reason + ", hardReset=" + hardReset
-                        + ", cooldown=" + hardwareSafeVanillaTerrainRefreshCooldown
-        );
-    }
-
-    private void logHardwareTerrainFallback(String stage, String detail) {
-        if (hardwareTerrainFallbackLogs >= MAX_HARDWARE_TERRAIN_FALLBACK_LOGS) {
-            return;
-        }
-        hardwareTerrainFallbackLogs++;
-        MainMod.LOGGER.warn(
-                "[AUSMHardwareTerrainFallback] call={} stage={} active={} safeVanilla={} reason='{}' detail={} frame={} worldFrame={} world={} gl={}",
-                hardwareTerrainFallbackLogs,
-                stage,
-                isPipelineActive,
-                hardwareSafeVanillaTerrain,
-                hardwareSafeVanillaTerrainReason
-                        + (softVanillaTerrainRenderer ? ", softVanilla='" + softVanillaTerrainRendererReason + "'" : "")
-                        + (shaderedNothiriumGlobalBypass ? ", shaderedNothiriumBypass='" + shaderedNothiriumGlobalBypassReason + "'" : ""),
-                detail,
-                pipelineFrameId,
-                worldFrameActive,
-                describeWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) : null),
-                glStateSummary()
-        );
-    }
-
-    public int getCenterDepthSmoothTexture() {
-        ensureCenterDepthSmoothTexture();
-        return centerDepthSmoothTexture;
-    }
-
-    private void ensureCenterDepthSmoothTexture() {
-        if (centerDepthSmoothTexture != -1) {
-            return;
-        }
-
-        centerDepthSmoothTexture = GL11.glGenTextures();
-        GL13.glActiveTexture(GL13.GL_TEXTURE0 + TextureBinder.CENTER_DEPTH_SMOOTH_TEXTURE_UNIT);
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, centerDepthSmoothTexture);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
-        centerDepthTextureBuffer.clear();
-        centerDepthTextureBuffer.put(centerDepthSmooth).flip();
-        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_R32F, 1, 1, 0, GL11.GL_RED, GL11.GL_FLOAT, centerDepthTextureBuffer);
-        TextureBinder.restoreDefaultTextureUnit();
-    }
-
-    private void updateCenterDepthSmoothTexture() {
-        ensureCenterDepthSmoothTexture();
-        centerDepthTextureBuffer.clear();
-        centerDepthTextureBuffer.put(centerDepthSmooth).flip();
-        GL13.glActiveTexture(GL13.GL_TEXTURE0 + TextureBinder.CENTER_DEPTH_SMOOTH_TEXTURE_UNIT);
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, centerDepthSmoothTexture);
-        GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL11.GL_RED, GL11.GL_FLOAT, centerDepthTextureBuffer);
-        TextureBinder.restoreDefaultTextureUnit();
-    }
-
-    private void deleteCenterDepthSmoothTexture() {
-        if (centerDepthSmoothTexture != -1) {
-            GL11.glDeleteTextures(centerDepthSmoothTexture);
-            centerDepthSmoothTexture = -1;
-        }
-    }
-
-    public int getNoiseTexture() {
-        if (noiseTexture == -1) {
-            noiseTexture = ShaderTextureLoader.createNoiseTexture(256);
-        }
-        return noiseTexture;
-    }
-
-    private void initializeNoiseTexture(ShaderPack pack, ShaderProperties properties) {
-        ShaderCustomTextureBinding customNoise = packDirectives.noiseTexture();
-        if (customNoise != null) {
-            try {
-                noiseTexture = ShaderTextureLoader.loadTexture(
-                        pack,
-                        customNoise.resourcePath(),
-                        customNoise.blur(),
-                        customNoise.clamp()
-                );
-                MainMod.LOGGER.debug("[ShaderTextures] Loaded custom noisetex from {}", customNoise.resourcePath());
-                return;
-            } catch (IOException e) {
-                MainMod.LOGGER.warn("[ShaderTextures] Failed to load custom noisetex {}, using generated noise", customNoise.resourcePath(), e);
-            }
-        }
-
-        int resolution = parseIntSetting(pack, properties, "noiseTextureResolution", packDirectives.noiseTextureResolution());
-        noiseTexture = ShaderTextureLoader.createNoiseTexture(resolution);
-    }
-
-    private void deleteNoiseTexture() {
-        if (noiseTexture != -1) {
-            GL11.glDeleteTextures(noiseTexture);
-            noiseTexture = -1;
-        }
-    }
-
-    private void copyPreTranslucentDepth() {
-        if (!isPipelineActive || !pingPongManager.isInitialized()) {
-            return;
-        }
-        if (!preTranslucentDepthCopiedThisFrame) {
-            pingPongManager.copyPreTranslucentDepth();
-            preTranslucentDepthCopiedThisFrame = true;
-        }
     }
 
     public void beginTranslucents() {
@@ -15808,7 +267,7 @@ public class PipelineContext {
         bindWorldFramebuffer();
     }
 
-    private void compositeLatestDistantHorizonsTexture(Framebuffer target) {
+    protected void compositeLatestDistantHorizonsTexture(Framebuffer target) {
         if (shouldUseDistantHorizonsFramebufferOverride()) {
             distantHorizonsFramebufferPendingComposite = false;
             distantHorizonsColorTextureId = 0;
@@ -15842,7 +301,7 @@ public class PipelineContext {
         };
     }
 
-    private boolean hasDeferredPrograms() {
+    protected boolean hasDeferredPrograms() {
         for (RenderPass pass : RenderPass.DEFERRED_PASSES) {
             PipelineProgram program = programs.get(pass);
             if (program != null && program.hasOwnProgram()) {
@@ -15901,6 +360,7 @@ public class PipelineContext {
         BetterPortalsCompat.logRenderStateDiagnostic("pipeline:world-blit-start external=" + externalTarget
                 + " target=" + describeFramebufferTarget(target)
                 + " read=" + describeDeferredFramebuffer(readBuffer));
+        logSkyPresentationRouteProbe("world-blit-start", target, readBuffer, programs.get(RenderPass.FINAL));
         logBetterPortalsPipeline("blit-start", "target=" + describeFramebufferTargetDetailed(target)
                 + ", targetStatus=" + framebufferStatus(target));
         beginTranslucents();
@@ -16061,6 +521,7 @@ public class PipelineContext {
 
         PipelineProgram finalProgram = programs.get(RenderPass.FINAL);
         if (finalProgram != null && finalProgram.hasOwnProgram()) {
+            logSkyPresentationRouteProbe("choose-final-pass", target, readBuffer, finalProgram);
             logBetterPortalsPipeline("choose-final-pass");
             renderFinalPass(target);
             logShaderedVoidSkyTargetProbe("after-final-pass", target);
@@ -16078,7 +539,7 @@ public class PipelineContext {
                 "choose-direct-blit", externalTarget, true, true);
     }
 
-    private boolean shouldHoldSparseNothiriumStartupPresentation(DeferredFramebuffer readBuffer, Attachment attachment) {
+    protected boolean shouldHoldSparseNothiriumStartupPresentation(DeferredFramebuffer readBuffer, Attachment attachment) {
         return readBuffer != null
                 && attachment != null
                 && ENABLE_SPARSE_STARTUP_PRESENTATION_HOLD
@@ -16092,7 +553,7 @@ public class PipelineContext {
                 && hasSparseNothiriumMainTerrainEvidence();
     }
 
-    private void holdSparseStartupPresentation(Framebuffer target, String reason) {
+    protected void holdSparseStartupPresentation(Framebuffer target, String reason) {
         int holdFrame = ++sparseStartupPresentationHoldFrames;
         if (sparseStartupPresentationHoldLogs++ < MAX_SPARSE_STARTUP_PRESENTATION_HOLD_LOGS) {
             MainMod.LOGGER.info(
@@ -16120,7 +581,7 @@ public class PipelineContext {
         logBetterPortalsPipeline("finish-sparse-startup-hold", "reason=" + reason);
     }
 
-    private void clearSparseStartupSkyOnlyTarget(Framebuffer target) {
+    protected void clearSparseStartupSkyOnlyTarget(Framebuffer target) {
         if (target == null || isExternalWorldFramebufferTarget(target)) {
             return;
         }
@@ -16152,7 +613,7 @@ public class PipelineContext {
         }
     }
 
-    private void finishFlatCompositeSkyOnlyFrame(Framebuffer target, String reason) {
+    protected void finishFlatCompositeSkyOnlyFrame(Framebuffer target, String reason) {
         compositeInvalidFallbackFrames = 0;
         clearCompositeInvalidFallbackSnapshot();
         clearSparseStartupSkyOnlyTarget(target);
@@ -16163,24 +624,17 @@ public class PipelineContext {
         logBetterPortalsPipeline("finish-flat-composite-sky-only", "reason=" + reason);
     }
 
-    private static float clampColorChannel(float value) {
+    protected static float clampColorChannel(float value) {
         if (!Float.isFinite(value)) {
             return 0.0F;
         }
         return Math.max(0.0F, Math.min(1.0F, value));
     }
 
-    private float[] sparseStartupSkyOnlyColor(Minecraft mc) {
+    protected float[] sparseStartupSkyOnlyColor(Minecraft mc) {
         World world = renderWorld(mc);
         if (isSimpleVoidWorld(world)) {
-            float dayFactor = 1.0F - ausmOfficialNightFactor(world);
-            float[] night = new float[]{0.018F, 0.028F, 0.056F};
-            float[] day = new float[]{0.45F, 0.62F, 0.86F};
-            return new float[]{
-                    night[0] + (day[0] - night[0]) * dayFactor,
-                    night[1] + (day[1] - night[1]) * dayFactor,
-                    night[2] + (day[2] - night[2]) * dayFactor
-            };
+            return new float[]{0.45F, 0.62F, 0.86F};
         }
         float[] color = skyColor(mc);
         float maxChannel = Math.max(color[0], Math.max(color[1], color[2]));
@@ -16190,13 +644,13 @@ public class PipelineContext {
         return color;
     }
 
-    private static float ausmOfficialNightFactor(World world) {
+    protected static float ausmOfficialNightFactor(World world) {
         long time = world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L : 6000L;
         float timeAngle = (float) time / 24000.0F;
         return Math.max((float) Math.sin(timeAngle * -6.28318530718F), 0.0F);
     }
 
-    private boolean presentPreCompositeWithFinalPassIfNeeded(Framebuffer target,
+    protected boolean presentPreCompositeWithFinalPassIfNeeded(Framebuffer target,
                                                             Minecraft mc,
                                                             boolean externalTarget,
                                                             String reason) {
@@ -16208,13 +662,14 @@ public class PipelineContext {
             return false;
         }
         logBetterPortalsPipeline(reason);
+        logSkyPresentationRouteProbe(reason, target, pingPongManager.getReadBuffer(), finalProgram);
         renderFinalPass(target);
         logShaderedVoidSkyTargetProbe("after-" + reason, target);
         finishWorldFramebuffer(target, externalTarget);
         return true;
     }
 
-    private void blitReadBufferToPresentationTarget(DeferredFramebuffer readBuffer,
+    protected void blitReadBufferToPresentationTarget(DeferredFramebuffer readBuffer,
                                                     Framebuffer target,
                                                     Minecraft mc,
                                                     String reason,
@@ -16225,7 +680,7 @@ public class PipelineContext {
                 clearPresentation, probeTarget);
     }
 
-    private void blitReadBufferAttachmentToPresentationTarget(DeferredFramebuffer readBuffer,
+    protected void blitReadBufferAttachmentToPresentationTarget(DeferredFramebuffer readBuffer,
                                                     Attachment sourceAttachment,
                                                     Framebuffer target,
                                                     Minecraft mc,
@@ -16237,7 +692,7 @@ public class PipelineContext {
                 externalTarget, clearPresentation, probeTarget, true);
     }
 
-    private void blitReadBufferAttachmentToPresentationTarget(DeferredFramebuffer readBuffer,
+    protected void blitReadBufferAttachmentToPresentationTarget(DeferredFramebuffer readBuffer,
                                                     Attachment sourceAttachment,
                                                     Framebuffer target,
                                                     Minecraft mc,
@@ -16250,7 +705,7 @@ public class PipelineContext {
                 externalTarget, clearPresentation, probeTarget, renderPostBloom, 1.0F);
     }
 
-    private void blitReadBufferAttachmentToPresentationTarget(DeferredFramebuffer readBuffer,
+    protected void blitReadBufferAttachmentToPresentationTarget(DeferredFramebuffer readBuffer,
                                                     Attachment sourceAttachment,
                                                     Framebuffer target,
                                                     Minecraft mc,
@@ -16261,6 +716,7 @@ public class PipelineContext {
                                                     boolean renderPostBloom,
                                                     float directPresentColorScale) {
         logBetterPortalsPipeline(reason);
+        logSkyPresentationRouteProbe(reason, target, readBuffer, programs.get(RenderPass.FINAL));
         if (clearPresentation) {
             clearPresentationTarget(target, reason);
         }
@@ -16283,7 +739,7 @@ public class PipelineContext {
         finishWorldFramebuffer(target, externalTarget, renderPostBloom);
     }
 
-    private void markDirectRecoveredWindowSource(DeferredFramebuffer readBuffer,
+    protected void markDirectRecoveredWindowSource(DeferredFramebuffer readBuffer,
                                                  Attachment sourceAttachment,
                                                  Framebuffer target,
                                                  float colorScale) {
@@ -16299,7 +755,7 @@ public class PipelineContext {
         directRecoveredWindowColorScale = Float.isFinite(colorScale) ? Math.max(0.0F, Math.min(1.0F, colorScale)) : 1.0F;
     }
 
-    private void clearDirectRecoveredWindowSource() {
+    protected void clearDirectRecoveredWindowSource() {
         directRecoveredWindowSource = null;
         directRecoveredWindowAttachment = null;
         directRecoveredWindowFrame = Long.MIN_VALUE;
@@ -16308,7 +764,14 @@ public class PipelineContext {
         directRecoveredWindowColorScale = 1.0F;
     }
 
-    private void deleteDirectPresentationSnapshot() {
+    public void invalidateWorldLoadPresentationState() {
+        clearDirectRecoveredWindowSource();
+        deleteDirectPresentationSnapshot();
+        worldLoadPresentationGuardFrames = Math.max(worldLoadPresentationGuardFrames, 8);
+        guiTargetContentFrame = Long.MIN_VALUE;
+    }
+
+    protected void deleteDirectPresentationSnapshot() {
         directPresentationValid = false;
         directPresentationFrame = Long.MIN_VALUE;
         directPresentationReason = "";
@@ -16324,7 +787,7 @@ public class PipelineContext {
         }
     }
 
-    private void logDirectColorPresent(String reason,
+    protected void logDirectColorPresent(String reason,
                                        DeferredFramebuffer readBuffer,
                                        Attachment sourceAttachment,
                                        Framebuffer target) {
@@ -16345,7 +808,7 @@ public class PipelineContext {
         );
     }
 
-    private boolean deferredBufferHasSceneContent(DeferredFramebuffer framebuffer, Attachment attachment) {
+    protected boolean deferredBufferHasSceneContent(DeferredFramebuffer framebuffer, Attachment attachment) {
         if (framebuffer == null || !framebuffer.isUsable() || attachment == null) {
             return false;
         }
@@ -16364,7 +827,7 @@ public class PipelineContext {
         return false;
     }
 
-    private boolean deferredBufferHasPresentableTerrainColor(DeferredFramebuffer framebuffer, Attachment attachment) {
+    protected boolean deferredBufferHasPresentableTerrainColor(DeferredFramebuffer framebuffer, Attachment attachment) {
         if (framebuffer == null || !framebuffer.isUsable() || attachment == null) {
             return false;
         }
@@ -16380,7 +843,7 @@ public class PipelineContext {
         return presentable >= 2;
     }
 
-    private boolean deferredBufferHasColorContent(DeferredFramebuffer framebuffer, Attachment attachment) {
+    protected boolean deferredBufferHasColorContent(DeferredFramebuffer framebuffer, Attachment attachment) {
         if (framebuffer == null || !framebuffer.isUsable() || attachment == null) {
             return false;
         }
@@ -16395,7 +858,7 @@ public class PipelineContext {
         return false;
     }
 
-    private boolean deferredBufferLooksFlatWhiteOrClear(DeferredFramebuffer framebuffer, Attachment attachment) {
+    protected boolean deferredBufferLooksFlatWhiteOrClear(DeferredFramebuffer framebuffer, Attachment attachment) {
         if (framebuffer == null || !framebuffer.isUsable() || attachment == null) {
             return false;
         }
@@ -16421,7 +884,7 @@ public class PipelineContext {
         return total > 0 && flat == total && clearDepth >= Math.max(1, total - 1);
     }
 
-    private boolean shouldPresentColorBeforeFinal(DeferredFramebuffer framebuffer, Attachment colorAttachment) {
+    protected boolean shouldPresentColorBeforeFinal(DeferredFramebuffer framebuffer, Attachment colorAttachment) {
         if (framebuffer == null
                 || colorAttachment == null
                 || !deferredBufferHasColorContent(framebuffer, colorAttachment)
@@ -16432,7 +895,7 @@ public class PipelineContext {
                 || deferredBufferLooksNeutralGrayOrClear(framebuffer, Attachment.COMPOSITE);
     }
 
-    private boolean shouldPresentPreFinalDirectlyForNothirium(DeferredFramebuffer framebuffer,
+    protected boolean shouldPresentPreFinalDirectlyForNothirium(DeferredFramebuffer framebuffer,
                                                               Attachment colorAttachment,
                                                               Minecraft mc) {
         if (framebuffer == null
@@ -16456,7 +919,7 @@ public class PipelineContext {
         return hasSparseNothiriumMainTerrainEvidence();
     }
 
-    private void logPreFinalDirectPresent(DeferredFramebuffer framebuffer,
+    protected void logPreFinalDirectPresent(DeferredFramebuffer framebuffer,
                                           Attachment colorAttachment,
                                           Framebuffer target) {
         if (preFinalDirectPresentLogs++ >= MAX_PRE_FINAL_DIRECT_PRESENT_LOGS) {
@@ -16477,7 +940,7 @@ public class PipelineContext {
         );
     }
 
-    private boolean isComplementaryFinalColorSourceSensitivePack() {
+    protected boolean isComplementaryFinalColorSourceSensitivePack() {
         String name = activePackName != null ? activePackName.toLowerCase(Locale.ROOT) : "";
         return name.contains("complementary")
                 || name.contains("complimentary")
@@ -16485,7 +948,7 @@ public class PipelineContext {
                 || name.contains("entrée");
     }
 
-    private boolean deferredBufferLooksNeutralGrayOrClear(DeferredFramebuffer framebuffer, Attachment attachment) {
+    protected boolean deferredBufferLooksNeutralGrayOrClear(DeferredFramebuffer framebuffer, Attachment attachment) {
         if (framebuffer == null || !framebuffer.isUsable() || attachment == null) {
             return false;
         }
@@ -16503,7 +966,7 @@ public class PipelineContext {
         return total > 0 && neutralOrClear == total;
     }
 
-    private boolean deferredBufferLooksBlackOrClear(DeferredFramebuffer framebuffer, Attachment attachment) {
+    protected boolean deferredBufferLooksBlackOrClear(DeferredFramebuffer framebuffer, Attachment attachment) {
         if (framebuffer == null || !framebuffer.isUsable() || attachment == null) {
             return false;
         }
@@ -16521,7 +984,7 @@ public class PipelineContext {
         return total > 0 && blackOrClear == total;
     }
 
-    private boolean framebufferTargetLooksBlackOrClear(Framebuffer target) {
+    protected boolean framebufferTargetLooksBlackOrClear(Framebuffer target) {
         if (target == null) {
             return false;
         }
@@ -16565,7 +1028,7 @@ public class PipelineContext {
         return total > 0 && blackOrClear == total;
     }
 
-    private boolean restorePreDeferredColorIfDeferredBlackened(DeferredFramebuffer framebuffer,
+    protected boolean restorePreDeferredColorIfDeferredBlackened(DeferredFramebuffer framebuffer,
                                                                Attachment attachment,
                                                                String reason) {
         if (!preDeferredColorSnapshotThisFrame
@@ -16583,7 +1046,7 @@ public class PipelineContext {
         return restored;
     }
 
-    private void logPreDeferredColorRestore(DeferredFramebuffer framebuffer, Attachment attachment, String reason) {
+    protected void logPreDeferredColorRestore(DeferredFramebuffer framebuffer, Attachment attachment, String reason) {
         if (preDeferredColorRestoreLogs++ >= MAX_PRE_DEFERRED_COLOR_RESTORE_LOGS) {
             return;
         }
@@ -16599,7 +1062,7 @@ public class PipelineContext {
         );
     }
 
-    private int[][] compositeFallbackProbePoints(int width, int height) {
+    protected int[][] compositeFallbackProbePoints(int width, int height) {
         int maxX = Math.max(0, width - 1);
         int maxY = Math.max(0, height - 1);
         return new int[][] {
@@ -16612,7 +1075,7 @@ public class PipelineContext {
         };
     }
 
-    private float[] safeReadDeferredColor(DeferredFramebuffer framebuffer, Attachment attachment, int x, int y) {
+    protected float[] safeReadDeferredColor(DeferredFramebuffer framebuffer, Attachment attachment, int x, int y) {
         try {
             return framebuffer.readColorAt(attachment, x, y);
         } catch (RuntimeException | LinkageError e) {
@@ -16620,7 +1083,7 @@ public class PipelineContext {
         }
     }
 
-    private float[] safeReadRecoveryColor(DeferredFramebuffer framebuffer, int x, int y) {
+    protected float[] safeReadRecoveryColor(DeferredFramebuffer framebuffer, int x, int y) {
         try {
             return framebuffer.readRecoveryColorAt(x, y);
         } catch (RuntimeException | LinkageError e) {
@@ -16628,7 +1091,7 @@ public class PipelineContext {
         }
     }
 
-    private float safeReadDeferredDepth(DeferredFramebuffer framebuffer, int x, int y, int colorWidth, int colorHeight) {
+    protected float safeReadDeferredDepth(DeferredFramebuffer framebuffer, int x, int y, int colorWidth, int colorHeight) {
         try {
             int depthX = Math.max(0, Math.min(framebuffer.getWidth() - 1,
                     Math.round(x * (framebuffer.getWidth() - 1) / (float) Math.max(1, colorWidth - 1))));
@@ -16640,7 +1103,7 @@ public class PipelineContext {
         }
     }
 
-    private float safeReadDeferredDepthSnapshot(DeferredFramebuffer framebuffer, int snapshotIndex, int x, int y) {
+    protected float safeReadDeferredDepthSnapshot(DeferredFramebuffer framebuffer, int snapshotIndex, int x, int y) {
         try {
             return framebuffer.readDepthSamplerAtPixel(
                     snapshotIndex,
@@ -16652,7 +1115,7 @@ public class PipelineContext {
         }
     }
 
-    private boolean isFiniteColor(float[] color) {
+    protected boolean isFiniteColor(float[] color) {
         return color != null
                 && color.length >= 4
                 && Float.isFinite(color[0])
@@ -16661,11 +1124,11 @@ public class PipelineContext {
                 && Float.isFinite(color[3]);
     }
 
-    private boolean isFlatWhiteColor(float[] color) {
+    protected boolean isFlatWhiteColor(float[] color) {
         return color[0] >= 0.985f && color[1] >= 0.985f && color[2] >= 0.985f && color[3] >= 0.985f;
     }
 
-    private boolean isNeutralGrayColor(float[] color) {
+    protected boolean isNeutralGrayColor(float[] color) {
         if (!isFiniteColor(color) || color[3] <= 0.001f) {
             return false;
         }
@@ -16674,7 +1137,7 @@ public class PipelineContext {
         return max >= 0.45f && max <= 0.95f && max - min <= 0.035f;
     }
 
-    private boolean isRecoverableColorOnlySceneColor(float[] color) {
+    protected boolean isRecoverableColorOnlySceneColor(float[] color) {
         if (!isFiniteColor(color) || isClearColor(color) || isFlatWhiteColor(color)) {
             return false;
         }
@@ -16684,12 +1147,12 @@ public class PipelineContext {
                 && luma >= COMPOSITE_RECOVERY_COLOR_MIN_LUMA;
     }
 
-    private boolean isClearColor(float[] color) {
+    protected boolean isClearColor(float[] color) {
         return color[3] <= 0.001f
                 || (Math.max(color[0], Math.max(color[1], color[2])) <= 0.001f && color[3] >= 0.999f);
     }
 
-    private void logSoftVanillaPresentationProbe(String stage, DeferredFramebuffer framebuffer, Attachment attachment,
+    protected void logSoftVanillaPresentationProbe(String stage, DeferredFramebuffer framebuffer, Attachment attachment,
                                                  boolean currentHasScene, boolean cachedSnapshot, String selected,
                                                  long worldBlitStartNanos, long afterTranslucentsNanos) {
         if (!isComplementarySoftVanillaStartupFallbackActive()
@@ -16725,25 +1188,28 @@ public class PipelineContext {
         );
     }
 
-    private static double nanosToMillis(long nanos) {
+    protected static double nanosToMillis(long nanos) {
         return nanos / 1_000_000.0D;
     }
 
-    private static String formatMillis(double millis) {
+    protected static String formatMillis(double millis) {
         return String.format(Locale.ROOT, "%.3f", millis);
     }
 
-    private void finishWorldFramebuffer(Framebuffer target, boolean externalTarget) {
+    protected void finishWorldFramebuffer(Framebuffer target, boolean externalTarget) {
         finishWorldFramebuffer(target, externalTarget, true);
     }
 
-    private void finishWorldFramebuffer(Framebuffer target, boolean externalTarget, boolean renderPostBloom) {
+    protected void finishWorldFramebuffer(Framebuffer target, boolean externalTarget, boolean renderPostBloom) {
         BetterPortalsCompat.logRenderStateDiagnostic("pipeline:finish-world-before-reset external=" + externalTarget
                 + " target=" + describeFramebufferTarget(target));
         logBetterPortalsPipeline("finish-before-reset", "external=" + externalTarget
                 + ", target=" + describeFramebufferTargetDetailed(target)
                 + ", targetStatus=" + framebufferStatus(target)
                 + ", postBloom=" + renderPostBloom);
+        logSkyPresentationRouteProbe("finish-before-reset", target,
+                pingPongManager == null ? null : pingPongManager.getReadBuffer(),
+                programs.get(RenderPass.FINAL));
         com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
         if (renderPostBloom) {
             renderPostWorldBloom(target, externalTarget);
@@ -16759,11 +1225,14 @@ public class PipelineContext {
         resetPipelineState(target);
         drainPausedPostRenderGlErrors("world-finish");
         worldFrameActive = false;
+        if (!externalTarget && worldLoadPresentationGuardFrames > 0) {
+            worldLoadPresentationGuardFrames--;
+        }
         logBetterPortalsPipeline("finish-after-reset", "external=" + externalTarget);
         BetterPortalsCompat.logRenderStateDiagnostic("pipeline:finish-world-after-reset external=" + externalTarget);
     }
 
-    private void logSoftVanillaFrameTimingProbe(boolean externalTarget) {
+    protected void logSoftVanillaFrameTimingProbe(boolean externalTarget) {
         if (!isComplementarySoftVanillaStartupFallbackActive()
                 || softVanillaFrameTimingLogs >= MAX_SOFT_VANILLA_FRAME_TIMING_LOGS
                 || currentWorldFrameStartNanos == Long.MIN_VALUE) {
@@ -16801,7 +1270,7 @@ public class PipelineContext {
         );
     }
 
-    private void clearPresentationTarget(Framebuffer target, String reason) {
+    protected void clearPresentationTarget(Framebuffer target, String reason) {
         if (target == null || isExternalWorldFramebufferTarget(target)) {
             return;
         }
@@ -16823,7 +1292,57 @@ public class PipelineContext {
         }
     }
 
-    private void runFullscreenPasses(RenderPass[] passes) {
+    protected void clearWorldLoadPresentationFramebuffer(Minecraft mc) {
+        if (worldLoadPresentationGuardFrames <= 0 || mc == null) {
+            return;
+        }
+        Framebuffer target = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        if (target == null || isExternalWorldFramebufferTarget(target)) {
+            return;
+        }
+
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
+            GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glDisable(GL11.GL_SCISSOR_TEST);
+            GL11.glColorMask(true, true, true, true);
+            GL11.glDepthMask(true);
+            GL11.glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
+            GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+            restoreDrawBufferForFramebuffer(previousDrawFramebuffer, previousDrawBuffer);
+            GL11.glDepthMask(previousDepthMask);
+        }
+    }
+
+    public void clearWorldLoadWindowBackbuffer(Minecraft mc) {
+        if (worldLoadPresentationGuardFrames <= 0 || mc == null) {
+            return;
+        }
+
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, 0);
+            GL11.glDrawBuffer(GL11.GL_BACK);
+            GL11.glDisable(GL11.GL_SCISSOR_TEST);
+            GL11.glColorMask(true, true, true, true);
+            GL11.glDepthMask(true);
+            GL11.glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
+            GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+            restoreDrawBufferForFramebuffer(previousDrawFramebuffer, previousDrawBuffer);
+            GL11.glDepthMask(previousDepthMask);
+        }
+    }
+
+    protected void runFullscreenPasses(RenderPass[] passes) {
         for (RenderPass pass : passes) {
             PipelineProgram program = programs.get(pass);
             if (program != null && program.hasOwnProgram()) {
@@ -16832,7 +1351,7 @@ public class PipelineContext {
         }
     }
 
-    private void runFullscreenPasses(ProgramArrayId arrayId) {
+    protected void runFullscreenPasses(ProgramArrayId arrayId) {
         if (arrayId == ProgramArrayId.SHADOWCOMP) {
             runShadowCompPasses();
             return;
@@ -16866,7 +1385,7 @@ public class PipelineContext {
         }
     }
 
-    private void runShadowCompPasses() {
+    protected void runShadowCompPasses() {
         int size = shadowFramebuffer != null ? shadowFramebuffer.resolution() : 1;
         List<ComputeProgram> computes = computeProgramArrays.getOrDefault(ProgramArrayId.SHADOWCOMP, List.of());
         List<FullscreenArrayProgram> indexedPrograms = fullscreenArrayPrograms.getOrDefault(ProgramArrayId.SHADOWCOMP, List.of());
@@ -16881,11 +1400,11 @@ public class PipelineContext {
         }
     }
 
-    private void runComputeProgramsForArrayIndex(List<ComputeProgram> computes, int index, RenderPass bindingPass) {
+    protected void runComputeProgramsForArrayIndex(List<ComputeProgram> computes, int index, RenderPass bindingPass) {
         runComputeProgramsForArrayIndex(computes, index, bindingPass, -1, -1);
     }
 
-    private void runComputeProgramsForArrayIndex(List<ComputeProgram> computes, int index, RenderPass bindingPass, int width, int height) {
+    protected void runComputeProgramsForArrayIndex(List<ComputeProgram> computes, int index, RenderPass bindingPass, int width, int height) {
         if (computes == null || computes.isEmpty()) {
             return;
         }
@@ -16905,7 +1424,7 @@ public class PipelineContext {
         }
     }
 
-    private static int maxComputeArrayIndex(List<ComputeProgram> computes) {
+    protected static int maxComputeArrayIndex(List<ComputeProgram> computes) {
         int max = -1;
         if (computes != null) {
             for (ComputeProgram compute : computes) {
@@ -16917,7 +1436,7 @@ public class PipelineContext {
         return max;
     }
 
-    private static int maxFullscreenArrayProgramIndex(List<FullscreenArrayProgram> programs) {
+    protected static int maxFullscreenArrayProgramIndex(List<FullscreenArrayProgram> programs) {
         int max = -1;
         if (programs != null) {
             for (FullscreenArrayProgram program : programs) {
@@ -16929,7 +1448,7 @@ public class PipelineContext {
         return max;
     }
 
-    private void runSetupComputesIfNeeded() {
+    protected void runSetupComputesIfNeeded() {
         if (!setupComputePending) {
             return;
         }
@@ -16937,7 +1456,7 @@ public class PipelineContext {
         runFullscreenPasses(ProgramArrayId.SETUP);
     }
 
-    private RenderPass computeBindingPass(ProgramArrayId arrayId) {
+    protected RenderPass computeBindingPass(ProgramArrayId arrayId) {
         if (arrayId == ProgramArrayId.SETUP || arrayId == ProgramArrayId.BEGIN || arrayId == ProgramArrayId.PREPARE) {
             return RenderPass.PREPARE;
         }
@@ -16953,7 +1472,7 @@ public class PipelineContext {
         return RenderPass.FINAL;
     }
 
-    private void runFullscreenArrayProgram(FullscreenArrayProgram program) {
+    protected void runFullscreenArrayProgram(FullscreenArrayProgram program) {
         List<Attachment> drawBuffers = program.drawBuffers();
         Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
 
@@ -16998,7 +1517,7 @@ public class PipelineContext {
         }
     }
 
-    private void bindFullscreenArrayProgram(FullscreenArrayProgram program) {
+    protected void bindFullscreenArrayProgram(FullscreenArrayProgram program) {
         ShaderProgram shaderProgram = program.shaderProgram();
         if (shaderProgram == null) {
             return;
@@ -17014,10 +1533,10 @@ public class PipelineContext {
         TextureBinder.bindShadowTextures(bindingPass);
         shaderProgram.bind();
         bindProgramResources(bindingPass, shaderProgram);
-        bindCustomTextures(program.arrayId(), program.index(), shaderProgram);
+        customTextures.bind(program.arrayId(), program.index(), shaderProgram);
     }
 
-    private void applyFullscreenArrayRenderState(ShaderProgramDirectives directives, List<Attachment> drawBuffers) {
+    protected void applyFullscreenArrayRenderState(ShaderProgramDirectives directives, List<Attachment> drawBuffers) {
         ShaderAlphaTest alphaTest = directives.alphaTestOverride();
         if (alphaTest != null) {
             currentAlphaTestReference = alphaTest.reference();
@@ -17057,7 +1576,7 @@ public class PipelineContext {
         }
     }
 
-    private void runComputePrograms(List<ComputeProgram> computes, RenderPass bindingPass) {
+    protected void runComputePrograms(List<ComputeProgram> computes, RenderPass bindingPass) {
         if (computes == null || computes.isEmpty()) {
             return;
         }
@@ -17068,7 +1587,7 @@ public class PipelineContext {
         runComputePrograms(computes, bindingPass, width, height);
     }
 
-    private void runComputePrograms(List<ComputeProgram> computes, RenderPass bindingPass, int width, int height) {
+    protected void runComputePrograms(List<ComputeProgram> computes, RenderPass bindingPass, int width, int height) {
         if (computes == null || computes.isEmpty()) {
             return;
         }
@@ -17106,7 +1625,7 @@ public class PipelineContext {
         TextureBinder.restoreDefaultTextureUnit();
     }
 
-    private void applyComputeMemoryBarrier(boolean indirectDispatch) {
+    protected void applyComputeMemoryBarrier(boolean indirectDispatch) {
         int barriers = 0;
         if (shaderProperties == null || !shaderProperties.renderSettings().allowConcurrentCompute()) {
             barriers |= GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
@@ -17122,13 +1641,13 @@ public class PipelineContext {
         }
     }
 
-    private void applyShaderImageTextureBarrier() {
+    protected void applyShaderImageTextureBarrier() {
         if (shaderImages.active() && GLContext.getCapabilities().OpenGL42) {
             GL42.glMemoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
         }
     }
 
-    private void runFullscreenPass(PipelineProgram program) {
+    protected void runFullscreenPass(PipelineProgram program) {
         List<Attachment> drawBuffers = program.drawBuffers();
         Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
 
@@ -17190,7 +1709,7 @@ public class PipelineContext {
         }
     }
 
-    private boolean bindFullscreenPipelineProgram(PipelineProgram program) {
+    protected boolean bindFullscreenPipelineProgram(PipelineProgram program) {
         if (program == null || program.shaderProgram() == null) {
             return false;
         }
@@ -17208,19 +1727,19 @@ public class PipelineContext {
         return true;
     }
 
-    private void applyViewportScale(PipelineProgram program, int width, int height) {
+    protected void applyViewportScale(PipelineProgram program, int width, int height) {
         applyViewportScale(program.directives().viewportScale(), width, height);
     }
 
-    private void applyViewportScale(ShaderViewportScale scale, int width, int height) {
+    protected void applyViewportScale(ShaderViewportScale scale, int width, int height) {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(scale.x(width), scale.y(height), scale.width(width), scale.height(height));
     }
 
-    private void applyFullscreenViewport(PipelineProgram program, List<Attachment> drawBuffers) {
+    protected void applyFullscreenViewport(PipelineProgram program, List<Attachment> drawBuffers) {
         applyFullscreenViewport(program.pass().getProgramName(), program.directives(), drawBuffers);
     }
 
-    private void applyFullscreenViewport(String programName, ShaderProgramDirectives directives, List<Attachment> drawBuffers) {
+    protected void applyFullscreenViewport(String programName, ShaderProgramDirectives directives, List<Attachment> drawBuffers) {
         DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
         if (framebuffer == null) {
             return;
@@ -17242,7 +1761,7 @@ public class PipelineContext {
         applyViewportScale(directives.viewportScale(), width, height);
     }
 
-    private void renderFinalPass(Framebuffer target) {
+    protected void renderFinalPass(Framebuffer target) {
         DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
         PipelineProgram finalProgram = programs.get(RenderPass.FINAL);
         if (target == null || readBuffer == null || finalProgram == null) {
@@ -17284,6 +1803,7 @@ public class PipelineContext {
             applyViewportScale(finalProgram, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target), com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target));
             applyFullscreenArrayRenderState(finalProgram.directives(), finalProgram.drawBuffers());
             if (bindFullscreenPipelineProgram(finalProgram)) {
+                logFinalSkyRepairProbe(finalProgram);
                 FullscreenQuad.draw();
             }
         } finally {
@@ -17308,13 +1828,66 @@ public class PipelineContext {
                 + ", targetStatus=" + framebufferStatus(target));
     }
 
-    private void generateReadMipmaps(PipelineProgram program) {
+    protected void logFinalSkyRepairProbe(PipelineProgram finalProgram) {
+        if (finalSkyRepairProbeLogs++ >= 48 || finalProgram == null) {
+            return;
+        }
+        ShaderProgram shader = finalProgram.shaderProgram();
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        MainMod.LOGGER.info(
+                "[AUSMFinalSkyRepairProbe] pass={} shader={} skybox={} ui={} simpleVoid={} screen={} hideGui={} paused={} locations={}/{}/{}/{}",
+                finalProgram.pass(),
+                shader == null ? "null" : shader.getName(),
+                shouldRepairCurrentSkybox(mc),
+                shouldForceUiSkyboxRepair(mc),
+                isSimpleVoidWorld(renderWorld(mc)),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc),
+                shader == null ? -2 : shader.getUniformLocation("ausmSkyboxRepair"),
+                shader == null ? -2 : shader.getUniformLocation("ausmUiSkyRepair"),
+                shader == null ? -2 : shader.getUniformLocation("depthtex0"),
+                shader == null ? -2 : shader.getUniformLocation("colortex0")
+        );
+    }
+
+    protected void logSkyPresentationRouteProbe(String route, Framebuffer target,
+                                                DeferredFramebuffer readBuffer,
+                                                PipelineProgram finalProgram) {
+        if (skyPresentationRouteProbeLogs++ >= 64) {
+            return;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        ShaderProgram shader = finalProgram == null ? null : finalProgram.shaderProgram();
+        MainMod.LOGGER.info(
+                "[AUSMSkyRouteProbe] route={} final={} hasOwnFinal={} shader={} skybox={} ui={} simpleVoid={} screen={} hideGui={} target={} read={} locations={}/{}",
+                route,
+                describePipelineProgram(finalProgram),
+                finalProgram != null && finalProgram.hasOwnProgram(),
+                shader == null ? "null" : shader.getName(),
+                shouldRepairCurrentSkybox(mc),
+                shouldForceUiSkyboxRepair(mc),
+                isSimpleVoidWorld(renderWorld(mc)),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)),
+                describeFramebufferTargetDetailed(target),
+                describeDeferredFramebuffer(readBuffer),
+                shader == null ? -2 : shader.getUniformLocation("ausmSkyboxRepair"),
+                shader == null ? -2 : shader.getUniformLocation("ausmUiSkyRepair")
+        );
+    }
+
+    public void logExternalSkyPresentationRouteProbe(String route, Framebuffer target) {
+        logSkyPresentationRouteProbe(route, target, pingPongManager.getReadBuffer(), programs.get(RenderPass.FINAL));
+    }
+
+    protected void generateReadMipmaps(PipelineProgram program) {
         if (program != null) {
             generateReadMipmaps(program.directives());
         }
     }
 
-    private void generateReadMipmaps(ShaderProgramDirectives directives) {
+    protected void generateReadMipmaps(ShaderProgramDirectives directives) {
         DeferredFramebuffer readBuffer = pingPongManager.getReadBuffer();
         if (directives != null && readBuffer != null && !directives.mipmappedBuffers().isEmpty()) {
             readBuffer.generateMipmaps(directives.mipmappedBuffers());
@@ -17322,14 +1895,14 @@ public class PipelineContext {
         }
     }
 
-    private void generateWrittenMipmaps(PipelineProgram program, Attachment[] flippedAttachments) {
+    protected void generateWrittenMipmaps(PipelineProgram program, Attachment[] flippedAttachments) {
         if (program == null) {
             return;
         }
         generateWrittenMipmaps(program.directives(), flippedAttachments);
     }
 
-    private void runShadowCompArrayProgram(FullscreenArrayProgram program) {
+    protected void runShadowCompArrayProgram(FullscreenArrayProgram program) {
         if (shadowFramebuffer == null) {
             return;
         }
@@ -17364,7 +1937,7 @@ public class PipelineContext {
         shadowFramebuffer.generateShadowColorMipmaps();
     }
 
-    private void generateWrittenMipmaps(ShaderProgramDirectives directives, Attachment[] flippedAttachments) {
+    protected void generateWrittenMipmaps(ShaderProgramDirectives directives, Attachment[] flippedAttachments) {
         if (directives == null || flippedAttachments.length == 0 || directives.mipmappedBuffers().isEmpty()) {
             return;
         }
@@ -17383,7 +1956,7 @@ public class PipelineContext {
         }
     }
 
-    private void setupFullscreenState() {
+    protected void setupFullscreenState() {
         int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GL11.glMatrixMode(GL11.GL_TEXTURE);
@@ -17409,7 +1982,7 @@ public class PipelineContext {
         GL11.glLoadIdentity();
     }
 
-    private void restoreFullscreenState() {
+    protected void restoreFullscreenState() {
         GL11.glMatrixMode(GL11.GL_PROJECTION);
         GL11.glPopMatrix();
 
@@ -17432,11 +2005,11 @@ public class PipelineContext {
         cleanupRuntimeState(true, true);
     }
 
-    private void cleanupRuntimeState(boolean deleteActiveCompiledPrograms, boolean deleteCachedCompiledPrograms) {
+    protected void cleanupRuntimeState(boolean deleteActiveCompiledPrograms, boolean deleteCachedCompiledPrograms) {
         cleanupRuntimeState(deleteActiveCompiledPrograms, deleteCachedCompiledPrograms, true);
     }
 
-    private void cleanupRuntimeState(boolean deleteActiveCompiledPrograms, boolean deleteCachedCompiledPrograms, boolean deleteVanillaTerrainRenderers) {
+    protected void cleanupRuntimeState(boolean deleteActiveCompiledPrograms, boolean deleteCachedCompiledPrograms, boolean deleteVanillaTerrainRenderers) {
         resetPipelineState();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), 0);
 
@@ -17455,7 +2028,7 @@ public class PipelineContext {
         deleteCenterDepthSmoothTexture();
         deleteNoiseTexture();
         bloomRenderer.delete();
-        deleteCustomTextures();
+        customTextures.delete();
         if (deleteVanillaTerrainRenderers) {
             deleteCachedVanillaTerrainRenderers();
             vanillaViewFrustumStateStack.clear();
@@ -17658,19 +2231,19 @@ public class PipelineContext {
                 + " read=" + describeDeferredFramebuffer(pingPongManager.getReadBuffer());
     }
 
-    private boolean computeShouldBypassWorldPassRendering() {
+    protected boolean computeShouldBypassWorldPassRendering() {
         return shouldLeaveBetterPortalsRenderPassUntouched()
                 || isRenderingBetterPortalsNestedView() && !shouldRenderBetterPortalsNestedViewWithShaders();
     }
 
-    private boolean shouldLeaveBetterPortalsRenderPassUntouched() {
+    protected boolean shouldLeaveBetterPortalsRenderPassUntouched() {
         return BetterPortalsCompat.isInstalled()
                 && isRenderingBetterPortalsRenderPass()
                 && (!isPipelineActive
                 || isRenderingBetterPortalsNestedView() && !shouldRenderBetterPortalsNestedViewWithShaders());
     }
 
-    private String describeDeferredFramebuffer(DeferredFramebuffer framebuffer) {
+    protected String describeDeferredFramebuffer(DeferredFramebuffer framebuffer) {
         if (framebuffer == null) {
             return "null";
         }
@@ -17687,7 +2260,7 @@ public class PipelineContext {
                 + ")";
     }
 
-    private String describeFramebufferTarget(Framebuffer framebuffer) {
+    protected String describeFramebufferTarget(Framebuffer framebuffer) {
         if (framebuffer == null) {
             return "null";
         }
@@ -17700,11 +2273,11 @@ public class PipelineContext {
                 + ")";
     }
 
-    private void logBetterPortalsPipeline(String stage) {
+    protected void logBetterPortalsPipeline(String stage) {
         logBetterPortalsPipeline(stage, "");
     }
 
-    private void logBetterPortalsPipeline(String stage, String detail) {
+    protected void logBetterPortalsPipeline(String stage, String detail) {
         if (!shouldLogBetterPortalsPipeline(stage)) {
             return;
         }
@@ -17743,7 +2316,7 @@ public class PipelineContext {
                 describeCurrentGlTarget());
     }
 
-    private boolean shouldLogBetterPortalsPipeline(String stage) {
+    protected boolean shouldLogBetterPortalsPipeline(String stage) {
         if (!BetterPortalsCompat.isInstalled()) {
             return false;
         }
@@ -17760,7 +2333,7 @@ public class PipelineContext {
                 || BetterPortalsCompat.isMainViewSwapRecoveryActive();
     }
 
-    private String describeFramebufferTargetDetailed(Framebuffer framebuffer) {
+    protected String describeFramebufferTargetDetailed(Framebuffer framebuffer) {
         if (framebuffer == null) {
             return "null";
         }
@@ -17780,7 +2353,7 @@ public class PipelineContext {
                 + ")";
     }
 
-    private String framebufferStatus(Framebuffer framebuffer) {
+    protected String framebufferStatus(Framebuffer framebuffer) {
         if (framebuffer == null) {
             return "null";
         }
@@ -17801,14 +2374,14 @@ public class PipelineContext {
         }
     }
 
-    private String describePipelineProgram(PipelineProgram program) {
+    protected String describePipelineProgram(PipelineProgram program) {
         if (program == null) {
             return "null";
         }
         return "enabled=" + program.enabled() + ", own=" + program.hasOwnProgram();
     }
 
-    private long countCompositePrograms() {
+    protected long countCompositePrograms() {
         return fullscreenArrayPrograms
                 .getOrDefault(ProgramArrayId.COMPOSITE, List.of())
                 .stream()
@@ -17816,13 +2389,13 @@ public class PipelineContext {
                 .count();
     }
 
-    private String shaderPackDiagnostics() {
+    protected String shaderPackDiagnostics() {
         return MainMod.getShaderPackManager() != null
                 ? MainMod.getShaderPackManager().describeBetterPortalsPipelineState()
                 : "shaderManager=null";
     }
 
-    private String describeCurrentGlTarget() {
+    protected String describeCurrentGlTarget() {
         try {
             return "fbo=" + GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING)
                     + ", readFb=" + GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING)
@@ -17836,7 +2409,7 @@ public class PipelineContext {
         }
     }
 
-    private String currentViewportSummary() {
+    protected String currentViewportSummary() {
         viewportBuffer.clear();
         GL11.glGetInteger(GL11.GL_VIEWPORT, viewportBuffer);
         return "["
@@ -17934,7 +2507,7 @@ public class PipelineContext {
         return mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
     }
 
-    private boolean isBetterPortalsChunkUpdateNullWorldFailure(NullPointerException exception) {
+    protected boolean isBetterPortalsChunkUpdateNullWorldFailure(NullPointerException exception) {
         if (exception == null) {
             return false;
         }
@@ -17949,7 +2522,7 @@ public class PipelineContext {
         return false;
     }
 
-    private boolean hasOnlyValidBetterPortalsChunkUpdates(RenderGlobalAccessor accessor, World allowedWorld) {
+    protected boolean hasOnlyValidBetterPortalsChunkUpdates(RenderGlobalAccessor accessor, World allowedWorld) {
         Set<RenderChunk> chunksToUpdate = accessor.ausm$chunksToUpdate();
         if (chunksToUpdate == null || chunksToUpdate.isEmpty()) {
             return false;
@@ -17964,7 +2537,7 @@ public class PipelineContext {
         return true;
     }
 
-    private boolean isValidBetterPortalsChunkUpdate(RenderChunk chunk, World allowedWorld) {
+    protected boolean isValidBetterPortalsChunkUpdate(RenderChunk chunk, World allowedWorld) {
         if (chunk == null) {
             return false;
         }
@@ -17976,7 +2549,7 @@ public class PipelineContext {
         return chunkWorld == allowedWorld;
     }
 
-    private boolean hasInvalidBetterPortalsChunkUpdate(RenderGlobalAccessor accessor) {
+    protected boolean hasInvalidBetterPortalsChunkUpdate(RenderGlobalAccessor accessor) {
         Set<RenderChunk> chunksToUpdate = accessor.ausm$chunksToUpdate();
         if (chunksToUpdate == null || chunksToUpdate.isEmpty()) {
             return false;
@@ -17990,11 +2563,11 @@ public class PipelineContext {
         return false;
     }
 
-    private World renderChunkWorld(RenderChunk chunk) {
+    protected World renderChunkWorld(RenderChunk chunk) {
         return com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkWorld(chunk);
     }
 
-    private boolean assignRenderChunkWorld(RenderChunk chunk, World world) {
+    protected boolean assignRenderChunkWorld(RenderChunk chunk, World world) {
         if (chunk == null || world == null) {
             return false;
         }
@@ -18006,25 +2579,25 @@ public class PipelineContext {
         }
     }
 
-    private void clearRenderGlobalChunkUpdates(RenderGlobalAccessor accessor) {
+    protected void clearRenderGlobalChunkUpdates(RenderGlobalAccessor accessor) {
         Set<RenderChunk> chunksToUpdate = accessor.ausm$chunksToUpdate();
         if (chunksToUpdate != null && !chunksToUpdate.isEmpty()) {
             chunksToUpdate.clear();
         }
     }
 
-    private int safeDimensionId(World world) {
+    protected int safeDimensionId(World world) {
         return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) : Integer.MIN_VALUE;
     }
 
-    private boolean isOverworldShaderEnvironment(World world) {
+    protected boolean isOverworldShaderEnvironment(World world) {
         int dimensionId = safeDimensionId(world);
         return dimensionId != Integer.MIN_VALUE
                 && dimensionId != -1
                 && dimensionId != 1;
     }
 
-    private String describeWorld(World world) {
+    protected String describeWorld(World world) {
         if (world == null) {
             return "null";
         }
@@ -18082,7 +2655,7 @@ public class PipelineContext {
         BetterPortalsCompat.logRenderStateDiagnostic("pipeline:bypass-finish-after");
     }
 
-    private boolean prepareUntouchedBetterPortalsRenderPass() {
+    protected boolean prepareUntouchedBetterPortalsRenderPass() {
         boolean nestedBetterPortalsView = isRenderingBetterPortalsNestedView();
         boolean useNestedVanillaRenderer = nestedBetterPortalsView
                 && !shouldRenderBetterPortalsNestedViewWithShaders();
@@ -18101,7 +2674,7 @@ public class PipelineContext {
         return useNestedVanillaRenderer;
     }
 
-    private void renderNativeBloomLayerIfNeeded() {
+    protected void renderNativeBloomLayerIfNeeded() {
         if (bloomLayerRenderedThisWorldPass
                 || !AusmBloomLayer.shouldUseNativeHook()
                 || renderingGuiScreen()) {
@@ -18127,8 +2700,7 @@ public class PipelineContext {
 
     public void renderNativeAusmBloomLayerFromWorldPass(float partialTicks, int pass) {
         if (bloomLayerRenderedThisWorldPass
-                || !AusmBloomLayer.shouldUseNativeHook()
-                || !isPipelineActive) {
+                || !AusmBloomLayer.shouldUseNativeHook()) {
             return;
         }
         if (isRenderingBetterPortalsRenderPass()) {
@@ -18194,76 +2766,10 @@ public class PipelineContext {
     }
 
     public int renderEmissiveBloomExtractionFromWorldPass(float partialTicks, int pass) {
-        boolean pipelineActive = isPipelineActive;
-        if (renderingGuiScreen()
-                || renderingShadowMap
-                || isRenderingBetterPortalsRenderPass()
-                || isRenderingBetterPortalsNestedView()
-                || (!pipelineActive && shaderlessBloomRenderedThisWorldPass)) {
-            return 0;
-        }
-
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null) {
-            return 0;
-        }
-
-        boolean hasBloomResources = bloomRenderer.hasBloomResources();
-        boolean hasShaderlessBloomMetadata = hasShaderlessBloomMetadata();
-        boolean framedBloomBootstrap = false;
-        refreshShaderlessBloomVertexFormatIfNeeded(hasBloomResources);
-
-        boolean shouldExtractBloom = hasShaderlessBloomMetadata || framedBloomBootstrap;
-        if (!shouldExtractBloom) {
-            return 0;
-        }
-        if (!pipelineActive && AusmBloomLayer.shouldUseShaderlessNativeHook()) {
-            return 0;
-        }
-
-        Entity renderViewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
-        boolean previousShaderlessBloomExtractionActive = shaderlessBloomExtractionActive;
-        boolean previousShaderlessBloomExtractionBootstrapActive = shaderlessBloomExtractionBootstrapActive;
-        DeferredFramebuffer pipelineDepthSource = pipelineActive && worldFrameActive && pingPongManager.isInitialized()
-                ? pingPongManager.getReadBuffer()
-                : null;
-        int rendered;
-        shaderlessBloomExtractionActive = true;
-        shaderlessBloomExtractionBootstrapActive = framedBloomBootstrap && !hasShaderlessBloomMetadata;
-        try {
-            rendered = bloomRenderer.renderEmissiveTerrainBloomCount(
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc),
-                    pipelineDepthSource,
-                    () -> renderShaderlessBloomExtractionGeometry(mc, renderViewEntity, true),
-                    true
-            );
-        } finally {
-            shaderlessBloomExtractionActive = previousShaderlessBloomExtractionActive;
-            shaderlessBloomExtractionBootstrapActive = previousShaderlessBloomExtractionBootstrapActive;
-        }
-
-        if (rendered <= 0) {
-            if (!pipelineActive) {
-                shaderlessBloomRenderedThisWorldPass = true;
-                shaderlessBloomRenderedThisWorldFrame = true;
-            }
-            return 0;
-        }
-
-        if (pipelineActive) {
-            bloomLayerRenderedThisWorldPass = true;
-            bloomLayerRenderedThisWorldFrame = true;
-            shaderlessStyleBloomRenderedThisWorldPass = true;
-            shaderlessStyleBloomRenderedThisWorldFrame = true;
-        } else {
-            bloomRenderer.renderPostWorldBloom(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc));
-            shaderlessBloomRenderedThisWorldPass = true;
-            shaderlessBloomRenderedThisWorldFrame = true;
-        }
-        return rendered;
+        return 0;
     }
 
-    private void logVisibleBloomDiag(String stage, int pass, int rendered, String detail) {
+    protected void logVisibleBloomDiag(String stage, int pass, int rendered, String detail) {
         // Diagnostic disabled.
     }
 
@@ -18312,7 +2818,53 @@ public class PipelineContext {
         return rendered;
     }
 
-    private void requestDeferredNativeBloom(double partialTicks, int pass) {
+    /**
+     * Emits Nothirium-owned mesh data without invoking Nothirium's renderer.
+     * AUSM keeps the active program, framebuffer, and fixed-function state.
+     * A negative result means the caller should use vanilla RenderGlobal data.
+     */
+    public int renderAusmOwnedNothiriumBloomGeometry(double partialTicks, Entity viewEntity) {
+        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
+        if (bloomLayer == null
+                || viewEntity == null
+                || !isNothiriumLoaded()
+                || !NothiriumShadowRenderer.isAvailable()) {
+            return -1;
+        }
+        if (AusmBloomLayer.consumeNothiriumRendererRecreateRequest()) {
+            boolean recreated = NothiriumBypass.recreateRenderer();
+            MainMod.LOGGER.info("[AUSMBloom] Recreated Nothirium mesh backend for BLOOM pass: {}", recreated);
+            return 0;
+        }
+
+        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), (float) partialTicks);
+        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), (float) partialTicks);
+        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), (float) partialTicks);
+        nothiriumShadowRenderer.drainUploads();
+
+        WorldRenderingPhase previousPhase = activePhase;
+        boolean previousShaderlessWorldPassActive = shaderlessWorldPassActive;
+        shaderlessWorldPassActive = true;
+        activePhase = WorldRenderingPhase.TERRAIN_TRANSLUCENT;
+        try {
+            return positiveCount(nothiriumShadowRenderer.renderVisibleLayerAllowingVanillaStride(
+                    bloomLayer,
+                    cameraX,
+                    cameraY,
+                    cameraZ,
+                    nothiriumFallbackBlockEntityId(bloomLayer),
+                    nothiriumFallbackRenderType(bloomLayer)
+            ));
+        } finally {
+            activePhase = previousPhase;
+            shaderlessWorldPassActive = previousShaderlessWorldPassActive;
+        }
+    }
+
+    protected void requestDeferredNativeBloom(double partialTicks, int pass) {
         if (bloomLayerRenderedThisWorldPass
                 || !AusmBloomLayer.shouldUseNativeHook()
                 || renderingGuiScreen()
@@ -18325,7 +2877,7 @@ public class PipelineContext {
         pendingDeferredBloomPass = pass;
     }
 
-    private void renderDeferredNativeBloomIfNeeded() {
+    protected void renderDeferredNativeBloomIfNeeded() {
         if (!pendingDeferredNativeBloom
                 || bloomLayerRenderedThisWorldPass
                 || !AusmBloomLayer.shouldUseNativeHook()
@@ -18345,7 +2897,7 @@ public class PipelineContext {
         renderAusmBloomLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc), partialTicks, pass, com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc));
     }
 
-    private void recordBloomRenderResult(int rendered) {
+    protected void recordBloomRenderResult(int rendered) {
         if (rendered > 0) {
             bloomZeroGeometryFrames = 0;
             return;
@@ -18374,7 +2926,7 @@ public class PipelineContext {
         scheduleBloomTerrainRefresh("zero-bloom-geometry");
     }
 
-    private void renderPostWorldBloom(Framebuffer target, boolean externalTarget) {
+    protected void renderPostWorldBloom(Framebuffer target, boolean externalTarget) {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (target == null
                 || mc == null
@@ -18396,17 +2948,52 @@ public class PipelineContext {
             int postHandDepthTexture = handMaskSource != null
                     ? handMaskSource.getDepthSamplerTexture(DeferredFramebuffer.DEPTHTEX2_SNAPSHOT)
                     : 0;
-            if (preHandDepthTexture > 0 && postHandDepthTexture > 0) {
-                bloomRenderer.renderPostWorldBloom(target, preHandDepthTexture, postHandDepthTexture);
-                return;
-            }
-            bloomRenderer.renderPostWorldBloom(target);
+            bloomRenderer.renderPostWorldBloom(target, preHandDepthTexture, postHandDepthTexture);
             return;
         }
         bloomRenderer.renderPostWorldBloom(target);
     }
 
+    public void renderDepthTestedOwnedSkyRepair(Framebuffer target, Minecraft mc) {
+        WorldClient world = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
+        if (target == null
+                || mc == null
+                || world == null
+                || !isPipelineActive
+                || !shouldUseOwnedSkyOverrideWorld(world)
+                || isRenderingBetterPortalsNestedView()
+                || isRenderingBetterPortalsRenderPass()) {
+            return;
+        }
+        boolean uiRepair = com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc);
+        if (!isSimpleVoidWorld(world) && !uiRepair) {
+            return;
+        }
+        logOwnedSkyBackingProbe("presentation-depth-repair", mc);
+
+        Vec3d skyColor = null;
+        try {
+            skyColor = com.l.ausm.impl.util.MinecraftReflectionCompat.call(world, net.minecraft.util.math.Vec3d.class, null,
+                    new String[] {"func_72833_a", "getSkyColor"},
+                    new Class<?>[] {net.minecraft.entity.Entity.class, float.class},
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc),
+                    currentWorldPartialTicks);
+        } catch (RuntimeException | LinkageError ignored) {
+            skyColor = null;
+        }
+        drawOwnedSkyDepthRepairGradient(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target),
+                skyColor,
+                mc,
+                target);
+    }
+
     public void renderShaderlessBloomBeforeGui() {
+        if (disableShaderlessPreGuiHooks) {
+            return;
+        }
         if (isPipelineActive) {
             return;
         }
@@ -18438,7 +3025,9 @@ public class PipelineContext {
         boolean framedBloomBootstrap = false;
         refreshShaderlessBloomVertexFormatIfNeeded(hasBloomResources);
 
-        boolean shouldExtractShaderlessBloom = hasShaderlessBloomMetadata || framedBloomBootstrap;
+        // Ordinary terrain is never re-rendered as bloom. Lumenized owns the
+        // resource-pack BLOOM layer and is handled by the native layer path.
+        boolean shouldExtractShaderlessBloom = false;
         boolean nativeBloom = AusmBloomLayer.shouldUseShaderlessNativeHook();
         Entity renderViewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
         logShaderlessBloomHook("render target=" + describeFramebufferTarget(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc))
@@ -18465,7 +3054,7 @@ public class PipelineContext {
             try {
                 shaderlessExtractRendered = bloomRenderer.renderShaderlessEmissiveTerrainBloom(
                         com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc),
-                        () -> renderShaderlessBloomExtractionGeometry(mc, renderViewEntity)
+                        () -> renderShaderlessBloomExtractionGeometry(mc, renderViewEntity, false)
                 );
             } finally {
                 shaderlessBloomExtractionActive = previousShaderlessBloomExtractionActive;
@@ -18487,66 +3076,62 @@ public class PipelineContext {
         restoreShaderlessBloomExitState(mc);
     }
 
-    private boolean shouldRenderShaderlessCustomSkyBacking(Minecraft mc) {
+    protected boolean shouldRenderShaderlessCustomSkyBacking(Minecraft mc) {
         if (clientRenderFrameNanos != Long.MIN_VALUE) {
             return shaderlessCustomSkyBackingThisFrame;
         }
         return shouldRenderShaderlessCustomSkyBackingNow(mc);
     }
 
-    private boolean shouldRenderShaderlessCustomSkyBackingNow(Minecraft mc) {
+    protected boolean shouldRenderShaderlessCustomSkyBackingNow(Minecraft mc) {
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return shouldUseShaderlessOwnedSky(mc) && isSimpleVoidWorld(world);
     }
 
-    private Vec3d desaturateSkyColor(Vec3d color, double saturation) {
-        double s = clamp01(saturation);
-        double x = com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(color);
-        double y = com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(color);
-        double z = com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(color);
-        double luminance = x * 0.299D + y * 0.587D + z * 0.114D;
-        return new Vec3d(
-                clamp01(luminance + (x - luminance) * s),
-                clamp01(luminance + (y - luminance) * s),
-                clamp01(luminance + (z - luminance) * s)
-        );
+    protected Vec3d desaturateSkyColor(Vec3d color, double saturation) {
+        return PipelineSkyColorMath.desaturate(color, saturation);
     }
 
-    private Vec3d mixSkyColors(Vec3d from, Vec3d to, double factor) {
-        double t = clamp01(factor);
-        double inverse = 1.0D - t;
-        return new Vec3d(
-                clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(from) * inverse + com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(to) * t),
-                clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(from) * inverse + com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(to) * t),
-                clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(from) * inverse + com.l.ausm.impl.util.MinecraftReflectionCompat.vecZ(to) * t)
-        );
+    protected Vec3d mixSkyColors(Vec3d from, Vec3d to, double factor) {
+        return PipelineSkyColorMath.mix(from, to, factor);
     }
 
-    private double clamp01(double value) {
-        return Math.max(0.0D, Math.min(1.0D, value));
+    protected double clamp01(double value) {
+        return PipelineSkyColorMath.clamp01(value);
     }
 
-    private static int clampInt(int value, int min, int max) {
+    protected static int clampInt(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
     }
 
-    private static int floorDiv(int value, int divisor) {
+    protected static int floorDiv(int value, int divisor) {
         return Math.floorDiv(value, divisor);
     }
 
     public void renderOwnedSkyBackingBeforeSky(float partialTicks) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
+        boolean external = externalWorldFramebufferTarget != null;
+        boolean bpNested = isRenderingBetterPortalsNestedView();
+        boolean bpPass = isRenderingBetterPortalsRenderPass();
+        boolean hasView = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) != null;
+        boolean hasTarget = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) != null;
+        boolean owned = shouldUseOwnedSkyOverrideWorld(world);
+        boolean shaderless = shouldRenderShaderlessCustomSkyBacking(mc);
+        boolean shadered = shouldRenderShaderedOwnedSkyBacking(mc);
+        logOwnedSkyBackingDecisionProbe("before-sky", mc, world, external, bpNested, bpPass,
+                hasView, hasTarget, owned, shaderless, shadered);
         if (externalWorldFramebufferTarget != null
                 || isRenderingBetterPortalsNestedView()
                 || isRenderingBetterPortalsRenderPass()) {
             return;
         }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc) == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null
-                || !shouldUseOwnedSkyOverrideWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc))
-                || (!shouldRenderShaderlessCustomSkyBacking(mc) && !shouldRenderShaderedOwnedSkyBacking(mc))) {
+                || world == null
+                || !hasView
+                || !hasTarget
+                || !owned
+                || (!shaderless && !shadered)) {
             return;
         }
 
@@ -18561,12 +3146,14 @@ public class PipelineContext {
         try {
             if (shouldRenderShaderlessCustomSkyBacking(mc)) {
                 bindMinecraftFramebufferForGui(mc);
+                logOwnedSkyBackingProbe("shaderless", mc);
                 drawOwnedSkyBackingGradient(
                         com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
                         com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
                         skyColor,
                         mc);
             } else {
+                logOwnedSkyBackingProbe("shadered", mc);
                 drawOwnedSkyBackingGradient(
                         Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc)),
                         Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc)),
@@ -18582,11 +3169,98 @@ public class PipelineContext {
         }
     }
 
+    public void renderShaderlessBotaniaSkyBacking(float partialTicks, WorldClient world, Minecraft mc) {
+        if (isPipelineActive || mc == null || world == null || !isSimpleVoidWorld(world)) {
+            return;
+        }
+        Vec3d skyColor = com.l.ausm.impl.util.MinecraftReflectionCompat.call(
+                world,
+                Vec3d.class,
+                null,
+                new String[] {"func_72833_a", "getSkyColor"},
+                new Class<?>[] {net.minecraft.entity.Entity.class, float.class},
+                com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc),
+                partialTicks
+        );
+        if (skyColor == null || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null) {
+            return;
+        }
+        bindMinecraftFramebufferForGui(mc);
+        drawOwnedSkyBackingGradient(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)),
+                skyColor,
+                mc
+        );
+    }
+
+    protected void logOwnedSkyBackingDecisionProbe(String route, Minecraft mc, World world, boolean external,
+                                                   boolean bpNested, boolean bpPass, boolean hasView,
+                                                   boolean hasTarget, boolean owned, boolean shaderless,
+                                                   boolean shadered) {
+        boolean hideGui = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc));
+        if (!hideGui || ownedSkyBackingDecisionProbeLogs++ >= 36) {
+            return;
+        }
+        MainMod.LOGGER.info(
+                "[AUSMSkyBackingDecisionProbe] route={} active={} world={} dim={} simpleVoid={} customVoid={} owned={} shaderless={} shadered={} external={} bpNested={} bpPass={} hasView={} hasTarget={} screen={} hideGui={} paused={} drawFbo={} readFbo={} mcTarget={}",
+                route,
+                isPipelineActive,
+                world == null ? "null" : world.getClass().getName(),
+                world == null || com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) == null
+                        ? Integer.MIN_VALUE
+                        : com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)),
+                isSimpleVoidWorld(world),
+                isCustomVoidWorldSkyEnabled(world),
+                owned,
+                shaderless,
+                shadered,
+                external,
+                bpNested,
+                bpPass,
+                hasView,
+                hasTarget,
+                mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null,
+                hideGui,
+                mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc),
+                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
+                describeFramebufferTargetDetailed(mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc))
+        );
+    }
+
+    protected void logOwnedSkyBackingProbe(String route, Minecraft mc) {
+        if (mc == null
+                || !com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc))
+                || ownedSkyBackingProbeLogs++ >= 36) {
+            return;
+        }
+        Framebuffer framebuffer = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        MainMod.LOGGER.info(
+                "[AUSMSkyBackingProbe] route={} active={} simpleVoid={} owned={} screen={} hideGui={} paused={} drawFbo={} readFbo={} mcTarget={} display={}x{}",
+                route,
+                isPipelineActive,
+                isSimpleVoidWorld(renderWorld(mc)),
+                shouldUseOwnedSkyOverrideWorld(renderWorld(mc)),
+                mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null,
+                mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)),
+                mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc),
+                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
+                describeFramebufferTargetDetailed(framebuffer),
+                mc == null ? -1 : com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc),
+                mc == null ? -1 : com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc)
+        );
+    }
+
     public void renderShaderlessGuiCustomSkyBackingBeforeSky(float partialTicks) {
         renderOwnedSkyBackingBeforeSky(partialTicks);
     }
 
-    private boolean shouldRenderShaderedOwnedSkyBacking(Minecraft mc) {
+    protected boolean shouldRenderShaderedOwnedSkyBacking(Minecraft mc) {
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return isPipelineActive
                 && world != null
@@ -18595,18 +3269,11 @@ public class PipelineContext {
                 && !isRenderingBetterPortalsRenderPass();
     }
 
-    private boolean shouldUseShaderedF1LowerSkyRepair(Minecraft mc, World world) {
-        return isPipelineActive
-                && mc != null
-                && world != null
-                && !isSimpleVoidWorld(world)
-                && shouldUseOwnedSkyOverrideWorld(world)
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc));
+    protected boolean shouldUseShaderedF1LowerSkyRepair(Minecraft mc, World world) {
+        return false;
     }
 
-    private void drawOwnedSkyBackingGradient(int width, int height, Vec3d skyColor, Minecraft mc) {
+    protected void drawOwnedSkyBackingGradient(int width, int height, Vec3d skyColor, Minecraft mc) {
         int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
         int previousShadeModel = GL11.glGetInteger(GL11.GL_SHADE_MODEL);
         int previousDepthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
@@ -18696,7 +3363,115 @@ public class PipelineContext {
         }
     }
 
-    private void renderShaderlessBotaniaVoidDetails(float partialTicks, WorldClient world, Minecraft mc) {
+    protected void drawOwnedSkyDepthRepairGradient(int width, int height, Vec3d skyColor, Minecraft mc, Framebuffer target) {
+        if (target == null || width <= 0 || height <= 0) {
+            return;
+        }
+        int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+        int previousShadeModel = GL11.glGetInteger(GL11.GL_SHADE_MODEL);
+        int previousDepthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
+        boolean previousDepthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
+        boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+        boolean previousTexture2D = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
+        boolean previousBlend = GL11.glIsEnabled(GL11.GL_BLEND);
+        boolean previousCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+        boolean previousFog = GL11.glIsEnabled(GL11.GL_FOG);
+        boolean pushedProjection = false;
+        boolean pushedModelView = false;
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
+            GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0
+                    ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glViewport(0, 0, width, height);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
+                    new String[] {"func_179106_n", "disableFog"},
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+            GL11.glDepthFunc(GL11.GL_LEQUAL);
+
+            GL11.glMatrixMode(GL11.GL_PROJECTION);
+            GL11.glPushMatrix();
+            pushedProjection = true;
+            GL11.glLoadIdentity();
+            GL11.glOrtho(0.0D, Math.max(1, width), 0.0D, Math.max(1, height), -1.0D, 1.0D);
+            GL11.glMatrixMode(GL11.GL_MODELVIEW);
+            GL11.glPushMatrix();
+            pushedModelView = true;
+            GL11.glLoadIdentity();
+            GL11.glShadeModel(GL11.GL_SMOOTH);
+
+            Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
+            BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.field(
+                            net.minecraft.client.renderer.vertex.DefaultVertexFormats.class,
+                            net.minecraft.client.renderer.vertex.VertexFormat.class,
+                            null,
+                            "field_181706_f",
+                            "POSITION_COLOR"));
+            int bands = Math.max(24, Math.min(96, height / 8));
+            for (int i = 0; i < bands; i++) {
+                double y0 = (height * i) / (double) bands;
+                double y1 = (height * (i + 1)) / (double) bands;
+                float[] c0 = officialOwnedSkyBackingColorAt(y0, height, skyColor, mc);
+                float[] c1 = officialOwnedSkyBackingColorAt(y1, height, skyColor, mc);
+                putGradientQuad(buffer, 0.0D, y0, width, y1, c0, c1, 1.0D);
+            }
+            com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+        } finally {
+            Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.forceResetBufferDrawingState(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator));
+            if (pushedModelView) {
+                GL11.glMatrixMode(GL11.GL_MODELVIEW);
+                GL11.glPopMatrix();
+            }
+            if (pushedProjection) {
+                GL11.glMatrixMode(GL11.GL_PROJECTION);
+                GL11.glPopMatrix();
+            }
+            GL11.glMatrixMode(previousMatrixMode);
+            GL11.glShadeModel(previousShadeModel);
+            if (previousTexture2D) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
+            }
+            if (previousBlend) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+            }
+            if (previousCull) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+            }
+            if (previousFog) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
+                        new String[] {"func_179127_m", "enableFog"},
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
+                        new String[] {"func_179106_n", "disableFog"},
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+            }
+            if (previousDepthTest) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+            } else {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+            }
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(previousDepthMask);
+            GL11.glDepthFunc(previousDepthFunc);
+        }
+    }
+
+    protected void renderShaderlessBotaniaVoidDetails(float partialTicks, WorldClient world, Minecraft mc) {
         TextureManager textureManager = com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc);
         if (textureManager == null) {
             return;
@@ -18737,12 +3512,11 @@ public class PipelineContext {
             float celestial = com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks);
             float dayDistance = celestial > 0.5F ? 1.0F - celestial : celestial;
             float nightAlpha = clamp01((dayDistance - 0.30F) * 5.0F) * rainFade;
-            float ornamentAlpha = Math.max(0.10F, nightAlpha) * rainFade;
+            float ornamentAlpha = 1.0F;
             long time = com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world);
 
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO);
             drawBotaniaVoidPlanets(textureManager, time, partialTicks, ornamentAlpha);
-            drawBotaniaVoidSkyBands(textureManager, time, partialTicks, nightAlpha * 0.45F);
+            drawBotaniaVoidSkyBands(textureManager, time, partialTicks, ornamentAlpha);
             drawBotaniaVoidRainbow(textureManager, time, partialTicks, rainFade, celestial);
         } finally {
             if (pushed) {
@@ -18793,13 +3567,15 @@ public class PipelineContext {
         }
     }
 
-    private void drawBotaniaVoidPlanets(TextureManager textureManager, long time, float partialTicks, float alpha) {
+    protected void drawBotaniaVoidPlanets(TextureManager textureManager, long time, float partialTicks, float alpha) {
         if (alpha <= 0.01F) {
             return;
         }
         GL11.glPushMatrix();
         try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, clamp01(alpha * 1.8F));
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+                    GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, clamp01(alpha));
             GL11.glRotatef(90.0F, 0.5F, 0.5F, 0.0F);
             float size = 20.0F;
             for (int i = 0; i < BOTANIA_VOID_PLANET_TEXTURES.length; i++) {
@@ -18837,14 +3613,15 @@ public class PipelineContext {
         }
     }
 
-    private void drawBotaniaVoidSkyBands(TextureManager textureManager, long time, float partialTicks, float alpha) {
+    protected void drawBotaniaVoidSkyBands(TextureManager textureManager, long time, float partialTicks, float alpha) {
         if (alpha <= 0.01F) {
             return;
         }
         com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, BOTANIA_VOID_SKYBOX_TEXTURE);
         GL11.glPushMatrix();
         try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+                    GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, clamp01(alpha));
             GL11.glTranslatef(0.0F, -1.0F, 0.0F);
             GL11.glRotatef(220.0F, 1.0F, 0.0F, 0.0F);
@@ -18861,7 +3638,7 @@ public class PipelineContext {
         }
     }
 
-    private void drawBotaniaVoidRainbow(TextureManager textureManager, long time, float partialTicks, float rainFade, float celestial) {
+    protected void drawBotaniaVoidRainbow(TextureManager textureManager, long time, float partialTicks, float rainFade, float celestial) {
         float daySide = celestial > 0.25F ? 1.0F - celestial : celestial;
         float alpha = clamp01((0.25F - Math.min(0.25F, daySide)) * 4.0F) * rainFade * 0.35F;
         if (alpha <= 0.01F) {
@@ -18881,7 +3658,7 @@ public class PipelineContext {
         }
     }
 
-    private void drawBotaniaVoidBillboard(float size) {
+    protected void drawBotaniaVoidBillboard(float size) {
         Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
         BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
         com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181707_g", "POSITION_TEX"));
@@ -18892,7 +3669,7 @@ public class PipelineContext {
         com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
     }
 
-    private void drawBotaniaRibbon(float scrollDegrees, float radius, float height, int segments) {
+    protected void drawBotaniaRibbon(float scrollDegrees, float radius, float height, int segments) {
         Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
         BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
         com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUAD_STRIP, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181707_g", "POSITION_TEX"));
@@ -18909,31 +3686,41 @@ public class PipelineContext {
         com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
     }
 
-    private float[] officialOwnedSkyBackingColorAt(double y, int height, Vec3d skyColor, Minecraft mc) {
+    protected float[] officialOwnedSkyBackingColorAt(double y, int height, Vec3d skyColor, Minecraft mc) {
         double uvY = clamp01(y / Math.max(1.0D, height));
         return vec3Color(officialOwnedSkyBackingColor(uvY, skyColor, mc));
     }
 
-    private Vec3d officialOwnedSkyBackingColor(double uvY, Vec3d skyColor, Minecraft mc) {
+    protected Vec3d officialOwnedSkyBackingColor(double uvY, Vec3d skyColor, Minecraft mc) {
         if (!isSimpleVoidWorld(renderWorld(mc))) {
             return dimensionOwnedSkyBackingColor(uvY, skyColor, mc);
         }
 
         double horizonY = 0.50D;
         double softness = 0.70D;
-        double dayFactor = 1.0D - officialSkyNightFactor(mc);
-
         Vec3d source = skyColor != null ? skyColor : new Vec3d(0.0D, 0.0D, 0.0D);
         Vec3d dayTop = maxSkyColor(source, new Vec3d(0.45D, 0.62D, 0.86D));
         Vec3d dayHorizon = mixSkyColors(desaturateSkyColor(dayTop, 0.35D), new Vec3d(0.84D, 0.90D, 1.0D), 0.62D);
-        Vec3d dayLower = dayHorizon;
+        World world = renderWorld(mc);
+        double celestial = world == null ? 0.25D
+                : com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world,
+                mc == null ? 0.0F : com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
+        // This world's celestial angle is zero at midday and one-half at
+        // midnight. Use cosine rather than the standard quarter-shifted sine.
+        double sunHeight = Math.cos(celestial * Math.PI * 2.0D);
+        double day = smoothstep(-0.12D, 0.20D, sunHeight);
+        double night = 1.0D - smoothstep(-0.30D, 0.08D, sunHeight);
+        double twilight = clamp01(1.0D - day - night);
+        double sunsetSide = clamp01((1.0D + Math.sin(celestial * Math.PI * 2.0D)) * 0.5D);
 
-        Vec3d nightFloor = new Vec3d(0.018D, 0.024D, 0.045D);
-        Vec3d nightSky = maxSkyColor(source, new Vec3d(0.026D, 0.034D, 0.062D));
-        Vec3d nightBase = mixSkyColors(nightFloor, nightSky, 0.75D);
+        Vec3d nightTop = new Vec3d(0.012D, 0.021D, 0.075D);
+        Vec3d nightHorizon = new Vec3d(0.042D, 0.058D, 0.125D);
+        Vec3d sunrise = new Vec3d(0.96D, 0.47D, 0.32D);
+        Vec3d sunset = new Vec3d(0.62D, 0.16D, 0.30D);
+        Vec3d twilightColor = mixSkyColors(sunrise, sunset, sunsetSide);
 
-        Vec3d topColor = mixSkyColors(nightBase, dayTop, dayFactor);
-        Vec3d lowerColor = mixSkyColors(nightBase, dayLower, dayFactor);
+        Vec3d topColor = mixSkyColors(mixSkyColors(nightTop, twilightColor, twilight), dayTop, day);
+        Vec3d lowerColor = mixSkyColors(mixSkyColors(nightHorizon, twilightColor, twilight), dayHorizon, day);
 
         double band = (uvY - (horizonY - softness)) / (softness * 2.0D);
         Vec3d result = mixSkyColors(lowerColor, topColor, smootherstep(band));
@@ -18950,7 +3737,12 @@ public class PipelineContext {
         return mixSkyColors(result, rainColor, clamp01(rainAmount * 0.50D));
     }
 
-    private Vec3d dimensionOwnedSkyBackingColor(double uvY, Vec3d skyColor, Minecraft mc) {
+    protected double smoothstep(double edge0, double edge1, double value) {
+        double t = clamp01((value - edge0) / Math.max(1.0E-6D, edge1 - edge0));
+        return t * t * (3.0D - 2.0D * t);
+    }
+
+    protected Vec3d dimensionOwnedSkyBackingColor(double uvY, Vec3d skyColor, Minecraft mc) {
         double horizonY = 0.50D;
         double softness = 0.70D;
         Vec3d source = skyColor != null ? skyColor : new Vec3d(0.0D, 0.0D, 0.0D);
@@ -18964,7 +3756,7 @@ public class PipelineContext {
         return result;
     }
 
-    private double officialSkyNightFactor(Minecraft mc) {
+    protected double officialSkyNightFactor(Minecraft mc) {
         World world = renderWorld(mc);
         if (world == null) {
             return 0.0D;
@@ -18973,7 +3765,7 @@ public class PipelineContext {
         return clamp01(Math.max(Math.sin(timeAngle * -Math.PI * 2.0D), 0.0D));
     }
 
-    private double officialSkyRainFactor(Minecraft mc) {
+    protected double officialSkyRainFactor(Minecraft mc) {
         World world = renderWorld(mc);
         if (world == null) {
             return 0.0D;
@@ -18982,7 +3774,7 @@ public class PipelineContext {
         return clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, partialTicks));
     }
 
-    private Vec3d maxSkyColor(Vec3d left, Vec3d right) {
+    protected Vec3d maxSkyColor(Vec3d left, Vec3d right) {
         return new Vec3d(
                 Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(left), com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(right)),
                 Math.max(com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(left), com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(right)),
@@ -18990,7 +3782,7 @@ public class PipelineContext {
         );
     }
 
-    private Vec3d scaleSkyColor(Vec3d color, double scale) {
+    protected Vec3d scaleSkyColor(Vec3d color, double scale) {
         return new Vec3d(
                 clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(color) * scale),
                 clamp01(com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(color) * scale),
@@ -18998,12 +3790,12 @@ public class PipelineContext {
         );
     }
 
-    private double smootherstep(double value) {
+    protected double smootherstep(double value) {
         double t = clamp01(value);
         return t * t * t * (t * (t * 6.0D - 15.0D) + 10.0D);
     }
 
-    private float[] vec3Color(Vec3d color) {
+    protected float[] vec3Color(Vec3d color) {
         return new float[] {
                 clamp01((float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecX(color)),
                 clamp01((float) com.l.ausm.impl.util.MinecraftReflectionCompat.vecY(color)),
@@ -19011,22 +3803,22 @@ public class PipelineContext {
         };
     }
 
-    private void putGradientQuad(BufferBuilder buffer, double x0, double y0, double x1, double y1, float[] bottom, float[] top) {
+    protected void putGradientQuad(BufferBuilder buffer, double x0, double y0, double x1, double y1, float[] bottom, float[] top) {
         putGradientQuad(buffer, x0, y0, x1, y1, bottom, top, 0.0D);
     }
 
-    private void putGradientQuad(BufferBuilder buffer, double x0, double y0, double x1, double y1, float[] bottom, float[] top, double z) {
+    protected void putGradientQuad(BufferBuilder buffer, double x0, double y0, double x1, double y1, float[] bottom, float[] top, double z) {
         com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, x0, y0, z, colorByte(bottom[0]), colorByte(bottom[1]), colorByte(bottom[2]), 255);
         com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, x1, y0, z, colorByte(bottom[0]), colorByte(bottom[1]), colorByte(bottom[2]), 255);
         com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, x1, y1, z, colorByte(top[0]), colorByte(top[1]), colorByte(top[2]), 255);
         com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, x0, y1, z, colorByte(top[0]), colorByte(top[1]), colorByte(top[2]), 255);
     }
 
-    private int colorByte(float value) {
+    protected int colorByte(float value) {
         return clampInt((int) (clamp01(value) * 255.0F + 0.5F), 0, 255);
     }
 
-    private void sealShaderlessWorldFramebufferAlpha(String stage) {
+    protected void sealShaderlessWorldFramebufferAlpha(String stage) {
         if (isPipelineActive
                 || externalWorldFramebufferTarget != null
                 || isRenderingBetterPortalsNestedView()
@@ -19036,8 +3828,7 @@ public class PipelineContext {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null
                 || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null
-                || !isOverworldShaderEnvironment(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc))) {
+                || com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc) == null) {
             return;
         }
 
@@ -19077,7 +3868,63 @@ public class PipelineContext {
         }
     }
 
-    private void restoreShaderlessBloomExitState(Minecraft mc) {
+    public void sealShaderlessSkyFramebufferAlpha() {
+        sealShaderlessWorldFramebufferAlpha("post-sky");
+    }
+
+    public void logHiddenSkyFramebufferProbe(String stage) {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null
+                || !com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc))
+                || hiddenSkyFramebufferProbeLogs++ >= 36) {
+            return;
+        }
+        Framebuffer target = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        if (target == null) {
+            return;
+        }
+        int previousRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int width = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target));
+        int height = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target));
+        FloatBuffer top = BufferUtils.createFloatBuffer(4);
+        FloatBuffer center = BufferUtils.createFloatBuffer(4);
+        FloatBuffer windowTop = BufferUtils.createFloatBuffer(4);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
+            GL11.glReadPixels(width / 2, Math.max(0, (height * 3) / 4), 1, 1, GL11.GL_RGBA, GL11.GL_FLOAT, top);
+            GL11.glReadPixels(width / 2, height / 2, 1, 1, GL11.GL_RGBA, GL11.GL_FLOAT, center);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, 0);
+            GL11.glReadBuffer(GL11.GL_BACK);
+            GL11.glReadPixels(Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) / 2),
+                    Math.max(0, (com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) * 3) / 4),
+                    1, 1, GL11.GL_RGBA, GL11.GL_FLOAT, windowTop);
+            World world = com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
+            float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
+            float celestial = world == null ? -1.0F : com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks);
+            float rain = world == null ? -1.0F : com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, partialTicks);
+            MainMod.LOGGER.info("[AUSMHiddenSkyProbe] call={} stage={} time={} celestial={} rain={} top={}/{}/{}/{} center={}/{}/{}/{} windowTop={}/{}/{}/{} blend={} alpha={} fbo={}",
+                    hiddenSkyFramebufferProbeLogs,
+                    stage,
+                    world == null ? -1L : com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world),
+                    celestial,
+                    rain,
+                    top.get(0), top.get(1), top.get(2), top.get(3),
+                    center.get(0), center.get(1), center.get(2), center.get(3),
+                    windowTop.get(0), windowTop.get(1), windowTop.get(2), windowTop.get(3),
+                    GL11.glIsEnabled(GL11.GL_BLEND),
+                    GL11.glIsEnabled(GL11.GL_ALPHA_TEST),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
+        } catch (RuntimeException | LinkageError ignored) {
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousRead);
+            GL11.glReadBuffer(previousReadBuffer);
+        }
+    }
+
+    protected void restoreShaderlessBloomExitState(Minecraft mc) {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
@@ -19101,6 +3948,9 @@ public class PipelineContext {
     }
 
     public void prepareShaderlessUiRenderingBoundary() {
+        if (disableShaderlessPreGuiHooks) {
+            return;
+        }
         if (isPipelineActive
                 || externalWorldFramebufferTarget != null
                 || isRenderingBetterPortalsNestedView()
@@ -19114,6 +3964,15 @@ public class PipelineContext {
         bindMinecraftFramebufferForGui(mc);
         restoreShaderlessBloomExitState(mc);
         sealShaderlessWorldFramebufferAlpha("ui-boundary");
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc))) {
+            // F1 has no subsequent HUD draw to consume/reset GUI blending. Keep
+            // the world framebuffer opaque for the final presentation blit.
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+            return;
+        }
         if (com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null) {
             com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
             com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
@@ -19131,14 +3990,13 @@ public class PipelineContext {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
     }
 
-    private void refreshShaderlessBloomVertexFormatIfNeeded() {
+    protected void refreshShaderlessBloomVertexFormatIfNeeded() {
         refreshShaderlessBloomVertexFormatIfNeeded(bloomRenderer.hasBloomResources());
     }
 
-    private void refreshShaderlessBloomVertexFormatIfNeeded(boolean hasBloomResources) {
+    protected void refreshShaderlessBloomVertexFormatIfNeeded(boolean hasBloomResources) {
         if (isPipelineActive
                 || shaderlessBloomVertexFormatRefreshRequested
-                || AusmBloomLayer.shouldUseShaderlessNativeHook()
                 || !hasBloomResources) {
             return;
         }
@@ -19148,8 +4006,8 @@ public class PipelineContext {
         rebuildTerrainRenderers(recreateNothirium, false);
     }
 
-    private boolean hasShaderlessFramedBloomBootstrapCandidate() {
-        return blockcrafteryTileClass() != null;
+    protected boolean hasShaderlessFramedBloomBootstrapCandidate() {
+        return false;
     }
 
     public void recordCurrentShaderlessBloomMetadata(BlockRenderLayer layer) {
@@ -19183,7 +4041,7 @@ public class PipelineContext {
         if (layer == null) {
             return;
         }
-        long key = shaderlessBloomMetadataKey(
+        long key = BloomExtractionPlan.metadataKey(
                 currentClientDimensionId(),
                 blockX >> 4,
                 blockY >> 4,
@@ -19193,8 +4051,6 @@ public class PipelineContext {
         shaderlessBloomMetadataKnownChunkLayers.add(key);
         if (hasBloom) {
             shaderlessBloomMetadataChunkLayers.add(key);
-        } else {
-            shaderlessBloomMetadataChunkLayers.remove(key);
         }
     }
 
@@ -19215,7 +4071,7 @@ public class PipelineContext {
         if (layer == null) {
             return;
         }
-        long key = shaderlessBloomMetadataKey(
+        long key = BloomExtractionPlan.metadataKey(
                 currentClientDimensionId(),
                 blockX >> 4,
                 blockY >> 4,
@@ -19256,6 +4112,14 @@ public class PipelineContext {
         boolean hadBloomMetadata = invalidateShaderlessBloomMetadataSection(dimension, sectionX, sectionY, sectionZ);
         boolean bloomSourceChanged = stateHasShaderlessBloomSource(oldState) || stateHasShaderlessBloomSource(newState);
         if (!hadBloomMetadata && !bloomSourceChanged) {
+            return;
+        }
+
+        // Lumenized's native BLOOM layer is rebuilt by the normal world block
+        // update. Scheduling our legacy shaderless extractor here recompiled
+        // every populated section in the column several times and caused
+        // visible flicker after ordinary block placement.
+        if (AusmBloomLayer.shouldUseShaderlessNativeHook()) {
             return;
         }
 
@@ -19305,7 +4169,7 @@ public class PipelineContext {
         // compile summary; actual block changes invalidate through the block-update path.
     }
 
-    private boolean renderUpdateRangeContainsShaderlessBloomSource(World world, int minX, int minY, int minZ,
+    protected boolean renderUpdateRangeContainsShaderlessBloomSource(World world, int minX, int minY, int minZ,
                                                                   int maxX, int maxY, int maxZ) {
         int startX = Math.min(minX, maxX);
         int endX = Math.max(minX, maxX);
@@ -19339,7 +4203,7 @@ public class PipelineContext {
         return false;
     }
 
-    private void queueShaderlessBloomClientChunkRefreshes(World world, int sectionMinX, int sectionMaxX,
+    protected void queueShaderlessBloomClientChunkRefreshes(World world, int sectionMinX, int sectionMaxX,
                                                          int sectionMinZ, int sectionMaxZ) {
         int startX = Math.min(sectionMinX, sectionMaxX);
         int endX = Math.max(sectionMinX, sectionMaxX);
@@ -19357,26 +4221,26 @@ public class PipelineContext {
         }
     }
 
-    private void queueShaderlessBloomClientChunkRefresh(World world, int chunkX, int chunkZ) {
+    protected void queueShaderlessBloomClientChunkRefresh(World world, int chunkX, int chunkZ) {
         if (world instanceof WorldClient worldClient) {
             queueClientChunkRenderRefresh(worldClient, chunkX, chunkZ, CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM);
         }
     }
 
-    private boolean invalidateShaderlessBloomMetadataSection(int dimension, int sectionX, int sectionY, int sectionZ) {
+    protected boolean invalidateShaderlessBloomMetadataSection(int dimension, int sectionX, int sectionY, int sectionZ) {
         boolean hadBloomMetadata = false;
         for (BlockRenderLayer layer : BlockRenderLayer.values()) {
             if (layer == null) {
                 continue;
             }
-            long key = shaderlessBloomMetadataKey(dimension, sectionX, sectionY, sectionZ, layer);
+            long key = BloomExtractionPlan.metadataKey(dimension, sectionX, sectionY, sectionZ, layer);
             hadBloomMetadata |= shaderlessBloomMetadataChunkLayers.remove(key);
             shaderlessBloomMetadataKnownChunkLayers.remove(key);
         }
         return hadBloomMetadata;
     }
 
-    private boolean hasShaderlessBloomMetadata() {
+    protected boolean hasShaderlessBloomMetadata() {
         return !shaderlessBloomMetadataChunkLayers.isEmpty();
     }
 
@@ -19409,7 +4273,7 @@ public class PipelineContext {
         if (AusmBloomLayer.isBloomLayer(layer) || shaderlessBloomExtractionBootstrapActive) {
             return true;
         }
-        long key = shaderlessBloomMetadataKey(
+        long key = BloomExtractionPlan.metadataKey(
                 dimension,
                 chunkBlockX >> 4,
                 chunkBlockY >> 4,
@@ -19419,7 +4283,10 @@ public class PipelineContext {
         return shaderlessBloomMetadataChunkLayers.contains(key);
     }
 
-    private int currentClientDimensionId() {
+    public void prepareShaderlessOptimizedBloomDraw() {
+    }
+
+    protected int currentClientDimensionId() {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         WorldProvider provider = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
@@ -19428,7 +4295,7 @@ public class PipelineContext {
                 : Integer.MIN_VALUE;
     }
 
-    private boolean isSimpleVoidWorld(World world) {
+    protected boolean isSimpleVoidWorld(World world) {
         WorldProvider provider = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
         return provider != null
                 && com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider) == SIMPLE_VOID_WORLD_DIMENSION_ID;
@@ -19445,23 +4312,11 @@ public class PipelineContext {
         return isSimpleVoidWorld(world) || isOverworldShaderEnvironment(world);
     }
 
-    private static long shaderlessBloomMetadataKey(int dimension, int sectionX, int sectionY, int sectionZ, BlockRenderLayer layer) {
-        return ((long) (dimension & 0x3FF) << 54)
-                | ((long) (layer.ordinal() & 0xF) << 50)
-                | ((long) (sectionY & 0x3FF) << 40)
-                | ((long) (sectionX & 0xFFFFF) << 20)
-                | (long) (sectionZ & 0xFFFFF);
-    }
-
-    private int renderShaderlessBloomExtractionGeometry(Minecraft mc, Entity viewEntity) {
-        return renderShaderlessBloomExtractionGeometry(mc, viewEntity, false);
-    }
-
-    private int renderShaderlessBloomExtractionGeometry(Minecraft mc, Entity viewEntity, boolean allowPipelineActive) {
+    protected int renderShaderlessBloomExtractionGeometry(Minecraft mc, Entity viewEntity, boolean allowPipelineActive) {
         return renderBloomExtractionGeometry(mc, viewEntity, allowPipelineActive);
     }
 
-    private int renderBloomExtractionGeometry(Minecraft mc, Entity viewEntity, boolean allowPipelineActive) {
+    protected int renderBloomExtractionGeometry(Minecraft mc, Entity viewEntity, boolean allowPipelineActive) {
         if (mc == null || viewEntity == null) {
             return 0;
         }
@@ -19473,50 +4328,59 @@ public class PipelineContext {
         return renderEmissiveExtractionTerrain(partialTicks, viewEntity, allowPipelineActive);
     }
 
-    private int renderShaderlessNothiriumEmissiveTerrain(float partialTicks, Entity viewEntity) {
-        return renderEmissiveExtractionTerrain(partialTicks, viewEntity, false);
-    }
-
-    private int renderEmissiveExtractionTerrain(float partialTicks, Entity viewEntity, boolean allowPipelineActive) {
+    protected int renderEmissiveExtractionTerrain(float partialTicks, Entity viewEntity, boolean allowPipelineActive) {
         if ((!allowPipelineActive && isPipelineActive) || viewEntity == null) {
             return 0;
         }
         if (!NothiriumShadowRenderer.isAvailable() || NothiriumBypass.shouldBypass()) {
             return renderVanillaEmissiveTerrain(partialTicks, viewEntity, allowPipelineActive);
         }
-
-        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        nothiriumShadowRenderer.drainUploads();
-
-        int solid = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.SOLID, cameraX, cameraY, cameraZ);
-        int cutoutMipped = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.CUTOUT_MIPPED, cameraX, cameraY, cameraZ);
-        int cutout = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.CUTOUT, cameraX, cameraY, cameraZ);
-        int translucent = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.TRANSLUCENT, cameraX, cameraY, cameraZ);
-        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        int bloom = shouldRenderSyntheticBloomLayerWithRenderGlobal(bloomLayer) && mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null
-                ? renderShaderlessVanillaEmissiveLayerIfVisible(mc, WorldRenderingPhase.TERRAIN_TRANSLUCENT,
-                        bloomLayer, partialTicks, viewEntity)
-                : 0;
-        return solid + cutoutMipped + cutout + translucent + bloom;
+        return renderNothiriumEmissiveExtractionTerrain(partialTicks, viewEntity);
     }
 
-    private int renderShaderlessNothiriumExtractionLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ) {
+    protected int renderNothiriumEmissiveExtractionTerrain(float partialTicks, Entity viewEntity) {
+        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
+        nothiriumShadowRenderer.drainUploads();
+
+        WorldRenderingPhase previousPhase = activePhase;
+        boolean previousShaderlessWorldPassActive = shaderlessWorldPassActive;
+        if (!isPipelineActive) {
+            shaderlessWorldPassActive = true;
+        }
+        try {
+            activePhase = WorldRenderingPhase.TERRAIN_SOLID;
+            int solid = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.SOLID, cameraX, cameraY, cameraZ);
+            activePhase = WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED;
+            int cutoutMipped = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.CUTOUT_MIPPED, cameraX, cameraY, cameraZ);
+            activePhase = WorldRenderingPhase.TERRAIN_CUTOUT;
+            int cutout = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.CUTOUT, cameraX, cameraY, cameraZ);
+            activePhase = WorldRenderingPhase.TERRAIN_TRANSLUCENT;
+            int translucent = renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.TRANSLUCENT, cameraX, cameraY, cameraZ);
+            BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
+            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+            int bloom = shouldRenderSyntheticBloomLayerWithRenderGlobal(bloomLayer) && mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) != null
+                    ? renderShaderlessVanillaEmissiveLayerIfVisible(mc, WorldRenderingPhase.TERRAIN_TRANSLUCENT, bloomLayer, partialTicks, viewEntity)
+                    : 0;
+            return solid + cutoutMipped + cutout + translucent + bloom;
+        } finally {
+            activePhase = previousPhase;
+            shaderlessWorldPassActive = previousShaderlessWorldPassActive;
+        }
+    }
+
+    protected int renderShaderlessNothiriumExtractionLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ) {
         if (!shouldRenderShaderlessExtractionLayer(layer)) {
             return 0;
         }
         boolean forceBloomLayerEmission = AusmBloomLayer.isBloomLayer(layer);
         bloomRenderer.setShaderlessForceEmission(forceBloomLayerEmission ? 1.0F : 0.0F);
         try {
-            return positiveCount(nothiriumShadowRenderer.renderLayer(
-                    layer,
-                    cameraX,
-                    cameraY,
-                    cameraZ,
-                    nothiriumMainTerrainFallbackDistance()
-            ));
+            return positiveCount(nothiriumShadowRenderer.renderVisibleLayer(layer, cameraX, cameraY, cameraZ, 0, (short) 0));
         } finally {
             if (forceBloomLayerEmission) {
                 bloomRenderer.setShaderlessForceEmission(0.0F);
@@ -19524,11 +4388,7 @@ public class PipelineContext {
         }
     }
 
-    private int renderShaderlessVanillaEmissiveTerrain(float partialTicks, Entity viewEntity) {
-        return renderVanillaEmissiveTerrain(partialTicks, viewEntity, false);
-    }
-
-    private int renderVanillaEmissiveTerrain(float partialTicks, Entity viewEntity, boolean allowPipelineActive) {
+    protected int renderVanillaEmissiveTerrain(float partialTicks, Entity viewEntity, boolean allowPipelineActive) {
         if (!allowPipelineActive && isPipelineActive) {
             return 0;
         }
@@ -19543,22 +4403,23 @@ public class PipelineContext {
             shaderlessWorldPassActive = true;
         }
         try {
-            int solid = renderShaderlessVanillaEmissiveLayerIfVisible(mc, WorldRenderingPhase.TERRAIN_SOLID, BlockRenderLayer.SOLID, partialTicks, viewEntity);
-            int cutoutMipped = renderShaderlessVanillaEmissiveLayerIfVisible(mc, WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED, BlockRenderLayer.CUTOUT_MIPPED, partialTicks, viewEntity);
-            int cutout = renderShaderlessVanillaEmissiveLayerIfVisible(mc, WorldRenderingPhase.TERRAIN_CUTOUT, BlockRenderLayer.CUTOUT, partialTicks, viewEntity);
-            int translucent = renderShaderlessVanillaEmissiveLayerIfVisible(mc, WorldRenderingPhase.TERRAIN_TRANSLUCENT, BlockRenderLayer.TRANSLUCENT, partialTicks, viewEntity);
+            int rendered = 0;
+            for (BlockRenderLayer layer : BloomExtractionPlan.terrainLayers()) {
+                rendered += renderShaderlessVanillaEmissiveLayerIfVisible(
+                        mc, BloomExtractionPlan.phaseFor(layer), layer, partialTicks, viewEntity);
+            }
             BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
             int bloom = shouldRenderSyntheticBloomLayerWithRenderGlobal(bloomLayer)
                     ? renderShaderlessVanillaEmissiveLayerIfVisible(mc, WorldRenderingPhase.TERRAIN_TRANSLUCENT, bloomLayer, partialTicks, viewEntity)
                     : 0;
-            return solid + cutoutMipped + cutout + translucent + bloom;
+            return rendered + bloom;
         } finally {
             activePhase = previousPhase;
             shaderlessWorldPassActive = previousShaderlessWorldPassActive;
         }
     }
 
-    private int renderShaderlessVanillaEmissiveLayerIfVisible(Minecraft mc, WorldRenderingPhase phase, BlockRenderLayer layer,
+    protected int renderShaderlessVanillaEmissiveLayerIfVisible(Minecraft mc, WorldRenderingPhase phase, BlockRenderLayer layer,
                                                               float partialTicks, Entity viewEntity) {
         if (!shouldRenderShaderlessExtractionLayer(layer)) {
             return 0;
@@ -19566,7 +4427,7 @@ public class PipelineContext {
         return renderShaderlessVanillaEmissiveLayer(mc, phase, layer, partialTicks, viewEntity);
     }
 
-    private int renderShaderlessVanillaEmissiveLayer(Minecraft mc, WorldRenderingPhase phase, BlockRenderLayer layer,
+    protected int renderShaderlessVanillaEmissiveLayer(Minecraft mc, WorldRenderingPhase phase, BlockRenderLayer layer,
                                                      float partialTicks, Entity viewEntity) {
         activePhase = phase;
         boolean forceBloomLayerEmission = AusmBloomLayer.isBloomLayer(layer);
@@ -19584,19 +4445,24 @@ public class PipelineContext {
         }
     }
 
-    private static boolean shouldRenderSyntheticBloomLayerWithRenderGlobal(BlockRenderLayer layer) {
-        return layer != null && (!AusmBloomLayer.isBloomLayer(layer) || !isNothiriumLoaded());
+    protected static boolean shouldRenderSyntheticBloomLayerWithRenderGlobal(BlockRenderLayer layer) {
+        return BloomExtractionPlan.shouldRenderSyntheticLayer(layer, isNothiriumLoaded());
     }
 
-    private static boolean isNothiriumLoaded() {
+    protected static boolean isNothiriumLoaded() {
         return Loader.isModLoaded(NOTHIRIUM_MOD_ID) || Loader.isModLoaded(NAUGHTHIRIUM_MOD_ID);
     }
 
-    private static int positiveCount(int count) {
+    protected static int floorDouble(double value) {
+        int truncated = (int) value;
+        return value < (double) truncated ? truncated - 1 : truncated;
+    }
+
+    protected static int positiveCount(int count) {
         return Math.max(0, count);
     }
 
-    private void logShaderlessBloomHook(String detail) {
+    protected void logShaderlessBloomHook(String detail) {
         if (shaderlessBloomHookLogs >= MAX_SHADERLESS_BLOOM_HOOK_LOGS) {
             return;
         }
@@ -19604,14 +4470,14 @@ public class PipelineContext {
         MainMod.LOGGER.info("[AUSMBloom] Shaderless pre-GUI hook {}", detail);
     }
 
-    private String bloomMetadataSummary() {
+    protected String bloomMetadataSummary() {
         return "known=" + shaderlessBloomMetadataKnownChunkLayers.size()
                 + ", bloom=" + shaderlessBloomMetadataChunkLayers.size()
                 + ", extractionActive=" + shaderlessBloomExtractionActive
                 + ", bootstrap=" + shaderlessBloomExtractionBootstrapActive;
     }
 
-    private static String glStateSummary() {
+    protected static String glStateSummary() {
         return FixedFunctionGlState.summary();
     }
 
@@ -19676,7 +4542,7 @@ public class PipelineContext {
         restoreWorldSafeRenderState(source);
     }
 
-    private void restoreGuiSafeRenderState(String source) {
+    protected void restoreGuiSafeRenderState(String source) {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         bindMinecraftFramebufferForGui(mc);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
@@ -19709,9 +4575,13 @@ public class PipelineContext {
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
+        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+        }
     }
 
-    private void restoreWorldSafeRenderState(String source) {
+    protected void restoreWorldSafeRenderState(String source) {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         resetIndexedBlendState();
@@ -19864,12 +4734,43 @@ public class PipelineContext {
         if (isPipelineActive) {
             return;
         }
+        prepareDirectGuiScreenRenderingState(false);
+    }
+
+    public void prepareBypassedGuiScreenRendering() {
+        prepareDirectGuiScreenRenderingState(isPipelineActive);
+        prepareVanillaGuiScreenOverlayState();
+    }
+
+    public void prepareBypassedGuiScreenDrawState() {
+        prepareDirectGuiScreenRenderingState(false);
+    }
+
+    /**
+     * Vanilla GuiScreen backgrounds and widgets are drawn over the already-presented
+     * world.  Retaining the world depth buffer here rejects those flat screen quads.
+     */
+    private void prepareVanillaGuiScreenOverlayState() {
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glDepthMask(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+    }
+
+    private void prepareDirectGuiScreenRenderingState(boolean flushPipelineWorld) {
+        if (flushPipelineWorld && externalWorldFramebufferTarget == null && !isRenderingBetterPortalsNestedView()) {
+            if (worldFrameActive) {
+                renderDeferredNativeBloomIfNeeded();
+                blitWorldFramebufferToMinecraft();
+            }
+        }
         renderingGui = false;
         guiRenderDepth = 0;
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         disablePipelineVertexAttributes();
+        restoreVanillaClientRenderState();
         unbindShaderImages();
         unbindShaderStorageBuffers();
         resetIndexedBlendState();
@@ -19962,7 +4863,7 @@ public class PipelineContext {
         }
     }
 
-    private void bindGuiTarget() {
+    protected void bindGuiTarget() {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null) {
             return;
@@ -19972,7 +4873,7 @@ public class PipelineContext {
         }
     }
 
-    private void prepareGuiState() {
+    protected void prepareGuiState() {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
             com.l.ausm.impl.util.MinecraftReflectionCompat.disableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
@@ -20015,8 +4916,12 @@ public class PipelineContext {
                 && !isRenderingBetterPortalsNestedView();
     }
 
-    private void snapshotPresentationTargetForDirectPresentation(Framebuffer target, String reason) {
+    protected void snapshotPresentationTargetForDirectPresentation(Framebuffer target, String reason) {
         if (target == null) {
+            directPresentationValid = false;
+            return;
+        }
+        if (worldLoadPresentationGuardFrames > 0) {
             directPresentationValid = false;
             return;
         }
@@ -20052,6 +4957,7 @@ public class PipelineContext {
             directPresentationValid = true;
             directPresentationFrame = pipelineFrameId;
             directPresentationReason = reason;
+            logDirectPresentationSnapshot(reason, target);
         } catch (RuntimeException | LinkageError e) {
             directPresentationValid = false;
         } finally {
@@ -20062,7 +4968,7 @@ public class PipelineContext {
         }
     }
 
-    private boolean ensureDirectPresentationTexture(int width, int height) {
+    protected boolean ensureDirectPresentationTexture(int width, int height) {
         if (width <= 0 || height <= 0) {
             return false;
         }
@@ -20117,7 +5023,7 @@ public class PipelineContext {
         }
     }
 
-    private boolean refreshMinecraftFramebufferFromDirectPresentationTexture(Framebuffer target, boolean allowStaleForGui) {
+    protected boolean refreshMinecraftFramebufferFromDirectPresentationTexture(Framebuffer target, boolean allowStaleForGui) {
         if (target == null
                 || !directPresentationValid
                 || directPresentationTexture <= 0
@@ -20127,7 +5033,7 @@ public class PipelineContext {
             return false;
         }
         long age = pipelineFrameId - directPresentationFrame;
-        if (directPresentationFrame == Long.MIN_VALUE || (age != 0L && (!allowStaleForGui || age < 0L || age > 240L))) {
+        if (directPresentationFrame == Long.MIN_VALUE || age != 0L) {
             return false;
         }
 
@@ -20160,6 +5066,7 @@ public class PipelineContext {
             );
             com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, targetWidth, targetHeight);
+            logDirectPresentationTextureRefresh(target, targetWidth, targetHeight, allowStaleForGui);
             return true;
         } catch (RuntimeException | LinkageError e) {
             return false;
@@ -20176,7 +5083,7 @@ public class PipelineContext {
         }
     }
 
-    private void logDirectPresentationSnapshot(String reason, Framebuffer target) {
+    protected void logDirectPresentationSnapshot(String reason, Framebuffer target) {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null) {
             return;
@@ -20198,7 +5105,7 @@ public class PipelineContext {
         );
     }
 
-    private void logDirectPresentationTextureRefresh(Framebuffer target, int targetWidth, int targetHeight, boolean gui) {
+    protected void logDirectPresentationTextureRefresh(Framebuffer target, int targetWidth, int targetHeight, boolean gui) {
         if (directPresentationTextureRefreshLogs++ >= MAX_DIRECT_PRESENTATION_TEXTURE_REFRESH_LOGS) {
             return;
         }
@@ -20220,7 +5127,7 @@ public class PipelineContext {
         );
     }
 
-    private void logGuiRecoveredBackground(boolean refreshed, Framebuffer target) {
+    protected void logGuiRecoveredBackground(boolean refreshed, Framebuffer target) {
         if (guiRecoveredBackgroundLogs++ >= MAX_GUI_RECOVERED_BACKGROUND_LOGS) {
             return;
         }
@@ -20302,10 +5209,14 @@ public class PipelineContext {
         TextureBinder.restoreDefaultTextureUnit();
     }
 
-    private boolean refreshMinecraftFramebufferFromDirectRecoveredWindowSource(Framebuffer target) {
+    protected boolean refreshMinecraftFramebufferFromDirectRecoveredWindowSource(Framebuffer target) {
         if (refreshMinecraftFramebufferFromDirectPresentationTexture(target, false)) {
             return true;
         }
+        return refreshMinecraftFramebufferFromCurrentRecoveredWindowSource(target);
+    }
+
+    protected boolean refreshMinecraftFramebufferFromCurrentRecoveredWindowSource(Framebuffer target) {
         if (target == null
                 || directRecoveredWindowSource == null
                 || !directRecoveredWindowSource.isUsable()
@@ -20325,7 +5236,7 @@ public class PipelineContext {
         return true;
     }
 
-    private void drawDirectRecoveredWindowSourceToTarget(int targetFramebuffer, int targetWidth, int targetHeight, float colorScale) {
+    protected void drawDirectRecoveredWindowSourceToTarget(int targetFramebuffer, int targetWidth, int targetHeight, float colorScale) {
         int texture = directRecoveredWindowSource != null && directRecoveredWindowAttachment != null
                 ? directRecoveredWindowSource.getReadTexture(directRecoveredWindowAttachment)
                 : -1;
@@ -20402,7 +5313,7 @@ public class PipelineContext {
         }
     }
 
-    private void logDirectRecoveredWindowRefresh(Framebuffer target, int targetWidth, int targetHeight) {
+    protected void logDirectRecoveredWindowRefresh(Framebuffer target, int targetWidth, int targetHeight) {
         if (directRecoveredWindowRefreshLogs++ >= MAX_DIRECT_RECOVERED_WINDOW_REFRESH_LOGS) {
             return;
         }
@@ -20424,7 +5335,7 @@ public class PipelineContext {
         );
     }
 
-    private void logDirectWindowPresent(Framebuffer target, int width, int height, boolean recoveredRefresh) {
+    protected void logDirectWindowPresent(Framebuffer target, int width, int height, boolean recoveredRefresh) {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null) {
             return;
@@ -20509,7 +5420,7 @@ public class PipelineContext {
         return program != null ? program.shaderProgram() : null;
     }
 
-    private PipelineProgram effectiveDistantHorizonsPipelineProgram() {
+    protected PipelineProgram effectiveDistantHorizonsPipelineProgram() {
         PipelineProgram pipelineProgram = effectivePipelineProgram(currentDistantHorizonsPass);
         if (pipelineProgram == null && currentDistantHorizonsPass != RenderPass.DH_TERRAIN) {
             pipelineProgram = effectivePipelineProgram(RenderPass.DH_TERRAIN);
@@ -20570,7 +5481,7 @@ public class PipelineContext {
         GL30.glBindVertexArray(0);
     }
 
-    private void configureDistantHorizonsShaderState(PipelineProgram pipelineProgram) {
+    protected void configureDistantHorizonsShaderState(PipelineProgram pipelineProgram) {
         RenderPass pass = pipelineProgram.pass();
         List<Attachment> drawBuffers = pipelineProgram.effectiveDrawBuffers(programs);
         if (drawBuffers.isEmpty()) {
@@ -20622,14 +5533,14 @@ public class PipelineContext {
         }
     }
 
-    private void bindDistantHorizonsVertexArray() {
+    protected void bindDistantHorizonsVertexArray() {
         if (distantHorizonsVertexArray < 0) {
             distantHorizonsVertexArray = GL30.glGenVertexArrays();
         }
         GL30.glBindVertexArray(distantHorizonsVertexArray);
     }
 
-    private void bindDistantHorizonsFallbackProgram() {
+    protected void bindDistantHorizonsFallbackProgram() {
         if (!ensureDistantHorizonsFallbackProgram()) {
             return;
         }
@@ -20641,7 +5552,7 @@ public class PipelineContext {
         uploadDistantHorizonsFallbackModelOffset();
     }
 
-    private boolean ensureDistantHorizonsFallbackProgram() {
+    protected boolean ensureDistantHorizonsFallbackProgram() {
         if (distantHorizonsFallbackProgramId != 0) {
             return true;
         }
@@ -20653,8 +5564,8 @@ public class PipelineContext {
         int fragmentShader = 0;
         int program = 0;
         try {
-            vertexShader = compileDistantHorizonsFallbackShader(GL20.GL_VERTEX_SHADER, DISTANT_HORIZONS_FALLBACK_VERTEX_SHADER);
-            fragmentShader = compileDistantHorizonsFallbackShader(GL20.GL_FRAGMENT_SHADER, DISTANT_HORIZONS_FALLBACK_FRAGMENT_SHADER);
+            vertexShader = compileDistantHorizonsFallbackShader(GL20.GL_VERTEX_SHADER, DistantHorizonsInternalShaders.FALLBACK_VERTEX);
+            fragmentShader = compileDistantHorizonsFallbackShader(GL20.GL_FRAGMENT_SHADER, DistantHorizonsInternalShaders.FALLBACK_FRAGMENT);
             if (vertexShader == 0 || fragmentShader == 0) {
                 return false;
             }
@@ -20693,7 +5604,7 @@ public class PipelineContext {
         }
     }
 
-    private int compileDistantHorizonsFallbackShader(int type, String source) {
+    protected int compileDistantHorizonsFallbackShader(int type, String source) {
         int shader = GL20.glCreateShader(type);
         GL20.glShaderSource(shader, source);
         GL20.glCompileShader(shader);
@@ -20708,22 +5619,22 @@ public class PipelineContext {
         return shader;
     }
 
-    private void uploadDistantHorizonsFallbackMatrices() {
+    protected void uploadDistantHorizonsFallbackMatrices() {
         if (distantHorizonsFallbackProgramId == 0) {
             return;
         }
         if (distantHorizonsFallbackCombinedMatrixUniform >= 0) {
-            FloatBuffer combinedMatrix = dhModelViewProjectionBuffer.duplicate();
+            FloatBuffer combinedMatrix = distantHorizonsMatrices.modelViewProjection().duplicate();
             combinedMatrix.position(0);
             GL20.glUniformMatrix4(distantHorizonsFallbackCombinedMatrixUniform, false, combinedMatrix);
         }
         if (distantHorizonsFallbackProjectionMatrixUniform >= 0) {
-            FloatBuffer projectionMatrix = dhProjectionBuffer.duplicate();
+            FloatBuffer projectionMatrix = distantHorizonsMatrices.projection().duplicate();
             projectionMatrix.position(0);
             GL20.glUniformMatrix4(distantHorizonsFallbackProjectionMatrixUniform, false, projectionMatrix);
         }
         if (distantHorizonsFallbackModelViewMatrixUniform >= 0) {
-            FloatBuffer modelViewMatrix = dhModelViewBuffer.duplicate();
+            FloatBuffer modelViewMatrix = distantHorizonsMatrices.modelView().duplicate();
             modelViewMatrix.position(0);
             GL20.glUniformMatrix4(distantHorizonsFallbackModelViewMatrixUniform, false, modelViewMatrix);
         }
@@ -20735,13 +5646,14 @@ public class PipelineContext {
         }
     }
 
-    private void uploadDistantHorizonsFallbackModelOffset() {
+    protected void uploadDistantHorizonsFallbackModelOffset() {
         if (distantHorizonsFallbackProgramId != 0 && distantHorizonsFallbackModelOffsetUniform >= 0) {
-            GL20.glUniform3f(distantHorizonsFallbackModelOffsetUniform, dhModelOffset[0], dhModelOffset[1], dhModelOffset[2]);
+            float[] modelOffset = distantHorizonsMatrices.modelOffset();
+            GL20.glUniform3f(distantHorizonsFallbackModelOffsetUniform, modelOffset[0], modelOffset[1], modelOffset[2]);
         }
     }
 
-    private void deleteDistantHorizonsFallbackProgram() {
+    protected void deleteDistantHorizonsFallbackProgram() {
         currentDistantHorizonsFallbackProgram = false;
         if (distantHorizonsFallbackProgramId != 0) {
             GL20.glDeleteProgram(distantHorizonsFallbackProgramId);
@@ -20757,7 +5669,7 @@ public class PipelineContext {
         distantHorizonsFallbackProgramFailed = false;
     }
 
-    private boolean ensureDistantHorizonsCompositeProgram() {
+    protected boolean ensureDistantHorizonsCompositeProgram() {
         if (distantHorizonsCompositeProgramId != 0) {
             return true;
         }
@@ -20769,8 +5681,8 @@ public class PipelineContext {
         int fragmentShader = 0;
         int program = 0;
         try {
-            vertexShader = compileDistantHorizonsCompositeShader(GL20.GL_VERTEX_SHADER, DISTANT_HORIZONS_COMPOSITE_VERTEX_SHADER);
-            fragmentShader = compileDistantHorizonsCompositeShader(GL20.GL_FRAGMENT_SHADER, DISTANT_HORIZONS_COMPOSITE_FRAGMENT_SHADER);
+            vertexShader = compileDistantHorizonsCompositeShader(GL20.GL_VERTEX_SHADER, DistantHorizonsInternalShaders.COMPOSITE_VERTEX);
+            fragmentShader = compileDistantHorizonsCompositeShader(GL20.GL_FRAGMENT_SHADER, DistantHorizonsInternalShaders.COMPOSITE_FRAGMENT);
             if (vertexShader == 0 || fragmentShader == 0) {
                 return false;
             }
@@ -20800,7 +5712,7 @@ public class PipelineContext {
         }
     }
 
-    private int compileDistantHorizonsCompositeShader(int type, String source) {
+    protected int compileDistantHorizonsCompositeShader(int type, String source) {
         int shader = GL20.glCreateShader(type);
         GL20.glShaderSource(shader, source);
         GL20.glCompileShader(shader);
@@ -20815,7 +5727,7 @@ public class PipelineContext {
         return shader;
     }
 
-    private void deleteDistantHorizonsCompositeProgram() {
+    protected void deleteDistantHorizonsCompositeProgram() {
         if (distantHorizonsCompositeProgramId != 0) {
             GL20.glDeleteProgram(distantHorizonsCompositeProgramId);
         }
@@ -20825,7 +5737,7 @@ public class PipelineContext {
         distantHorizonsCompositeProgramFailed = false;
     }
 
-    private void deleteDistantHorizonsFramebuffer() {
+    protected void deleteDistantHorizonsFramebuffer() {
         if (distantHorizonsFramebufferId != 0) {
             com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteFramebuffers(distantHorizonsFramebufferId);
         }
@@ -20854,9 +5766,7 @@ public class PipelineContext {
             return;
         }
         try {
-            dhModelOffset[0] = ((Number) vec.getClass().getField("x").get(vec)).floatValue();
-            dhModelOffset[1] = ((Number) vec.getClass().getField("y").get(vec)).floatValue();
-            dhModelOffset[2] = ((Number) vec.getClass().getField("z").get(vec)).floatValue();
+            distantHorizonsMatrices.updateModelOffset(vec);
             if (currentDistantHorizonsProgram != null) {
                 uniformRegistry.upload(currentDistantHorizonsProgram, "dhModelOffset");
                 uniformRegistry.upload(currentDistantHorizonsProgram, "iris_ModelOffset");
@@ -20874,17 +5784,14 @@ public class PipelineContext {
         try {
             updateDistantHorizonsRenderPass(renderParam);
 
-            copyDistantHorizonsMatrix(renderParam, "dhProjectionMatrix", dhProjectionBuffer);
-            copyAndInvertDistantHorizonsMatrix(renderParam, "dhProjectionMatrix", dhProjectionInverseBuffer);
-            copyDistantHorizonsMatrix(renderParam, "dhModelViewMatrix", dhModelViewBuffer);
-            copyDistantHorizonsMatrix(renderParam, "dhMvmProjMatrix", dhModelViewProjectionBuffer);
+            distantHorizonsMatrices.update(renderParam);
             bindDistantHorizonsShaderProgram();
             uploadDistantHorizonsWorldYOffset(renderParam);
         } catch (ReflectiveOperationException | RuntimeException ignored) {
         }
     }
 
-    private void uploadDistantHorizonsWorldYOffset(Object renderParam) {
+    protected void uploadDistantHorizonsWorldYOffset(Object renderParam) {
         if (!currentDistantHorizonsFallbackProgram || distantHorizonsFallbackProgramId == 0 || distantHorizonsFallbackWorldYOffsetUniform < 0) {
             return;
         }
@@ -20896,54 +5803,7 @@ public class PipelineContext {
         }
     }
 
-    private void copyDistantHorizonsMatrix(Object renderParam, String fieldName, FloatBuffer target) throws ReflectiveOperationException {
-        Object matrix = renderParam.getClass().getField(fieldName).get(renderParam);
-        if (matrix == null) {
-            return;
-        }
-        copyDistantHorizonsMatrixValues(matrix);
-        target.clear();
-        target.put(dhMatrixScratch);
-        target.flip();
-    }
-
-    private void copyAndInvertDistantHorizonsMatrix(Object renderParam, String fieldName, FloatBuffer target) throws ReflectiveOperationException {
-        Object matrix = renderParam.getClass().getField(fieldName).get(renderParam);
-        if (matrix == null) {
-            return;
-        }
-        Object copy = matrix.getClass().getMethod("copy").invoke(matrix);
-        if (Boolean.FALSE.equals(copy.getClass().getMethod("canInvert").invoke(copy))) {
-            return;
-        }
-        copy.getClass().getMethod("invert").invoke(copy);
-        copyDistantHorizonsMatrixValues(copy);
-        target.clear();
-        target.put(dhMatrixScratch);
-        target.flip();
-    }
-
-    private void copyDistantHorizonsMatrixValues(Object matrix) throws ReflectiveOperationException {
-        Class<?> type = matrix.getClass();
-        dhMatrixScratch[0] = ((Number) type.getField("m00").get(matrix)).floatValue();
-        dhMatrixScratch[1] = ((Number) type.getField("m10").get(matrix)).floatValue();
-        dhMatrixScratch[2] = ((Number) type.getField("m20").get(matrix)).floatValue();
-        dhMatrixScratch[3] = ((Number) type.getField("m30").get(matrix)).floatValue();
-        dhMatrixScratch[4] = ((Number) type.getField("m01").get(matrix)).floatValue();
-        dhMatrixScratch[5] = ((Number) type.getField("m11").get(matrix)).floatValue();
-        dhMatrixScratch[6] = ((Number) type.getField("m21").get(matrix)).floatValue();
-        dhMatrixScratch[7] = ((Number) type.getField("m31").get(matrix)).floatValue();
-        dhMatrixScratch[8] = ((Number) type.getField("m02").get(matrix)).floatValue();
-        dhMatrixScratch[9] = ((Number) type.getField("m12").get(matrix)).floatValue();
-        dhMatrixScratch[10] = ((Number) type.getField("m22").get(matrix)).floatValue();
-        dhMatrixScratch[11] = ((Number) type.getField("m32").get(matrix)).floatValue();
-        dhMatrixScratch[12] = ((Number) type.getField("m03").get(matrix)).floatValue();
-        dhMatrixScratch[13] = ((Number) type.getField("m13").get(matrix)).floatValue();
-        dhMatrixScratch[14] = ((Number) type.getField("m23").get(matrix)).floatValue();
-        dhMatrixScratch[15] = ((Number) type.getField("m33").get(matrix)).floatValue();
-    }
-
-    private ShaderProgram activeProgram() {
+    protected ShaderProgram activeProgram() {
         if (activePass == null) {
             return null;
         }
@@ -21069,11 +5929,11 @@ public class PipelineContext {
         MainMod.LOGGER.info("[Pipeline] Recovered render state after resource pack reload.");
     }
 
-    private void rebuildTerrainRenderers(boolean recreateNothiriumRenderer) {
+    protected void rebuildTerrainRenderers(boolean recreateNothiriumRenderer) {
         rebuildTerrainRenderers(recreateNothiriumRenderer, true);
     }
 
-    private void rebuildTerrainRenderers(boolean recreateNothiriumRenderer, boolean reloadVanillaRenderGlobal) {
+    protected void rebuildTerrainRenderers(boolean recreateNothiriumRenderer, boolean reloadVanillaRenderGlobal) {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
@@ -21096,7 +5956,7 @@ public class PipelineContext {
         }
     }
 
-    private boolean updateNothiriumPipelineBlockFormatMode() {
+    protected boolean updateNothiriumPipelineBlockFormatMode() {
         boolean active = shouldUsePipelineBlockFormat();
         if (nothiriumPipelineBlockFormatActive == active) {
             return false;
@@ -21194,23 +6054,23 @@ public class PipelineContext {
         scheduleWorldTerrainRefresh(true, true, WORLD_LOAD_TERRAIN_REFRESH_INITIAL_DELAY_FRAMES, 1);
     }
 
-    private void scheduleDimensionSwitchTerrainRefresh() {
+    protected void scheduleDimensionSwitchTerrainRefresh() {
         scheduleWorldTerrainRefresh(true, true, 0);
     }
 
-    private void scheduleWorldTerrainRefresh(boolean fullRendererReset) {
+    protected void scheduleWorldTerrainRefresh(boolean fullRendererReset) {
         scheduleWorldTerrainRefresh(fullRendererReset, fullRendererReset);
     }
 
-    private void scheduleWorldTerrainRefresh(boolean fullRendererReset, boolean vanillaReload) {
+    protected void scheduleWorldTerrainRefresh(boolean fullRendererReset, boolean vanillaReload) {
         scheduleWorldTerrainRefresh(fullRendererReset, vanillaReload, WORLD_LOAD_TERRAIN_REFRESH_INITIAL_DELAY_FRAMES);
     }
 
-    private void scheduleWorldTerrainRefresh(boolean fullRendererReset, boolean vanillaReload, int initialDelay) {
+    protected void scheduleWorldTerrainRefresh(boolean fullRendererReset, boolean vanillaReload, int initialDelay) {
         scheduleWorldTerrainRefresh(fullRendererReset, vanillaReload, initialDelay, WORLD_LOAD_TERRAIN_REFRESH_ATTEMPTS);
     }
 
-    private void scheduleWorldTerrainRefresh(boolean fullRendererReset, boolean vanillaReload, int initialDelay, int attempts) {
+    protected void scheduleWorldTerrainRefresh(boolean fullRendererReset, boolean vanillaReload, int initialDelay, int attempts) {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         int dimension = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null ? safeDimensionId(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc)) : Integer.MIN_VALUE;
         int delay = Math.max(0, initialDelay);
@@ -21318,7 +6178,7 @@ public class PipelineContext {
         }
     }
 
-    private void mergeClientChunkRenderRefresh(ClientChunkRenderRefresh existing, String reason) {
+    protected void mergeClientChunkRenderRefresh(ClientChunkRenderRefresh existing, String reason) {
         if (existing == null) {
             return;
         }
@@ -21333,16 +6193,13 @@ public class PipelineContext {
         }
     }
 
-    private int clientChunkRenderRefreshInitialDelay(String reason) {
-        if (CLIENT_CHUNK_RENDER_REFRESH_REASON_BLOCK_UPDATE.equals(reason)
-                || CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM.equals(reason)) {
-            return 0;
-        }
-        return CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES;
+    protected int clientChunkRenderRefreshInitialDelay(String reason) {
+        return PipelineClientChunkRefreshPolicy.initialDelay(reason, CLIENT_CHUNK_RENDER_REFRESH_REASON_BLOCK_UPDATE,
+                CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM, CLIENT_CHUNK_RENDER_REFRESH_INITIAL_DELAY_FRAMES);
     }
 
-    private static long clientChunkRenderRefreshChunkKey(int chunkX, int chunkZ) {
-        return ((long) chunkX << 32) ^ (chunkZ & 0xFFFFFFFFL);
+    protected static long clientChunkRenderRefreshChunkKey(int chunkX, int chunkZ) {
+        return PipelineClientChunkRefreshPolicy.chunkKey(chunkX, chunkZ);
     }
 
     public void clearPendingShaderChunkRefreshes() {
@@ -21408,7 +6265,7 @@ public class PipelineContext {
         runPendingClientChunkRenderRefreshesForWorld(mc, renderPassWorld, false);
     }
 
-    private void runPendingClientChunkRenderRefreshesForWorld(Minecraft mc, WorldClient targetWorld,
+    protected void runPendingClientChunkRenderRefreshesForWorld(Minecraft mc, WorldClient targetWorld,
                                                               boolean advanceDelays) {
         if (targetWorld == null) {
             return;
@@ -21433,7 +6290,7 @@ public class PipelineContext {
         }
     }
 
-    private ClientChunkRenderRefresh pollDueClientChunkRenderRefresh(WorldClient targetWorld, boolean advanceDelays) {
+    protected ClientChunkRenderRefresh pollDueClientChunkRenderRefresh(WorldClient targetWorld, boolean advanceDelays) {
         synchronized (pendingClientChunkRenderRefreshes) {
             LinkedHashSet<ClientChunkRenderRefresh> worldRefreshes = pendingClientChunkRenderRefreshesByWorld.get(targetWorld);
             if (worldRefreshes == null || worldRefreshes.isEmpty()) {
@@ -21460,7 +6317,7 @@ public class PipelineContext {
         return null;
     }
 
-    private void ageStaleClientChunkRenderRefreshes(WorldClient activeWorld) {
+    protected void ageStaleClientChunkRenderRefreshes(WorldClient activeWorld) {
         if (activeWorld == null) {
             return;
         }
@@ -21514,7 +6371,7 @@ public class PipelineContext {
         }
     }
 
-    private void addPendingClientChunkRenderRefreshLocked(ClientChunkRenderRefresh refresh) {
+    protected void addPendingClientChunkRenderRefreshLocked(ClientChunkRenderRefresh refresh) {
         if (refresh == null || refresh.world == null || !pendingClientChunkRenderRefreshes.add(refresh)) {
             return;
         }
@@ -21526,7 +6383,7 @@ public class PipelineContext {
                 .add(refresh);
     }
 
-    private void removePendingClientChunkRenderRefreshLocked(ClientChunkRenderRefresh refresh) {
+    protected void removePendingClientChunkRenderRefreshLocked(ClientChunkRenderRefresh refresh) {
         if (refresh == null) {
             return;
         }
@@ -21535,7 +6392,7 @@ public class PipelineContext {
         removePendingClientChunkRenderRefreshFromWorldBucketLocked(refresh);
     }
 
-    private void removePendingClientChunkRenderRefreshFromLookupLocked(ClientChunkRenderRefresh refresh) {
+    protected void removePendingClientChunkRenderRefreshFromLookupLocked(ClientChunkRenderRefresh refresh) {
         if (refresh == null || refresh.world == null) {
             return;
         }
@@ -21549,7 +6406,7 @@ public class PipelineContext {
         }
     }
 
-    private void removePendingClientChunkRenderRefreshFromWorldBucketLocked(ClientChunkRenderRefresh refresh) {
+    protected void removePendingClientChunkRenderRefreshFromWorldBucketLocked(ClientChunkRenderRefresh refresh) {
         if (refresh == null || refresh.world == null) {
             return;
         }
@@ -21563,7 +6420,7 @@ public class PipelineContext {
         }
     }
 
-    private boolean shouldRetainOffWorldClientChunkRefresh(ClientChunkRenderRefresh refresh) {
+    protected boolean shouldRetainOffWorldClientChunkRefresh(ClientChunkRenderRefresh refresh) {
         if (refresh == null || refresh.world == null || !BetterPortalsCompat.isInstalled()) {
             return false;
         }
@@ -21572,7 +6429,7 @@ public class PipelineContext {
                 || BetterPortalsCompat.isRenderingNestedView();
     }
 
-    private boolean isRecentlyCompletedClientChunkRenderRefreshLocked(WorldClient world, long chunkKey) {
+    protected boolean isRecentlyCompletedClientChunkRenderRefreshLocked(WorldClient world, long chunkKey) {
         Map<Long, Long> worldRefreshes = recentlyCompletedClientChunkRenderRefreshes.get(world);
         Long expiresAt = worldRefreshes != null ? worldRefreshes.get(chunkKey) : null;
         if (expiresAt == null) {
@@ -21588,7 +6445,7 @@ public class PipelineContext {
         return true;
     }
 
-    private void rememberCompletedClientChunkRenderRefresh(WorldClient world, int chunkX, int chunkZ) {
+    protected void rememberCompletedClientChunkRenderRefresh(WorldClient world, int chunkX, int chunkZ) {
         if (world == null) {
             return;
         }
@@ -21603,7 +6460,7 @@ public class PipelineContext {
         }
     }
 
-    private void forgetRecentlyCompletedClientChunkRenderRefreshLocked(WorldClient world, long chunkKey) {
+    protected void forgetRecentlyCompletedClientChunkRenderRefreshLocked(WorldClient world, long chunkKey) {
         Map<Long, Long> worldRefreshes = recentlyCompletedClientChunkRenderRefreshes.get(world);
         if (worldRefreshes == null) {
             return;
@@ -21614,7 +6471,7 @@ public class PipelineContext {
         }
     }
 
-    private void pruneRecentlyCompletedClientChunkRenderRefreshesLocked() {
+    protected void pruneRecentlyCompletedClientChunkRenderRefreshesLocked() {
         if (recentlyCompletedClientChunkRenderRefreshLastPruneFrame != Long.MIN_VALUE
                 && pipelineFrameId - recentlyCompletedClientChunkRenderRefreshLastPruneFrame < CLIENT_CHUNK_RENDER_REFRESH_RECENT_PRUNE_INTERVAL_FRAMES) {
             return;
@@ -21635,7 +6492,7 @@ public class PipelineContext {
         }
     }
 
-    private void trimRecentlyCompletedClientChunkRenderRefreshesLocked(Map<Long, Long> worldRefreshes) {
+    protected void trimRecentlyCompletedClientChunkRenderRefreshesLocked(Map<Long, Long> worldRefreshes) {
         if (worldRefreshes == null || worldRefreshes.size() <= MAX_RECENT_CLIENT_CHUNK_RENDER_REFRESHES_PER_WORLD) {
             return;
         }
@@ -21646,7 +6503,7 @@ public class PipelineContext {
         }
     }
 
-    private boolean shouldQueueClientChunkRenderRefresh(WorldClient world, String reason) {
+    protected boolean shouldQueueClientChunkRenderRefresh(WorldClient world, String reason) {
         if ("chunk-data".equals(reason)) {
             return true;
         }
@@ -21676,7 +6533,7 @@ public class PipelineContext {
                 || BetterPortalsCompat.isRenderingNestedView();
     }
 
-    private boolean refreshClientChunkRender(Minecraft mc, ClientChunkRenderRefresh refresh, WorldClient targetWorld) {
+    protected boolean refreshClientChunkRender(Minecraft mc, ClientChunkRenderRefresh refresh, WorldClient targetWorld) {
         if (refresh == null || refresh.world == null || targetWorld == null || refresh.world != targetWorld || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return false;
         }
@@ -21730,7 +6587,7 @@ public class PipelineContext {
         return !loaded || !scheduleResult.completed || refresh.coveredSections < scheduleResult.requiredSections;
     }
 
-    private ClientChunkRenderScheduleResult scheduleLoadedClientChunkRenderChunks(RenderGlobalAccessor renderGlobal,
+    protected ClientChunkRenderScheduleResult scheduleLoadedClientChunkRenderChunks(RenderGlobalAccessor renderGlobal,
                                                                                  ViewFrustum viewFrustum,
                                                                                  World world, Chunk chunk,
                                                                                  int chunkX, int chunkZ,
@@ -21792,7 +6649,7 @@ public class PipelineContext {
         return new ClientChunkRenderScheduleResult(scheduled, covered, 0, true, requiredSections);
     }
 
-    private ClientChunkRenderScheduleResult scheduleLoadedClientChunkRenderChunksIndexed(ViewFrustumAccessor viewFrustum,
+    protected ClientChunkRenderScheduleResult scheduleLoadedClientChunkRenderChunksIndexed(ViewFrustumAccessor viewFrustum,
                                                                                         RenderChunk[] renderChunks,
                                                                                         Set<RenderChunk> chunksToUpdate,
                                                                                         World world,
@@ -21872,7 +6729,7 @@ public class PipelineContext {
         return new ClientChunkRenderScheduleResult(scheduled, covered, 0, true, requiredSections);
     }
 
-    private int countNonEmptyClientChunkSections(Chunk chunk) {
+    protected int countNonEmptyClientChunkSections(Chunk chunk) {
         if (chunk == null) {
             return 0;
         }
@@ -21889,7 +6746,7 @@ public class PipelineContext {
         return count;
     }
 
-    private boolean shouldScheduleLoadedClientRenderChunk(RenderChunk renderChunk, Chunk chunk, BlockPos position) {
+    protected boolean shouldScheduleLoadedClientRenderChunk(RenderChunk renderChunk, Chunk chunk, BlockPos position) {
         if (renderChunk == null || chunk == null || position == null) {
             return false;
         }
@@ -21904,25 +6761,25 @@ public class PipelineContext {
         return !com.l.ausm.impl.util.MinecraftReflectionCompat.blockStorageEmpty(section);
     }
 
-    private static int maxClientChunkRefreshSections(int sectionBudget) {
+    protected static int maxClientChunkRefreshSections(int sectionBudget) {
         return Math.max(1, sectionBudget);
     }
 
-    private static int clampSectionCursor(int sectionY, int sectionCount) {
+    protected static int clampSectionCursor(int sectionY, int sectionCount) {
         if (sectionY < 0 || sectionY >= sectionCount) {
             return 0;
         }
         return sectionY;
     }
 
-    private static boolean hasNonEmptyClientChunkSection(ExtendedBlockStorage[] sections, int sectionY) {
+    protected static boolean hasNonEmptyClientChunkSection(ExtendedBlockStorage[] sections, int sectionY) {
         return sections != null
                 && sectionY >= 0
                 && sectionY < sections.length
                 && !com.l.ausm.impl.util.MinecraftReflectionCompat.blockStorageEmpty(sections[sectionY]);
     }
 
-    private RenderChunk findRenderChunkForSection(RenderChunk[] renderChunks, int chunkX, int chunkZ, int sectionY) {
+    protected RenderChunk findRenderChunkForSection(RenderChunk[] renderChunks, int chunkX, int chunkZ, int sectionY) {
         if (renderChunks == null) {
             return null;
         }
@@ -21938,7 +6795,7 @@ public class PipelineContext {
         return null;
     }
 
-    private void logClientChunkRenderRefresh(ClientChunkRenderRefresh refresh, boolean loaded, int scheduledChunks) {
+    protected void logClientChunkRenderRefresh(ClientChunkRenderRefresh refresh, boolean loaded, int scheduledChunks) {
         if (clientChunkRenderRefreshLogs >= MAX_CLIENT_CHUNK_RENDER_REFRESH_LOGS) {
             return;
         }
@@ -21959,7 +6816,7 @@ public class PipelineContext {
         );
     }
 
-    private void refreshShaderChunk(Minecraft mc, ShaderChunkRefresh refresh) {
+    protected void refreshShaderChunk(Minecraft mc, ShaderChunkRefresh refresh) {
         if (refresh == null || refresh.world == null || com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(refresh.world) == null) {
             return;
         }
@@ -22066,7 +6923,7 @@ public class PipelineContext {
         scheduleWorldLoadLightRecalculation();
     }
 
-    private void forceRenderDistanceTerrainReload(Minecraft mc, int previousRenderDistanceChunks, int renderDistanceChunks) {
+    protected void forceRenderDistanceTerrainReload(Minecraft mc, int previousRenderDistanceChunks, int renderDistanceChunks) {
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
@@ -22128,7 +6985,7 @@ public class PipelineContext {
         }
     }
 
-    private boolean refreshBloomTerrainState(String reason) {
+    protected boolean refreshBloomTerrainState(String reason) {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             return false;
@@ -22157,7 +7014,7 @@ public class PipelineContext {
         return true;
     }
 
-    private boolean refreshWorldTerrainState() {
+    protected boolean refreshWorldTerrainState() {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             return false;
@@ -22210,7 +7067,7 @@ public class PipelineContext {
         return true;
     }
 
-    private boolean refreshWorldLoadLightState() {
+    protected boolean refreshWorldLoadLightState() {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null) {
             return false;
@@ -22233,89 +7090,20 @@ public class PipelineContext {
         return true;
     }
 
-    private int forceChunkLightingRefresh(World world, int minX, int maxX, int minZ, int maxZ) {
-        if (!(world instanceof WorldClient worldClient)) {
-            return 0;
-        }
-        ChunkProviderClient chunkProvider = com.l.ausm.impl.util.MinecraftReflectionCompat.call((worldClient), net.minecraft.client.multiplayer.ChunkProviderClient.class, null, new String[] {"func_72863_F", "getChunkProvider"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
-        if (chunkProvider == null) {
-            return 0;
-        }
-
-        int minChunkX = minX >> 4;
-        int maxChunkX = maxX >> 4;
-        int minChunkZ = minZ >> 4;
-        int maxChunkZ = maxZ >> 4;
-        int refreshed = 0;
-        for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
-            for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
-                Chunk chunk = com.l.ausm.impl.util.MinecraftReflectionCompat.call((chunkProvider), net.minecraft.world.chunk.Chunk.class, null, new String[] {"func_186026_b", "getLoadedChunk"},
-                new Class<?>[] {int.class, int.class}, (chunkX), (chunkZ));
-                if (chunk == null || com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((chunk), new String[] {"func_76621_g", "isEmpty"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
-                    continue;
-                }
-                try {
-                    if (com.l.ausm.impl.util.MinecraftReflectionCompat.providerHasSkyLight(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world))) {
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((chunk), new String[] {"func_76603_b", "generateSkylightMap"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
-                    }
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((chunk), new String[] {"func_76613_n", "resetRelightChecks"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((chunk), new String[] {"func_76594_o", "enqueueRelightChecks"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((chunk), new String[] {"func_150809_p", "checkLight"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
-                    refreshed++;
-                } catch (RuntimeException ignored) {
-                }
-            }
-        }
-        return refreshed;
+    protected int forceChunkLightingRefresh(World world, int minX, int maxX, int minZ, int maxZ) {
+        return PipelineLightingRefresh.refreshChunks(world, minX, maxX, minZ, maxZ);
     }
 
-    private int forceBlockLightingRefresh(World world, int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
-        BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
-        int checks = 0;
-        for (int y = minY; y <= maxY; y++) {
-            for (int z = minZ; z <= maxZ; z++) {
-                for (int x = minX; x <= maxX; x++) {
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.mutableBlockPosSet(mutablePos, x, y, z);
-                    if (!com.l.ausm.impl.util.MinecraftReflectionCompat.worldIsBlockLoaded(world, mutablePos, false)) {
-                        continue;
-                    }
-                    IBlockState state;
-                    int sourceLight;
-                    int storedBlockLight;
-                    try {
-                        state = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, mutablePos);
-                        sourceLight = com.l.ausm.impl.util.MinecraftReflectionCompat.stateLightValue(state, world, mutablePos);
-                        storedBlockLight = com.l.ausm.impl.util.MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.BLOCK, mutablePos);
-                    } catch (RuntimeException ignored) {
-                        continue;
-                    }
-                    if (sourceLight <= 0 && storedBlockLight <= 0) {
-                        continue;
-                    }
-                    try {
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((world), new String[] {"func_180500_c", "checkLightFor"},
-                new Class<?>[] {net.minecraft.world.EnumSkyBlock.class, net.minecraft.util.math.BlockPos.class}, false, (net.minecraft.world.EnumSkyBlock.BLOCK), (mutablePos));
-                        if (com.l.ausm.impl.util.MinecraftReflectionCompat.providerHasSkyLight(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world))) {
-                            com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((world), new String[] {"func_180500_c", "checkLightFor"},
-                new Class<?>[] {net.minecraft.world.EnumSkyBlock.class, net.minecraft.util.math.BlockPos.class}, false, (net.minecraft.world.EnumSkyBlock.SKY), (mutablePos));
-                        }
-                        checks++;
-                    } catch (RuntimeException ignored) {
-                    }
-                    if (sourceLight > 0) {
-                        refreshSyntheticLightCandidate(world, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(mutablePos));
-                    }
-                }
-            }
-        }
-        return checks;
+    protected int forceBlockLightingRefresh(World world, int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
+        return PipelineLightingRefresh.refreshBlocks(world, minX, minY, minZ, maxX, maxY, maxZ,
+                this::refreshSyntheticLightCandidate);
     }
 
-    private void resetPipelineState() {
+    protected void resetPipelineState() {
         resetPipelineState(null);
     }
 
-    private void resetPipelineState(Framebuffer preferredTarget) {
+    protected void resetPipelineState(Framebuffer preferredTarget) {
         activePass = null;
         activeShaderKey = null;
         activePhase = WorldRenderingPhase.NONE;
@@ -22389,7 +7177,7 @@ public class PipelineContext {
         TextureBinder.restoreDefaultTextureUnit();
     }
 
-    private void resetShaderResourceBindings() {
+    protected void resetShaderResourceBindings() {
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
         TextureBinder.unbindAllTextureTargets();
@@ -22400,44 +7188,7 @@ public class PipelineContext {
         com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
     }
 
-    private static void setIndexedBlend(int drawBufferIndex, boolean enabled) {
-        if (!GLContext.getCapabilities().OpenGL30 || drawBufferIndex < 0 || drawBufferIndex >= maxDrawBuffers()) {
-            return;
-        }
-        if (enabled) {
-            GL30.glEnablei(GL11.GL_BLEND, drawBufferIndex);
-        } else {
-            GL30.glDisablei(GL11.GL_BLEND, drawBufferIndex);
-        }
-    }
-
-    private static void resetIndexedBlendState() {
-        for (int i = 0; i < maxDrawBuffers(); i++) {
-            setIndexedBlend(i, false);
-        }
-    }
-
-    private static void resetOitRenderState() {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        resetIndexedBlendState();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE_MINUS_SRC_ALPHA,
-                GL11.GL_ONE,
-                GL11.GL_ZERO
-        );
-    }
-
-    private static int maxDrawBuffers() {
-        if (maxDrawBuffers < 0) {
-            maxDrawBuffers = GLContext.getCapabilities().OpenGL20
-                    ? Math.max(1, GL11.glGetInteger(GL20.GL_MAX_DRAW_BUFFERS))
-                    : 1;
-        }
-        return maxDrawBuffers;
-    }
-
-    private void restoreVanillaTextureBindingsAfterPipeline() {
+    protected void restoreVanillaTextureBindingsAfterPipeline() {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null) {
             TextureBinder.restoreDefaultTextureUnit();
@@ -22461,76 +7212,27 @@ public class PipelineContext {
         TextureBinder.restoreDefaultTextureUnit();
     }
 
-    private void restoreVanillaLightmapTexture(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) == null) {
-            return;
-        }
-
-        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
-        DynamicTexture lightmapTexture = ((EntityRendererAccessor) com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc)).ausm$getLightmapTexture();
-        try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
-            boolean lightmapTextureEnabled = GL11.glIsEnabled(GL11.GL_TEXTURE_2D);
-            int textureId = lightmapTexture != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.glTextureId(lightmapTexture) : 0;
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(textureId);
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
-            if (lightmapTextureEnabled) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-            } else {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
-            }
-        } finally {
-            GL13.glActiveTexture(previousActiveTexture);
-            TextureBinder.restoreDefaultTextureUnit();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-        }
+    protected void restoreVanillaLightmapTexture(Minecraft mc) {
+        PipelineVanillaLightmapState.restore(mc);
     }
 
-    private void refreshVanillaLightmap(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) == null) {
-            return;
-        }
-        EntityRendererAccessor accessor = (EntityRendererAccessor) com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc);
-        accessor.ausm$setLightmapUpdateNeeded(true);
-        accessor.ausm$updateLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc));
-        restoreVanillaLightmapTexture(mc);
+    protected void refreshVanillaLightmap(Minecraft mc) {
+        PipelineVanillaLightmapState.refresh(mc);
     }
 
-    private void disableVanillaLightmap(Minecraft mc) {
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) == null) {
-            return;
-        }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.disableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
-        TextureBinder.restoreDefaultTextureUnit();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+    protected void disableVanillaLightmap(Minecraft mc) {
+        PipelineVanillaLightmapState.disable(mc);
     }
 
-    private static void unbindShaderImages() {
-        if (!GLContext.getCapabilities().OpenGL42) {
-            return;
-        }
-
-        int maxImageUnits = Math.max(0, GL11.glGetInteger(GL42.GL_MAX_IMAGE_UNITS));
-        for (int unit = 0; unit < maxImageUnits; unit++) {
-            GL42.glBindImageTexture(unit, 0, 0, false, 0, GL15.GL_READ_ONLY, GL11.GL_RGBA8);
-        }
-    }
-
-    private static void markShaderStorageBuffersBound() {
-        if (GLContext.getCapabilities().OpenGL43) {
-            shaderStorageBuffersKnownUnbound = false;
-        }
-    }
-
-    private void unbindShaderStorageBuffers() {
+    protected void unbindShaderStorageBuffers() {
         unbindShaderStorageBuffers(false);
     }
 
-    private void unbindShaderStorageBuffers(boolean force) {
+    protected void unbindShaderStorageBuffers(boolean force) {
         if (!GLContext.getCapabilities().OpenGL43) {
             return;
         }
-        if (!force && shaderStorageBuffersKnownUnbound) {
+        if (!force && shaderStorageBuffersKnownUnbound()) {
             return;
         }
 
@@ -22545,496 +7247,10 @@ public class PipelineContext {
             }
         }
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
-        shaderStorageBuffersKnownUnbound = true;
+        markShaderStorageBuffersUnbound();
     }
 
-    private static int maxShaderStorageBufferBindings() {
-        if (maxShaderStorageBufferBindings < 0) {
-            maxShaderStorageBufferBindings = Math.max(0, GL11.glGetInteger(GL43.GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS));
-        }
-        return maxShaderStorageBufferBindings;
-    }
-
-    private static void disablePipelineVertexAttributes() {
-        GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
-        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
-        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
-        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
-        ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
-    }
-
-    private static void restoreVanillaClientRenderState() {
-        GL11.glFrontFace(GL11.GL_CCW);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateCullFaceBack();
-        GL11.glDepthRange(0.0D, 1.0D);
-        GL11.glClearDepth(1.0D);
-        GL11.glPolygonMode(GL11.GL_FRONT_AND_BACK, GL11.GL_FILL);
-        GL14.glBlendEquation(GL14.GL_FUNC_ADD);
-
-        GL11.glMatrixMode(GL11.GL_TEXTURE);
-        GL11.glLoadIdentity();
-        GL11.glMatrixMode(GL11.GL_MODELVIEW);
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
-        GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        GL11.glDisableClientState(GL11.GL_COLOR_ARRAY);
-        GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
-
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-    }
-
-    private void loadCustomTextures(ShaderPack pack, ShaderProperties properties) {
-        Map<String, Integer> loadedByPath = new HashMap<>();
-        Map<ShaderRawTextureDirective, ShaderTextureLoader.RawTexture> loadedRawTextures = new HashMap<>();
-        Map<String, Integer> customUnitsBySampler = new HashMap<>();
-        Set<String> failedTexturePaths = new HashSet<>();
-        int[] nextCustomUnit = {com.l.ausm.impl.pipeline.shader.ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT};
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-
-        for (RenderPass pass : RenderPass.values()) {
-            List<LoadedCustomTexture> textures = loadCustomTextureList(
-                    pack,
-                    mc,
-                    packDirectives.textureDirectives().rawTexturesFor(pass.programId()),
-                    packDirectives.textureDirectives().texturesFor(pass.programId()),
-                    loadedByPath,
-                    loadedRawTextures,
-                    customUnitsBySampler,
-                    failedTexturePaths,
-                    nextCustomUnit,
-                    "pass " + pass.getProgramName()
-            );
-            if (!textures.isEmpty()) {
-                customTextures.put(pass, List.copyOf(textures));
-            }
-        }
-
-        java.util.LinkedHashSet<ShaderProgramArrayKey> arrayTextureKeys = new java.util.LinkedHashSet<>();
-        arrayTextureKeys.addAll(packDirectives.textureDirectives().programArrayRawTextures().keySet());
-        arrayTextureKeys.addAll(packDirectives.textureDirectives().programArrayTextures().keySet());
-        for (Map.Entry<ProgramArrayId, List<FullscreenArrayProgram>> entry : fullscreenArrayPrograms.entrySet()) {
-            for (FullscreenArrayProgram program : entry.getValue()) {
-                arrayTextureKeys.add(new ShaderProgramArrayKey(entry.getKey(), program.index()));
-            }
-        }
-        for (ShaderProgramArrayKey key : arrayTextureKeys) {
-            List<LoadedCustomTexture> textures = loadCustomTextureList(
-                    pack,
-                    mc,
-                    packDirectives.textureDirectives().rawTexturesFor(key.arrayId(), key.index()),
-                    packDirectives.textureDirectives().texturesFor(key.arrayId(), key.index()),
-                    loadedByPath,
-                    loadedRawTextures,
-                    customUnitsBySampler,
-                    failedTexturePaths,
-                    nextCustomUnit,
-                    "program array " + key.arrayId().sourcePrefix() + (key.index() == 0 ? "" : key.index())
-            );
-            if (!textures.isEmpty()) {
-                customArrayTextures.put(key, List.copyOf(textures));
-            }
-        }
-    }
-
-    private List<LoadedCustomTexture> loadCustomTextureList(
-            ShaderPack pack,
-            Minecraft mc,
-            List<ShaderRawTextureDirective> rawDirectives,
-            List<ShaderCustomTextureBinding> bindings,
-            Map<String, Integer> loadedByPath,
-            Map<ShaderRawTextureDirective, ShaderTextureLoader.RawTexture> loadedRawTextures,
-            Map<String, Integer> customUnitsBySampler,
-            Set<String> failedTexturePaths,
-            int[] nextCustomUnit,
-            String owner
-    ) {
-        List<LoadedCustomTexture> textures = new ArrayList<>();
-        for (var directive : rawDirectives) {
-            int textureUnit = customUnitsBySampler.computeIfAbsent(directive.samplerName(), ignored -> nextCustomUnit[0]++);
-            try {
-                ShaderTextureLoader.RawTexture rawTexture = loadedRawTextures.computeIfAbsent(directive, raw -> {
-                    try {
-                        return ShaderTextureLoader.loadRawTexture(pack, raw);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
-                });
-                textures.add(new LoadedCustomTexture(
-                        directive.samplerName(),
-                        directive.replacementSamplerName(),
-                        directive.resourcePath(),
-                        textureUnit,
-                        rawTexture.textureId(),
-                        rawTexture.textureTarget(),
-                        true
-                ));
-            } catch (UncheckedIOException e) {
-                MainMod.LOGGER.warn("[ShaderTextures] Failed to load raw {}", directive.resourcePath(), e.getCause());
-            }
-        }
-        for (var binding : bindings) {
-            int textureUnit = TextureBinder.textureUnitForSampler(binding.samplerName());
-            if (textureUnit < 0) {
-                textureUnit = customUnitsBySampler.computeIfAbsent(binding.samplerName(), ignored -> nextCustomUnit[0]++);
-            }
-
-            int atlasTexture = minecraftBlockAtlasTexture(mc, binding.resourcePath());
-            if (atlasTexture > 0) {
-                textures.add(new LoadedCustomTexture(binding.samplerName(), binding.samplerName(), binding.resourcePath(), textureUnit, atlasTexture, GL11.GL_TEXTURE_2D, false));
-                MainMod.LOGGER.debug(
-                        "[ShaderTextures] Prepared Minecraft block atlas for sampler '{}' on unit {} in {} as texture {}",
-                        binding.samplerName(),
-                        textureUnit,
-                        owner,
-                        atlasTexture
-                );
-                continue;
-            }
-
-            try {
-                String textureCacheKey = binding.resourcePath() + "|" + binding.blur() + "|" + binding.clamp();
-                int textureId = loadedByPath.computeIfAbsent(textureCacheKey, ignored -> {
-                    try {
-                        return ShaderTextureLoader.loadTexture(pack, binding.resourcePath(), binding.blur(), binding.clamp());
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
-                });
-                textures.add(new LoadedCustomTexture(binding.samplerName(), binding.samplerName(), binding.resourcePath(), textureUnit, textureId, GL11.GL_TEXTURE_2D, true));
-                MainMod.LOGGER.debug(
-                        "[ShaderTextures] Prepared {} for sampler '{}' on unit {} in {} as texture {}",
-                        binding.resourcePath(),
-                        binding.samplerName(),
-                        textureUnit,
-                        owner,
-                        textureId
-                );
-            } catch (UncheckedIOException e) {
-                if (failedTexturePaths.add(binding.resourcePath())) {
-                    MainMod.LOGGER.warn("[ShaderTextures] Failed to load {}", binding.resourcePath(), e.getCause());
-                }
-            }
-        }
-        return textures;
-    }
-
-    private int minecraftBlockAtlasTexture(Minecraft mc, String resourcePath) {
-        TextureManager textureManager = com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc);
-        if (textureManager == null || !isMinecraftBlockAtlasPath(resourcePath)) {
-            return -1;
-        }
-
-        ITextureObject texture = com.l.ausm.impl.util.MinecraftReflectionCompat.texture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
-        if (texture == null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
-            texture = com.l.ausm.impl.util.MinecraftReflectionCompat.texture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
-        }
-        return texture != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.glTextureId(texture) : -1;
-    }
-
-    private static boolean isMinecraftBlockAtlasPath(String resourcePath) {
-        return "minecraft:textures/atlas/blocks.png".equals(resourcePath)
-                || "shaders/minecraft:textures/atlas/blocks.png".equals(resourcePath);
-    }
-
-    private void bindCustomTextures(RenderPass pass, ShaderProgram program) {
-        List<LoadedCustomTexture> textures = customTextures.get(pass);
-        bindCustomTextures(textures, program);
-    }
-
-    private void bindCustomTextures(ProgramArrayId arrayId, int index, ShaderProgram program) {
-        List<LoadedCustomTexture> textures = customArrayTextures.get(new ShaderProgramArrayKey(arrayId, index));
-        bindCustomTextures(textures, program);
-    }
-
-    private void bindCustomTextures(List<LoadedCustomTexture> textures, ShaderProgram program) {
-        if (textures == null || textures.isEmpty()) {
-            return;
-        }
-
-        for (LoadedCustomTexture texture : textures) {
-            TextureBinder.bindTexture(texture.textureTarget(), texture.textureUnit(), texture.textureId());
-            int location = program.getUniformLocation(texture.samplerName());
-            if (location != -1) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(location, texture.textureUnit());
-            }
-            if (!texture.replacementSamplerName().equals(texture.samplerName())) {
-                int replacementLocation = program.getUniformLocation(texture.replacementSamplerName());
-                if (replacementLocation != -1) {
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(replacementLocation, texture.textureUnit());
-                }
-            }
-        }
-        TextureBinder.restoreDefaultTextureUnit();
-    }
-
-    private void deleteCustomTextures() {
-        Stream.concat(customTextures.values().stream(), customArrayTextures.values().stream())
-                .flatMap(List::stream)
-                .filter(LoadedCustomTexture::deleteOnCleanup)
-                .mapToInt(LoadedCustomTexture::textureId)
-                .distinct()
-                .forEach(GL11::glDeleteTextures);
-        customTextures.clear();
-        customArrayTextures.clear();
-    }
-
-    private static final class LoadedCustomTexture {
-        private final String samplerName;
-        private final String replacementSamplerName;
-        private final String resourcePath;
-        private final int textureUnit;
-        private final int textureId;
-        private final int textureTarget;
-        private final boolean deleteOnCleanup;
-
-        private LoadedCustomTexture(String samplerName, String replacementSamplerName, String resourcePath, int textureUnit, int textureId, int textureTarget, boolean deleteOnCleanup) {
-            this.samplerName = samplerName;
-            this.replacementSamplerName = replacementSamplerName;
-            this.resourcePath = resourcePath;
-            this.textureUnit = textureUnit;
-            this.textureId = textureId;
-            this.textureTarget = textureTarget;
-            this.deleteOnCleanup = deleteOnCleanup;
-        }
-
-        private String samplerName() {
-            return samplerName;
-        }
-
-        private String replacementSamplerName() {
-            return replacementSamplerName;
-        }
-
-        private String resourcePath() {
-            return resourcePath;
-        }
-
-        private int textureUnit() {
-            return textureUnit;
-        }
-
-        private int textureId() {
-            return textureId;
-        }
-
-        private int textureTarget() {
-            return textureTarget;
-        }
-
-        private boolean deleteOnCleanup() {
-            return deleteOnCleanup;
-        }
-    }
-
-    private static final class ShaderChunkRefresh {
-        private final WorldClient world;
-        private final int chunkX;
-        private final int chunkZ;
-
-        private ShaderChunkRefresh(WorldClient world, int chunkX, int chunkZ) {
-            this.world = world;
-            this.chunkX = chunkX;
-            this.chunkZ = chunkZ;
-        }
-
-        @Override
-        public boolean equals(Object other) {
-            if (this == other) {
-                return true;
-            }
-            if (!(other instanceof ShaderChunkRefresh refresh)) {
-                return false;
-            }
-            return world == refresh.world && chunkX == refresh.chunkX && chunkZ == refresh.chunkZ;
-        }
-
-        @Override
-        public int hashCode() {
-            int result = System.identityHashCode(world);
-            result = 31 * result + chunkX;
-            result = 31 * result + chunkZ;
-            return result;
-        }
-    }
-
-    private static final class FramedMaterialKey {
-        private final IBlockAccess blockAccess;
-        private final IBlockState state;
-        private final long pos;
-        private final int hash;
-
-        private FramedMaterialKey(IBlockAccess blockAccess, BlockPos pos, IBlockState state) {
-            this.blockAccess = blockAccess;
-            this.state = state;
-            this.pos = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToLong(pos);
-            int result = System.identityHashCode(blockAccess);
-            result = 31 * result + System.identityHashCode(state);
-            result = 31 * result + Long.hashCode(this.pos);
-            this.hash = result;
-        }
-
-        @Override
-        public boolean equals(Object other) {
-            if (this == other) {
-                return true;
-            }
-            if (!(other instanceof FramedMaterialKey key)) {
-                return false;
-            }
-            return blockAccess == key.blockAccess && state == key.state && pos == key.pos;
-        }
-
-        @Override
-        public int hashCode() {
-            return hash;
-        }
-    }
-
-    private record FramedMaterialState(
-            IBlockState actualLightState,
-            IBlockState blockcrafteryDecoratedState,
-            IBlockState blockcrafteryActualState,
-            IBlockState architectureBaseState,
-            IBlockState architectureBaseActualState,
-            IBlockState architectureSecondaryState,
-            IBlockState architectureSecondaryActualState
-    ) {
-    }
-
-    private static final class ClientChunkRenderRefresh {
-        private final WorldClient world;
-        private final int chunkX;
-        private final int chunkZ;
-        private String reason;
-        private int attemptsRemaining;
-        private int delayFrames;
-        private int nextSectionY;
-        private int coveredSections;
-        private boolean shadowRefreshed;
-
-        private ClientChunkRenderRefresh(WorldClient world, int chunkX, int chunkZ, String reason,
-                                         int attemptsRemaining, int delayFrames) {
-            this.world = world;
-            this.chunkX = chunkX;
-            this.chunkZ = chunkZ;
-            this.reason = reason;
-            this.attemptsRemaining = attemptsRemaining;
-            this.delayFrames = delayFrames;
-        }
-
-        @Override
-        public boolean equals(Object other) {
-            if (this == other) {
-                return true;
-            }
-            if (!(other instanceof ClientChunkRenderRefresh refresh)) {
-                return false;
-            }
-            return world == refresh.world && chunkX == refresh.chunkX && chunkZ == refresh.chunkZ;
-        }
-
-        @Override
-        public int hashCode() {
-            int result = System.identityHashCode(world);
-            result = 31 * result + chunkX;
-            result = 31 * result + chunkZ;
-            return result;
-        }
-    }
-
-    private static final class ClientChunkRenderScheduleResult {
-        private final int scheduledChunks;
-        private final int coveredSections;
-        private final int nextSectionY;
-        private final boolean completed;
-        private final int requiredSections;
-
-        private ClientChunkRenderScheduleResult(int scheduledChunks, int coveredSections, int nextSectionY,
-                                                boolean completed, int requiredSections) {
-            this.scheduledChunks = scheduledChunks;
-            this.coveredSections = coveredSections;
-            this.nextSectionY = nextSectionY;
-            this.completed = completed;
-            this.requiredSections = requiredSections;
-        }
-
-        private static ClientChunkRenderScheduleResult empty() {
-            return new ClientChunkRenderScheduleResult(0, 0, 0, false, 1);
-        }
-    }
-
-    private static final class ChunkFadeKey {
-        private final int dimensionId;
-        private final int chunkX;
-        private final int chunkY;
-        private final int chunkZ;
-
-        private ChunkFadeKey(int dimensionId, int chunkX, int chunkY, int chunkZ) {
-            this.dimensionId = dimensionId;
-            this.chunkX = chunkX;
-            this.chunkY = chunkY;
-            this.chunkZ = chunkZ;
-        }
-
-        @Override
-        public boolean equals(Object other) {
-            if (this == other) {
-                return true;
-            }
-            if (!(other instanceof ChunkFadeKey key)) {
-                return false;
-            }
-            return dimensionId == key.dimensionId
-                    && chunkX == key.chunkX
-                    && chunkY == key.chunkY
-                    && chunkZ == key.chunkZ;
-        }
-
-        @Override
-        public int hashCode() {
-            int result = dimensionId;
-            result = 31 * result + chunkX;
-            result = 31 * result + chunkY;
-            result = 31 * result + chunkZ;
-            return result;
-        }
-    }
-
-    private static final class ChunkFadeState {
-        private float value;
-        private long lastFrameSeen;
-
-        private ChunkFadeState(float value, long lastFrameSeen) {
-            this.value = value;
-            this.lastFrameSeen = lastFrameSeen;
-        }
-    }
-
-    private static final class SyntheticLightInfo {
-        private final IBlockState originalState;
-        private final IBlockState actualState;
-        private final int shaderBlockId;
-        private final int voxelId;
-        private final int emission;
-        private final String reason;
-
-        private SyntheticLightInfo(IBlockState originalState, IBlockState actualState, int shaderBlockId, int voxelId, int emission, String reason) {
-            this.originalState = originalState;
-            this.actualState = actualState;
-            this.shaderBlockId = shaderBlockId;
-            this.voxelId = voxelId;
-            this.emission = emission;
-            this.reason = reason;
-        }
-    }
-
-    private static ShaderProperties emptyShaderProperties() {
+    protected static ShaderProperties emptyShaderProperties() {
         return new ShaderProperties(
                 Map.of(),
                 Map.of(),

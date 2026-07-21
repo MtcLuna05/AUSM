@@ -3,11 +3,12 @@ package com.l.ausm.impl.mixin.pipeline;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
-import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
+import com.l.ausm.impl.pipeline.compat.TerrainRenderProbeState;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
+import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
@@ -29,40 +30,18 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.nio.ByteBuffer;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(BlockRendererDispatcher.class)
 public class BlockRendererDispatcherMixin {
-    @Unique
-    private static final int AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_INITIAL = 4;
-
-    @Unique
-    private static final int AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_INTERVAL = 128;
-
-    @Unique
-    private static final int AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_LIMIT = 0;
-
-    @Unique
-    private static final int AUSM_SHADERLESS_DISPATCH_LIGHT_PROBE_LIMIT = 0;
-
-    @Unique
-    private static final AtomicInteger AUSM_BLOCKCRAFTERY_FALLBACK_PROBES = new AtomicInteger();
-
-    @Unique
-    private static final AtomicInteger AUSM_SHADERLESS_DISPATCH_LIGHT_PROBES = new AtomicInteger();
-
     @Inject(method = "renderBlock", at = @At("HEAD"), cancellable = true)
     private void ausm$beforeRenderBlock(IBlockState state, BlockPos pos, IBlockAccess blockAccess, BufferBuilder bufferBuilder, CallbackInfoReturnable<Boolean> cir) {
-        if (BetterPortalsCompat.shouldSuppressOriginalPortalBlock(state)) {
-            cir.setReturnValue(false);
-            return;
-        }
-
         PipelineContext pipeline = PipelineContext.getInstance();
         IBlockState contextState = pipeline.effectiveBlockRenderState(state, blockAccess, pos);
         if (contextState == null) {
             contextState = state;
         }
+        int startVertex = bufferBuilder != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : -1;
+        TerrainRenderProbeState.setTerrainDispatchStart(startVertex);
         int blockEntityId = pipeline.blockEntityId(state, blockAccess, pos);
         int blockEmission = pipeline.shouldUseShaderlessBloomEmission()
                 ? pipeline.blockShaderlessBloomEmission(state, blockAccess, pos)
@@ -91,7 +70,6 @@ public class BlockRendererDispatcherMixin {
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, blockAccess, pos));
         BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState, blockAccess, pos));
         if (pipeline.shouldProbeSoftVanillaSpecialBlock(state, contextState, blockAccess, pos)) {
-            int startVertex = bufferBuilder != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : -1;
             BlockRendererDispatcherHooks.SOFT_VANILLA_SPECIAL_START_VERTEX.set(startVertex);
             pipeline.logSoftVanillaSpecialBlockProbe("dispatcher-head", state, blockAccess, pos, startVertex, startVertex, null,
                     "context=" + pipeline.diagnosticStateName(contextState)
@@ -103,14 +81,12 @@ public class BlockRendererDispatcherMixin {
         } else {
             BlockRendererDispatcherHooks.SOFT_VANILLA_SPECIAL_START_VERTEX.remove();
         }
-        if (pipeline.isBlockcrafteryEditableState(state)
-                && AusmBloomLayer.isBloomLayer(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer())) {
-        // Probe disabled.
-}
         if (pipeline.currentProblemProbesEnabled()) {
             pipeline.setBlockRenderDebugContext(state, blockAccess, pos);
         }
         pipeline.recordSyntheticLightCandidate(contextState, blockAccess, pos);
+        ausm$logTerrainDispatchProbe("head", state, contextState, pos, blockAccess, bufferBuilder, startVertex, -1,
+                null, blockEntityId, blockEmission, packedLightmap);
         if (pipeline.currentProblemProbesEnabled()
                 && (pipeline.isCurrentProblemProbeTarget(state)
                 || pipeline.isCurrentProblemProbeTarget(contextState)
@@ -132,21 +108,45 @@ public class BlockRendererDispatcherMixin {
         } else {
             BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.remove();
         }
-        if (pipeline.shouldProbeBlockcrafteryTransparency(state, blockAccess, pos)) {
-            pipeline.logBlockcrafteryTransparencyProbe(
-                    "dispatcher-head",
-                    state,
-                    blockAccess,
-                    pos,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
-                    bufferBuilder != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : null,
-                    bufferBuilder != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : null,
-                    null,
-                    "context=" + pipeline.diagnosticStateName(contextState)
-                            + ", blockAlpha=" + BlockRenderContext.blockAlpha()
-                            + ", buffer=" + ausm$bufferDetails(bufferBuilder)
-            );
+    }
+
+    @Unique
+    private static void ausm$logTerrainDispatchProbe(String stage, IBlockState state, IBlockState contextState,
+                                                     BlockPos pos, IBlockAccess blockAccess, BufferBuilder bufferBuilder,
+                                                     int startVertex, int endVertex, Boolean result,
+                                                     int blockEntityId, int blockEmission, int packedLightmap) {
+        int call = TerrainRenderProbeState.nextTerrainDispatchProbe();
+        if (call < 0) {
+            return;
         }
+        PipelineContext pipeline = PipelineContext.getInstance();
+        Block block = state != null ? MinecraftReflectionCompat.blockFromState(state) : null;
+        Block contextBlock = contextState != null ? MinecraftReflectionCompat.blockFromState(contextState) : null;
+        MainMod.LOGGER.info(
+                "[AUSMTerrainDispatch] call={} stage={} thread={} pos={} layer={} state={} context={} block={} contextBlock={} start={} end={} delta={} result={} buffer={} drawing={} format={} blockId={} emission={} packedLight=0x{} pipelineActive={} forceVanilla={} access={}",
+                call,
+                stage,
+                Thread.currentThread().getName(),
+                pos,
+                MinecraftReflectionCompat.currentRenderLayer(),
+                pipeline.diagnosticStateName(state),
+                pipeline.diagnosticStateName(contextState),
+                block != null ? MinecraftReflectionCompat.blockRegistryName(block) : null,
+                contextBlock != null ? MinecraftReflectionCompat.blockRegistryName(contextBlock) : null,
+                startVertex,
+                endVertex,
+                startVertex >= 0 && endVertex >= 0 ? endVertex - startVertex : -1,
+                result,
+                ausm$bufferDetails(bufferBuilder),
+                bufferBuilder instanceof IBufferBuilderExtension extension && extension.ausm$isDrawing(),
+                bufferBuilder != null ? MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder) : null,
+                blockEntityId,
+                blockEmission,
+                Integer.toHexString(packedLightmap),
+                pipeline.isPipelineActive(),
+                pipeline.shouldForceVanillaTerrainRenderer(),
+                blockAccess != null ? blockAccess.getClass().getName() : null
+        );
     }
 
     @Unique
@@ -219,20 +219,12 @@ public class BlockRendererDispatcherMixin {
             cir.setReturnValue(true);
         }
         PipelineContext pipeline = PipelineContext.getInstance();
-        if (pipeline.shouldProbeBlockcrafteryTransparency(state, blockAccess, pos)) {
-            Integer start = BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.get();
-            pipeline.logBlockcrafteryTransparencyProbe(
-                    "dispatcher-return",
-                    state,
-                    blockAccess,
-                    pos,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
-                    start,
-                    bufferBuilder != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : null,
-                    cir.getReturnValue(),
-                    "buffer=" + ausm$bufferDetails(bufferBuilder)
-            );
-        }
+        Integer terrainStart = TerrainRenderProbeState.terrainDispatchStart();
+        int terrainEnd = bufferBuilder != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : -1;
+        ausm$logTerrainDispatchProbe("return", state, pipeline.effectiveBlockRenderState(state, blockAccess, pos), pos,
+                blockAccess, bufferBuilder, terrainStart != null ? terrainStart : -1, terrainEnd, cir.getReturnValue(),
+                BlockRenderContext.blockEntityId(), BlockRenderContext.blockEmission(), BlockRenderContext.packedLightmap());
+        TerrainRenderProbeState.clearTerrainDispatchStart();
         ausm$logRenderProbe(state, pos, blockAccess, bufferBuilder, cir.getReturnValue());
         Integer framedStart = BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.get();
         if (framedStart != null && bufferBuilder != null) {
@@ -256,6 +248,9 @@ public class BlockRendererDispatcherMixin {
     private static boolean ausm$appendBloomFallbackIfMissing(IBlockState state, BlockPos pos, IBlockAccess blockAccess,
                                                             BufferBuilder bufferBuilder) {
         PipelineContext pipeline = PipelineContext.getInstance();
+        if (!pipeline.isManualBloomExtractionEnabled()) {
+            return false;
+        }
         Integer start = BlockRendererDispatcherHooks.PROBE_START_VERTEX.get();
         boolean framedFallback = false;
         if (start == null && pipeline.isFramedBlockDiagnosticTarget(state)) {
@@ -324,6 +319,7 @@ public class BlockRendererDispatcherMixin {
 
         boolean textureBloomSource = pipeline.stateUsesTextureBloomSource(fallbackSourceState);
         boolean solidBloomMaskFallback = framedFallback && !textureBloomSource;
+        IBlockState fallbackGeometryState = solidBloomMaskFallback ? state : fallbackState;
         int normalDelta = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) - start;
         if (normalDelta > 0 && solidBloomMaskFallback) {
             ((com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension) bufferBuilder).ausm$truncateVertexCount(start);
@@ -342,8 +338,8 @@ public class BlockRendererDispatcherMixin {
 
         BlockRenderLayer previousLayer = layer;
         BlockRenderLayer fallbackRenderLayer = framedFallback && !textureBloomSource
-                ? ausm$framedGeometryLayer(fallbackState, fallbackSourceState)
-                : bloomLayer;
+                ? ausm$framedGeometryLayer(fallbackGeometryState, fallbackSourceState)
+                : ausm$bloomFallbackLayer(fallbackSourceState);
         int fallbackStart = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder);
         boolean rendered = false;
         try {
@@ -353,7 +349,7 @@ public class BlockRendererDispatcherMixin {
             }
             com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(fallbackRenderLayer);
             BlockRendererDispatcher dispatcher = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRendererDispatcher(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
-            rendered = dispatcher != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlock(dispatcher, fallbackState, pos, blockAccess, bufferBuilder);
+            rendered = dispatcher != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlock(dispatcher, fallbackGeometryState, pos, blockAccess, bufferBuilder);
         } finally {
             com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(previousLayer);
             BlockRenderContext.clearBloomMaskFallback();
@@ -365,8 +361,8 @@ public class BlockRendererDispatcherMixin {
                 inheritedState, fallbackSourceState, pos, blockAccess, previousLayer, bloomLayer, fallbackStart,
                 fallbackDelta, framedEmission, "fallbackLayer=" + fallbackRenderLayer
                         + ", rendered=" + rendered
-                        + ", fallbackState=" + ausm$stateName(fallbackState));
-        ausm$logEmissiveDispatcherFallback(state, inheritedState, fallbackSourceState, fallbackState, pos, previousLayer,
+                        + ", fallbackState=" + ausm$stateName(fallbackGeometryState));
+        ausm$logEmissiveDispatcherFallback(state, inheritedState, fallbackSourceState, fallbackGeometryState, pos, previousLayer,
                 bloomLayer, fallbackRenderLayer, start, fallbackStart, normalDelta, bufferBuilder, framedFallback,
                 rendered, fallbackDelta);
         return fallbackDelta > 0;
@@ -466,31 +462,6 @@ public class BlockRendererDispatcherMixin {
         if (!PipelineContext.getInstance().isBlockcrafteryEditableState(state)) {
             return;
         }
-        int probe = AUSM_BLOCKCRAFTERY_FALLBACK_PROBES.incrementAndGet();
-        if (probe > AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_LIMIT
-                || (probe > AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_INITIAL
-                && probe % AUSM_BLOCKCRAFTERY_FALLBACK_PROBE_INTERVAL != 0)) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMBlockcrafteryBloomFallback] call={} action={} pos={} layer={} bloomLayer={} start={} delta={} emission={} state={} inherited={} source={} access={} pipelineActive={} extractionActive={} recursive={} detail={}",
-                probe,
-                action,
-                pos,
-                layer,
-                bloomLayer,
-                start,
-                delta,
-                framedEmission,
-                ausm$stateName(state),
-                ausm$stateName(inheritedState),
-                ausm$stateName(fallbackSourceState),
-                blockAccess != null ? blockAccess.getClass().getName() : "null",
-                PipelineContext.getInstance().isActive(),
-                PipelineContext.getInstance().isShaderlessBloomExtractionActive(),
-                BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get(),
-                detail
-        );
     }
 
     @Unique
@@ -527,7 +498,6 @@ public class BlockRendererDispatcherMixin {
                 || namespace.contains("architecture")
                 || path.contains("architecture")
                 || path.contains("fire")
-                || path.contains("luminous")
                 || path.contains("glass")
                 || path.contains("translucent")
                 || className.contains("architecture")
@@ -558,20 +528,11 @@ public class BlockRendererDispatcherMixin {
         String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
         String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name);
         return "lumenized".equals(namespace)
-                || ausm$isRandomThingsLuminousState(state)
-                || path.contains("lumenized")
-                || path.contains("luminous")
-                || path.contains("emissive")
-                || path.contains("bloom");
+                || path.contains("lumenized");
     }
 
     @Unique
     private static BlockRenderLayer ausm$bloomFallbackLayer(IBlockState state) {
-        if (ausm$isRandomThingsLuminousState(state)) {
-            return ausm$isRandomThingsTranslucentLuminousState(state)
-                    ? BlockRenderLayer.TRANSLUCENT
-                    : BlockRenderLayer.SOLID;
-        }
         BlockRenderLayer naturalLayer = ausm$naturalRenderLayer(state);
         if (naturalLayer != null && !AusmBloomLayer.isBloomLayer(naturalLayer)) {
             return naturalLayer;
@@ -582,29 +543,6 @@ public class BlockRendererDispatcherMixin {
         return BlockRenderLayer.SOLID;
     }
 
-    @Unique
-    private static boolean ausm$isRandomThingsLuminousState(IBlockState state) {
-        ResourceLocation name = ausm$registryName(state);
-        return name != null
-                && "randomthings".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name) != null
-                && ausm$isRandomThingsLuminousPath(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name));
-    }
-
-    @Unique
-    private static boolean ausm$isRandomThingsLuminousPath(String path) {
-        return "luminousblock".equalsIgnoreCase(path)
-                || "translucentluminousblock".equalsIgnoreCase(path)
-                || "luminousstainedbrick".equalsIgnoreCase(path);
-    }
-
-    @Unique
-    private static boolean ausm$isRandomThingsTranslucentLuminousState(IBlockState state) {
-        ResourceLocation name = ausm$registryName(state);
-        return name != null
-                && "randomthings".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name))
-                && "translucentluminousblock".equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name));
-    }
 
     @Unique
     private static void ausm$logRenderProbe(IBlockState state, BlockPos pos, IBlockAccess blockAccess, BufferBuilder bufferBuilder, Boolean result) {

@@ -14,14 +14,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class GuiScreenMixin {
     private static final int WORLD_GUI_BACKGROUND = 0x44000000;
 
-    @Shadow
-    protected Minecraft mc;
-
-    @Shadow
-    public int width;
-
-    @Shadow
-    public int height;
+    @Shadow(remap = false)
+    protected Minecraft field_146297_k;
 
     @Inject(method = "drawWorldBackground", at = @At("HEAD"), cancellable = true)
     private void ausm$flattenShaderlessWorldBackground(int tint, CallbackInfo ci) {
@@ -31,22 +25,12 @@ public class GuiScreenMixin {
     }
 
     private boolean ausm$drawFlatWorldBackground() {
-        if (this.mc == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(this.mc) == null) {
-            return false;
-        }
-        if (ausm$shouldUseVanillaWorldBackground()) {
-            return false;
-        }
-
-        PipelineContext context = PipelineContext.getInstance();
-        if (!context.isActive()) {
-            return false;
-        }
-        return true;
+        return false;
     }
 
     private boolean ausm$shouldUseVanillaWorldBackground() {
-        return "tinker_io.gui.GuiSmartOutput".equals(getClass().getName());
+        String className = getClass().getName();
+        return className.startsWith("com.l.ausm.impl.client.gui.")
+                || "tinker_io.gui.GuiSmartOutput".equals(className);
     }
 }

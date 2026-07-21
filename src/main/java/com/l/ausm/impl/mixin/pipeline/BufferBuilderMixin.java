@@ -11,6 +11,7 @@ import com.l.ausm.impl.pipeline.vertex.IrisVertexMath;
 import com.l.ausm.impl.pipeline.vertex.SeparateAoColorWriter;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
+import com.l.ausm.impl.pipeline.compat.TerrainRenderProbeState;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.client.renderer.vertex.VertexFormatElement;
@@ -188,6 +189,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         int targetIntStride = ExtendedVertexFormats.integerSize(field_179011_q);
         int sourceIntStride = sourceStride / Integer.BYTES;
         int[] scratch = ausm$vertexScratch(targetIntStride);
+        boolean compatibilityEmissiveBoost = ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost();
+        int packedEntity = packedEntity();
+        int packedEntityHigh = packedEntityHigh();
+        int midBlockEmission = BlockRenderContext.midBlockEmission();
+        ausm$logVertexExpandProbe("bulk-in", sourceBytes, sourceStride, targetStride, vertexBase, vertexTotal, -1, compatibilityEmissiveBoost);
         func_181670_b(vertexTotal * targetStride + targetStride);
         field_178999_b.position(func_181664_j());
         for (int vertex = 0; vertex < vertexTotal; vertex++) {
@@ -198,18 +204,20 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             ausm$sanitizeAgricraftCropVertex(scratch, 0, sourceIntStride);
             ausm$applyBloomMaskVertexData(scratch, 0);
             ausm$applyCustomLiquidTintVertexData(scratch, 0);
-            ausm$applyEmissiveLightmap(scratch, 0, ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost());
-            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity();
-            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh();
+            ausm$applyEmissiveLightmap(scratch, 0, compatibilityEmissiveBoost);
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity;
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh;
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
                     Float.intBitsToFloat(scratch[0]),
                     Float.intBitsToFloat(scratch[1]),
-                    Float.intBitsToFloat(scratch[2])
+                    Float.intBitsToFloat(scratch[2]),
+                    midBlockEmission
             );
             field_178999_b.put(scratch, 0, targetIntStride);
         }
 
         field_178997_d += vertexTotal;
+        ausm$logVertexExpandProbe("bulk-out", sourceBytes, sourceStride, targetStride, vertexBase, vertexTotal, field_178997_d, compatibilityEmissiveBoost);
 
         for (int vertex = 0; vertex + 3 < vertexTotal; vertex += 4) {
             ausm$writeDerivedBlockAttributesForPolygon(vertexBase + vertex, 4);
@@ -248,6 +256,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         int vertexBase = field_178997_d;
         int vertexTotal = vertexData.length / sourceStride;
         int[] scratch = ausm$vertexScratch(targetStride);
+        boolean compatibilityEmissiveBoost = ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost();
+        int packedEntity = packedEntity();
+        int packedEntityHigh = packedEntityHigh();
+        int midBlockEmission = BlockRenderContext.midBlockEmission();
+        ausm$logVertexExpandProbe("quad-in", vertexData.length, sourceStride, targetStride, vertexBase, vertexTotal, -1, compatibilityEmissiveBoost);
         func_181670_b(vertexTotal * ExtendedVertexFormats.size(field_179011_q) + ExtendedVertexFormats.size(field_179011_q));
         field_178999_b.position(func_181664_j());
         for (int vertex = 0; vertex < vertexTotal; vertex++) {
@@ -257,18 +270,20 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             ausm$sanitizeAgricraftCropVertex(scratch, 0, sourceStride);
             ausm$applyBloomMaskVertexData(scratch, 0);
             ausm$applyCustomLiquidTintVertexData(scratch, 0);
-            ausm$applyEmissiveLightmap(scratch, 0, ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost());
-            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity();
-            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh();
+            ausm$applyEmissiveLightmap(scratch, 0, compatibilityEmissiveBoost);
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity;
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh;
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
                     Float.intBitsToFloat(scratch[0]),
                     Float.intBitsToFloat(scratch[1]),
-                    Float.intBitsToFloat(scratch[2])
+                    Float.intBitsToFloat(scratch[2]),
+                    midBlockEmission
             );
             field_178999_b.put(scratch, 0, targetStride);
         }
 
         field_178997_d += vertexTotal;
+        ausm$logVertexExpandProbe("quad-out", vertexData.length, sourceStride, targetStride, vertexBase, vertexTotal, field_178997_d, compatibilityEmissiveBoost);
 
         for (int vertex = 0; vertex + 3 < vertexTotal; vertex += 4) {
             ausm$writeDerivedBlockAttributesForPolygon(vertexBase + vertex, 4);
@@ -277,6 +292,61 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         ausm$markCurrentContextShaderlessBloomMetadata();
         ausm$resetPipelineVertexCursor();
         ci.cancel();
+    }
+
+    @Unique
+    private void ausm$logVertexExpandProbe(String stage, int sourceSize, int sourceStride, int targetStride,
+                                           int vertexBase, int vertexTotal, int vertexEnd,
+                                           boolean compatibilityEmissiveBoost) {
+        PipelineContext pipeline = PipelineContext.getInstance();
+        int call = TerrainRenderProbeState.nextVertexExpandProbe(ausm$hasUsefulVertexProbeContext(pipeline));
+        if (call < 0) {
+            return;
+        }
+        com.l.ausm.impl.MainMod.LOGGER.info(
+                "[AUSMVertexExpand] call={} stage={} thread={} sourceSize={} sourceStride={} targetStride={} vertexBase={} vertexTotal={} vertexEnd={} format={} mode={} layer={} blockId={} renderType={} metadata={} emission={} vanillaEmission={} bloomMask={} packedLight=0x{} pos={}/{}/{} pipelineActive={} forceVanilla={} compatBoost={}",
+                call,
+                stage,
+                Thread.currentThread().getName(),
+                sourceSize,
+                sourceStride,
+                targetStride,
+                vertexBase,
+                vertexTotal,
+                vertexEnd,
+                field_179011_q,
+                field_179006_k,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
+                BlockRenderContext.blockEntityId(),
+                BlockRenderContext.renderType(),
+                BlockRenderContext.metadata(),
+                BlockRenderContext.blockEmission(),
+                BlockRenderContext.vanillaLightmapEmission(),
+                BlockRenderContext.bloomMaskFallback(),
+                Integer.toHexString(BlockRenderContext.packedLightmap()),
+                BlockRenderContext.blockX(),
+                BlockRenderContext.blockY(),
+                BlockRenderContext.blockZ(),
+                pipeline.isPipelineActive(),
+                pipeline.shouldForceVanillaTerrainRenderer(),
+                compatibilityEmissiveBoost
+        );
+    }
+
+    @Unique
+    private static boolean ausm$hasUsefulVertexProbeContext(PipelineContext pipeline) {
+        if (pipeline.isPipelineActive()
+                || BlockRenderContext.renderType() >= 0
+                || BlockRenderContext.blockEntityId() != 0
+                || BlockRenderContext.blockEmission() != 0
+                || BlockRenderContext.packedLightmap() != 0
+                || BlockRenderContext.blockX() != 0
+                || BlockRenderContext.blockY() != 0
+                || BlockRenderContext.blockZ() != 0) {
+            return true;
+        }
+        String thread = Thread.currentThread().getName();
+        return thread != null && thread.contains("Chunk");
     }
 
     @Unique

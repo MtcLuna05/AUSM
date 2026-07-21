@@ -15,25 +15,11 @@ public final class NothiriumFogCompat {
     public static void setupFogFromGL(GLShader shader, String source) {
         PipelineContext context = PipelineContext.getInstance();
         if (!context.shouldSanitizeShaderlessNothiriumFog()) {
-            context.logNothiriumFogProbe(
-                    source + "-keep-disabled",
-                    GL11.glIsEnabled(GL11.GL_FOG),
-                    GL11.glGetInteger(GL11.GL_FOG_MODE),
-                    GL11.glGetFloat(GL11.GL_FOG_START),
-                    GL11.glGetFloat(GL11.GL_FOG_END),
-                    GL11.glGetFloat(GL11.GL_FOG_DENSITY),
-                    fogColor(),
-                    fogColor()
-            );
             FogUtil.setupFogFromGL(shader);
             return;
         }
 
         boolean fogEnabled = GL11.glIsEnabled(GL11.GL_FOG);
-        int fogMode = GL11.glGetInteger(GL11.GL_FOG_MODE);
-        float fogStart = GL11.glGetFloat(GL11.GL_FOG_START);
-        float fogEnd = GL11.glGetFloat(GL11.GL_FOG_END);
-        float fogDensity = GL11.glGetFloat(GL11.GL_FOG_DENSITY);
         float[] originalColor = fogColor();
         float[] adjustedColor = originalColor;
         boolean adjusted = false;
@@ -42,31 +28,11 @@ public final class NothiriumFogCompat {
             setFogColor(adjustedColor);
             adjusted = true;
         }
-        context.logNothiriumFogProbe(
-                source + (adjusted ? "-head-adjust" : "-head-keep"),
-                fogEnabled,
-                fogMode,
-                fogStart,
-                fogEnd,
-                fogDensity,
-                originalColor,
-                adjustedColor
-        );
         try {
             FogUtil.setupFogFromGL(shader);
         } finally {
             if (adjusted) {
                 setFogColor(originalColor);
-                context.logNothiriumFogProbe(
-                        source + "-return-restore",
-                        GL11.glIsEnabled(GL11.GL_FOG),
-                        GL11.glGetInteger(GL11.GL_FOG_MODE),
-                        GL11.glGetFloat(GL11.GL_FOG_START),
-                        GL11.glGetFloat(GL11.GL_FOG_END),
-                        GL11.glGetFloat(GL11.GL_FOG_DENSITY),
-                        fogColor(),
-                        originalColor
-                );
             }
         }
     }

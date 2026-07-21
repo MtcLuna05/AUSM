@@ -23,8 +23,9 @@ public class GuiIngameMixin {
             return;
         }
         PipelineContext context = PipelineContext.getInstance();
-        context.renderShaderlessBloomBeforeGui();
-        context.beginGuiRendering();
+        context.logGuiBypassProbe("hud-head-before-bypass");
+        context.prepareBypassedGuiScreenDrawState();
+        context.logGuiBypassProbe("hud-head-after-bypass");
     }
 
     @Inject(method = "renderGameOverlay(F)V", at = @At("RETURN"))
@@ -32,7 +33,7 @@ public class GuiIngameMixin {
         if (ausm$isHudHidden()) {
             return;
         }
-        PipelineContext.getInstance().finishGuiRendering();
+        PipelineContext.getInstance().logGuiBypassProbe("hud-return");
         ShaderCompileNotifications.renderOverlay(new ScaledResolution(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
     }
 
@@ -44,7 +45,7 @@ public class GuiIngameMixin {
             )
     )
     private void ausm$beforeHotbar(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().prepareGuiRendering();
+        PipelineContext.getInstance().logGuiBypassProbe("hud-before-hotbar");
     }
 
     @Inject(
@@ -55,7 +56,7 @@ public class GuiIngameMixin {
             )
     )
     private void ausm$beforeSubtitles(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().prepareGuiRendering();
+        PipelineContext.getInstance().logGuiBypassProbe("hud-before-subtitles");
     }
 
     @Inject(method = "renderVignette(FLnet/minecraft/client/gui/ScaledResolution;)V", at = @At("HEAD"), cancellable = true)

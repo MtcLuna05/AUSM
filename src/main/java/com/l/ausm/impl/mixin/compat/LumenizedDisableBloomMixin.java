@@ -26,12 +26,10 @@ public class LumenizedDisableBloomMixin {
         }
 
         if (context.isActive()) {
-            if (AusmBloomLayer.shouldUseNativeHook()
-                    && (layer == null || AusmBloomLayer.isBloomLayer(layer))) {
-                cir.setReturnValue(context.renderAusmBloomLayer(renderGlobal, partialTicks, pass, entity));
-            } else {
-                cir.setReturnValue(0);
-            }
+            // AUSM renders the native BLOOM layer from its world-pass hook while the
+            // deferred terrain depth is current. GregTech invokes this callback later,
+            // after the pipeline frame has been presented and its depth is unavailable.
+            cir.setReturnValue(0);
             return;
         }
 

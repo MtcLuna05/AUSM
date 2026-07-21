@@ -189,10 +189,6 @@ public final class BetterPortalsCompat {
         return shouldRenderNestedViewWithShaders();
     }
 
-    public static boolean shouldUseAusmPortalSurfaceReplacement() {
-        return false;
-    }
-
     private static boolean shouldProtectBetterPortalsRenderState() {
         return isInstalled() && isSeeThroughPortalsEnabled();
     }
@@ -395,22 +391,6 @@ public final class BetterPortalsCompat {
         }
 
         return portalOpacityForClassName(portal.getClass().getName());
-    }
-
-    public static boolean shouldSuppressOriginalPortalBlock(IBlockState state) {
-        if (state == null || !shouldUseAusmPortalSurfaceReplacement()) {
-            return false;
-        }
-        if (!isInstalled() || !isSeeThroughPortalsEnabled()) {
-            return false;
-        }
-
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        if (!isBetterPortalsPortalBlock(block)) {
-            return false;
-        }
-
-        return true;
     }
 
     public static boolean isBetterPortalsPortalBlock(Block block) {
