@@ -36,6 +36,15 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".CeleritasChunkBuilderMeshingTaskMixin")) {
             return optionalTargetPresent(mixinClassName, "org/taumc/celeritas/impl/render/terrain/compile/task/ChunkBuilderMeshingTask.class", true);
         }
+        if (mixinClassName.endsWith(".CeleritasWorldRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "org/taumc/celeritas/impl/render/terrain/CeleritasWorldRenderer.class", true);
+        }
+        if (mixinClassName.endsWith(".CeleritasMultiDrawEmitterMixin")) {
+            return optionalTargetPresent(mixinClassName, "org/embeddedt/embeddium/impl/render/chunk/multidraw/DirectMultiDrawEmitter.class", true);
+        }
+        if (mixinClassName.endsWith(".CeleritasDefaultChunkRendererMixin")) {
+            return optionalTargetPresent(mixinClassName, "org/embeddedt/embeddium/impl/render/chunk/DefaultChunkRenderer.class", true);
+        }
         if (mixinClassName.endsWith(".NothiriumRenderChunkTaskSortTranslucentMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskSortTranslucent.class", true);
         }

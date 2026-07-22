@@ -9,9 +9,13 @@ import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.gui.FontRenderer;
+import net.minecraft.client.gui.Gui;
+import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiIngame;
 import net.minecraft.client.gui.GuiNewChat;
 import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.client.gui.GuiTextField;
+import net.minecraft.client.gui.ScaledResolution;
 import net.minecraft.client.multiplayer.ChunkProviderClient;
 import net.minecraft.client.multiplayer.PlayerControllerMP;
 import net.minecraft.client.network.NetHandlerPlayClient;
@@ -23,6 +27,7 @@ import net.minecraft.client.renderer.color.IItemColor;
 import net.minecraft.client.renderer.color.ItemColors;
 import net.minecraft.client.renderer.BlockRendererDispatcher;
 import net.minecraft.client.renderer.BufferBuilder;
+import net.minecraft.client.renderer.ChunkRenderContainer;
 import net.minecraft.client.renderer.EntityRenderer;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
@@ -44,6 +49,8 @@ import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.client.renderer.vertex.VertexFormatElement;
+import net.minecraft.client.renderer.vertex.VertexBuffer;
+import net.minecraft.client.resources.I18n;
 import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.client.settings.GameSettings;
 import net.minecraft.client.settings.KeyBinding;
@@ -54,6 +61,7 @@ import net.minecraft.entity.EntityList;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.item.EntityItem;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.ItemBlock;
@@ -76,6 +84,7 @@ import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.GameType;
 import net.minecraft.world.World;
+import net.minecraft.world.WorldServer;
 import net.minecraft.world.WorldProvider;
 import net.minecraft.world.WorldType;
 import net.minecraft.world.biome.Biome;
@@ -109,6 +118,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class MinecraftReflectionCompat {
     private static final ConcurrentMap<MethodKey, Method> METHOD_CACHE = new ConcurrentHashMap<>();
@@ -124,6 +134,9 @@ public final class MinecraftReflectionCompat {
     private static final ConcurrentMap<IProperty<?>, String> PROPERTY_NAME_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<PropertyValueNameKey, String> PROPERTY_VALUE_NAME_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<Block, ResourceLocation> BLOCK_REGISTRY_NAME_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Class<?>, MethodHandle> BLOCK_LAYER_METHOD_HANDLES = new ConcurrentHashMap<>();
+    private static final Set<Class<?>> MISSING_BLOCK_LAYER_METHODS = ConcurrentHashMap.newKeySet();
+    private static final AtomicInteger BLOCK_LAYER_FAILURE_PROBES = new AtomicInteger();
     private static final ConcurrentMap<ResourceLocation, String> RESOURCE_NAMESPACE_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<ResourceLocation, String> RESOURCE_PATH_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<ResourceLocation, String> RESOURCE_STRING_CACHE = new ConcurrentHashMap<>();
@@ -318,24 +331,16 @@ public final class MinecraftReflectionCompat {
         if (world == null || pos == null) {
             return false;
         }
-        try {
-            return world.isBlockLoaded(pos);
-        } catch (Throwable ignored) {
-            return callBoolean(world, new String[] {"func_175667_e", "isBlockLoaded"},
-                    new Class<?>[] {BlockPos.class}, false, pos);
-        }
+        return callBoolean(world, new String[] {"func_175667_e", "isBlockLoaded"},
+                new Class<?>[] {BlockPos.class}, false, pos);
     }
 
     public static boolean worldIsBlockLoaded(World world, BlockPos pos, boolean allowEmpty) {
         if (world == null || pos == null) {
             return false;
         }
-        try {
-            return world.isBlockLoaded(pos, allowEmpty);
-        } catch (Throwable ignored) {
-            return callBoolean(world, new String[] {"func_175668_a", "isBlockLoaded"},
-                    new Class<?>[] {BlockPos.class, boolean.class}, false, pos, allowEmpty);
-        }
+        return callBoolean(world, new String[] {"func_175668_a", "isBlockLoaded"},
+                new Class<?>[] {BlockPos.class, boolean.class}, false, pos, allowEmpty);
     }
 
     public static boolean worldCanSeeSky(World world, BlockPos pos) {
@@ -1070,15 +1075,66 @@ public final class MinecraftReflectionCompat {
     }
 
     public static boolean blockCanRenderInLayer(Block block, IBlockState state, BlockRenderLayer layer) {
-        if (block == null) {
+        if (block == null || state == null || layer == null) {
             return false;
         }
-        try {
-            return block.canRenderInLayer(state, layer);
-        } catch (Throwable ignored) {
-            Object value = invoke(block, new String[] {"canRenderInLayer"}, new Class<?>[] {IBlockState.class, BlockRenderLayer.class}, state, layer);
-            return value instanceof Boolean ? (Boolean) value : layer == blockRenderLayer(block);
+        MethodHandle handle = blockLayerMethodHandle(block.getClass());
+        if (handle != null) {
+            try {
+                return (boolean) handle.invoke(block, state, layer);
+            } catch (Throwable failure) {
+                int probe = BLOCK_LAYER_FAILURE_PROBES.incrementAndGet();
+                if (probe <= 8) {
+                    com.l.ausm.impl.MainMod.LOGGER.warn(
+                            "[AUSMBlockLayerCompat] invocation failed for {}: {}",
+                            block.getClass().getName(), failure.toString());
+                }
+            }
         }
+        return layer == blockRenderLayer(block);
+    }
+
+    private static MethodHandle blockLayerMethodHandle(Class<?> owner) {
+        MethodHandle cached = BLOCK_LAYER_METHOD_HANDLES.get(owner);
+        if (cached != null || MISSING_BLOCK_LAYER_METHODS.contains(owner)) {
+            return cached;
+        }
+        Method method = findMethod(owner, "canRenderInLayer",
+                new Class<?>[] {IBlockState.class, BlockRenderLayer.class});
+        if (method == null) {
+            method = findBlockLayerMethodByShape(owner);
+        }
+        if (method != null) {
+            try {
+                method.setAccessible(true);
+                MethodHandle handle = MethodHandles.lookup().unreflect(method);
+                MethodHandle existing = BLOCK_LAYER_METHOD_HANDLES.putIfAbsent(owner, handle);
+                return existing != null ? existing : handle;
+            } catch (IllegalAccessException | RuntimeException ignored) {
+            }
+        }
+        MISSING_BLOCK_LAYER_METHODS.add(owner);
+        int probe = BLOCK_LAYER_FAILURE_PROBES.incrementAndGet();
+        if (probe <= 8) {
+            com.l.ausm.impl.MainMod.LOGGER.warn(
+                    "[AUSMBlockLayerCompat] no compatible layer method for {}", owner.getName());
+        }
+        return null;
+    }
+
+    private static Method findBlockLayerMethodByShape(Class<?> owner) {
+        for (Class<?> current = owner; current != null; current = current.getSuperclass()) {
+            for (Method method : current.getDeclaredMethods()) {
+                Class<?>[] parameters = method.getParameterTypes();
+                if (method.getReturnType() == boolean.class
+                        && parameters.length == 2
+                        && parameters[0] == IBlockState.class
+                        && parameters[1] == BlockRenderLayer.class) {
+                    return method;
+                }
+            }
+        }
+        return null;
     }
 
     public static ResourceLocation blockRegistryName(Block block) {
@@ -1089,14 +1145,8 @@ public final class MinecraftReflectionCompat {
         if (cached != null) {
             return cached;
         }
-        ResourceLocation name = null;
-        try {
-            name = block.getRegistryName();
-        } catch (Throwable ignored) {
-        }
-        if (name == null) {
-            name = call(block, ResourceLocation.class, null, new String[] {"getRegistryName"}, NO_PARAMETERS);
-        }
+        ResourceLocation name = call(block, ResourceLocation.class, null,
+                new String[] {"getRegistryName"}, NO_PARAMETERS);
         if (name != null) {
             ResourceLocation existing = BLOCK_REGISTRY_NAME_CACHE.putIfAbsent(block, name);
             return existing != null ? existing : name;
@@ -1236,6 +1286,185 @@ public final class MinecraftReflectionCompat {
         return field(minecraft, FontRenderer.class, null, "field_71466_p", "fontRenderer");
     }
 
+    public static int fontStringWidth(FontRenderer fontRenderer, String text) {
+        return callInt(fontRenderer, new String[] {"func_78256_a", "getStringWidth"},
+                new Class<?>[] {String.class}, 0, text);
+    }
+
+    public static float fontDrawStringWithShadow(FontRenderer fontRenderer, String text,
+                                                 float x, float y, int color) {
+        return callFloat(fontRenderer, new String[] {"func_175063_a", "drawStringWithShadow"},
+                new Class<?>[] {String.class, float.class, float.class, int.class},
+                0.0F, text, x, y, color);
+    }
+
+    public static int fontDrawString(FontRenderer fontRenderer, String text, int x, int y, int color) {
+        return callInt(fontRenderer, new String[] {"func_78276_b", "drawString"},
+                new Class<?>[] {String.class, int.class, int.class, int.class},
+                0, text, x, y, color);
+    }
+
+    @SuppressWarnings("unchecked")
+    public static List<String> fontListFormattedStringToWidth(FontRenderer fontRenderer, String text, int width) {
+        Object value = invoke(fontRenderer,
+                new String[] {"func_78271_c", "listFormattedStringToWidth"},
+                new Class<?>[] {String.class, int.class}, text, width);
+        return value instanceof List<?> ? (List<String>) value : Collections.emptyList();
+    }
+
+    public static int scaledResolutionWidth(ScaledResolution resolution) {
+        return callInt(resolution, new String[] {"func_78326_a", "getScaledWidth"},
+                NO_PARAMETERS, 0);
+    }
+
+    public static void guiDrawRect(int left, int top, int right, int bottom, int color) {
+        invoke(Gui.class, new String[] {"func_73734_a", "drawRect"},
+                new Class<?>[] {int.class, int.class, int.class, int.class, int.class},
+                left, top, right, bottom, color);
+    }
+
+    public static int guiButtonId(GuiButton button) {
+        return fieldInt(button, -1, "field_146127_k", "id");
+    }
+
+    public static int guiButtonX(GuiButton button) {
+        return fieldInt(button, 0, "field_146128_h", "x");
+    }
+
+    public static int guiButtonY(GuiButton button) {
+        return fieldInt(button, 0, "field_146129_i", "y");
+    }
+
+    public static int guiButtonWidth(GuiButton button) {
+        return fieldInt(button, 0, "field_146120_f", "width");
+    }
+
+    public static void setGuiButtonX(GuiButton button, int x) {
+        setField(button, x, "field_146128_h", "x");
+    }
+
+    public static void setGuiButtonWidth(GuiButton button, int width) {
+        setField(button, width, "field_146120_f", "width");
+    }
+
+    public static int guiButtonHeight(GuiButton button) {
+        return fieldInt(button, 0, "field_146121_g", "height");
+    }
+
+    public static boolean guiButtonEnabled(GuiButton button) {
+        return fieldBoolean(button, false, "field_146124_l", "enabled");
+    }
+
+    public static void setGuiButtonEnabled(GuiButton button, boolean enabled) {
+        setField(button, enabled, "field_146124_l", "enabled");
+    }
+
+    public static boolean guiButtonVisible(GuiButton button) {
+        return fieldBoolean(button, false, "field_146125_m", "visible");
+    }
+
+    public static void setGuiButtonVisible(GuiButton button, boolean visible) {
+        setField(button, visible, "field_146125_m", "visible");
+    }
+
+    public static String guiButtonText(GuiButton button) {
+        return field(button, String.class, "", "field_146126_j", "displayString");
+    }
+
+    public static void setGuiButtonText(GuiButton button, String text) {
+        setField(button, text, "field_146126_j", "displayString");
+    }
+
+    public static boolean guiButtonMousePressed(GuiButton button, Minecraft minecraft, int mouseX, int mouseY) {
+        if (!guiButtonEnabled(button) || !guiButtonVisible(button)) {
+            return false;
+        }
+        int x = guiButtonX(button);
+        int y = guiButtonY(button);
+        return mouseX >= x && mouseY >= y
+                && mouseX < x + guiButtonWidth(button)
+                && mouseY < y + guiButtonHeight(button);
+    }
+
+    public static int guiTextFieldX(GuiTextField field) {
+        return fieldInt(field, 0, "field_146209_f", "x");
+    }
+
+    public static int guiTextFieldY(GuiTextField field) {
+        return fieldInt(field, 0, "field_146210_g", "y");
+    }
+
+    public static int guiTextFieldWidth(GuiTextField field) {
+        return fieldInt(field, 0, "field_146218_h", "width");
+    }
+
+    public static int guiTextFieldHeight(GuiTextField field) {
+        return fieldInt(field, 0, "field_146219_i", "height");
+    }
+
+    public static String guiTextFieldText(GuiTextField field) {
+        return call(field, String.class, "", new String[] {"func_146179_b", "getText"}, NO_PARAMETERS);
+    }
+
+    public static boolean guiTextFieldFocused(GuiTextField field) {
+        return callBoolean(field, new String[] {"func_146206_l", "isFocused"}, NO_PARAMETERS, false);
+    }
+
+    public static void setGuiTextFieldFocused(GuiTextField field, boolean focused) {
+        invoke(field, new String[] {"func_146195_b", "setFocused"}, new Class<?>[] {boolean.class}, focused);
+    }
+
+    public static void setGuiTextFieldText(GuiTextField field, String text) {
+        invoke(field, new String[] {"func_146180_a", "setText"}, new Class<?>[] {String.class}, text);
+    }
+
+    public static void setGuiTextFieldMaxLength(GuiTextField field, int length) {
+        invoke(field, new String[] {"func_146203_f", "setMaxStringLength"}, new Class<?>[] {int.class}, length);
+    }
+
+    public static void setGuiTextFieldBackground(GuiTextField field, boolean enabled) {
+        invoke(field, new String[] {"func_146185_a", "setEnableBackgroundDrawing"},
+                new Class<?>[] {boolean.class}, enabled);
+    }
+
+    public static boolean guiTextFieldKeyTyped(GuiTextField field, char typedChar, int keyCode) {
+        return callBoolean(field, new String[] {"func_146201_a", "textboxKeyTyped"},
+                new Class<?>[] {char.class, int.class}, false, typedChar, keyCode);
+    }
+
+    public static boolean guiTextFieldMouseClicked(GuiTextField field, int mouseX, int mouseY, int mouseButton) {
+        return callBoolean(field, new String[] {"func_146192_a", "mouseClicked"},
+                new Class<?>[] {int.class, int.class, int.class}, false, mouseX, mouseY, mouseButton);
+    }
+
+    public static void drawGuiTextField(GuiTextField field) {
+        invoke(field, new String[] {"func_146194_f", "drawTextBox"}, NO_PARAMETERS);
+    }
+
+    public static long minecraftSystemTime() {
+        Object value = invokeStatic(Minecraft.class, new String[] {"func_71386_F", "getSystemTime"}, NO_PARAMETERS);
+        return longValue(value, System.currentTimeMillis());
+    }
+
+    public static String i18nFormat(String key, Object... parameters) {
+        Object value = invokeStatic(I18n.class, new String[] {"func_135052_a", "format"},
+                new Class<?>[] {String.class, Object[].class}, key, parameters);
+        return value instanceof String ? (String) value : key;
+    }
+
+    public static int guiScreenWidth(GuiScreen screen) {
+        return fieldInt(screen, 0, "field_146294_l", "width");
+    }
+
+    public static Minecraft guiScreenMinecraft(GuiScreen screen) {
+        return field(screen, Minecraft.class, null, "field_146297_k", "mc");
+    }
+
+    @SuppressWarnings("unchecked")
+    public static List<GuiButton> guiScreenButtons(GuiScreen screen) {
+        return field(screen, List.class, Collections.emptyList(), "field_146292_n", "buttonList");
+    }
+
     public static BlockPos rayTraceBlockPos(RayTraceResult hit) {
         Object value = getField(hit, "field_178783_e", "blockPos");
         if (value instanceof BlockPos) {
@@ -1326,6 +1555,52 @@ public final class MinecraftReflectionCompat {
     public static void renderEntities(RenderGlobal renderGlobal, Entity renderViewEntity, ICamera camera, float partialTicks) {
         invokePropagating(renderGlobal, new String[] {"func_180446_a", "renderEntities"},
                 new Class<?>[] {Entity.class, ICamera.class, float.class}, renderViewEntity, camera, partialTicks);
+    }
+
+    public static void initializeChunkRenderContainer(ChunkRenderContainer container,
+                                                      double cameraX, double cameraY, double cameraZ) {
+        invoke(container, new String[] {"func_178004_a", "initialize"},
+                new Class<?>[] {double.class, double.class, double.class}, cameraX, cameraY, cameraZ);
+    }
+
+    public static void addChunkRenderContainerChunk(ChunkRenderContainer container,
+                                                     RenderChunk renderChunk, BlockRenderLayer layer) {
+        invoke(container, new String[] {"func_178002_a", "addRenderChunk"},
+                new Class<?>[] {RenderChunk.class, BlockRenderLayer.class}, renderChunk, layer);
+    }
+
+    public static void renderChunkContainerLayer(ChunkRenderContainer container, BlockRenderLayer layer) {
+        invoke(container, new String[] {"func_178001_a", "renderChunkLayer"},
+                new Class<?>[] {BlockRenderLayer.class}, layer);
+    }
+
+    public static VertexBuffer renderChunkVertexBuffer(RenderChunk renderChunk, int layer) {
+        return call(renderChunk, VertexBuffer.class, null,
+                new String[] {"func_178565_b", "getVertexBufferByLayer"}, new Class<?>[] {int.class}, layer);
+    }
+
+    public static void renderEntity(Render<?> renderer, Entity entity, double x, double y, double z,
+                                    float yaw, float partialTicks) {
+        invoke(renderer, new String[] {"func_76986_a", "doRender"},
+                new Class<?>[] {Entity.class, double.class, double.class, double.class, float.class, float.class},
+                entity, x, y, z, yaw, partialTicks);
+    }
+
+    public static void vertexBufferDrawArrays(VertexBuffer vertexBuffer, int mode) {
+        invoke(vertexBuffer, new String[] {"func_177358_a", "drawArrays"}, new Class<?>[] {int.class}, mode);
+    }
+
+    public static boolean entityLivingIsPlayerSleeping(EntityLivingBase entity) {
+        return callBoolean(entity, new String[] {"func_70608_bn", "isPlayerSleeping"}, NO_PARAMETERS, false);
+    }
+
+    public static WorldServer playerServerWorld(EntityPlayerMP player) {
+        return call(player, WorldServer.class, null,
+                new String[] {"func_71121_q", "getServerWorld"}, NO_PARAMETERS);
+    }
+
+    public static String entityName(Entity entity) {
+        return call(entity, String.class, "unknown", new String[] {"func_70005_c_", "getName"}, NO_PARAMETERS);
     }
 
     public static void setupTerrain(RenderGlobal renderGlobal, Entity renderViewEntity, double partialTicks,

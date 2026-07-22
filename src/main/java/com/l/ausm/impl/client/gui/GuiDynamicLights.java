@@ -5,9 +5,9 @@ import com.l.ausm.impl.client.ClientSettingsConfig;
 import com.l.ausm.impl.client.dynamic.DynamicLightConfig;
 import com.l.ausm.impl.client.dynamic.DynamicLightManager;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
-import net.minecraft.client.resources.I18n;
 import org.lwjgl.input.Keyboard;
 
 import java.awt.Desktop;
@@ -17,7 +17,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 
-public class GuiDynamicLights extends GuiScreen {
+public class GuiDynamicLights extends MappingSafeGuiScreen {
     private static final int ID_DONE = 200;
     private static final int ID_TOGGLE = 201;
     private static final int ID_MULTIPLIER_DOWN = 202;
@@ -44,12 +44,12 @@ public class GuiDynamicLights extends GuiScreen {
     }
 
     @Override
-    public boolean doesGuiPauseGame() {
+    protected boolean ausm$doesGuiPauseGame() {
         return false;
     }
 
     @Override
-    public void initGui() {
+    protected void ausm$initGui() {
         this.buttonList.clear();
 
         int centerX = this.width / 2;
@@ -78,25 +78,26 @@ public class GuiDynamicLights extends GuiScreen {
         this.buttonList.add(new GuiFlatButton(ID_OPEN_CLIENT_CONFIG, centerX + 4, y, 92, 20, "Open Settings"));
 
         int bottom = this.height - 28;
-        this.buttonList.add(new GuiFlatButton(ID_DONE, centerX - 50, bottom, 100, 20, I18n.format("gui.done")));
+        this.buttonList.add(new GuiFlatButton(ID_DONE, centerX - 50, bottom, 100, 20,
+                MinecraftReflectionCompat.i18nFormat("gui.done")));
         updateButtons();
     }
 
     @Override
-    public void updateScreen() {
-        super.updateScreen();
+    protected void ausm$updateScreen() {
+        super.ausm$updateScreen();
         if (notificationTicks > 0) {
             notificationTicks--;
         }
     }
 
     @Override
-    protected void actionPerformed(GuiButton button) throws IOException {
-        if (!button.enabled) {
+    protected void ausm$actionPerformed(GuiButton button) throws IOException {
+        if (!MinecraftReflectionCompat.guiButtonEnabled(button)) {
             return;
         }
 
-        switch (button.id) {
+        switch (MinecraftReflectionCompat.guiButtonId(button)) {
             case ID_DONE:
                 com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, parent);
                 break;
@@ -135,17 +136,17 @@ public class GuiDynamicLights extends GuiScreen {
     }
 
     @Override
-    protected void keyTyped(char typedChar, int keyCode) throws IOException {
+    protected void ausm$keyTyped(char typedChar, int keyCode) throws IOException {
         if (keyCode == Keyboard.KEY_ESCAPE) {
             com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, GuiControlHints.isShiftDown() ? null : parent);
             return;
         }
-        super.keyTyped(typedChar, keyCode);
+        super.ausm$keyTyped(typedChar, keyCode);
     }
 
     @Override
-    public void drawScreen(int mouseX, int mouseY, float partialTicks) {
-        drawDefaultBackground();
+    protected void ausm$drawScreen(int mouseX, int mouseY, float partialTicks) {
+        ausm$drawDefaultBackground();
         drawRect(0, 0, this.width, this.height, 0x550B1016);
 
         int centerX = this.width / 2;
@@ -171,7 +172,7 @@ public class GuiDynamicLights extends GuiScreen {
         this.drawCenteredString(this.fontRenderer, "Custom Items: " + customCount, centerX, 202, labelColor);
 
         drawNotification();
-        super.drawScreen(mouseX, mouseY, partialTicks);
+        super.ausm$drawScreen(mouseX, mouseY, partialTicks);
         drawLockoutTooltip(mouseX, mouseY);
         drawPortalShaderTooltip(mouseX, mouseY);
         drawEscapeHintTooltip(mouseX, mouseY);
@@ -297,21 +298,24 @@ public class GuiDynamicLights extends GuiScreen {
     private void updateButtons() {
         boolean available = available();
         if (portalShaderButton != null) {
-            portalShaderButton.displayString = portalShaderLabel();
-            portalShaderButton.enabled = MainMod.getClientSettingsConfig() != null;
+            MinecraftReflectionCompat.setGuiButtonText(portalShaderButton, portalShaderLabel());
+            MinecraftReflectionCompat.setGuiButtonEnabled(portalShaderButton,
+                    MainMod.getClientSettingsConfig() != null);
         }
         if (toggleButton != null) {
-            toggleButton.displayString = toggleLabel();
-            toggleButton.enabled = available;
+            MinecraftReflectionCompat.setGuiButtonText(toggleButton, toggleLabel());
+            MinecraftReflectionCompat.setGuiButtonEnabled(toggleButton, available);
         }
         if (multiplierDownButton != null) {
-            multiplierDownButton.enabled = available && multiplier() > 0.0D;
+            MinecraftReflectionCompat.setGuiButtonEnabled(multiplierDownButton,
+                    available && multiplier() > 0.0D);
         }
         if (multiplierUpButton != null) {
-            multiplierUpButton.enabled = available && multiplier() < 4.0D;
+            MinecraftReflectionCompat.setGuiButtonEnabled(multiplierUpButton,
+                    available && multiplier() < 4.0D);
         }
         if (refreshButton != null) {
-            refreshButton.enabled = available;
+            MinecraftReflectionCompat.setGuiButtonEnabled(refreshButton, available);
         }
     }
 
@@ -391,7 +395,7 @@ public class GuiDynamicLights extends GuiScreen {
             return;
         }
 
-        int textWidth = this.fontRenderer.getStringWidth(notificationText);
+        int textWidth = MinecraftReflectionCompat.fontStringWidth(this.fontRenderer, notificationText);
         int x = (this.width - textWidth) / 2;
         int y = this.height - 58;
         drawRect(x - 8, y - 6, x + textWidth + 8, y + 14, 0xAA101418);
@@ -404,7 +408,7 @@ public class GuiDynamicLights extends GuiScreen {
     }
 
     private void drawLockoutTooltip(int mouseX, int mouseY) {
-        if (available() || toggleButton == null || !toggleButton.visible
+        if (available() || toggleButton == null || !MinecraftReflectionCompat.guiButtonVisible(toggleButton)
                 || !GuiControlHints.isMouseOverButton(toggleButton, mouseX, mouseY)) {
             return;
         }
@@ -412,7 +416,7 @@ public class GuiDynamicLights extends GuiScreen {
     }
 
     private void drawPortalShaderTooltip(int mouseX, int mouseY) {
-        if (portalShaderButton == null || !portalShaderButton.visible
+        if (portalShaderButton == null || !MinecraftReflectionCompat.guiButtonVisible(portalShaderButton)
                 || !GuiControlHints.isMouseOverButton(portalShaderButton, mouseX, mouseY)) {
             return;
         }

@@ -28,6 +28,11 @@ public class RenderManagerMixin {
     )
     private void ausm$beforeRenderEntity(Entity entity, double x, double y, double z, float entityYaw, float partialTicks, boolean debugBoundingBox, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.isInventoryEntityPreview(entity, x, y, z)) {
+            context.prepareGuiEntityPreviewRenderState();
+            context.probeGuiEntityState("render-manager-before");
+            return;
+        }
         if (context.isRenderingGuiScreen()) {
             return;
         }
@@ -51,6 +56,11 @@ public class RenderManagerMixin {
     )
     private void ausm$afterRenderEntity(Entity entity, double x, double y, double z, float entityYaw, float partialTicks, boolean debugBoundingBox, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.isInventoryEntityPreview(entity, x, y, z)) {
+            context.probeGuiEntityState("render-manager-after");
+            context.finishGuiEntityPreviewRenderState();
+            return;
+        }
         if (context.isRenderingGuiScreen()) {
             return;
         }

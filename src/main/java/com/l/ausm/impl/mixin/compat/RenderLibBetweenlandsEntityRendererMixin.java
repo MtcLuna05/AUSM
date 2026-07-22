@@ -211,7 +211,7 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
                 double z = com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(entity) + (com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity) - com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(entity)) * partialTicks - renderManagerAccessor.ausm$renderPosZ();
                 float yaw = com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationYaw(entity)
                         + (com.l.ausm.impl.util.MinecraftReflectionCompat.rotationYaw(entity) - com.l.ausm.impl.util.MinecraftReflectionCompat.prevRotationYaw(entity)) * partialTicks;
-                renderer.doRender(entity, x, y, z, yaw, partialTicks);
+                MinecraftReflectionCompat.renderEntity(renderer, entity, x, y, z, yaw, partialTicks);
                 rendered++;
                 if (firstRendered == null) {
                     firstRendered = ausm$describe(entity) + " renderer=" + renderer.getClass().getName();
@@ -285,7 +285,7 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
                 || com.l.ausm.impl.util.MinecraftReflectionCompat.thirdPersonView(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)) != 0
                 || entity != com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc)
                 || !(entity instanceof EntityLivingBase)
-                || ((EntityLivingBase) entity).isPlayerSleeping();
+                || MinecraftReflectionCompat.entityLivingIsPlayerSleeping((EntityLivingBase) entity);
     }
 
     private static String ausm$forceRejectReason(Entity entity) {
@@ -307,7 +307,7 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
                 && com.l.ausm.impl.util.MinecraftReflectionCompat.thirdPersonView(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)) == 0
                 && entity == com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc)
                 && entity instanceof EntityLivingBase
-                && !((EntityLivingBase) entity).isPlayerSleeping()) {
+                && !MinecraftReflectionCompat.entityLivingIsPlayerSleeping((EntityLivingBase) entity)) {
             return "first-person-view-entity";
         }
         return "unknown";

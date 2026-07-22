@@ -116,7 +116,7 @@ public class EntityRendererMixin {
             return;
         }
         if (!context.isActive()) {
-            context.prepareShaderlessGuiScreenRendering();
+            context.prepareBypassedGuiScreenRendering();
             return;
         }
         context.beginGuiScreenRendering();
@@ -157,13 +157,14 @@ public class EntityRendererMixin {
     }
 
     private boolean ausm$shouldUseVanillaGuiScreen() {
-        return true;
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        Object screen = minecraft != null ? MinecraftReflectionCompat.currentScreen(minecraft) : null;
+        return screen == null || !ausm$shouldUseManagedAusmGuiScreen(screen);
     }
 
-    private boolean ausm$shouldBypassPipelineGuiScreen(Object screen) {
+    private boolean ausm$shouldUseManagedAusmGuiScreen(Object screen) {
         String name = screen.getClass().getName();
-        return "tinker_io.gui.GuiSmartOutput".equals(name)
-                || name.startsWith("com.l.ausm.impl.client.gui.GuiShader")
+        return name.startsWith("com.l.ausm.impl.client.gui.GuiShader")
                 || "com.l.ausm.impl.client.gui.GuiDynamicLights".equals(name);
     }
 

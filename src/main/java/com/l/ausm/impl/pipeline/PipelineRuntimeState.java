@@ -1412,26 +1412,11 @@ abstract class PipelineRuntimeState {
     }
 
     protected boolean shouldRepairCurrentSkybox(Minecraft mc) {
-        World world = renderWorld(mc);
-        if (isCustomVoidWorldSkyEnabled(world)
-                || (isPipelineActive && isSimpleVoidWorld(world) && shouldUseOwnedSkyOverrideWorld(world))) {
-            return true;
-        }
-        return shouldForceUiSkyboxRepair(mc);
+        return false;
     }
 
     protected boolean shouldForceUiSkyboxRepair(Minecraft mc) {
-        World world = renderWorld(mc);
-        Object screen = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc);
-        boolean hideGui = mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
-                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc));
-        return isPipelineActive
-                && shouldUseOwnedSkyOverrideWorld(world)
-                && (screen != null
-                    || hideGui
-                    || com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc));
+        return false;
     }
 
     protected static float cloudTime(Minecraft mc) {
@@ -5290,6 +5275,7 @@ abstract class PipelineRuntimeState {
         World world = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
         return mc != null
                 && world != null
+                && !isPipelineActive
                 && isSimpleVoidWorld(world)
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
@@ -5451,13 +5437,7 @@ abstract class PipelineRuntimeState {
     }
 
     protected boolean shouldSuppressShaderedVoidCelestialGeometry() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        return isPipelineActive
-                && world != null
-                && isCustomVoidWorldSkyEnabled(world)
-                && !isRenderingBetterPortalsNestedView()
-                && !isRenderingBetterPortalsRenderPass();
+        return false;
     }
 
     public boolean shouldSuppressVanillaStarsGeometry() {
@@ -5503,7 +5483,7 @@ abstract class PipelineRuntimeState {
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return world != null
                 && isSimpleVoidWorld(world)
-                && (shouldUseShaderlessOwnedSky(mc) || isCustomVoidWorldSkyEnabled(world))
+                && shouldUseShaderlessOwnedSky(mc)
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
     }
@@ -5644,15 +5624,7 @@ abstract class PipelineRuntimeState {
     }
 
     protected boolean shouldSuppressShaderedSimpleVoidSkyBaseGeometry() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        boolean result = isPipelineActive
-                && world != null
-                && isCustomVoidWorldSkyEnabled(world)
-                && !isRenderingBetterPortalsNestedView()
-                && !isRenderingBetterPortalsRenderPass();
-        logSkySuppressionDecision("shadered-simple-void-base", mc, world, result);
-        return result;
+        return false;
     }
 
     protected void logSkySuppressionDecision(String route, Minecraft mc, World world, boolean result) {
@@ -7817,9 +7789,6 @@ abstract class PipelineRuntimeState {
     }
 
     public void prepareGuiEntityPreviewRenderState() {
-        if (!isPipelineActive) {
-            return;
-        }
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
             return;
@@ -7836,6 +7805,19 @@ abstract class PipelineRuntimeState {
                 | GL11.GL_TRANSFORM_BIT
                 | GL11.GL_VIEWPORT_BIT);
         guiEntityPreviewStateDepth++;
+
+        // Entity models use Minecraft's normal counter-clockwise winding even
+        // inside GuiInventory's mirrored transform.
+        GL11.glFrontFace(GL11.GL_CCW);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateCullFaceBack();
+        // This basic preview state is required with and without a shader pack.
+        // Use real driver calls because the world/UI transition can desync the
+        // GlStateManager cache from OpenGL.
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthMask(true);
+        if (!isPipelineActive) {
+            return;
+        }
 
         bindMinecraftFramebufferForGui(mc);
         if (com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
@@ -7867,6 +7849,8 @@ abstract class PipelineRuntimeState {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableColorMaterial();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+        GL11.glFrontFace(GL11.GL_CCW);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateCullFaceBack();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
         probeGuiEntityState("entity-prepared");
     }
@@ -7878,6 +7862,9 @@ abstract class PipelineRuntimeState {
         probeGuiEntityState("entity-return");
         guiEntityPreviewStateDepth--;
         GL11.glPopAttrib();
+        if (!isPipelineActive) {
+            return;
+        }
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
         com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
@@ -8054,8 +8041,8 @@ abstract class PipelineRuntimeState {
                 + formatProbeFloat(guiModelMatrixProbe.get(14));
     }
 
-    protected void probeGuiEntityState(String stage) {
-        if (!isPipelineActive || guiEntityStateProbeLogs >= MAX_GUI_ENTITY_STATE_PROBE_LOGS) {
+    public void probeGuiEntityState(String stage) {
+        if (guiEntityStateProbeLogs >= MAX_GUI_ENTITY_STATE_PROBE_LOGS) {
             return;
         }
         guiEntityStateProbeLogs++;
@@ -8074,6 +8061,17 @@ abstract class PipelineRuntimeState {
                 guiModelMatrixSummary(),
                 glStateSummary()
         );
+    }
+
+    public boolean isInventoryEntityPreview(net.minecraft.entity.Entity entity, double x, double y, double z) {
+        if (entity == null) {
+            return false;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Object screen = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) : null;
+        return screen != null
+                && "net.minecraft.client.gui.inventory.GuiInventory".equals(screen.getClass().getName())
+                && entity == com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc);
     }
 
     public boolean beginGuiItemStateScope() {

@@ -33,12 +33,14 @@ public class AstralSorcerySkyboxMixin {
         PipelineContext context = PipelineContext.getInstance();
         context.setAstralSolarEclipseFactor(ausm$solarEclipseFactor(partialTicks));
         context.beginPhase(WorldRenderingPhase.SKY);
+        context.logShaderedSkyGeometryProbe("astral-upper-before");
         try {
             if (context.shouldSuppressAstralUpperSkyGeometry()) {
                 return;
             }
             com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
                     new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, displayList);
+            context.logShaderedSkyGeometryProbe("astral-upper-after");
         } finally {
             context.endPass();
         }
@@ -60,9 +62,11 @@ public class AstralSorcerySkyboxMixin {
             return;
         }
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
+        context.logShaderedSkyGeometryProbe("astral-lower-before");
         try {
             com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
                     new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, displayList);
+            context.logShaderedSkyGeometryProbe("astral-lower-after");
         } finally {
             context.endPass();
         }

@@ -1,6 +1,7 @@
 package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.world.WorldServer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -39,7 +40,7 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
             return;
         }
 
-        WorldServer playerWorld = player.getServerWorld();
+        WorldServer playerWorld = MinecraftReflectionCompat.playerServerWorld(player);
         Map worldManagers = getWorldManagers();
         if (playerWorld == null || worldManagers == null || worldManagers.containsKey(playerWorld)) {
             return;
@@ -48,7 +49,7 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
         try {
             worldManagers.put(playerWorld, ausm$createWorldManager(playerWorld, player));
             MainMod.LOGGER.warn("[BetterPortalsCompat] Repaired missed Better Portals server view transfer for player={} world={}",
-                    player.getName(),
+                    MinecraftReflectionCompat.entityName(player),
                     com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(playerWorld) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(playerWorld)) : "null");
         } catch (RuntimeException e) {
             MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to repair missed Better Portals server view transfer", e);
@@ -61,7 +62,7 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
             return;
         }
 
-        WorldServer currentWorld = player.getServerWorld();
+        WorldServer currentWorld = MinecraftReflectionCompat.playerServerWorld(player);
         Map worldManagers = getWorldManagers();
         if (currentWorld == null || worldManagers == null || worldManagers.size() <= 1) {
             return;
@@ -93,7 +94,7 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
             MainMod.LOGGER.warn("[BetterPortalsCompat] Removed {} stale Better Portals server world manager(s) before {} player={} currentDim={} destinationDim={} remaining={}",
                     removed,
                     reason,
-                    player.getName(),
+                    MinecraftReflectionCompat.entityName(player),
                     com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(currentWorld) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(currentWorld)) : "null",
                     destination != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(destination) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(destination)) : "null",
                     worldManagers.size());

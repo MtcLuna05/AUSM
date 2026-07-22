@@ -4,7 +4,6 @@ import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.FontRenderer;
-import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiIngame;
 import net.minecraft.client.gui.GuiNewChat;
 import net.minecraft.client.gui.ScaledResolution;
@@ -83,10 +82,10 @@ public final class ShaderCompileNotifications {
         }
 
         FontRenderer font = com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc);
-        int textWidth = font.getStringWidth(overlayText);
-        int x = Math.max(6, (resolution.getScaledWidth() - textWidth) / 2);
+        int textWidth = MinecraftReflectionCompat.fontStringWidth(font, overlayText);
+        int x = Math.max(6, (MinecraftReflectionCompat.scaledResolutionWidth(resolution) - textWidth) / 2);
         int y = 8;
-        Gui.drawRect(x - 6, y - 4, x + textWidth + 6, y + 13, 0xCC300C0C);
-        font.drawStringWithShadow(overlayText, x, y, 0xFFFFD0D0);
+        MinecraftReflectionCompat.guiDrawRect(x - 6, y - 4, x + textWidth + 6, y + 13, 0xCC300C0C);
+        MinecraftReflectionCompat.fontDrawStringWithShadow(font, overlayText, x, y, 0xFFFFD0D0);
     }
 }

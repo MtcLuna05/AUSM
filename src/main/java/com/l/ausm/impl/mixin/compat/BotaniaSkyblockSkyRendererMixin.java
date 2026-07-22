@@ -1,6 +1,7 @@
 package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
@@ -26,6 +27,7 @@ public class BotaniaSkyblockSkyRendererMixin {
     private static boolean ausm$loggedBaseSuppression;
     private static int ausm$normalStateProbeCalls;
     private static int ausm$hiddenStateProbeCalls;
+    private boolean ausm$shaderedVoidPhase;
 
     @Inject(method = "render", at = @At("HEAD"), remap = false)
     private void ausm$probeF1Entry(float partialTicks, WorldClient world, Minecraft minecraft, CallbackInfo ci) {
@@ -33,13 +35,50 @@ public class BotaniaSkyblockSkyRendererMixin {
         // compatibility branch, which can bypass RenderGlobal's owned-sky
         // entry point. Establish the authoritative backing at the renderer
         // boundary before Botania's base geometry is suppressed.
-        PipelineContext.getInstance().renderShaderlessBotaniaSkyBacking(
+        PipelineContext context = PipelineContext.getInstance();
+        context.renderShaderlessBotaniaSkyBacking(
                 partialTicks, world, minecraft);
+        ausm$shaderedVoidPhase = context.isActive()
+                && world != null
+                && context.isCustomVoidWorldSkyEnabled(world);
+        if (ausm$shaderedVoidPhase) {
+            context.beginPhase(WorldRenderingPhase.SKY);
+        }
+        context.logShaderedSkyGeometryProbe("botania-entry");
         ausm$probeF1State("entry", minecraft);
+    }
+
+    @Inject(
+            method = "render",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179098_w()V",
+                    ordinal = 0,
+                    shift = At.Shift.AFTER
+            ),
+            require = 0,
+            remap = false
+    )
+    private void ausm$beginTexturedSkyDetails(float partialTicks, WorldClient world, Minecraft minecraft,
+                                               CallbackInfo ci) {
+        if (!ausm$shaderedVoidPhase) {
+            return;
+        }
+        PipelineContext context = PipelineContext.getInstance();
+        context.logShaderedSkyGeometryProbe("botania-base-complete");
+        context.endPass();
+        context.beginPhase(WorldRenderingPhase.CUSTOM_SKY);
+        context.logShaderedSkyGeometryProbe("botania-textured-begin");
     }
 
     @Inject(method = "render", at = @At("RETURN"), remap = false)
     private void ausm$probeF1Exit(float partialTicks, WorldClient world, Minecraft minecraft, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.logShaderedSkyGeometryProbe("botania-exit");
+        if (ausm$shaderedVoidPhase) {
+            context.endPass();
+            ausm$shaderedVoidPhase = false;
+        }
         ausm$probeF1State("exit", minecraft);
     }
 

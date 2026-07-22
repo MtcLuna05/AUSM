@@ -5,6 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.client.gui.GuiShaders;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.GuiVideoSettings;
@@ -30,8 +31,9 @@ public class GuiVideoSettingsMixin extends GuiScreen {
         // above the "Done" button so it doesn't overlap the scroll list.
 
         GuiButton doneButton = null;
-        for (GuiButton btn : this.buttonList) {
-            if (btn.id == 200) {
+        java.util.List<GuiButton> buttons = MinecraftReflectionCompat.guiScreenButtons(this);
+        for (GuiButton btn : buttons) {
+            if (MinecraftReflectionCompat.guiButtonId(btn) == 200) {
                 doneButton = btn;
                 break;
             }
@@ -46,22 +48,24 @@ public class GuiVideoSettingsMixin extends GuiScreen {
             // Standard button width is 200, half is 150.
             
             // Move Done button to the right half
-            doneButton.width = 150;
-            doneButton.x = this.width / 2 + 5;
+            int screenWidth = MinecraftReflectionCompat.guiScreenWidth(this);
+            MinecraftReflectionCompat.setGuiButtonWidth(doneButton, 150);
+            MinecraftReflectionCompat.setGuiButtonX(doneButton, screenWidth / 2 + 5);
             
             // Add Shaders button to the left half
-            int x = this.width / 2 - 155;
-            int y = doneButton.y; 
+            int x = screenWidth / 2 - 155;
+            int y = MinecraftReflectionCompat.guiButtonY(doneButton);
             
             GuiButton shadersButton = new GuiButton(buttonId, x, y, 150, 20, "Shaders...");
-            this.buttonList.add(shadersButton);
+            buttons.add(shadersButton);
         }
     }
 
     @Inject(method = "actionPerformed", at = @At("HEAD"), cancellable = true)
     private void onActionPerformed(GuiButton button, CallbackInfo ci) {
-        if (button.id == 300) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, new GuiShaders(this));
+        if (MinecraftReflectionCompat.guiButtonId(button) == 300) {
+            MinecraftReflectionCompat.displayGuiScreen(
+                    MinecraftReflectionCompat.guiScreenMinecraft(this), new GuiShaders(this));
             ci.cancel();
         }
     }

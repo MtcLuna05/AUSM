@@ -26,6 +26,7 @@ import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.bloom.BloomExtractionPlan;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomRenderer;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
+import com.l.ausm.impl.pipeline.compat.CeleritasCompat;
 import com.l.ausm.impl.pipeline.compat.NothiriumBypass;
 import com.l.ausm.impl.pipeline.compat.NothiriumShadowRenderer;
 import com.l.ausm.impl.pipeline.compat.ProjectRedIlluminationCompat;
@@ -819,6 +820,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         return isPipelineActive
                 && worldFrameActive
                 && isNothiriumLoaded()
+                && !CeleritasCompat.installed()
                 && NothiriumShadowRenderer.isAvailable()
                 && !shouldForceVanillaTerrainRenderer()
                 && !BetterPortalsCompat.isRenderingRenderPass()
@@ -829,6 +831,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         return isPipelineActive
                 && worldFrameActive
                 && isNothiriumLoaded()
+                && !CeleritasCompat.installed()
                 && NothiriumShadowRenderer.isAvailable()
                 && !shouldForceVanillaTerrainRenderer()
                 && !BetterPortalsCompat.isRenderingRenderPass()
@@ -3197,7 +3200,8 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         double maxDistance = shadowRenderCullDistance();
         double maxDistanceSquared = maxDistance * maxDistance;
 
-        renderContainer.initialize(cameraX, cameraY, cameraZ);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.initializeChunkRenderContainer(
+                renderContainer, cameraX, cameraY, cameraZ);
         int fallbackCount = 0;
         for (RenderChunk renderChunk : renderChunks) {
             if (renderChunk == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkLayerEmpty(renderChunk, layer)) {
@@ -3210,12 +3214,13 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             if (maxDistanceSquared >= 0.0D && dx * dx + dy * dy + dz * dz > maxDistanceSquared) {
                 continue;
             }
-            renderContainer.addRenderChunk(renderChunk, layer);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.addChunkRenderContainerChunk(
+                    renderContainer, renderChunk, layer);
             fallbackCount++;
         }
 
         if (fallbackCount > 0) {
-            renderContainer.renderChunkLayer(layer);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkContainerLayer(renderContainer, layer);
         }
         return fallbackCount;
     }

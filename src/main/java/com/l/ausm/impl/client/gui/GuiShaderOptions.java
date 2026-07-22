@@ -5,13 +5,13 @@ import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.pack.ShaderOption;
 import com.l.ausm.api.pipeline.pack.ShaderOptions;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.api.pipeline.pack.ShaderScreen;
 import com.l.ausm.api.pipeline.pack.ShaderScreenEntry;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.GuiTextField;
-import net.minecraft.client.resources.I18n;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 
@@ -27,7 +27,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-public class GuiShaderOptions extends GuiScreen {
+public class GuiShaderOptions extends MappingSafeGuiScreen {
     private static final int ID_DONE = 200;
     private static final int ID_APPLY = 201;
     private static final int ID_RESET = 202;
@@ -86,7 +86,7 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     @Override
-    public void initGui() {
+    protected void ausm$initGui() {
         String activeOptionName = activeDropdown != null ? activeDropdown.option.name() : null;
         boolean profileDropdownOpen = activeProfileDropdown != null;
         rebuildButtons();
@@ -94,7 +94,7 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     @Override
-    public boolean doesGuiPauseGame() {
+    protected boolean ausm$doesGuiPauseGame() {
         return false;
     }
 
@@ -116,9 +116,10 @@ public class GuiShaderOptions extends GuiScreen {
         addOptionButtons(properties);
 
         int bottom = this.height - 28;
-        this.buttonList.add(new GuiFlatButton(ID_DONE, this.width - 92, bottom, 82, 20, I18n.format("gui.done")));
+        this.buttonList.add(new GuiFlatButton(ID_DONE, this.width - 92, bottom, 82, 20,
+                MinecraftReflectionCompat.i18nFormat("gui.done")));
         this.applyButton = new GuiFlatButton(ID_APPLY, this.width - 180, bottom, 82, 20, "Apply");
-        this.applyButton.enabled = isDirty();
+        MinecraftReflectionCompat.setGuiButtonEnabled(this.applyButton, isDirty());
         this.buttonList.add(this.applyButton);
         this.buttonList.add(new GuiFlatButton(ID_RESET, 12, bottom, 82, 20, "Reset"));
         this.previewButton = new GuiFlatButton(ID_PREVIEW, 100, bottom, 82, 20, "Preview");
@@ -127,8 +128,8 @@ public class GuiShaderOptions extends GuiScreen {
         this.previousPageButton = new GuiFlatButton(ID_PREVIOUS_PAGE, this.width / 2 - 56, bottom, 24, 20, "<");
         this.nextPageButton = new GuiFlatButton(ID_NEXT_PAGE, this.width / 2 + 32, bottom, 24, 20, ">");
         int maxPage = maxPage();
-        this.previousPageButton.enabled = page > 0;
-        this.nextPageButton.enabled = page < maxPage;
+        MinecraftReflectionCompat.setGuiButtonEnabled(this.previousPageButton, page > 0);
+        MinecraftReflectionCompat.setGuiButtonEnabled(this.nextPageButton, page < maxPage);
         this.buttonList.add(previousPageButton);
         this.buttonList.add(nextPageButton);
         updatePreviewVisibility();
@@ -162,9 +163,9 @@ public class GuiShaderOptions extends GuiScreen {
             return Math.max(1, Math.min(maxWidth, contentButtonWidth(label(entry.name()) + "...", 22, 88, maxWidth)));
         }
         if (type == ShaderScreenEntry.Type.PROFILE) {
-            int widestProfile = fontRenderer.getStringWidth(profileLabel()) + 30;
+            int widestProfile = MinecraftReflectionCompat.fontStringWidth(fontRenderer, profileLabel()) + 30;
             for (String profile : properties().profiles().keySet()) {
-                widestProfile = Math.max(widestProfile, fontRenderer.getStringWidth(profileName(profile)) + 30);
+                widestProfile = Math.max(widestProfile, MinecraftReflectionCompat.fontStringWidth(fontRenderer, profileName(profile)) + 30);
             }
             return Math.max(1, Math.min(maxWidth, clamp(widestProfile, 116, maxWidth)));
         }
@@ -199,7 +200,7 @@ public class GuiShaderOptions extends GuiScreen {
             if (option == null) {
                 logVoidOption("create-missing", null, "screen=" + selectedScreen + ", entry=" + entry.name() + ", id=" + id);
                 GuiButton missing = new GuiFlatButton(id, x, y, width, 20, entry.name());
-                missing.enabled = false;
+                MinecraftReflectionCompat.setGuiButtonEnabled(missing, false);
                 return missing;
             }
             logVoidOption("create", option, "screen=" + selectedScreen
@@ -279,7 +280,7 @@ public class GuiShaderOptions extends GuiScreen {
             int x = 12 + item.depth() * 10;
             int buttonWidth = Math.max(44, Math.min(sidebarWidth - 24 - item.depth() * 10, buttonRight - x));
             GuiButton button = new GuiFlatButton(CATEGORY_BASE_ID + i, x, y, buttonWidth, 20, label);
-            button.enabled = !item.screen().equals(selectedScreen);
+            MinecraftReflectionCompat.setGuiButtonEnabled(button, !item.screen().equals(selectedScreen));
             this.buttonList.add(button);
             y += 22;
         }
@@ -332,22 +333,22 @@ public class GuiShaderOptions extends GuiScreen {
     private int sliderButtonWidth(ShaderOption option, int maxWidth) {
         int widestValue = 0;
         for (String choice : option.choices()) {
-            widestValue = Math.max(widestValue, fontRenderer.getStringWidth(optionValue(option.name(), choice)));
+            widestValue = Math.max(widestValue, MinecraftReflectionCompat.fontStringWidth(fontRenderer, optionValue(option.name(), choice)));
         }
-        int labelWidth = fontRenderer.getStringWidth(optionName(option.name()));
+        int labelWidth = MinecraftReflectionCompat.fontStringWidth(fontRenderer, optionName(option.name()));
         return clamp(labelWidth + widestValue + 28, 130, maxWidth);
     }
 
     private int dropdownButtonWidth(ShaderOption option, int maxWidth) {
-        int widest = fontRenderer.getStringWidth(optionName(option.name()) + ": " + optionValue(option.name(), valueFor(option)));
+        int widest = MinecraftReflectionCompat.fontStringWidth(fontRenderer, optionName(option.name()) + ": " + optionValue(option.name(), valueFor(option)));
         for (String choice : option.choices()) {
-            widest = Math.max(widest, fontRenderer.getStringWidth(optionValue(option.name(), choice)) + 24);
+            widest = Math.max(widest, MinecraftReflectionCompat.fontStringWidth(fontRenderer, optionValue(option.name(), choice)) + 24);
         }
         return clamp(widest + 30, 104, maxWidth);
     }
 
     private int contentButtonWidth(String text, int padding, int minWidth, int maxWidth) {
-        return clamp(fontRenderer.getStringWidth(text) + padding, minWidth, maxWidth);
+        return clamp(MinecraftReflectionCompat.fontStringWidth(fontRenderer, text) + padding, minWidth, maxWidth);
     }
 
     private int clamp(int value, int min, int max) {
@@ -355,14 +356,14 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     @Override
-    public void handleMouseInput() throws IOException {
+    protected void ausm$handleMouseInput() throws IOException {
         int wheel = Mouse.getEventDWheel();
         if (wheel == 0) {
-            super.handleMouseInput();
+            super.ausm$handleMouseInput();
             return;
         }
         if (previewHidden) {
-            super.handleMouseInput();
+            super.ausm$handleMouseInput();
             return;
         }
 
@@ -394,7 +395,7 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     @Override
-    protected void keyTyped(char typedChar, int keyCode) throws IOException {
+    protected void ausm$keyTyped(char typedChar, int keyCode) throws IOException {
         if (keyCode == Keyboard.KEY_ESCAPE) {
             if (GuiControlHints.isShiftDown()) {
                 com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, null);
@@ -422,16 +423,16 @@ public class GuiShaderOptions extends GuiScreen {
             return;
         }
 
-        if (searchField != null && searchField.isFocused()) {
-            String before = searchField.getText();
-            if (searchField.textboxKeyTyped(typedChar, keyCode)) {
-                if (!Objects.equals(before, searchField.getText())) {
+        if (searchField != null && MinecraftReflectionCompat.guiTextFieldFocused(searchField)) {
+            String before = MinecraftReflectionCompat.guiTextFieldText(searchField);
+            if (MinecraftReflectionCompat.guiTextFieldKeyTyped(searchField, typedChar, keyCode)) {
+                if (!Objects.equals(before, MinecraftReflectionCompat.guiTextFieldText(searchField))) {
                     page = 0;
                     activeDropdown = null;
                     activeProfileDropdown = null;
                     rebuildButtons();
                     if (searchField != null) {
-                        searchField.setFocused(true);
+                        MinecraftReflectionCompat.setGuiTextFieldFocused(searchField, true);
                     }
                 }
                 return;
@@ -442,20 +443,21 @@ public class GuiShaderOptions extends GuiScreen {
             return;
         }
 
-        super.keyTyped(typedChar, keyCode);
+        super.ausm$keyTyped(typedChar, keyCode);
     }
 
     @Override
-    protected void actionPerformed(GuiButton button) throws IOException {
-        if (!button.enabled) {
+    protected void ausm$actionPerformed(GuiButton button) throws IOException {
+        if (!MinecraftReflectionCompat.guiButtonEnabled(button)) {
             return;
         }
 
-        if (button.id == ID_DONE) {
+        int buttonId = MinecraftReflectionCompat.guiButtonId(button);
+        if (buttonId == ID_DONE) {
             com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, parent);
             return;
         }
-        if (button.id == ID_APPLY) {
+        if (buttonId == ID_APPLY) {
             logVoidOption("apply", properties().options().get(DEBUG_VOID_OPTION), "pending=" + pendingValues.get(DEBUG_VOID_OPTION)
                     + ", saved=" + savedValues.get(DEBUG_VOID_OPTION)
                     + ", dirty=" + isDirty());
@@ -463,12 +465,12 @@ public class GuiShaderOptions extends GuiScreen {
             savedValues.clear();
             savedValues.putAll(pendingValues);
             if (applyButton != null) {
-                applyButton.enabled = false;
+                MinecraftReflectionCompat.setGuiButtonEnabled(applyButton, false);
             }
             rebuildButtons();
             return;
         }
-        if (button.id == ID_RESET) {
+        if (buttonId == ID_RESET) {
             String resetProfile = resetProfile(properties());
             pendingValues.clear();
             if (resetProfile != null) {
@@ -477,33 +479,33 @@ public class GuiShaderOptions extends GuiScreen {
                 syncProfileWithCurrentValues(properties);
             }
             if (applyButton != null) {
-                applyButton.enabled = isDirty();
+                MinecraftReflectionCompat.setGuiButtonEnabled(applyButton, isDirty());
             }
             rebuildButtons();
             return;
         }
-        if (button.id == ID_PREVIEW) {
+        if (buttonId == ID_PREVIEW) {
             setPreviewHidden(!previewHidden);
             return;
         }
-        if (button.id == ID_PREVIOUS_PAGE) {
+        if (buttonId == ID_PREVIOUS_PAGE) {
             page = Math.max(0, page - 1);
             rebuildButtons();
             return;
         }
-        if (button.id == ID_NEXT_PAGE) {
+        if (buttonId == ID_NEXT_PAGE) {
             page = Math.min(maxPage(), page + 1);
             rebuildButtons();
             return;
         }
-        if (button.id >= CATEGORY_BASE_ID && button.id < OPTION_BASE_ID) {
-            int index = button.id - CATEGORY_BASE_ID;
+        if (buttonId >= CATEGORY_BASE_ID && buttonId < OPTION_BASE_ID) {
+            int index = buttonId - CATEGORY_BASE_ID;
             if (index >= 0 && index < sidebarItems.size()) {
                 navigateToScreen(sidebarItems.get(index).screen());
             }
             return;
         }
-        if (button.id >= OPTION_BASE_ID) {
+        if (buttonId >= OPTION_BASE_ID) {
             handleEntryClick(button);
         }
     }
@@ -519,38 +521,39 @@ public class GuiShaderOptions extends GuiScreen {
 
     private void updatePreviewVisibility() {
         for (GuiButton button : this.buttonList) {
-            button.visible = !previewHidden || button.id == ID_PREVIEW;
+            MinecraftReflectionCompat.setGuiButtonVisible(button,
+                    !previewHidden || MinecraftReflectionCompat.guiButtonId(button) == ID_PREVIEW);
         }
         if (previewButton != null) {
-            previewButton.displayString = previewHidden ? "Show GUI" : "Preview";
+            MinecraftReflectionCompat.setGuiButtonText(previewButton, previewHidden ? "Show GUI" : "Preview");
         }
     }
 
     @Override
-    protected void mouseClicked(int mouseX, int mouseY, int mouseButton) throws IOException {
+    protected void ausm$mouseClicked(int mouseX, int mouseY, int mouseButton) throws IOException {
         if (previewHidden) {
-            super.mouseClicked(mouseX, mouseY, mouseButton);
+            super.ausm$mouseClicked(mouseX, mouseY, mouseButton);
             updateFocusFromMouse(mouseX, mouseY);
             return;
         }
 
         if (searchField != null && mouseButton == 1 && isMouseOverSearchField(mouseX, mouseY)) {
-            if (!searchField.getText().isEmpty()) {
+            if (!MinecraftReflectionCompat.guiTextFieldText(searchField).isEmpty()) {
                 clearSearch();
-                searchField.setFocused(true);
+                MinecraftReflectionCompat.setGuiTextFieldFocused(searchField, true);
                 page = 0;
                 activeDropdown = null;
                 activeProfileDropdown = null;
                 rebuildButtons();
                 if (searchField != null) {
-                    searchField.setFocused(true);
+                    MinecraftReflectionCompat.setGuiTextFieldFocused(searchField, true);
                 }
             }
             return;
         }
 
         if (searchField != null) {
-            searchField.mouseClicked(mouseX, mouseY, mouseButton);
+            MinecraftReflectionCompat.guiTextFieldMouseClicked(searchField, mouseX, mouseY, mouseButton);
         }
 
         if (mouseButton == 1 && handleSidebarRightClick(mouseX, mouseY)) {
@@ -600,12 +603,13 @@ public class GuiShaderOptions extends GuiScreen {
             return;
         }
 
-        super.mouseClicked(mouseX, mouseY, mouseButton);
+        super.ausm$mouseClicked(mouseX, mouseY, mouseButton);
         updateFocusFromMouse(mouseX, mouseY);
     }
 
     private void handleEntryClick(GuiButton button) {
-        int index = button.id - OPTION_BASE_ID;
+        int buttonId = MinecraftReflectionCompat.guiButtonId(button);
+        int index = buttonId - OPTION_BASE_ID;
         if (index < 0 || index >= visibleEntries.size()) {
             return;
         }
@@ -638,7 +642,8 @@ public class GuiShaderOptions extends GuiScreen {
 
         ShaderOption option = properties.options().get(entry.name());
         if (option == null) {
-            logVoidOption("click-missing", null, "screen=" + selectedScreen + ", entry=" + entry.name() + ", id=" + button.id);
+            logVoidOption("click-missing", null,
+                    "screen=" + selectedScreen + ", entry=" + entry.name() + ", id=" + buttonId);
             return;
         }
         logVoidOption("click", option, "screen=" + selectedScreen
@@ -656,7 +661,7 @@ public class GuiShaderOptions extends GuiScreen {
             String value = slider.selectedValue();
             setPendingOptionValue(option, value);
             if (applyButton != null) {
-                applyButton.enabled = true;
+                MinecraftReflectionCompat.setGuiButtonEnabled(applyButton, true);
             }
             return;
         } else if (button instanceof GuiShaderOptionDropdown) {
@@ -674,21 +679,21 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     private void initSearchField() {
-        String existing = searchField == null ? "" : searchField.getText();
-        boolean focused = searchField != null && searchField.isFocused();
+        String existing = searchField == null ? "" : MinecraftReflectionCompat.guiTextFieldText(searchField);
+        boolean focused = searchField != null && MinecraftReflectionCompat.guiTextFieldFocused(searchField);
         searchField = new GuiTextField(900, fontRenderer, 12, 38, sidebarWidth - 24, 18);
-        searchField.setMaxStringLength(80);
-        searchField.setEnableBackgroundDrawing(true);
-        searchField.setText(existing);
-        searchField.setFocused(focused);
+        MinecraftReflectionCompat.setGuiTextFieldMaxLength(searchField, 80);
+        MinecraftReflectionCompat.setGuiTextFieldBackground(searchField, true);
+        MinecraftReflectionCompat.setGuiTextFieldText(searchField, existing);
+        MinecraftReflectionCompat.setGuiTextFieldFocused(searchField, focused);
     }
 
     private boolean searchActive() {
-        return searchField != null && !searchField.getText().trim().isEmpty();
+        return searchField != null && !MinecraftReflectionCompat.guiTextFieldText(searchField).trim().isEmpty();
     }
 
     private List<ShaderScreenEntry> searchEntries(ShaderProperties properties) {
-        String query = normalizeSearch(searchField.getText());
+        String query = normalizeSearch(MinecraftReflectionCompat.guiTextFieldText(searchField));
         if (query.isEmpty()) {
             return List.of();
         }
@@ -750,13 +755,13 @@ public class GuiShaderOptions extends GuiScreen {
 
     private boolean adjustHoveredOption(int mouseX, int mouseY, int direction) {
         GuiButton button = adjustableButtonAt(mouseX, mouseY);
-        if (button == null || !button.enabled) {
+        if (button == null || !MinecraftReflectionCompat.guiButtonEnabled(button)) {
             return false;
         }
 
         if (button instanceof GuiShaderOptionSlider) {
             GuiShaderOptionSlider slider = (GuiShaderOptionSlider) button;
-            if (isShiftKeyDown()) {
+            if (GuiControlHints.isShiftDown()) {
                 slider.stepFine(direction);
             } else {
                 slider.stepNotch(direction);
@@ -774,7 +779,7 @@ public class GuiShaderOptions extends GuiScreen {
             return true;
         }
 
-        int index = button.id - OPTION_BASE_ID;
+        int index = MinecraftReflectionCompat.guiButtonId(button) - OPTION_BASE_ID;
         if (index < 0 || index >= visibleEntries.size()) {
             return false;
         }
@@ -794,11 +799,11 @@ public class GuiShaderOptions extends GuiScreen {
 
     private GuiButton adjustableButtonAt(int mouseX, int mouseY) {
         for (GuiButton button : buttonList) {
-            if (button.visible && isMouseOver(button, mouseX, mouseY)
+            if (MinecraftReflectionCompat.guiButtonVisible(button) && isMouseOver(button, mouseX, mouseY)
                     && (button instanceof GuiShaderOptionSlider
                     || button instanceof GuiShaderOptionDropdown
                     || button instanceof GuiShaderProfileDropdown
-                    || button.id >= OPTION_BASE_ID)) {
+                    || MinecraftReflectionCompat.guiButtonId(button) >= OPTION_BASE_ID)) {
                 return button;
             }
         }
@@ -808,7 +813,7 @@ public class GuiShaderOptions extends GuiScreen {
     private void setOptionValue(ShaderOption option, String value) {
         setPendingOptionValue(option, value);
         if (applyButton != null) {
-            applyButton.enabled = true;
+            MinecraftReflectionCompat.setGuiButtonEnabled(applyButton, true);
         }
         rebuildButtons();
     }
@@ -958,7 +963,7 @@ public class GuiShaderOptions extends GuiScreen {
         String profile = matchingProfile(properties);
         pendingValues.put("<profile>", profile == null ? CUSTOM_PROFILE : profile);
         if (profileButton != null) {
-            profileButton.displayString = profileLabel();
+            MinecraftReflectionCompat.setGuiButtonText(profileButton, profileLabel());
         }
     }
 
@@ -1066,21 +1071,24 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     private boolean isMouseOverSearchField(int mouseX, int mouseY) {
-        return searchField != null
-                && mouseX >= searchField.x
-                && mouseY >= searchField.y
-                && mouseX < searchField.x + searchField.width
-                && mouseY < searchField.y + searchField.height;
+        if (searchField == null) {
+            return false;
+        }
+        int x = MinecraftReflectionCompat.guiTextFieldX(searchField);
+        int y = MinecraftReflectionCompat.guiTextFieldY(searchField);
+        return mouseX >= x && mouseY >= y
+                && mouseX < x + MinecraftReflectionCompat.guiTextFieldWidth(searchField)
+                && mouseY < y + MinecraftReflectionCompat.guiTextFieldHeight(searchField);
     }
 
     private int computeSidebarWidth(ShaderProperties properties) {
         int widest = MIN_SIDEBAR_WIDTH;
         List<SidebarItem> items = sidebarItems.isEmpty() ? sidebarItems(properties) : sidebarItems;
         for (SidebarItem item : items) {
-            int width = 28 + item.depth() * 10 + fontRenderer.getStringWidth(sidebarLabel(properties, item));
+            int width = 28 + item.depth() * 10 + MinecraftReflectionCompat.fontStringWidth(fontRenderer, sidebarLabel(properties, item));
             widest = Math.max(widest, width);
         }
-        widest = Math.max(widest, 24 + fontRenderer.getStringWidth("Search options"));
+        widest = Math.max(widest, 24 + MinecraftReflectionCompat.fontStringWidth(fontRenderer, "Search options"));
         int maxByScreen = Math.max(MIN_SIDEBAR_WIDTH, this.width - 190);
         return Math.max(MIN_SIDEBAR_WIDTH, Math.min(Math.min(MAX_SIDEBAR_WIDTH, maxByScreen), widest));
     }
@@ -1088,7 +1096,7 @@ public class GuiShaderOptions extends GuiScreen {
     private int sidebarButtonRight(ShaderProperties properties) {
         int right = 12 + 44;
         for (SidebarItem item : sidebarItems) {
-            int width = 18 + fontRenderer.getStringWidth(sidebarLabel(properties, item));
+            int width = 18 + MinecraftReflectionCompat.fontStringWidth(fontRenderer, sidebarLabel(properties, item));
             right = Math.max(right, 12 + item.depth() * 10 + width);
         }
         return Math.min(sidebarWidth - 12, right);
@@ -1133,10 +1141,12 @@ public class GuiShaderOptions extends GuiScreen {
 
     private boolean handleSidebarRightClick(int mouseX, int mouseY) {
         for (GuiButton button : buttonList) {
-            if (button.id < CATEGORY_BASE_ID || button.id >= OPTION_BASE_ID || !button.visible || !isMouseOver(button, mouseX, mouseY)) {
+            int buttonId = MinecraftReflectionCompat.guiButtonId(button);
+            if (buttonId < CATEGORY_BASE_ID || buttonId >= OPTION_BASE_ID
+                    || !MinecraftReflectionCompat.guiButtonVisible(button) || !isMouseOver(button, mouseX, mouseY)) {
                 continue;
             }
-            int index = button.id - CATEGORY_BASE_ID;
+            int index = buttonId - CATEGORY_BASE_ID;
             if (index < 0 || index >= sidebarItems.size()) {
                 return false;
             }
@@ -1156,8 +1166,8 @@ public class GuiShaderOptions extends GuiScreen {
 
     private void clearSearch() {
         if (searchField != null) {
-            searchField.setText("");
-            searchField.setFocused(false);
+            MinecraftReflectionCompat.setGuiTextFieldText(searchField, "");
+            MinecraftReflectionCompat.setGuiTextFieldFocused(searchField, false);
         }
     }
 
@@ -1304,14 +1314,14 @@ public class GuiShaderOptions extends GuiScreen {
     }
 
     @Override
-    public void drawScreen(int mouseX, int mouseY, float partialTicks) {
+    protected void ausm$drawScreen(int mouseX, int mouseY, float partialTicks) {
         PipelineContext.getInstance().logGuiBypassProbe("shader-options-draw-entry");
         lastMouseX = mouseX;
         lastMouseY = mouseY;
         hoveredCommentTitle = List.of();
         hoveredCommentBody = List.of();
         if (previewHidden) {
-            super.drawScreen(mouseX, mouseY, partialTicks);
+            super.ausm$drawScreen(mouseX, mouseY, partialTicks);
             return;
         }
 
@@ -1322,14 +1332,17 @@ public class GuiShaderOptions extends GuiScreen {
         String pageText = (page + 1) + " / " + (maxPage() + 1);
         this.drawCenteredString(this.fontRenderer, pageText, this.width / 2, this.height - 22, 0xA0A0A0);
         if (searchField != null) {
-            searchField.drawTextBox();
-            if (!searchField.isFocused() && searchField.getText().isEmpty()) {
-                fontRenderer.drawString("Search options", searchField.x + 4, searchField.y + 5, 0xFF6F7E8D);
+            MinecraftReflectionCompat.drawGuiTextField(searchField);
+            if (!MinecraftReflectionCompat.guiTextFieldFocused(searchField)
+                    && MinecraftReflectionCompat.guiTextFieldText(searchField).isEmpty()) {
+                MinecraftReflectionCompat.fontDrawString(fontRenderer, "Search options",
+                        MinecraftReflectionCompat.guiTextFieldX(searchField) + 4,
+                        MinecraftReflectionCompat.guiTextFieldY(searchField) + 5, 0xFF6F7E8D);
             }
         }
         drawSidebarScrollbar();
         boolean dropdownOpen = activeDropdown != null || activeProfileDropdown != null;
-        super.drawScreen(dropdownOpen ? -1 : mouseX, dropdownOpen ? -1 : mouseY, partialTicks);
+        super.ausm$drawScreen(dropdownOpen ? -1 : mouseX, dropdownOpen ? -1 : mouseY, partialTicks);
         drawFocusedButtonOutline();
         if (activeDropdown != null) {
             activeDropdown.drawDropdown(mouseX, mouseY);
@@ -1369,7 +1382,7 @@ public class GuiShaderOptions extends GuiScreen {
         }
 
         for (GuiButton button : buttonList) {
-            if (!button.visible || !isMouseOver(button, mouseX, mouseY)) {
+            if (!MinecraftReflectionCompat.guiButtonVisible(button) || !isMouseOver(button, mouseX, mouseY)) {
                 continue;
             }
 
@@ -1390,13 +1403,13 @@ public class GuiShaderOptions extends GuiScreen {
             hoveredCommentTitle = List.of(optionName(dropdown.option.name()));
         } else if (button instanceof GuiShaderProfileDropdown) {
             hoveredCommentTitle = List.of("Profile");
-        } else if (button.id >= OPTION_BASE_ID) {
-            int index = button.id - OPTION_BASE_ID;
+        } else if (MinecraftReflectionCompat.guiButtonId(button) >= OPTION_BASE_ID) {
+            int index = MinecraftReflectionCompat.guiButtonId(button) - OPTION_BASE_ID;
             if (index >= 0 && index < visibleEntries.size()) {
                 hoveredCommentTitle = List.of(label(visibleEntries.get(index).name()));
             }
         } else {
-            hoveredCommentTitle = List.of(button.displayString);
+            hoveredCommentTitle = List.of(MinecraftReflectionCompat.guiButtonText(button));
         }
         hoveredCommentBody = tooltip;
     }
@@ -1417,10 +1430,10 @@ public class GuiShaderOptions extends GuiScreen {
 
         int titleColor = 0xFFFFFFFF;
         if (!hoveredCommentTitle.isEmpty()) {
-            this.fontRenderer.drawString(hoveredCommentTitle.get(0), x + 5, y + 5, titleColor);
+            MinecraftReflectionCompat.fontDrawString(this.fontRenderer, hoveredCommentTitle.get(0), x + 5, y + 5, titleColor);
         }
         for (int i = 0; i < hoveredCommentBody.size(); i++) {
-            this.fontRenderer.drawString(hoveredCommentBody.get(i), x + 5, y + 17 + i * 10, 0xFFD8DEE8);
+            MinecraftReflectionCompat.fontDrawString(this.fontRenderer, hoveredCommentBody.get(i), x + 5, y + 17 + i * 10, 0xFFD8DEE8);
         }
     }
 
@@ -1466,7 +1479,7 @@ public class GuiShaderOptions extends GuiScreen {
     private boolean handleKeyboardNavigation(int keyCode) throws IOException {
         ensureFocusedControl();
         if (keyCode == Keyboard.KEY_TAB) {
-            moveFocusLinear(isShiftKeyDown() ? -1 : 1);
+            moveFocusLinear(GuiControlHints.isShiftDown() ? -1 : 1);
             return true;
         }
         if (keyCode == Keyboard.KEY_UP) {
@@ -1512,7 +1525,7 @@ public class GuiShaderOptions extends GuiScreen {
         if (keyCode == Keyboard.KEY_RETURN || keyCode == Keyboard.KEY_NUMPADENTER || keyCode == Keyboard.KEY_SPACE) {
             GuiButton button = focusedButton();
             if (button != null) {
-                actionPerformed(button);
+                ausm$actionPerformed(button);
             }
             return true;
         }
@@ -1544,16 +1557,20 @@ public class GuiShaderOptions extends GuiScreen {
             return;
         }
 
-        int currentX = current.x + current.width / 2;
-        int currentY = current.y + current.height / 2;
+        int currentX = MinecraftReflectionCompat.guiButtonX(current)
+                + MinecraftReflectionCompat.guiButtonWidth(current) / 2;
+        int currentY = MinecraftReflectionCompat.guiButtonY(current)
+                + MinecraftReflectionCompat.guiButtonHeight(current) / 2;
         GuiButton best = null;
         int bestScore = Integer.MAX_VALUE;
         for (GuiButton candidate : focusables) {
             if (candidate == current) {
                 continue;
             }
-            int candidateX = candidate.x + candidate.width / 2;
-            int candidateY = candidate.y + candidate.height / 2;
+            int candidateX = MinecraftReflectionCompat.guiButtonX(candidate)
+                    + MinecraftReflectionCompat.guiButtonWidth(candidate) / 2;
+            int candidateY = MinecraftReflectionCompat.guiButtonY(candidate)
+                    + MinecraftReflectionCompat.guiButtonHeight(candidate) / 2;
             int deltaX = candidateX - currentX;
             int deltaY = candidateY - currentY;
             if (dx < 0 && deltaX >= 0 || dx > 0 && deltaX <= 0 || dy < 0 && deltaY >= 0 || dy > 0 && deltaY <= 0) {
@@ -1611,7 +1628,7 @@ public class GuiShaderOptions extends GuiScreen {
 
     private int indexOfButton(int id) {
         for (int i = 0; i < buttonList.size(); i++) {
-            if (buttonList.get(i).id == id) {
+            if (MinecraftReflectionCompat.guiButtonId(buttonList.get(i)) == id) {
                 return i;
             }
         }
@@ -1639,8 +1656,8 @@ public class GuiShaderOptions extends GuiScreen {
         } else if (button instanceof GuiShaderOptionDropdown) {
             GuiShaderOptionDropdown dropdown = (GuiShaderOptionDropdown) button;
             comment = optionComment(dropdown.option.name());
-        } else if (button.id >= OPTION_BASE_ID) {
-            int index = button.id - OPTION_BASE_ID;
+        } else if (MinecraftReflectionCompat.guiButtonId(button) >= OPTION_BASE_ID) {
+            int index = MinecraftReflectionCompat.guiButtonId(button) - OPTION_BASE_ID;
             if (index >= 0 && index < visibleEntries.size()) {
                 ShaderScreenEntry entry = visibleEntries.get(index);
                 if (entry.type() == ShaderScreenEntry.Type.OPTION) {
@@ -1651,8 +1668,9 @@ public class GuiShaderOptions extends GuiScreen {
                     comment = translationOrNull("profile.comment");
                 }
             }
-        } else if (button.id >= CATEGORY_BASE_ID && button.id < OPTION_BASE_ID) {
-            int index = button.id - CATEGORY_BASE_ID;
+        } else if (MinecraftReflectionCompat.guiButtonId(button) >= CATEGORY_BASE_ID
+                && MinecraftReflectionCompat.guiButtonId(button) < OPTION_BASE_ID) {
+            int index = MinecraftReflectionCompat.guiButtonId(button) - CATEGORY_BASE_ID;
             if (index >= 0 && index < sidebarItems.size()) {
                 comment = translationOrNull("screen." + sidebarItems.get(index).screen() + ".comment");
             }
@@ -1681,7 +1699,7 @@ public class GuiShaderOptions extends GuiScreen {
         for (String segment : text.split("\\\\n|\\n")) {
             String trimmed = segment.trim();
             if (!trimmed.isEmpty()) {
-                lines.addAll(fontRenderer.listFormattedStringToWidth(trimmed, 260));
+                lines.addAll(MinecraftReflectionCompat.fontListFormattedStringToWidth(fontRenderer, trimmed, 260));
             }
         }
         return lines;
@@ -1737,26 +1755,33 @@ public class GuiShaderOptions extends GuiScreen {
 
         @Override
         public void drawButton(Minecraft mc, int mouseX, int mouseY, float partialTicks) {
-            if (!visible) {
+            if (!MinecraftReflectionCompat.guiButtonVisible(this)) {
                 return;
             }
             if (dragging) {
                 updateFromMouse(mouseX, false);
             }
 
+            int x = MinecraftReflectionCompat.guiButtonX(this);
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int width = MinecraftReflectionCompat.guiButtonWidth(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             boolean hovered = mouseX >= x && mouseY >= y && mouseX < x + width && mouseY < y + height;
             int background = hovered ? 0xFF202C38 : 0xFF151D26;
-            drawRect(x, y, x + width, y + height, background);
-            drawRect(x, y, x + width, y + 1, 0xFF40566C);
-            drawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
+            MinecraftReflectionCompat.guiDrawRect(x, y, x + width, y + height, background);
+            MinecraftReflectionCompat.guiDrawRect(x, y, x + width, y + 1, 0xFF40566C);
+            MinecraftReflectionCompat.guiDrawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
 
             boolean showSlider = hovered || dragging;
             String leftText = optionName(option.name());
             String rightText = showSlider ? "" : optionValue(option.name(), selectedValue);
-            int textColor = enabled ? 0xFFFFFF : 0x707070;
+            int textColor = MinecraftReflectionCompat.guiButtonEnabled(this) ? 0xFFFFFF : 0x707070;
             if (!showSlider) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(leftText, x + 7, y + 5, textColor);
-                com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(rightText, x + width - 7 - com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).getStringWidth(rightText), y + 5, textColor);
+                MinecraftReflectionCompat.fontDrawString(MinecraftReflectionCompat.fontRenderer(mc),
+                        leftText, x + 7, y + 5, textColor);
+                MinecraftReflectionCompat.fontDrawString(MinecraftReflectionCompat.fontRenderer(mc),
+                        rightText, x + width - 7 - MinecraftReflectionCompat.fontStringWidth(
+                                MinecraftReflectionCompat.fontRenderer(mc), rightText), y + 5, textColor);
             }
 
             if (showSlider) {
@@ -1764,19 +1789,24 @@ public class GuiShaderOptions extends GuiScreen {
                 int trackTop = y + 2;
                 int trackWidth = width - 4;
                 int trackHeight = height - 4;
-                drawRect(trackLeft, trackTop, trackLeft + trackWidth, trackTop + trackHeight, 0xFF07101A);
-                drawRect(trackLeft, trackTop, trackLeft + Math.round(sliderValue * trackWidth), trackTop + trackHeight, 0xFF204D7A);
+                MinecraftReflectionCompat.guiDrawRect(trackLeft, trackTop,
+                        trackLeft + trackWidth, trackTop + trackHeight, 0xFF07101A);
+                MinecraftReflectionCompat.guiDrawRect(trackLeft, trackTop,
+                        trackLeft + Math.round(sliderValue * trackWidth), trackTop + trackHeight, 0xFF204D7A);
                 drawNotches(trackLeft, trackTop, trackWidth, trackHeight);
 
                 int thumbWidth = 6;
                 int thumbX = trackLeft + Math.round(sliderValue * (trackWidth - thumbWidth));
-                drawRect(thumbX, trackTop + 2, thumbX + thumbWidth, trackTop + trackHeight - 2, dragging ? 0xFFFFFFFF : 0xFFE7EEF8);
-                drawRect(thumbX + 1, trackTop + 3, thumbX + thumbWidth - 1, trackTop + trackHeight - 3, 0xFF7CB7FF);
+                MinecraftReflectionCompat.guiDrawRect(thumbX, trackTop + 2, thumbX + thumbWidth,
+                        trackTop + trackHeight - 2, dragging ? 0xFFFFFFFF : 0xFFE7EEF8);
+                MinecraftReflectionCompat.guiDrawRect(thumbX + 1, trackTop + 3, thumbX + thumbWidth - 1,
+                        trackTop + trackHeight - 3, 0xFF7CB7FF);
 
                 String valueText = optionValue(option.name(), selectedValue);
-                com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(
+                MinecraftReflectionCompat.fontDrawString(MinecraftReflectionCompat.fontRenderer(mc),
                         valueText,
-                        x + width / 2 - com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).getStringWidth(valueText) / 2,
+                        x + width / 2 - MinecraftReflectionCompat.fontStringWidth(
+                                MinecraftReflectionCompat.fontRenderer(mc), valueText) / 2,
                         y + 6,
                         textColor
                 );
@@ -1785,8 +1815,8 @@ public class GuiShaderOptions extends GuiScreen {
 
         @Override
         public boolean mousePressed(Minecraft mc, int mouseX, int mouseY) {
-            if (super.mousePressed(mc, mouseX, mouseY)) {
-                if (isShiftKeyDown()) {
+            if (MinecraftReflectionCompat.guiButtonMousePressed(this, mc, mouseX, mouseY)) {
+                if (GuiControlHints.isShiftDown()) {
                     resetToDefault();
                     return true;
                 }
@@ -1799,7 +1829,7 @@ public class GuiShaderOptions extends GuiScreen {
 
         @Override
         protected void mouseDragged(Minecraft mc, int mouseX, int mouseY) {
-            if (visible && dragging) {
+            if (MinecraftReflectionCompat.guiButtonVisible(this) && dragging) {
                 updateFromMouse(mouseX, false);
             }
         }
@@ -1810,6 +1840,8 @@ public class GuiShaderOptions extends GuiScreen {
         }
 
         private void updateFromMouse(int mouseX, boolean snapToNearbyNotch) {
+            int x = MinecraftReflectionCompat.guiButtonX(this);
+            int width = MinecraftReflectionCompat.guiButtonWidth(this);
             sliderValue = (float) (mouseX - (x + 7)) / (float) (width - 14);
             sliderValue = Math.max(0.0f, Math.min(1.0f, sliderValue));
             if (!continuous) {
@@ -1821,13 +1853,13 @@ public class GuiShaderOptions extends GuiScreen {
             setPendingOptionValue(option, selectedValue);
             updateDisplay();
             if (applyButton != null) {
-                applyButton.enabled = true;
+                MinecraftReflectionCompat.setGuiButtonEnabled(applyButton, true);
             }
         }
 
         private void updateDisplay() {
             selectedValue = calculateSelectedValue();
-            this.displayString = optionName(option.name());
+            MinecraftReflectionCompat.setGuiButtonText(this, optionName(option.name()));
         }
 
         private void resetToDefault() {
@@ -1836,7 +1868,7 @@ public class GuiShaderOptions extends GuiScreen {
             setPendingOptionValue(option, option.defaultValue());
             updateDisplay();
             if (applyButton != null) {
-                applyButton.enabled = true;
+                MinecraftReflectionCompat.setGuiButtonEnabled(applyButton, true);
             }
         }
 
@@ -1862,7 +1894,7 @@ public class GuiShaderOptions extends GuiScreen {
             setPendingOptionValue(option, selectedValue);
             updateDisplay();
             if (applyButton != null) {
-                applyButton.enabled = true;
+                MinecraftReflectionCompat.setGuiButtonEnabled(applyButton, true);
             }
         }
 
@@ -1877,7 +1909,7 @@ public class GuiShaderOptions extends GuiScreen {
             setPendingOptionValue(option, selectedValue);
             updateDisplay();
             if (applyButton != null) {
-                applyButton.enabled = true;
+                MinecraftReflectionCompat.setGuiButtonEnabled(applyButton, true);
             }
         }
 
@@ -1895,8 +1927,8 @@ public class GuiShaderOptions extends GuiScreen {
         }
 
         private float nearestNotchValue(int mouseX, float fallback) {
-            int railLeft = x + 7;
-            int railWidth = width - 14;
+            int railLeft = MinecraftReflectionCompat.guiButtonX(this) + 7;
+            int railWidth = MinecraftReflectionCompat.guiButtonWidth(this) - 14;
             float nearest = fallback;
             int nearestDistance = 5;
             for (String choice : option.choices()) {
@@ -1930,7 +1962,8 @@ public class GuiShaderOptions extends GuiScreen {
         private void drawNotches(int trackLeft, int trackTop, int trackWidth, int trackHeight) {
             for (String choice : option.choices()) {
                 int notchX = trackLeft + Math.round(choicePosition(choice) * trackWidth);
-                drawRect(notchX, trackTop + trackHeight - 4, notchX + 1, trackTop + trackHeight - 1, 0xFFB7C7D8);
+                MinecraftReflectionCompat.guiDrawRect(notchX, trackTop + trackHeight - 4,
+                        notchX + 1, trackTop + trackHeight - 1, 0xFFB7C7D8);
             }
         }
 
@@ -1990,32 +2023,49 @@ public class GuiShaderOptions extends GuiScreen {
 
         @Override
         public void drawButton(Minecraft mc, int mouseX, int mouseY, float partialTicks) {
-            if (!visible) {
+            if (!MinecraftReflectionCompat.guiButtonVisible(this)) {
                 return;
             }
 
+            int x = MinecraftReflectionCompat.guiButtonX(this);
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int width = MinecraftReflectionCompat.guiButtonWidth(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             boolean open = activeDropdown == this;
             boolean hovered = mouseX >= x && mouseY >= y && mouseX < x + width && mouseY < y + height;
             int background = open ? 0xFF24354A : hovered ? 0xFF202C38 : 0xFF151D26;
-            drawRect(x, y, x + width, y + height, background);
-            drawRect(x, y, x + width, y + 1, 0xFF40566C);
-            drawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
-            drawRect(x + width - 18, y + 1, x + width - 17, y + height - 1, 0xFF0A0F15);
+            MinecraftReflectionCompat.guiDrawRect(x, y, x + width, y + height, background);
+            MinecraftReflectionCompat.guiDrawRect(x, y, x + width, y + 1, 0xFF40566C);
+            MinecraftReflectionCompat.guiDrawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
+            MinecraftReflectionCompat.guiDrawRect(x + width - 18, y + 1,
+                    x + width - 17, y + height - 1, 0xFF0A0F15);
 
-            com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(displayString, x + 7, y + 6, enabled ? 0xFFFFFF : 0x707070);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(open ? "^" : "v", x + width - 12, y + 6, 0xC8CED6);
+            MinecraftReflectionCompat.fontDrawString(MinecraftReflectionCompat.fontRenderer(mc),
+                    MinecraftReflectionCompat.guiButtonText(this), x + 7, y + 6,
+                    MinecraftReflectionCompat.guiButtonEnabled(this) ? 0xFFFFFF : 0x707070);
+            MinecraftReflectionCompat.fontDrawString(MinecraftReflectionCompat.fontRenderer(mc),
+                    open ? "^" : "v", x + width - 12, y + 6, 0xC8CED6);
         }
 
         private void updateDisplay(String value) {
-            this.displayString = optionName(option.name()) + ": " + optionValue(option.name(), value);
+            MinecraftReflectionCompat.setGuiButtonText(this,
+                    optionName(option.name()) + ": " + optionValue(option.name(), value));
         }
 
         private boolean isMouseOver(int mouseX, int mouseY) {
+            int x = MinecraftReflectionCompat.guiButtonX(this);
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int width = MinecraftReflectionCompat.guiButtonWidth(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             int bottom = activeDropdown == this ? dropdownBottom() : y + height;
             return mouseX >= x && mouseY >= y && mouseX < x + width && mouseY < bottom;
         }
 
         private String valueAt(int mouseX, int mouseY) {
+            int x = MinecraftReflectionCompat.guiButtonX(this);
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int width = MinecraftReflectionCompat.guiButtonWidth(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             int top = y + height;
             if (mouseX < x || mouseX >= x + width || mouseY < top || mouseY >= dropdownBottom()) {
                 return null;
@@ -2047,7 +2097,7 @@ public class GuiShaderOptions extends GuiScreen {
             setPendingOptionValue(option, value);
             updateDisplay(value);
             if (applyButton != null) {
-                applyButton.enabled = true;
+                MinecraftReflectionCompat.setGuiButtonEnabled(applyButton, true);
             }
         }
 
@@ -2060,21 +2110,29 @@ public class GuiShaderOptions extends GuiScreen {
         }
 
         private int visibleRows() {
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             int available = Math.max(height, GuiShaderOptions.this.height - (y + height) - 36);
             return Math.max(1, Math.min(option.choices().size(), available / height));
         }
 
         private int dropdownBottom() {
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             return y + height + visibleRows() * height;
         }
 
         private void drawDropdown(int mouseX, int mouseY) {
+            int x = MinecraftReflectionCompat.guiButtonX(this);
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int width = MinecraftReflectionCompat.guiButtonWidth(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             int top = y + height;
             int rows = visibleRows();
             int bottom = top + rows * height;
-            drawRect(x, top, x + width, bottom, 0xEE121922);
-            drawRect(x, top, x + width, top + 1, 0xFF4B5E73);
-            drawRect(x, bottom - 1, x + width, bottom, 0xFF05080C);
+            MinecraftReflectionCompat.guiDrawRect(x, top, x + width, bottom, 0xEE121922);
+            MinecraftReflectionCompat.guiDrawRect(x, top, x + width, top + 1, 0xFF4B5E73);
+            MinecraftReflectionCompat.guiDrawRect(x, bottom - 1, x + width, bottom, 0xFF05080C);
 
             for (int row = 0; row < rows; row++) {
                 int i = scrollOffset + row;
@@ -2082,12 +2140,14 @@ public class GuiShaderOptions extends GuiScreen {
                 boolean hovered = mouseX >= x && mouseX < x + width && mouseY >= rowTop && mouseY < rowTop + height;
                 boolean selected = option.choices().get(i).equals(valueFor(option));
                 if (hovered) {
-                    drawRect(x + 1, rowTop + 1, x + width - 1, rowTop + height - 1, 0xFF26384A);
+                    MinecraftReflectionCompat.guiDrawRect(x + 1, rowTop + 1,
+                            x + width - 1, rowTop + height - 1, 0xFF26384A);
                 } else if (selected) {
-                    drawRect(x + 1, rowTop + 1, x + width - 1, rowTop + height - 1, 0xFF1D2D3C);
+                    MinecraftReflectionCompat.guiDrawRect(x + 1, rowTop + 1,
+                            x + width - 1, rowTop + height - 1, 0xFF1D2D3C);
                 }
                 String value = option.choices().get(i);
-                fontRenderer.drawString(optionValue(option.name(), value), x + 6, rowTop + 6, selected ? 0xFFFFFF : 0xC8CED6);
+                MinecraftReflectionCompat.fontDrawString(fontRenderer, optionValue(option.name(), value), x + 6, rowTop + 6, selected ? 0xFFFFFF : 0xC8CED6);
             }
             drawScrollbar(x, width, top, bottom, option.choices().size(), rows, scrollOffset);
         }
@@ -2102,28 +2162,44 @@ public class GuiShaderOptions extends GuiScreen {
 
         @Override
         public void drawButton(Minecraft mc, int mouseX, int mouseY, float partialTicks) {
-            if (!visible) {
+            if (!MinecraftReflectionCompat.guiButtonVisible(this)) {
                 return;
             }
 
+            int x = MinecraftReflectionCompat.guiButtonX(this);
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int width = MinecraftReflectionCompat.guiButtonWidth(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             boolean open = activeProfileDropdown == this;
             boolean hovered = mouseX >= x && mouseY >= y && mouseX < x + width && mouseY < y + height;
             int background = open ? 0xFF24354A : hovered ? 0xFF202C38 : 0xFF151D26;
-            drawRect(x, y, x + width, y + height, background);
-            drawRect(x, y, x + width, y + 1, 0xFF40566C);
-            drawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
-            drawRect(x + width - 18, y + 1, x + width - 17, y + height - 1, 0xFF0A0F15);
+            MinecraftReflectionCompat.guiDrawRect(x, y, x + width, y + height, background);
+            MinecraftReflectionCompat.guiDrawRect(x, y, x + width, y + 1, 0xFF40566C);
+            MinecraftReflectionCompat.guiDrawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
+            MinecraftReflectionCompat.guiDrawRect(x + width - 18, y + 1,
+                    x + width - 17, y + height - 1, 0xFF0A0F15);
 
-            com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(profileLabel(), x + 7, y + 6, enabled ? 0xFFFFFF : 0x707070);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(open ? "^" : "v", x + width - 12, y + 6, 0xC8CED6);
+            MinecraftReflectionCompat.fontDrawString(MinecraftReflectionCompat.fontRenderer(mc),
+                    profileLabel(), x + 7, y + 6,
+                    MinecraftReflectionCompat.guiButtonEnabled(this) ? 0xFFFFFF : 0x707070);
+            MinecraftReflectionCompat.fontDrawString(MinecraftReflectionCompat.fontRenderer(mc),
+                    open ? "^" : "v", x + width - 12, y + 6, 0xC8CED6);
         }
 
         private boolean isMouseOver(int mouseX, int mouseY) {
+            int x = MinecraftReflectionCompat.guiButtonX(this);
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int width = MinecraftReflectionCompat.guiButtonWidth(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             int bottom = activeProfileDropdown == this ? dropdownBottom() : y + height;
             return mouseX >= x && mouseY >= y && mouseX < x + width && mouseY < bottom;
         }
 
         private String valueAt(int mouseX, int mouseY) {
+            int x = MinecraftReflectionCompat.guiButtonX(this);
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int width = MinecraftReflectionCompat.guiButtonWidth(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             int top = y + height;
             if (mouseX < x || mouseX >= x + width || mouseY < top || mouseY >= dropdownBottom()) {
                 return null;
@@ -2161,22 +2237,30 @@ public class GuiShaderOptions extends GuiScreen {
         }
 
         private int visibleRows() {
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             int available = Math.max(height, GuiShaderOptions.this.height - (y + height) - 36);
             return Math.max(1, Math.min(properties().profiles().size(), available / height));
         }
 
         private int dropdownBottom() {
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             return y + height + visibleRows() * height;
         }
 
         private void drawDropdown(int mouseX, int mouseY) {
             List<String> profiles = new ArrayList<>(properties().profiles().keySet());
+            int x = MinecraftReflectionCompat.guiButtonX(this);
+            int y = MinecraftReflectionCompat.guiButtonY(this);
+            int width = MinecraftReflectionCompat.guiButtonWidth(this);
+            int height = MinecraftReflectionCompat.guiButtonHeight(this);
             int top = y + height;
             int rows = visibleRows();
             int bottom = top + rows * height;
-            drawRect(x, top, x + width, bottom, 0xEE121922);
-            drawRect(x, top, x + width, top + 1, 0xFF4B5E73);
-            drawRect(x, bottom - 1, x + width, bottom, 0xFF05080C);
+            MinecraftReflectionCompat.guiDrawRect(x, top, x + width, bottom, 0xEE121922);
+            MinecraftReflectionCompat.guiDrawRect(x, top, x + width, top + 1, 0xFF4B5E73);
+            MinecraftReflectionCompat.guiDrawRect(x, bottom - 1, x + width, bottom, 0xFF05080C);
 
             String selectedProfile = pendingValues.get("<profile>");
             for (int row = 0; row < rows; row++) {
@@ -2186,11 +2270,13 @@ public class GuiShaderOptions extends GuiScreen {
                 boolean hovered = mouseX >= x && mouseX < x + width && mouseY >= rowTop && mouseY < rowTop + height;
                 boolean selected = profile.equals(selectedProfile);
                 if (hovered) {
-                    drawRect(x + 1, rowTop + 1, x + width - 1, rowTop + height - 1, 0xFF26384A);
+                    MinecraftReflectionCompat.guiDrawRect(x + 1, rowTop + 1,
+                            x + width - 1, rowTop + height - 1, 0xFF26384A);
                 } else if (selected) {
-                    drawRect(x + 1, rowTop + 1, x + width - 1, rowTop + height - 1, 0xFF1D2D3C);
+                    MinecraftReflectionCompat.guiDrawRect(x + 1, rowTop + 1,
+                            x + width - 1, rowTop + height - 1, 0xFF1D2D3C);
                 }
-                fontRenderer.drawString(profileName(profile), x + 6, rowTop + 6, selected ? 0xFFFFFF : 0xC8CED6);
+                MinecraftReflectionCompat.fontDrawString(fontRenderer, profileName(profile), x + 6, rowTop + 6, selected ? 0xFFFFFF : 0xC8CED6);
             }
             drawScrollbar(x, width, top, bottom, profiles.size(), rows, scrollOffset);
         }

@@ -48,6 +48,12 @@ public final class TerrainCompileCoordinator {
         // a block back into a normal terrain layer without leaving a second
         // bloom-only mesh behind.
         if (AusmBloomLayer.isBloomLayer(layer)) {
+            // A Blockcraftery host does not advertise its inherited material's
+            // layer. Let the position-aware Celeritas render hook decide from
+            // GPOM's framed material metadata instead.
+            if (decision.blockcraftery) {
+                return true;
+            }
             return MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer);
         }
         if (decision.forgeFallback) {

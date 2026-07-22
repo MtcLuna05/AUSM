@@ -5,9 +5,9 @@ import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
-import net.minecraft.client.resources.I18n;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWDropCallback;
 import org.lwjgl.input.Keyboard;
@@ -23,7 +23,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
-public class GuiShaders extends GuiScreen {
+public class GuiShaders extends MappingSafeGuiScreen {
     private static final int ID_DONE = 200;
     private static final int ID_APPLY = 201;
     private static final int ID_REFRESH = 202;
@@ -61,12 +61,12 @@ public class GuiShaders extends GuiScreen {
     }
 
     @Override
-    public boolean doesGuiPauseGame() {
+    protected boolean ausm$doesGuiPauseGame() {
         return false;
     }
 
     @Override
-    public void initGui() {
+    protected void ausm$initGui() {
         installDropCallback();
         this.leftPanelRight = computeLeftPanelRight();
         this.shaderList = new GuiSlotShaders(this, this.mc, leftPanelRight, 76, this.height - 42, 20);
@@ -78,10 +78,11 @@ public class GuiShaders extends GuiScreen {
         this.buttonList.add(new GuiFlatButton(ID_CANCEL, bottomStart, bottom, bottomButtonWidth, 20, "Cancel"));
 
         this.applyButton = new GuiFlatButton(ID_APPLY, bottomStart + bottomButtonWidth + bottomGap, bottom, bottomButtonWidth, 20, "Apply");
-        this.applyButton.enabled = false;
+        MinecraftReflectionCompat.setGuiButtonEnabled(this.applyButton, false);
         this.buttonList.add(this.applyButton);
 
-        this.buttonList.add(new GuiFlatButton(ID_DONE, bottomStart + (bottomButtonWidth + bottomGap) * 2, bottom, bottomButtonWidth, 20, I18n.format("gui.done")));
+        this.buttonList.add(new GuiFlatButton(ID_DONE, bottomStart + (bottomButtonWidth + bottomGap) * 2,
+                bottom, bottomButtonWidth, 20, MinecraftReflectionCompat.i18nFormat("gui.done")));
 
         int utilityY = this.height - 51;
         int bottomCenter = this.width / 2;
@@ -89,14 +90,15 @@ public class GuiShaders extends GuiScreen {
         this.buttonList.add(this.openFolderButton);
 
         this.optionsButton = new GuiFlatButton(ID_OPTIONS, bottomCenter + 4, utilityY, 152, 20, "Shader Pack Settings...");
-        this.optionsButton.enabled = canConfigure(shaderList.getSelectedPackName());
+        MinecraftReflectionCompat.setGuiButtonEnabled(this.optionsButton, canConfigure(shaderList.getSelectedPackName()));
         this.buttonList.add(this.optionsButton);
 
         this.refreshButton = new GuiFlatButton(ID_REFRESH, leftPanelRight - 66, 53, 54, 16, "Refresh");
         this.buttonList.add(this.refreshButton);
 
         this.toggleEnabledButton = new GuiFlatButton(ID_TOGGLE_ENABLED, 20, 53, 74, 16, MainMod.getShaderPackManager().areShadersEnabled() ? "Disable" : "Enable");
-        this.toggleEnabledButton.enabled = canConfigure(MainMod.getShaderPackManager().getSelectedPackName());
+        MinecraftReflectionCompat.setGuiButtonEnabled(this.toggleEnabledButton,
+                canConfigure(MainMod.getShaderPackManager().getSelectedPackName()));
         this.buttonList.add(this.toggleEnabledButton);
 
         this.settingsButton = new GuiFlatButton(ID_SETTINGS, 98, 53, 116, 16, settingsLabel());
@@ -108,25 +110,26 @@ public class GuiShaders extends GuiScreen {
         updateSettingsButton();
         updatePreviewVisibility();
         ensureFocusedControl();
+        PipelineContext.getInstance().logShaderGuiProbe("init-return");
     }
 
     @Override
-    public void onGuiClosed() {
+    protected void ausm$onGuiClosed() {
         restoreDropCallback();
-        super.onGuiClosed();
+        super.ausm$onGuiClosed();
     }
 
     @Override
-    public void updateScreen() {
-        super.updateScreen();
+    protected void ausm$updateScreen() {
+        super.ausm$updateScreen();
         if (notificationTicks > 0) {
             notificationTicks--;
         }
     }
 
     @Override
-    public void handleMouseInput() throws IOException {
-        super.handleMouseInput();
+    protected void ausm$handleMouseInput() throws IOException {
+        super.ausm$handleMouseInput();
         if (previewHidden) {
             return;
         }
@@ -134,12 +137,12 @@ public class GuiShaders extends GuiScreen {
     }
 
     @Override
-    protected void actionPerformed(GuiButton button) throws IOException {
-        if (!button.enabled) {
+    protected void ausm$actionPerformed(GuiButton button) throws IOException {
+        if (!MinecraftReflectionCompat.guiButtonEnabled(button)) {
             return;
         }
 
-        switch (button.id) {
+        switch (MinecraftReflectionCompat.guiButtonId(button)) {
             case ID_DONE:
                 if (this.parentScreen == null) {
                     com.l.ausm.impl.util.MinecraftReflectionCompat.setField((this.mc), (null), "field_71462_r", "currentScreen");;
@@ -200,10 +203,11 @@ public class GuiShaders extends GuiScreen {
 
     private void updatePreviewVisibility() {
         for (GuiButton guiButton : this.buttonList) {
-            guiButton.visible = !previewHidden || guiButton.id == ID_PREVIEW;
+            MinecraftReflectionCompat.setGuiButtonVisible(guiButton,
+                    !previewHidden || MinecraftReflectionCompat.guiButtonId(guiButton) == ID_PREVIEW);
         }
         if (previewButton != null) {
-            previewButton.displayString = previewHidden ? "Show GUI" : "Preview";
+            MinecraftReflectionCompat.setGuiButtonText(previewButton, previewHidden ? "Show GUI" : "Preview");
         }
     }
 
@@ -213,10 +217,12 @@ public class GuiShaders extends GuiScreen {
             String currentPack = MainMod.getShaderPackManager().getSelectedPackName();
             if (currentPack == null || currentPack.equals("(internal)")) currentPack = "OFF";
 
-            this.applyButton.enabled = selectedPack != null && !selectedPack.equals(currentPack);
+            MinecraftReflectionCompat.setGuiButtonEnabled(this.applyButton,
+                    selectedPack != null && !selectedPack.equals(currentPack));
         }
         if (this.optionsButton != null) {
-            this.optionsButton.enabled = canConfigure(shaderList.getSelectedPackName());
+            MinecraftReflectionCompat.setGuiButtonEnabled(this.optionsButton,
+                    canConfigure(shaderList.getSelectedPackName()));
         }
         updateEnabledButton();
         updateSelectedProperties();
@@ -230,10 +236,10 @@ public class GuiShaders extends GuiScreen {
 
         MainMod.getShaderPackManager().loadPack(selectedPack);
         if (this.applyButton != null) {
-            this.applyButton.enabled = false;
+            MinecraftReflectionCompat.setGuiButtonEnabled(this.applyButton, false);
         }
         if (this.optionsButton != null) {
-            this.optionsButton.enabled = canConfigure(selectedPack);
+            MinecraftReflectionCompat.setGuiButtonEnabled(this.optionsButton, canConfigure(selectedPack));
         }
         updateEnabledButton();
         updateSelectedProperties();
@@ -251,41 +257,48 @@ public class GuiShaders extends GuiScreen {
     }
 
     @Override
-    public void drawScreen(int mouseX, int mouseY, float partialTicks) {
-        PipelineContext.getInstance().logGuiBypassProbe("shader-screen-draw-entry");
+    protected void ausm$drawScreen(int mouseX, int mouseY, float partialTicks) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.logShaderGuiProbe("draw-entry");
         lastMouseX = mouseX;
         lastMouseY = mouseY;
         if (previewHidden) {
-            super.drawScreen(mouseX, mouseY, partialTicks);
+            super.ausm$drawScreen(mouseX, mouseY, partialTicks);
             drawFocusedButtonOutline();
+            context.logShaderGuiProbe("draw-preview-return");
             return;
         }
 
         drawRect(0, 0, this.width, this.height, 0x330B1016);
+        context.logShaderGuiProbe("after-background");
         drawPanels();
+        context.logShaderGuiProbe("after-panels");
         this.shaderList.drawScreen(mouseX, mouseY, partialTicks, focusedControl == -1);
+        context.logShaderGuiProbe("after-pack-list");
         drawHeader();
         drawPackDetails();
         drawNotification();
+        context.logShaderGuiProbe("after-details");
 
-        super.drawScreen(mouseX, mouseY, partialTicks);
+        super.ausm$drawScreen(mouseX, mouseY, partialTicks);
+        context.logShaderGuiProbe("after-super");
         drawFocusedButtonOutline();
         drawEscapeHintTooltip(mouseX, mouseY);
-        PipelineContext.getInstance().logGuiBypassProbe("shader-screen-draw-return");
+        context.logShaderGuiProbe("draw-return");
     }
 
     @Override
-    protected void mouseClicked(int mouseX, int mouseY, int mouseButton) throws IOException {
+    protected void ausm$mouseClicked(int mouseX, int mouseY, int mouseButton) throws IOException {
         if (previewHidden) {
-            super.mouseClicked(mouseX, mouseY, mouseButton);
+            super.ausm$mouseClicked(mouseX, mouseY, mouseButton);
             return;
         }
         this.shaderList.mouseClicked(mouseX, mouseY, mouseButton);
-        super.mouseClicked(mouseX, mouseY, mouseButton);
+        super.ausm$mouseClicked(mouseX, mouseY, mouseButton);
     }
 
     @Override
-    protected void keyTyped(char typedChar, int keyCode) throws IOException {
+    protected void ausm$keyTyped(char typedChar, int keyCode) throws IOException {
         if (keyCode == Keyboard.KEY_ESCAPE) {
             if (GuiControlHints.isShiftDown()) {
                 com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, null);
@@ -306,7 +319,7 @@ public class GuiShaders extends GuiScreen {
         if (handleKeyboardNavigation(keyCode)) {
             return;
         }
-        super.keyTyped(typedChar, keyCode);
+        super.ausm$keyTyped(typedChar, keyCode);
     }
 
     private boolean handleKeyboardNavigation(int keyCode) throws IOException {
@@ -342,7 +355,7 @@ public class GuiShaders extends GuiScreen {
             }
             GuiButton focused = focusedButton();
             if (focused != null) {
-                actionPerformed(focused);
+                ausm$actionPerformed(focused);
             }
             return true;
         }
@@ -426,7 +439,7 @@ public class GuiShaders extends GuiScreen {
 
     private int indexOfButton(int id) {
         for (int i = 0; i < this.buttonList.size(); i++) {
-            if (this.buttonList.get(i).id == id) {
+            if (MinecraftReflectionCompat.guiButtonId(this.buttonList.get(i)) == id) {
                 return i;
             }
         }
@@ -486,8 +499,9 @@ public class GuiShaders extends GuiScreen {
         this.drawString(this.fontRenderer, portalShadersStatus(), x, y + 216,
                 portalShadersEffective() ? 0xB4F28A : portalShadersConfigured() ? 0xFFD27D : 0xFF8A8A);
 
-        String status = this.applyButton != null && this.applyButton.enabled ? "Pending pack change" : "No pending pack change";
-        this.drawString(this.fontRenderer, status, x, this.height - 56, this.applyButton != null && this.applyButton.enabled ? 0xFFD27D : 0x8EA0B5);
+        boolean pending = this.applyButton != null && MinecraftReflectionCompat.guiButtonEnabled(this.applyButton);
+        String status = pending ? "Pending pack change" : "No pending pack change";
+        this.drawString(this.fontRenderer, status, x, this.height - 56, pending ? 0xFFD27D : 0x8EA0B5);
     }
 
     private void drawNotification() {
@@ -495,7 +509,7 @@ public class GuiShaders extends GuiScreen {
             return;
         }
 
-        int textWidth = this.fontRenderer.getStringWidth(notificationText);
+        int textWidth = MinecraftReflectionCompat.fontStringWidth(this.fontRenderer, notificationText);
         int x = (this.width - textWidth) / 2;
         int y = this.height - 76;
         drawRect(x - 8, y - 6, x + textWidth + 8, y + 14, 0xAA101418);
@@ -505,8 +519,9 @@ public class GuiShaders extends GuiScreen {
     private void refreshShaderList() {
         this.leftPanelRight = computeLeftPanelRight();
         this.shaderList = new GuiSlotShaders(this, this.mc, leftPanelRight, 76, this.height - 42, 20);
-        this.applyButton.enabled = false;
-        this.optionsButton.enabled = canConfigure(shaderList.getSelectedPackName());
+        MinecraftReflectionCompat.setGuiButtonEnabled(this.applyButton, false);
+        MinecraftReflectionCompat.setGuiButtonEnabled(this.optionsButton,
+                canConfigure(shaderList.getSelectedPackName()));
         updateEnabledButton();
         updateSettingsButton();
         updateSelectedProperties();
@@ -525,7 +540,7 @@ public class GuiShaders extends GuiScreen {
     private int computeLeftPanelRight() {
         int textWidth = 0;
         for (String packName : MainMod.getShaderPackManager().getAvailablePacks()) {
-            textWidth = Math.max(textWidth, this.fontRenderer.getStringWidth(packName));
+            textWidth = Math.max(textWidth, MinecraftReflectionCompat.fontStringWidth(this.fontRenderer, packName));
         }
 
         int desired = 28 + textWidth + 24;
@@ -545,14 +560,16 @@ public class GuiShaders extends GuiScreen {
         if (toggleEnabledButton == null) {
             return;
         }
-        toggleEnabledButton.displayString = MainMod.getShaderPackManager().areShadersEnabled() ? "Disable" : "Enable";
-        toggleEnabledButton.enabled = canConfigure(MainMod.getShaderPackManager().getSelectedPackName());
+        MinecraftReflectionCompat.setGuiButtonText(toggleEnabledButton,
+                MainMod.getShaderPackManager().areShadersEnabled() ? "Disable" : "Enable");
+        MinecraftReflectionCompat.setGuiButtonEnabled(toggleEnabledButton,
+                canConfigure(MainMod.getShaderPackManager().getSelectedPackName()));
     }
 
     private void updateSettingsButton() {
         if (settingsButton != null) {
-            settingsButton.displayString = settingsLabel();
-            settingsButton.enabled = true;
+            MinecraftReflectionCompat.setGuiButtonText(settingsButton, settingsLabel());
+            MinecraftReflectionCompat.setGuiButtonEnabled(settingsButton, true);
         }
     }
 
@@ -622,7 +639,8 @@ public class GuiShaders extends GuiScreen {
     }
 
     private boolean isMouseOver(GuiButton button, int mouseX, int mouseY) {
-        return button != null && button.enabled && GuiControlHints.isMouseOverButton(button, mouseX, mouseY);
+        return button != null && MinecraftReflectionCompat.guiButtonEnabled(button)
+                && GuiControlHints.isMouseOverButton(button, mouseX, mouseY);
     }
 
     private boolean isMouseOverButton(GuiButton button, int mouseX, int mouseY) {

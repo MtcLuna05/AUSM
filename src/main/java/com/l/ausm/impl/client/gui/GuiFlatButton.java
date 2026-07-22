@@ -1,5 +1,6 @@
 package com.l.ausm.impl.client.gui;
 
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiButton;
 
@@ -11,18 +12,27 @@ public class GuiFlatButton extends GuiButton {
 
     @Override
     public void drawButton(Minecraft mc, int mouseX, int mouseY, float partialTicks) {
-        if (!visible) {
+        if (!MinecraftReflectionCompat.guiButtonVisible(this)) {
             return;
         }
 
+        int x = MinecraftReflectionCompat.guiButtonX(this);
+        int y = MinecraftReflectionCompat.guiButtonY(this);
+        int width = MinecraftReflectionCompat.guiButtonWidth(this);
+        int height = MinecraftReflectionCompat.guiButtonHeight(this);
+        boolean enabled = MinecraftReflectionCompat.guiButtonEnabled(this);
         boolean hovered = mouseX >= x && mouseY >= y && mouseX < x + width && mouseY < y + height;
         int background = !enabled ? 0xFF11161D : hovered ? 0xFF263548 : 0xFF18222D;
         int topLine = hovered && enabled ? 0xFF5D7894 : 0xFF384C60;
         int textColor = !enabled ? 0xFF6B7580 : hovered ? 0xFFFFFFFF : 0xFFE2E8F0;
 
-        drawRect(x, y, x + width, y + height, background);
-        drawRect(x, y, x + width, y + 1, topLine);
-        drawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
-        drawCenteredString(com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc), displayString, x + width / 2, y + (height - 8) / 2, textColor);
+        MinecraftReflectionCompat.guiDrawRect(x, y, x + width, y + height, background);
+        MinecraftReflectionCompat.guiDrawRect(x, y, x + width, y + 1, topLine);
+        MinecraftReflectionCompat.guiDrawRect(x, y + height - 1, x + width, y + height, 0xFF070B10);
+        String text = MinecraftReflectionCompat.guiButtonText(this);
+        int textX = x + width / 2
+                - MinecraftReflectionCompat.fontStringWidth(MinecraftReflectionCompat.fontRenderer(mc), text) / 2;
+        MinecraftReflectionCompat.fontDrawString(MinecraftReflectionCompat.fontRenderer(mc),
+                text, textX, y + (height - 8) / 2, textColor);
     }
 }

@@ -84,7 +84,7 @@ public class VboRenderListMixin {
         BlockRenderLayer blockLayer = ausm$layerByOrdinal(layer);
         ausm$currentChunkUsesPipelineVertexFormat = renderChunk instanceof IPipelineRenderChunk pipelineRenderChunk
                 && pipelineRenderChunk.ausm$usesPipelineVertexFormat(blockLayer);
-        return renderChunk.getVertexBufferByLayer(layer);
+        return com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkVertexBuffer(renderChunk, layer);
     }
 
     @Redirect(

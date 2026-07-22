@@ -47,6 +47,8 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
     private static final String MARK_BLOCKS_FOR_UPDATE = "markBlocksForUpdate(IIIIIIZLorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V";
     private static final Map<String, String> HANDLER_BYPASS_METHODS = new HashMap<>();
     private static final Set<String> VOID_HANDLERS = new HashSet<>();
+    private static volatile Boolean celeritasInstalled;
+    private static volatile Boolean nothiriumInstalled;
 
     static {
         VOID_HANDLERS.add("stopChunkUpdates(Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V");
@@ -91,9 +93,11 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         if (CELERITAS_VINTAGE.equals(name) || CELERITAS_VINTAGE.equals(transformedName)) {
             return stripCeleritasDebugOverlayHandler(basicClass);
         }
-        if (celeritasPresent() && (UNIVERSAL_TWEAKS_FRUSTUM_MIXIN.equals(name) || UNIVERSAL_TWEAKS_FRUSTUM_MIXIN.equals(transformedName))) {
+        if (useCeleritasRenderer() && (UNIVERSAL_TWEAKS_FRUSTUM_MIXIN.equals(name) || UNIVERSAL_TWEAKS_FRUSTUM_MIXIN.equals(transformedName))) {
             return stripHandlers(basicClass);
         }
+        // Celeritas prevents LoliASM's BufferBuilder primer interface from being
+        // applied even when Nothirium remains the selected terrain renderer.
         if (celeritasPresent() && (NAUGHTHIRIUM_FLOAT_VERTEX_CONSUMER.equals(name) || NAUGHTHIRIUM_FLOAT_VERTEX_CONSUMER.equals(transformedName))) {
             return stripLoliTextureHook(basicClass);
         }
@@ -107,7 +111,7 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         // Celeritas owns RenderGlobal's terrain methods. Nothirium's handlers
         // target those same methods and cannot be applied after Celeritas
         // overwrites them, so leave this mixin as an inert marker in that mode.
-        if (celeritasPresent()) {
+        if (useCeleritasRenderer()) {
             return stripHandlers(basicClass);
         }
 
@@ -284,10 +288,42 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
     }
 
     private static boolean celeritasPresent() {
+        Boolean cached = celeritasInstalled;
+        if (cached != null) {
+            return cached;
+        }
+        boolean present = modPresent("celeritas");
+        celeritasInstalled = present;
+        return present;
+    }
+
+    private static boolean nothiriumPresent() {
+        Boolean cached = nothiriumInstalled;
+        if (cached != null) {
+            return cached;
+        }
+        boolean present = modPresent("nothirium", "naughthirium");
+        nothiriumInstalled = present;
+        return present;
+    }
+
+    private static boolean useCeleritasRenderer() {
+        return celeritasPresent();
+    }
+
+    private static boolean modPresent(String... prefixes) {
         File mods = new File(System.getProperty("user.dir", "."), "mods");
         File[] files = mods.listFiles((dir, fileName) -> {
             String lower = fileName.toLowerCase();
-            return lower.startsWith("celeritas") && (lower.endsWith(".jar") || lower.endsWith(".zip"));
+            if (!lower.endsWith(".jar") && !lower.endsWith(".zip")) {
+                return false;
+            }
+            for (String prefix : prefixes) {
+                if (lower.startsWith(prefix)) {
+                    return true;
+                }
+            }
+            return false;
         });
         return files != null && files.length > 0;
     }

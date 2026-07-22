@@ -26,6 +26,7 @@ import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.bloom.BloomExtractionPlan;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomRenderer;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
+import com.l.ausm.impl.pipeline.compat.CeleritasCompat;
 import com.l.ausm.impl.pipeline.compat.NothiriumBypass;
 import com.l.ausm.impl.pipeline.compat.NothiriumShadowRenderer;
 import com.l.ausm.impl.pipeline.compat.ProjectRedIlluminationCompat;
@@ -208,6 +209,10 @@ public class PipelineContext extends PipelineWorldRenderScope {
     private static boolean disableShaderlessPreGuiHooks = true;
     private static final AtomicInteger GUI_BYPASS_PROBE_LOGS = new AtomicInteger();
     private static final Set<String> GUI_BYPASS_PROBE_KEYS = ConcurrentHashMap.newKeySet();
+    private static final AtomicInteger SHADER_GUI_PROBE_LOGS = new AtomicInteger();
+    private static final Set<String> SHADER_GUI_PROBE_KEYS = ConcurrentHashMap.newKeySet();
+    private static final AtomicInteger SHADERED_SKY_GEOMETRY_PROBE_LOGS = new AtomicInteger();
+    private static final Set<String> SHADERED_SKY_GEOMETRY_PROBE_KEYS = ConcurrentHashMap.newKeySet();
 
     public void logGuiBypassProbe(String stage) {
         Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
@@ -245,6 +250,75 @@ public class PipelineContext extends PipelineWorldRenderScope {
                 GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
                 GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
                 glStateSummary()
+        );
+    }
+
+    public void logShaderGuiProbe(String stage) {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        Object screen = minecraft != null ? MinecraftReflectionCompat.currentScreen(minecraft) : null;
+        if (screen == null
+                || !screen.getClass().getName().startsWith("com.l.ausm.impl.client.gui.GuiShader")
+                || !SHADER_GUI_PROBE_KEYS.add(stage)) {
+            return;
+        }
+        int call = SHADER_GUI_PROBE_LOGS.incrementAndGet();
+        Framebuffer target = MinecraftReflectionCompat.minecraftFramebuffer(minecraft);
+        MainMod.LOGGER.info(
+                "[AUSMShaderGuiProbe] call={} stage={} active={} worldFrame={} guiDepth={} renderingGui={} screen={} target={} targetColor={} targetDepth={} drawFbo={} readFbo={} drawBuf={} readBuf={} gl={} glErrors={}",
+                call,
+                stage,
+                isPipelineActive,
+                worldFrameActive,
+                guiRenderDepth,
+                renderingGui,
+                screen.getClass().getName(),
+                describeFramebufferTargetDetailed(target),
+                framebufferSamples(target),
+                framebufferDepthSamples(target),
+                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL11.GL_DRAW_BUFFER),
+                GL11.glGetInteger(GL11.GL_READ_BUFFER),
+                glStateSummary(),
+                drainGlErrorsForProbe()
+        );
+    }
+
+    public void logShaderedSkyGeometryProbe(String stage) {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        World world = minecraft != null ? MinecraftReflectionCompat.world(minecraft) : null;
+        if (!isPipelineActive
+                || minecraft == null
+                || world == null
+                || !isSimpleVoidWorld(world)
+                || !SHADERED_SKY_GEOMETRY_PROBE_KEYS.add(stage)) {
+            return;
+        }
+        int call = SHADERED_SKY_GEOMETRY_PROBE_LOGS.incrementAndGet();
+        int width = Math.max(1, MinecraftReflectionCompat.displayWidth(minecraft));
+        int height = Math.max(1, MinecraftReflectionCompat.displayHeight(minecraft));
+        int drawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int drawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        int sampleBuffer = normalizedReadBuffer(drawFramebuffer, drawBuffer);
+        Framebuffer target = MinecraftReflectionCompat.minecraftFramebuffer(minecraft);
+        MainMod.LOGGER.info(
+                "[AUSMShaderedSkyGeometryProbe] call={} stage={} pass={} phase={} world={} screen={} target={} targetColor={} targetDepth={} drawFbo={} drawBuf={} drawColor={} drawDepth={} gl={} glErrors={}",
+                call,
+                stage,
+                activePass,
+                getPhase(),
+                skyProbeWorldSummary(),
+                MinecraftReflectionCompat.currentScreen(minecraft) != null
+                        ? MinecraftReflectionCompat.currentScreen(minecraft).getClass().getName() : "none",
+                describeFramebufferTargetDetailed(target),
+                framebufferSamples(target),
+                framebufferDepthSamples(target),
+                drawFramebuffer,
+                drawBuffer,
+                framebufferIdColorSamples(drawFramebuffer, width, height, sampleBuffer),
+                framebufferIdDepthSamples(drawFramebuffer, width, height, sampleBuffer),
+                skyProbeGlStateSummary(),
+                drainGlErrorsForProbe()
         );
     }
 
@@ -2835,6 +2909,7 @@ public class PipelineContext extends PipelineWorldRenderScope {
         if (bloomLayer == null
                 || viewEntity == null
                 || !isNothiriumLoaded()
+                || CeleritasCompat.installed()
                 || !NothiriumShadowRenderer.isAvailable()) {
             return -1;
         }
@@ -3289,12 +3364,7 @@ public class PipelineContext extends PipelineWorldRenderScope {
     }
 
     protected boolean shouldRenderShaderedOwnedSkyBacking(Minecraft mc) {
-        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        return isPipelineActive
-                && world != null
-                && isSimpleVoidWorld(world)
-                && !isRenderingBetterPortalsNestedView()
-                && !isRenderingBetterPortalsRenderPass();
+        return false;
     }
 
     protected boolean shouldUseShaderedF1LowerSkyRepair(Minecraft mc, World world) {
@@ -4392,7 +4462,9 @@ public class PipelineContext extends PipelineWorldRenderScope {
         if ((!allowPipelineActive && isPipelineActive) || viewEntity == null) {
             return 0;
         }
-        if (!NothiriumShadowRenderer.isAvailable() || NothiriumBypass.shouldBypass()) {
+        if (CeleritasCompat.installed()
+                || !NothiriumShadowRenderer.isAvailable()
+                || NothiriumBypass.shouldBypass()) {
             return renderVanillaEmissiveTerrain(partialTicks, viewEntity, allowPipelineActive);
         }
         return renderNothiriumEmissiveExtractionTerrain(partialTicks, viewEntity);

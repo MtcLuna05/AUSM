@@ -1,6 +1,7 @@
 package com.l.ausm.impl.client.gui;
 
 import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.input.Mouse;
 
@@ -67,7 +68,7 @@ public class GuiSlotShaders {
             return;
         }
 
-        long now = Minecraft.getSystemTime();
+        long now = MinecraftReflectionCompat.minecraftSystemTime();
         if (mouseButton == 0 && index == lastClickIndex && now - lastClickTime < 250L) {
             parent.applySelectedPack();
         }
@@ -107,7 +108,9 @@ public class GuiSlotShaders {
             }
 
             int color = selected ? 0xFFFFFF : 0xC8CED6;
-            com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc).drawString(shaderPacks.get(index), panelLeft + 28, y + 4, color);
+            MinecraftReflectionCompat.fontDrawString(
+                    MinecraftReflectionCompat.fontRenderer(mc),
+                    shaderPacks.get(index), panelLeft + 28, y + 4, color);
         }
 
         drawScrollbar(visibleRows);
@@ -204,6 +207,6 @@ public class GuiSlotShaders {
     }
 
     private void drawRect(int left, int top, int right, int bottom, int color) {
-        net.minecraft.client.gui.Gui.drawRect(left, top, right, bottom, color);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.guiDrawRect(left, top, right, bottom, color);
     }
 }

@@ -1,9 +1,8 @@
 package com.l.ausm.impl.client.gui;
 
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.gui.FontRenderer;
-import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiButton;
-import net.minecraft.client.resources.I18n;
 import org.lwjgl.input.Keyboard;
 
 import java.util.List;
@@ -22,20 +21,21 @@ final class GuiControlHints {
     }
 
     static List<String> escapeTooltip() {
-        return List.of(I18n.format(ESC_BACK_KEY), I18n.format(SHIFT_ESC_CLOSE_KEY));
+        return List.of(MinecraftReflectionCompat.i18nFormat(ESC_BACK_KEY),
+                MinecraftReflectionCompat.i18nFormat(SHIFT_ESC_CLOSE_KEY));
     }
 
     static void drawEscapeHintLabel(FontRenderer fontRenderer, int screenWidth) {
-        String label = I18n.format(LABEL_KEY);
+        String label = MinecraftReflectionCompat.i18nFormat(LABEL_KEY);
         int left = escapeHintLeft(fontRenderer, screenWidth, label);
         int right = screenWidth - HINT_MARGIN;
-        Gui.drawRect(left, HINT_TOP, right, HINT_TOP + HINT_HEIGHT, 0x66101418);
-        Gui.drawRect(left, HINT_TOP, right, HINT_TOP + 1, 0xFF42566D);
-        fontRenderer.drawString(label, left + HINT_PADDING_X, HINT_TOP + 4, 0xFFC8D3E0);
+        MinecraftReflectionCompat.guiDrawRect(left, HINT_TOP, right, HINT_TOP + HINT_HEIGHT, 0x66101418);
+        MinecraftReflectionCompat.guiDrawRect(left, HINT_TOP, right, HINT_TOP + 1, 0xFF42566D);
+        MinecraftReflectionCompat.fontDrawString(fontRenderer, label, left + HINT_PADDING_X, HINT_TOP + 4, 0xFFC8D3E0);
     }
 
     static boolean isMouseOverEscapeHint(FontRenderer fontRenderer, int screenWidth, int mouseX, int mouseY) {
-        String label = I18n.format(LABEL_KEY);
+        String label = MinecraftReflectionCompat.i18nFormat(LABEL_KEY);
         int left = escapeHintLeft(fontRenderer, screenWidth, label);
         int right = screenWidth - HINT_MARGIN;
         return mouseX >= left && mouseX < right
@@ -47,20 +47,30 @@ final class GuiControlHints {
             return;
         }
 
-        Gui.drawRect(button.x - 2, button.y - 2, button.x + button.width + 2, button.y - 1, FOCUS_COLOR);
-        Gui.drawRect(button.x - 2, button.y + button.height + 1, button.x + button.width + 2, button.y + button.height + 2, FOCUS_COLOR);
-        Gui.drawRect(button.x - 2, button.y - 2, button.x - 1, button.y + button.height + 2, FOCUS_COLOR);
-        Gui.drawRect(button.x + button.width + 1, button.y - 2, button.x + button.width + 2, button.y + button.height + 2, FOCUS_COLOR);
+        int x = MinecraftReflectionCompat.guiButtonX(button);
+        int y = MinecraftReflectionCompat.guiButtonY(button);
+        int width = MinecraftReflectionCompat.guiButtonWidth(button);
+        int height = MinecraftReflectionCompat.guiButtonHeight(button);
+        MinecraftReflectionCompat.guiDrawRect(x - 2, y - 2, x + width + 2, y - 1, FOCUS_COLOR);
+        MinecraftReflectionCompat.guiDrawRect(x - 2, y + height + 1, x + width + 2, y + height + 2, FOCUS_COLOR);
+        MinecraftReflectionCompat.guiDrawRect(x - 2, y - 2, x - 1, y + height + 2, FOCUS_COLOR);
+        MinecraftReflectionCompat.guiDrawRect(x + width + 1, y - 2, x + width + 2, y + height + 2, FOCUS_COLOR);
     }
 
     static boolean isFocusable(GuiButton button) {
-        return button.visible && button.enabled;
+        return MinecraftReflectionCompat.guiButtonVisible(button)
+                && MinecraftReflectionCompat.guiButtonEnabled(button);
     }
 
     static boolean isMouseOverButton(GuiButton button, int mouseX, int mouseY) {
-        return button != null && button.visible
-                && mouseX >= button.x && mouseY >= button.y
-                && mouseX < button.x + button.width && mouseY < button.y + button.height;
+        if (button == null || !MinecraftReflectionCompat.guiButtonVisible(button)) {
+            return false;
+        }
+        int x = MinecraftReflectionCompat.guiButtonX(button);
+        int y = MinecraftReflectionCompat.guiButtonY(button);
+        return mouseX >= x && mouseY >= y
+                && mouseX < x + MinecraftReflectionCompat.guiButtonWidth(button)
+                && mouseY < y + MinecraftReflectionCompat.guiButtonHeight(button);
     }
 
     static boolean isShiftDown() {
@@ -68,7 +78,7 @@ final class GuiControlHints {
     }
 
     private static int escapeHintLeft(FontRenderer fontRenderer, int screenWidth, String label) {
-        int width = fontRenderer.getStringWidth(label) + HINT_PADDING_X * 2;
+        int width = MinecraftReflectionCompat.fontStringWidth(fontRenderer, label) + HINT_PADDING_X * 2;
         return Math.max(4, screenWidth - HINT_MARGIN - width);
     }
 }

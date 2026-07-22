@@ -1182,8 +1182,7 @@ public final class NothiriumShadowRenderer {
                                                      int vbo, int first, int count, int offset, int size,
                                                      int stride, int vboSize, boolean pipelineStride) {
         PipelineContext context = PipelineContext.getInstance();
-        if (layer != BlockRenderLayer.TRANSLUCENT
-                || !context.shouldDisableNothiriumChunkCulling(layer)
+        if (!context.isPipelineActive()
                 || visibleTerrainDrawProbeAttempts >= MAX_VISIBLE_TERRAIN_DRAW_PROBE_LOGS
                 || count <= 0
                 || stride <= 0

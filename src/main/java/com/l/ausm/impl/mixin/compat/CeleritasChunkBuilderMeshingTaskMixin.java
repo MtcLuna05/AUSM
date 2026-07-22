@@ -42,6 +42,8 @@ public abstract class CeleritasChunkBuilderMeshingTaskMixin {
     private static volatile boolean ausm$getBufferForLayerUnavailable;
     @Unique
     private static final AtomicInteger ausm$blockcrafteryBloomProbeCount = new AtomicInteger();
+    @Unique
+    private static final AtomicInteger ausm$nativeRenderFailureCount = new AtomicInteger();
 
     @Inject(
             method = "execute(Lorg/embeddedt/embeddium/impl/render/chunk/compile/ChunkBuildContext;Lorg/embeddedt/embeddium/impl/util/task/CancellationToken;)Lorg/embeddedt/embeddium/impl/render/chunk/compile/ChunkBuildOutput;",
@@ -116,7 +118,9 @@ public abstract class CeleritasChunkBuilderMeshingTaskMixin {
         if (ausm$renderForgeFallback(state, pos, blockAccess, layer, buildContext)) {
             return;
         }
-        ausm$invokeNativeRenderBlock(renderer, state, pos, blockAccess, layer);
+        if (!ausm$invokeNativeRenderBlock(renderer, state, pos, blockAccess, layer)) {
+            ausm$renderVanillaBlock(state, pos, blockAccess, layer, buildContext);
+        }
     }
 
     @Unique
@@ -149,16 +153,38 @@ public abstract class CeleritasChunkBuilderMeshingTaskMixin {
     }
 
     @Unique
-    private static void ausm$invokeNativeRenderBlock(Object renderer, IBlockState state, BlockPos pos,
-                                                    Object blockAccess,
-                                                    BlockRenderLayer layer) {
+    private static boolean ausm$invokeNativeRenderBlock(Object renderer, IBlockState state, BlockPos pos,
+                                                       Object blockAccess,
+                                                       BlockRenderLayer layer) {
         MethodHandle handle = ausm$nativeRenderBlockHandle(renderer);
         if (handle == null) {
-            return;
+            return false;
         }
         try {
             handle.invoke(renderer, state, pos, blockAccess, layer);
-        } catch (Throwable ignored) {
+            return true;
+        } catch (Throwable failure) {
+            if (ausm$nativeRenderFailureCount.incrementAndGet() <= 8) {
+                com.l.ausm.impl.MainMod.LOGGER.warn(
+                        "[AUSMCeleritasCompileCompat] native block renderer failed; using vanilla fallback",
+                        failure);
+            }
+            return false;
+        }
+    }
+
+    @Unique
+    private static void ausm$renderVanillaBlock(IBlockState state, BlockPos pos, Object blockAccess,
+                                                BlockRenderLayer layer, Object buildContext) {
+        if (!(blockAccess instanceof net.minecraft.world.IBlockAccess)) {
+            return;
+        }
+        BufferBuilder buffer = ausm$getBufferForLayer(buildContext, layer);
+        BlockRendererDispatcher dispatcher = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRendererDispatcher(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
+        if (buffer != null && dispatcher != null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlock(dispatcher, state, pos,
+                    (net.minecraft.world.IBlockAccess) blockAccess, buffer);
         }
     }
 
