@@ -615,6 +615,7 @@ abstract class PipelineRuntimeState {
     protected int ownedSkyBackingDecisionProbeLogs = 0;
     protected int directColorPresentLogs = 0;
     protected int directWindowPresentLogs = 0;
+    protected int directF1WindowPresentLogs = 0;
     protected int presentationBoundaryLogs = 0;
     protected int skyDomeProbeLogs = 0;
     protected int skyDomeGuiProbeLogs = 0;
@@ -645,6 +646,7 @@ abstract class PipelineRuntimeState {
     protected int voidWorldSkyRendererChainGuiLogs = 0;
     protected int voidWorldSkyRendererChainPauseLogs = 0;
     protected int hiddenSkyFramebufferProbeLogs = 0;
+    protected int hiddenF1SkyFramebufferProbeLogs = 0;
     protected int shaderlessWorldFramebufferForUi = 0;
     protected int shaderlessWorldFramebufferWidth = 0;
     protected int shaderlessWorldFramebufferHeight = 0;
@@ -689,6 +691,7 @@ abstract class PipelineRuntimeState {
     protected final AtomicInteger decoratedLightAuditCount = new AtomicInteger();
     protected final Set<String> framedBlockDiagnosticKeys = ConcurrentHashMap.newKeySet();
     protected final AtomicInteger blockcrafteryDiagnosticCount = new AtomicInteger();
+    protected final AtomicInteger blockcrafteryBloomDecisionProbeCount = new AtomicInteger();
     protected final AtomicInteger architectureCraftDiagnosticCount = new AtomicInteger();
     protected final AtomicInteger framedPriorityDiagnosticCount = new AtomicInteger();
     protected final Set<String> currentProblemProbeKeys = ConcurrentHashMap.newKeySet();
@@ -1419,9 +1422,15 @@ abstract class PipelineRuntimeState {
 
     protected boolean shouldForceUiSkyboxRepair(Minecraft mc) {
         World world = renderWorld(mc);
+        Object screen = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc);
+        boolean hideGui = mc != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc));
         return isPipelineActive
                 && shouldUseOwnedSkyOverrideWorld(world)
-                && (com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null
+                && (screen != null
+                    || hideGui
                     || com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc));
     }
 
@@ -2914,7 +2923,13 @@ abstract class PipelineRuntimeState {
             return 0;
         }
 
-        IBlockState pipelineState = actualLightState(state, blockAccess, pos);
+        return blockEntityIdForActualState(actualLightState(state, blockAccess, pos), blockAccess, pos);
+    }
+
+    public int blockEntityIdForActualState(IBlockState pipelineState, IBlockAccess blockAccess, BlockPos pos) {
+        if (pipelineState == null) {
+            return 0;
+        }
 
         ShaderBlockIdMap.BlockIdRules blockIds = shaderProperties.blockIds();
         if (!blockIds.isEmpty()) {
@@ -3007,12 +3022,25 @@ abstract class PipelineRuntimeState {
         return blockMetadata(actualLightState(state, blockAccess, pos));
     }
 
+    public int blockMetadataForActualState(IBlockState actualState) {
+        return blockMetadata(actualState);
+    }
+
+    public IBlockState actualBlockRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        return actualLightState(state, blockAccess, pos);
+    }
+
     public IBlockState effectiveBlockRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        return effectiveBlockRenderState(state, actualLightState(state, blockAccess, pos), blockAccess, pos);
+    }
+
+    public IBlockState effectiveBlockRenderState(IBlockState state, IBlockState actualState,
+                                                 IBlockAccess blockAccess, BlockPos pos) {
         IBlockState inherited = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
         if (inherited != null) {
             return inherited;
         }
-        return actualLightState(state, blockAccess, pos);
+        return actualState;
     }
 
     public IBlockState inheritedBlockcrafteryRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -4561,8 +4589,20 @@ abstract class PipelineRuntimeState {
     }
 
     protected boolean gpomFramedMaterialHasBloom(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return isBlockcrafteryEditableBlock(state)
-                && GpomFramedMaterialCompat.material(blockAccess, pos).bloom();
+        if (!isBlockcrafteryEditableBlock(state)) {
+            return false;
+        }
+        GpomFramedMaterialCompat.Material material = GpomFramedMaterialCompat.material(blockAccess, pos);
+        int probe = blockcrafteryBloomDecisionProbeCount.incrementAndGet();
+        if (probe <= 64) {
+            MainMod.LOGGER.info("[AUSMBlockcrafteryBloomProbe] call={} thread={} pos={} state={} access={} present={} emission={} bloom={} primary={} secondary={} layer={} bloomLayer={}",
+                    probe, Thread.currentThread().getName(), pos, state,
+                    blockAccess != null ? blockAccess.getClass().getName() : "null",
+                    material.present(), material.emission(), material.bloom(),
+                    diagnosticStateName(material.primary()), diagnosticStateName(material.secondary()),
+                    MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer());
+        }
+        return material.bloom();
     }
 
     public boolean gpomFramedMaterialHasBloom(IBlockAccess blockAccess, BlockPos pos) {
@@ -5245,13 +5285,87 @@ abstract class PipelineRuntimeState {
         return !isPipelineActive || shaderProperties.renderSettings().sky();
     }
 
+    public boolean shouldUseCompleteOwnedSkyOverride() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
+        return mc != null
+                && world != null
+                && isSimpleVoidWorld(world)
+                && !isRenderingBetterPortalsNestedView()
+                && !isRenderingBetterPortalsRenderPass();
+    }
+
+    public void renderCompleteOwnedVoidSkyDetails(float partialTicks, WorldClient world, Minecraft mc) {
+        if (mc == null
+                || world == null
+                || !shouldUseCompleteOwnedSkyOverride()) {
+            return;
+        }
+        Object screen = com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc);
+        if (screen != null || com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc)) {
+            return;
+        }
+        Object renderer = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProviderSkyRenderer(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world));
+        if (renderer == null
+                || (!isActualBotaniaVoidWorld(world)
+                && !ASTRAL_SKYBOX_CLASS.equals(renderer.getClass().getName()))) {
+            return;
+        }
+        try {
+            if (ASTRAL_SKYBOX_CLASS.equals(renderer.getClass().getName())) {
+                // Keep Astral's wrapper intact. Its own compatibility mixin
+                // routes the delegated Botania renderer and constellation
+                // pass, while avoiding the recursive vanilla sky branch for
+                // dimensions that require Astral's sky handling.
+                com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
+                        renderer,
+                        new String[] {"render"},
+                        new Class<?>[] {float.class, WorldClient.class, Minecraft.class},
+                        partialTicks,
+                        world,
+                        mc);
+                return;
+            }
+            if (!"vazkii.botania.client.render.world.SkyblockSkyRenderer".equals(renderer.getClass().getName())) {
+                return;
+            }
+            // Botania's base dome and sunset fan are suppressed by its AUSM
+            // compatibility mixin; its planet/rainbow details remain intact.
+            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
+                    renderer,
+                    new String[] {"render"},
+                    new Class<?>[] {float.class, WorldClient.class, Minecraft.class},
+                    partialTicks,
+                    world,
+                    mc);
+        } catch (RuntimeException | LinkageError ignored) {
+            // Optional detail path; the owned gradient remains authoritative.
+        }
+    }
+
     public void prepareShaderlessHiddenGuiFramebufferPresentation() {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Object screen = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc);
+        boolean hideGui = mc != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc));
+        boolean paused = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc);
         if (mc == null
                 || !shouldUseShaderlessOwnedSky(mc)
-                || !com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
-                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc))) {
+                || (!hideGui && !paused && screen == null)) {
             return;
+        }
+        Framebuffer target = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        if (target != null
+                && GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
+                == com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target)) {
+            // Framebuffer.framebufferRenderExt draws the attached texture into
+            // the currently bound draw target. Ensure shaderless GUI/F1
+            // presentation cannot sample and overwrite its own source FBO.
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, 0);
+            GL11.glDrawBuffer(GL11.GL_BACK);
         }
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
@@ -5260,6 +5374,41 @@ abstract class PipelineRuntimeState {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    public void restoreShaderlessHiddenGuiFramebufferTarget() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Object screen = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc);
+        boolean hideGui = mc != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc));
+        boolean paused = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc);
+        if (mc == null
+                || !shouldUseShaderlessOwnedSky(mc)
+                || (!hideGui && !paused && screen == null)) {
+            return;
+        }
+        Framebuffer target = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        if (target == null) {
+            return;
+        }
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
+        GL11.glDrawBuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target) == 0
+                ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+    }
+
+    public boolean shouldUseShaderlessHiddenGuiPresentation() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Object screen = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc);
+        boolean hideGui = mc != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc));
+        boolean paused = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc);
+        return mc != null
+                && shouldUseShaderlessOwnedSky(mc)
+                && (hideGui || paused || screen != null);
     }
 
     public Object detachNonVanillaSkyRendererForVanillaSky() {
@@ -5424,17 +5573,12 @@ abstract class PipelineRuntimeState {
     }
 
     public void renderShaderlessBotaniaVoidDetailsIfNeeded(float partialTicks, WorldClient world, Minecraft mc) {
-        if (mc == null
-                || world == null
-                || !shouldUseShaderlessOwnedSky(mc)
-                || !isActualBotaniaVoidWorld(world)) {
-            return;
-        }
-        try {
-            renderShaderlessBotaniaVoidDetails(partialTicks, world, mc);
-        } catch (RuntimeException | LinkageError ignored) {
-            // Decorative only; preserve the owned sky if a texture/state call fails.
-        }
+        // The shaderless decorative overlays are depth-disabled and can be
+        // rendered before the GUI screen is installed, so a GUI-only guard is
+        // too late to prevent their bands from entering the presented world FBO.
+        // Keep the owned sky gradient; defer these optional decorations until
+        // their render boundary can be made depth-safe.
+        return;
     }
 
     /**
@@ -5449,19 +5593,14 @@ abstract class PipelineRuntimeState {
             return;
         }
 
-        renderShaderlessBotaniaVoidDetailsIfNeeded(partialTicks, world, mc);
+        // Optional Botania/Astral decoration is disabled here for the same
+        // reason as the shaderless compatibility path above: it is not
+        // contained by the world depth buffer in the current presentation.
+    }
 
-        try {
-            Class<?> astralSkybox = Class.forName("hellfirepvp.astralsorcery.client.sky.RenderAstralSkybox");
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
-                    astralSkybox,
-                    new String[] {"renderConstellationsWrapped"},
-                    new Class<?>[] {World.class, float.class},
-                    world,
-                    partialTicks);
-        } catch (RuntimeException | ReflectiveOperationException | LinkageError ignored) {
-            // Optional constellation overlay; retain the owned sky when Astral is absent.
-        }
+    protected boolean isShaderlessSkyDecorationSuppressedForGui(Minecraft mc) {
+        return mc != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null;
     }
 
     protected boolean isActualBotaniaVoidWorld(World world) {

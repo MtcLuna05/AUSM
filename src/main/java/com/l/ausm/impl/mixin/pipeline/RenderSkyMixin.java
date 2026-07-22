@@ -61,10 +61,17 @@ public class RenderSkyMixin {
         // if the previous buffer was not closed.
         ausm$forceResetTessellator();
         PipelineContext.getInstance().setAstralSolarEclipseFactor(0.0f);
-        PipelineContext.getInstance().beginPhase(WorldRenderingPhase.SKY);
-        PipelineContext.getInstance().renderOwnedSkyBackingBeforeSky(partialTicks);
-        if (!PipelineContext.getInstance().shouldRenderSkyDisc()) {
-            PipelineContext.getInstance().endPass();
+        PipelineContext context = PipelineContext.getInstance();
+        context.beginPhase(WorldRenderingPhase.SKY);
+        if (context.shouldUseCompleteOwnedSkyOverride()) {
+            context.renderCompleteOwnedSkyOverride(partialTicks, pass);
+            context.endPass();
+            ci.cancel();
+            return;
+        }
+        context.renderOwnedSkyBackingBeforeSky(partialTicks);
+        if (!context.shouldRenderSkyDisc()) {
+            context.endPass();
             ci.cancel();
             return;
         }
@@ -130,6 +137,9 @@ public class RenderSkyMixin {
     @Inject(method = "renderSkyEnd()V", at = @At("HEAD"), require = 0)
     private void ausm$beforeVoidSkybox(CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldUseCompleteOwnedSkyOverride()) {
+            return;
+        }
         context.endPass();
         context.prepareExternalWorldOverlayRender();
         context.beginPhase(WorldRenderingPhase.VOID);
@@ -138,6 +148,9 @@ public class RenderSkyMixin {
     @Inject(method = "renderSkyEnd()V", at = @At("RETURN"), require = 0)
     private void ausm$afterVoidSkybox(CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldUseCompleteOwnedSkyOverride()) {
+            return;
+        }
         context.endPass();
         context.finishExternalWorldOverlayRender("void skybox");
     }

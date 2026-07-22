@@ -5,7 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.vertex.SeparateAoColorWriter;
-import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraftforge.client.model.pipeline.VertexBufferConsumer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -24,9 +24,10 @@ public class VertexBufferConsumerMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/BufferBuilder;addVertexData([I)V")
     )
     private void ausm$rewriteForgeSeparateAo(BufferBuilder bufferBuilder, int[] data) {
-        SeparateAoColorWriter.rewriteForgeQuadData(bufferBuilder, data);
+        IBufferBuilderExtension extension = (IBufferBuilderExtension) bufferBuilder;
+        SeparateAoColorWriter.rewriteForgeQuadData(extension.ausm$vertexFormat(), data);
         try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((bufferBuilder), new String[] {"func_178981_a", "addVertexData"}, new Class<?>[] {int[].class}, (data));;
+            extension.ausm$addVertexData(data);
         } finally {
             // Forge leaves v at 4 if addVertexData throws, causing index-56 spam on the next quad.
             v = 0;

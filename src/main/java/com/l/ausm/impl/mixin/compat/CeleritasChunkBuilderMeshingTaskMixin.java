@@ -1,6 +1,7 @@
 package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.compat.TerrainCompileCoordinator;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
@@ -17,9 +18,31 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.lang.reflect.Method;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(targets = "org.taumc.celeritas.impl.render.terrain.compile.task.ChunkBuilderMeshingTask", remap = false)
 public abstract class CeleritasChunkBuilderMeshingTaskMixin {
+    @Unique
+    private static volatile Method ausm$nativeRenderBlockMethod;
+    @Unique
+    private static volatile MethodHandle ausm$nativeRenderBlockHandle;
+    @Unique
+    private static volatile Class<?> ausm$nativeRenderBlockOwner;
+    @Unique
+    private static volatile boolean ausm$nativeRenderBlockUnavailable;
+    @Unique
+    private static volatile Method ausm$getBufferForLayerMethod;
+    @Unique
+    private static volatile MethodHandle ausm$getBufferForLayerHandle;
+    @Unique
+    private static volatile Class<?> ausm$getBufferForLayerOwner;
+    @Unique
+    private static volatile boolean ausm$getBufferForLayerUnavailable;
+    @Unique
+    private static final AtomicInteger ausm$blockcrafteryBloomProbeCount = new AtomicInteger();
+
     @Inject(
             method = "execute(Lorg/embeddedt/embeddium/impl/render/chunk/compile/ChunkBuildContext;Lorg/embeddedt/embeddium/impl/util/task/CancellationToken;)Lorg/embeddedt/embeddium/impl/render/chunk/compile/ChunkBuildOutput;",
             at = @At("HEAD"),
@@ -73,6 +96,23 @@ public abstract class CeleritasChunkBuilderMeshingTaskMixin {
             @Coerce Object buildContext,
             @Coerce Object cancellationToken
     ) {
+        PipelineContext pipeline = PipelineContext.getInstance();
+        if (AusmBloomLayer.isBloomLayer(layer)
+                && pipeline.isBlockcrafteryEditableState(state)
+                && blockAccess instanceof net.minecraft.world.IBlockAccess) {
+            boolean materialBloom = pipeline.gpomFramedMaterialHasBloom(
+                    (net.minecraft.world.IBlockAccess) blockAccess, pos);
+            int probe = ausm$blockcrafteryBloomProbeCount.incrementAndGet();
+            if (probe <= 64) {
+                com.l.ausm.impl.MainMod.LOGGER.info(
+                        "[AUSMBlockcrafteryBloomLayerProbe] call={} thread={} pos={} state={} layer={} materialBloom={} access={}",
+                        probe, Thread.currentThread().getName(), pos, state, layer, materialBloom,
+                        blockAccess.getClass().getName());
+            }
+            if (!materialBloom) {
+                return;
+            }
+        }
         if (ausm$renderForgeFallback(state, pos, blockAccess, layer, buildContext)) {
             return;
         }
@@ -112,16 +152,50 @@ public abstract class CeleritasChunkBuilderMeshingTaskMixin {
     private static void ausm$invokeNativeRenderBlock(Object renderer, IBlockState state, BlockPos pos,
                                                     Object blockAccess,
                                                     BlockRenderLayer layer) {
+        MethodHandle handle = ausm$nativeRenderBlockHandle(renderer);
+        if (handle == null) {
+            return;
+        }
         try {
-            Method method = renderer.getClass().getMethod(
-                    "renderBlock",
-                    IBlockState.class,
-                    BlockPos.class,
-                    Class.forName("org.taumc.celeritas.impl.world.cloned.CeleritasBlockAccess"),
-                    BlockRenderLayer.class
-            );
-            method.invoke(renderer, state, pos, blockAccess, layer);
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            handle.invoke(renderer, state, pos, blockAccess, layer);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @Unique
+    private static MethodHandle ausm$nativeRenderBlockHandle(Object renderer) {
+        if (renderer == null || ausm$nativeRenderBlockUnavailable) {
+            return null;
+        }
+        Class<?> owner = renderer.getClass();
+        MethodHandle cached = ausm$nativeRenderBlockHandle;
+        if (cached != null && ausm$nativeRenderBlockOwner == owner) {
+            return cached;
+        }
+        synchronized (CeleritasChunkBuilderMeshingTaskMixin.class) {
+            cached = ausm$nativeRenderBlockHandle;
+            if (cached != null && ausm$nativeRenderBlockOwner == owner) {
+                return cached;
+            }
+            try {
+                Class<?> blockAccessType = Class.forName(
+                        "org.taumc.celeritas.impl.world.cloned.CeleritasBlockAccess",
+                        false,
+                        owner.getClassLoader()
+                );
+                Method method = owner.getMethod("renderBlock", IBlockState.class, BlockPos.class, blockAccessType,
+                        BlockRenderLayer.class);
+                method.setAccessible(true);
+                MethodHandle handle = MethodHandles.lookup().unreflect(method);
+                ausm$nativeRenderBlockOwner = owner;
+                ausm$nativeRenderBlockMethod = method;
+                ausm$nativeRenderBlockHandle = handle;
+                ausm$nativeRenderBlockUnavailable = false;
+                return handle;
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+                ausm$nativeRenderBlockUnavailable = true;
+                return null;
+            }
         }
     }
 
@@ -130,12 +204,46 @@ public abstract class CeleritasChunkBuilderMeshingTaskMixin {
         if (buildContext == null || layer == null) {
             return null;
         }
-        try {
-            Method method = buildContext.getClass().getMethod("getBufferForLayer", BlockRenderLayer.class);
-            Object value = method.invoke(buildContext, layer);
-            return value instanceof BufferBuilder ? (BufferBuilder) value : null;
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+        MethodHandle handle = ausm$getBufferForLayerHandle(buildContext);
+        if (handle == null) {
             return null;
+        }
+        try {
+            Object value = handle.invoke(buildContext, layer);
+            return value instanceof BufferBuilder ? (BufferBuilder) value : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    @Unique
+    private static MethodHandle ausm$getBufferForLayerHandle(Object buildContext) {
+        if (buildContext == null || ausm$getBufferForLayerUnavailable) {
+            return null;
+        }
+        Class<?> owner = buildContext.getClass();
+        MethodHandle cached = ausm$getBufferForLayerHandle;
+        if (cached != null && ausm$getBufferForLayerOwner == owner) {
+            return cached;
+        }
+        synchronized (CeleritasChunkBuilderMeshingTaskMixin.class) {
+            cached = ausm$getBufferForLayerHandle;
+            if (cached != null && ausm$getBufferForLayerOwner == owner) {
+                return cached;
+            }
+            try {
+                Method method = owner.getMethod("getBufferForLayer", BlockRenderLayer.class);
+                method.setAccessible(true);
+                MethodHandle handle = MethodHandles.lookup().unreflect(method);
+                ausm$getBufferForLayerOwner = owner;
+                ausm$getBufferForLayerMethod = method;
+                ausm$getBufferForLayerHandle = handle;
+                ausm$getBufferForLayerUnavailable = false;
+                return handle;
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+                ausm$getBufferForLayerUnavailable = true;
+                return null;
+            }
         }
     }
 }

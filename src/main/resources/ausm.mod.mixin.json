@@ -76,6 +76,7 @@
     "pipeline.BlockMixin",
     "pipeline.BlockStateContainerStateImplementationMixin",
     "pipeline.BlockRendererDispatcherMixin",
+    "pipeline.BlockFluidRendererMixin",
     "pipeline.BufferBuilderMixin",
     "pipeline.CustomMainMenuGuiCustomMixin",
     "pipeline.RenderChunkMixin",

@@ -67,6 +67,9 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     @Unique
     private static final AtomicInteger AUSM_LUMINOUS_COMPILE_PROBES = new AtomicInteger();
 
+    @Unique
+    private static final AtomicInteger AUSM_BLOCKCRAFTERY_BLOOM_LAYER_PROBES = new AtomicInteger();
+
     @Shadow(remap = false)
     private IBlockAccess chunkCache;
 
@@ -234,6 +237,26 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                                                     BlockPos pos,
                                                     VisibilityGraph visibilityGraph,
                                                     RegionRenderCacheBuilder regionBuffers) {
+        PipelineContext pipeline = PipelineContext.getInstance();
+        if (AusmBloomLayer.isBloomLayer(layer) && pipeline.isBlockcrafteryEditableState(state)) {
+            boolean materialBloom = pipeline.gpomFramedMaterialHasBloom(chunkCache, pos);
+            int probe = AUSM_BLOCKCRAFTERY_BLOOM_LAYER_PROBES.incrementAndGet();
+            if (probe <= 64) {
+                MainMod.LOGGER.info(
+                        "[AUSMNothiriumBlockcrafteryBloomLayerProbe] call={} thread={} pos={} state={} layer={} materialBloom={} materialEmission={} currentLayer={} access={}",
+                        probe,
+                        Thread.currentThread().getName(),
+                        pos,
+                        pipeline.diagnosticStateName(state),
+                        layer,
+                        materialBloom,
+                        pipeline.gpomFramedMaterialEmission(chunkCache, pos),
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
+                        chunkCache != null ? chunkCache.getClass().getName() : "null"
+                );
+            }
+            return materialBloom;
+        }
         if (ausm$canRenderInLayer(block, state, layer)) {
             return true;
         }
@@ -335,6 +358,14 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     )
     private void ausm$setPipelineBlockContext(IBlockState state, BlockPos pos, VisibilityGraph visibilityGraph,
                                               RegionRenderCacheBuilder bufferBuilder, CallbackInfo ci) {
+        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+        BlockRenderLayer naturalLayer = block != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.blockRenderLayer(block)
+                : null;
+        if (naturalLayer != null
+                && com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer() == null) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(naturalLayer);
+        }
         PipelineContext pipeline = PipelineContext.getInstance();
         ausm$terrainCompileProbeLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
         BufferBuilder terrainProbeBuffer = ausm$terrainCompileProbeLayer != null && bufferBuilder != null
@@ -343,6 +374,13 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         ausm$terrainCompileProbeStart = terrainProbeBuffer != null
                 ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(terrainProbeBuffer)
                 : -1;
+        ausm$framedDiagnosticStart = -1;
+        ausm$framedDiagnosticLayer = null;
+        if (!pipeline.currentProblemProbesEnabled()
+                && !pipeline.isFramedBlockDiagnosticTarget(state)
+                && !pipeline.shouldProbeBlockcrafteryTransparency(state, chunkCache, pos)) {
+            return;
+        }
         if (pipeline.shouldForceVanillaTerrainRenderer()) {
             BlockRenderContext.setBlockEntityId(0);
             BlockRenderContext.setRenderType((short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(state));
@@ -361,19 +399,18 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             BlockRenderContext.setCustomLiquidTint(-1);
             BlockRenderContext.setCrystalOnlyEmission(false);
             BlockRenderContext.setSeparateAoEligible(false);
-            ausm$framedDiagnosticStart = -1;
-            ausm$framedDiagnosticLayer = null;
             return;
         }
-        IBlockState contextState = pipeline.effectiveBlockRenderState(state, chunkCache, pos);
+        IBlockState actualState = pipeline.actualBlockRenderState(state, chunkCache, pos);
+        IBlockState contextState = pipeline.effectiveBlockRenderState(state, actualState, chunkCache, pos);
         if (contextState == null) {
             contextState = state;
         }
 
-        int blockEntityId = pipeline.blockEntityId(state, chunkCache, pos);
+        int blockEntityId = pipeline.blockEntityIdForActualState(actualState, chunkCache, pos);
         BlockRenderContext.setBlockEntityId(blockEntityId);
         BlockRenderContext.setRenderType((short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState));
-        BlockRenderContext.setMetadata(pipeline.blockMetadata(state, chunkCache, pos));
+        BlockRenderContext.setMetadata(pipeline.blockMetadataForActualState(actualState));
         BlockRenderContext.setLocalBlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos));
         BlockRenderContext.setWorldBlockContext(chunkCache, pos);
         BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
@@ -394,15 +431,13 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         BlockRenderContext.setBloomOnlyEmission(framedShaderlessExtractionEmission > 0);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, chunkCache, pos));
         BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, chunkCache, pos));
-        BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, chunkCache, pos));
-        BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState, chunkCache, pos));
+        BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(actualState));
+        BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState));
         if (pipeline.currentProblemProbesEnabled()) {
             pipeline.setBlockRenderDebugContext(state, chunkCache, pos);
         }
         pipeline.recordSyntheticLightCandidate(contextState, chunkCache, pos);
 
-        ausm$framedDiagnosticStart = -1;
-        ausm$framedDiagnosticLayer = null;
         if (pipeline.isFramedBlockDiagnosticTarget(state) && bufferBuilder != null) {
             ausm$framedDiagnosticLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
             BufferBuilder layerBuffer = ausm$framedDiagnosticLayer != null
@@ -599,6 +634,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                                               RegionRenderCacheBuilder regionBuffers, CallbackInfo ci) {
         PipelineContext pipeline = PipelineContext.getInstance();
         if (!pipeline.isManualBloomExtractionEnabled()) {
+            return;
+        }
+        if (pipeline.isBlockcrafteryEditableState(state)
+                && !pipeline.gpomFramedMaterialHasBloom(chunkCache, pos)) {
             return;
         }
         IBlockState effectiveState = pipeline.effectiveBlockRenderState(state, chunkCache, pos);

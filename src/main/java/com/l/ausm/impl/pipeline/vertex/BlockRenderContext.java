@@ -38,6 +38,15 @@ public final class BlockRenderContext {
         return state.hasQuadMetadataOverride ? state.quadMetadataOverride : state.metadata;
     }
 
+    public static long packedEntityData() {
+        State state = current();
+        int blockEntityId = state.hasQuadBlockEntityIdOverride ? state.quadBlockEntityIdOverride : state.blockEntityId;
+        short renderType = state.hasQuadRenderTypeOverride ? state.quadRenderTypeOverride : state.renderType;
+        short metadata = state.hasQuadMetadataOverride ? state.quadMetadataOverride : state.metadata;
+        int low = (blockEntityId & 0xFFFF) | (renderType << 16);
+        return (low & 0xFFFFFFFFL) | ((long) (metadata & 0xFFFF) << 32);
+    }
+
     public static void setLocalBlockPos(int x, int y, int z) {
         State state = current();
         state.blockX = x;
@@ -51,7 +60,7 @@ public final class BlockRenderContext {
     public static void setWorldBlockContext(IBlockAccess blockAccess, BlockPos pos) {
         State state = current();
         state.blockAccess = blockAccess;
-        state.blockPos = pos != null ? new BlockPos(state.blockX, state.blockY, state.blockZ) : null;
+        state.blockPos = pos;
     }
 
     public static IBlockAccess blockAccess() {
@@ -60,6 +69,11 @@ public final class BlockRenderContext {
 
     public static BlockPos blockPos() {
         return current().blockPos;
+    }
+
+    public static boolean hasWorldBlockContext() {
+        State state = current();
+        return state.blockAccess != null && state.blockPos != null;
     }
 
     public static int blockX() {
@@ -107,8 +121,7 @@ public final class BlockRenderContext {
     }
 
     public static int blockEmission() {
-        State state = current();
-        return state.hasQuadEmissionOverride ? clamp(state.quadEmissionOverride, 0, 15) : state.blockEmission;
+        return blockEmission(current());
     }
 
     public static void setBlockAlpha(int alpha) {
@@ -129,7 +142,7 @@ public final class BlockRenderContext {
 
     public static int vanillaLightmapEmission() {
         State state = current();
-        return state.crystalOnlyEmission || state.bloomOnlyEmission ? 0 : blockEmission();
+        return state.crystalOnlyEmission || state.bloomOnlyEmission ? 0 : blockEmission(state);
     }
 
     public static void setBloomOnlyEmission(boolean bloomOnlyEmission) {
@@ -186,16 +199,33 @@ public final class BlockRenderContext {
 
     public static int midBlock(float x, float y, float z, int emission) {
         State state = current();
+        return midBlock(x, y, z, packedLocalPosition(state), emission);
+    }
+
+    public static int packedLocalPosition() {
+        return packedLocalPosition(current());
+    }
+
+    public static int midBlock(float x, float y, float z, int packedLocalPosition, int emission) {
         return packMidBlock(
-                state.localX + 0.5f - x,
-                state.localY + 0.5f - y,
-                state.localZ + 0.5f - z,
+                (packedLocalPosition & 15) + 0.5f - x,
+                ((packedLocalPosition >>> 4) & 15) + 0.5f - y,
+                ((packedLocalPosition >>> 8) & 15) + 0.5f - z,
                 emission
         );
     }
 
     public static int midBlockEmission() {
-        return current().bloomMaskFallback ? BLOOM_ONLY_MASK_EMISSION : blockEmission();
+        State state = current();
+        return state.bloomMaskFallback ? BLOOM_ONLY_MASK_EMISSION : blockEmission(state);
+    }
+
+    private static int packedLocalPosition(State state) {
+        return state.localX | state.localY << 4 | state.localZ << 8;
+    }
+
+    private static int blockEmission(State state) {
+        return state.hasQuadEmissionOverride ? clamp(state.quadEmissionOverride, 0, 15) : state.blockEmission;
     }
 
     private static int packMidBlock(float x, float y, float z, int emission) {
@@ -223,23 +253,74 @@ public final class BlockRenderContext {
     }
 
     public static void setQuadAo(float[] quadAo) {
-        current().quadAo = quadAo == null ? null : quadAo.clone();
+        State state = current();
+        setQuadAo(state, quadAo);
+    }
+
+    public static void setQuadAoIfEligible(float[] quadAo) {
+        State state = current();
+        if (state.separateAoEligible) {
+            setQuadAo(state, quadAo);
+        }
+    }
+
+    private static void setQuadAo(State state, float[] quadAo) {
+        if (quadAo == null || quadAo.length < 4) {
+            state.hasQuadAo = false;
+            return;
+        }
+        state.quadAo0 = quadAo[0];
+        state.quadAo1 = quadAo[1];
+        state.quadAo2 = quadAo[2];
+        state.quadAo3 = quadAo[3];
+        state.hasQuadAo = true;
     }
 
     public static boolean hasQuadAo() {
-        return current().quadAo != null;
+        return current().hasQuadAo;
     }
 
     public static float separateAoForVertex(int vertexIndex, float fallback) {
-        float[] quadAo = current().quadAo;
-        if (quadAo == null || vertexIndex < 1 || vertexIndex > 4) {
+        State state = current();
+        if (!state.hasQuadAo) {
             return fallback;
         }
-        return quadAo[4 - vertexIndex];
+        return separateAoForVertex(state, vertexIndex, fallback);
+    }
+
+    public static float separateAoForVertexIfEligible(int vertexIndex, float fallback) {
+        State state = current();
+        if (!state.separateAoEligible || !state.hasQuadAo) {
+            return Float.NaN;
+        }
+        return separateAoForVertex(state, vertexIndex, fallback);
+    }
+
+    public static boolean separateAoAvailable() {
+        State state = current();
+        return state.separateAoEligible && state.hasQuadAo;
+    }
+
+    private static float separateAoForVertex(State state, int vertexIndex, float fallback) {
+        if (vertexIndex < 1 || vertexIndex > 4) {
+            return fallback;
+        }
+        switch (vertexIndex) {
+            case 1:
+                return state.quadAo3;
+            case 2:
+                return state.quadAo2;
+            case 3:
+                return state.quadAo1;
+            case 4:
+                return state.quadAo0;
+            default:
+                return fallback;
+        }
     }
 
     public static void clearQuadAo() {
-        current().quadAo = null;
+        current().hasQuadAo = false;
     }
 
     public static void setBloomMaskFallback(boolean enabled) {
@@ -313,7 +394,11 @@ public final class BlockRenderContext {
         private boolean hasQuadRenderTypeOverride;
         private boolean hasQuadMetadataOverride;
         private boolean separateAoEligible;
-        private float[] quadAo;
+        private boolean hasQuadAo;
+        private float quadAo0;
+        private float quadAo1;
+        private float quadAo2;
+        private float quadAo3;
         private boolean bloomMaskFallback;
         private String debugKind = "unknown";
         private String debugState = "unknown";
@@ -347,7 +432,11 @@ public final class BlockRenderContext {
             hasQuadRenderTypeOverride = false;
             hasQuadMetadataOverride = false;
             separateAoEligible = false;
-            quadAo = null;
+            hasQuadAo = false;
+            quadAo0 = 0.0F;
+            quadAo1 = 0.0F;
+            quadAo2 = 0.0F;
+            quadAo3 = 0.0F;
             bloomMaskFallback = false;
             debugKind = "unknown";
             debugState = "unknown";

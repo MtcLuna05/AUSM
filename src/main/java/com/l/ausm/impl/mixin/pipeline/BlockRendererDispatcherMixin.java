@@ -30,20 +30,59 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(BlockRendererDispatcher.class)
 public class BlockRendererDispatcherMixin {
-    @Inject(method = "renderBlock", at = @At("HEAD"), cancellable = true)
+    @Unique
+    private static final AtomicInteger AUSM$LIQUID_PROBE_COUNT = new AtomicInteger();
+
+    @Inject(method = "func_175018_a(Lnet/minecraft/block/state/IBlockState;Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/world/IBlockAccess;Lnet/minecraft/client/renderer/BufferBuilder;)Z", at = @At("HEAD"), remap = false, cancellable = true)
     private void ausm$beforeRenderBlock(IBlockState state, BlockPos pos, IBlockAccess blockAccess, BufferBuilder bufferBuilder, CallbackInfoReturnable<Boolean> cir) {
-        PipelineContext pipeline = PipelineContext.getInstance();
-        IBlockState contextState = pipeline.effectiveBlockRenderState(state, blockAccess, pos);
-        if (contextState == null) {
-            contextState = state;
-        }
-        int startVertex = bufferBuilder != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : -1;
-        TerrainRenderProbeState.setTerrainDispatchStart(startVertex);
-        int blockEntityId = pipeline.blockEntityId(state, blockAccess, pos);
-        int blockEmission = pipeline.shouldUseShaderlessBloomEmission()
+        try {
+            BlockRendererDispatcherHooks.LIQUID_RENDER.remove();
+            Block block = MinecraftReflectionCompat.blockFromState(state);
+            BlockRenderLayer naturalLayer = block != null
+                    ? MinecraftReflectionCompat.blockRenderLayer(block)
+                    : null;
+            if (naturalLayer != null && MinecraftReflectionCompat.currentRenderLayer() == null) {
+                MinecraftReflectionCompat.setCurrentRenderLayer(naturalLayer);
+            }
+            if (MinecraftReflectionCompat.stateIsLiquid(state)) {
+                // Fluid rendering is already complete vanilla geometry. Do
+                // not attach AUSM metadata writes to CCL/Nothirium's liquid
+                // buffer; those buffers are also consumed by native GL draw
+                // calls after the worker returns.
+                BlockRendererDispatcherHooks.LIQUID_RENDER.set(Boolean.TRUE);
+                TerrainRenderProbeState.clearTerrainDispatchStart();
+                BlockRendererDispatcherHooks.PROBE_START_VERTEX.remove();
+                BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.remove();
+                BlockRendererDispatcherHooks.SOFT_VANILLA_SPECIAL_START_VERTEX.remove();
+                BlockRenderContext.clear();
+                boolean rendered = MinecraftReflectionCompat.renderLiquidBlock(
+                        (BlockRendererDispatcher) (Object) this, blockAccess, state, pos, bufferBuilder);
+                int probe = AUSM$LIQUID_PROBE_COUNT.incrementAndGet();
+                if (probe <= 64) {
+                    MainMod.LOGGER.info("[AUSMLiquidDispatchProbe] call={} stage=dispatcher-head thread={} pos={} state={} access={} buffer={} layer={} rendered={} fluidRendererField={}",
+                            probe, Thread.currentThread().getName(), pos, state,
+                            blockAccess != null ? blockAccess.getClass().getName() : "null",
+                            bufferBuilder != null ? Integer.toHexString(System.identityHashCode(bufferBuilder)) : "null",
+                            MinecraftReflectionCompat.currentRenderLayer(), rendered,
+                            MinecraftReflectionCompat.hasField((BlockRendererDispatcher) (Object) this, "field_175025_e", "fluidRenderer"));
+                }
+                cir.setReturnValue(rendered);
+                return;
+            }
+            PipelineContext pipeline = PipelineContext.getInstance();
+            IBlockState actualState = pipeline.actualBlockRenderState(state, blockAccess, pos);
+            IBlockState contextState = pipeline.effectiveBlockRenderState(state, actualState, blockAccess, pos);
+            if (contextState == null) {
+                contextState = state;
+            }
+            int startVertex = bufferBuilder != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : -1;
+            TerrainRenderProbeState.setTerrainDispatchStart(startVertex);
+            int blockEntityId = pipeline.blockEntityIdForActualState(actualState, blockAccess, pos);
+            int blockEmission = pipeline.shouldUseShaderlessBloomEmission()
                 ? pipeline.blockShaderlessBloomEmission(state, blockAccess, pos)
                 : (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null
                 || pipeline.shouldInheritFramedEmissionInBasePass(state))
@@ -56,7 +95,7 @@ public class BlockRendererDispatcherMixin {
         blockEmission = Math.max(blockEmission, framedShaderlessExtractionEmission);
         BlockRenderContext.setBlockEntityId(blockEntityId);
         BlockRenderContext.setRenderType((short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState));
-        BlockRenderContext.setMetadata(pipeline.blockMetadata(state, blockAccess, pos));
+        BlockRenderContext.setMetadata(pipeline.blockMetadataForActualState(actualState));
         BlockRenderContext.setLocalBlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos));
         BlockRenderContext.setWorldBlockContext(blockAccess, pos);
         BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
@@ -67,8 +106,8 @@ public class BlockRendererDispatcherMixin {
         BlockRenderContext.setBloomOnlyEmission(framedShaderlessExtractionEmission > 0);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, blockAccess, pos));
         BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, blockAccess, pos));
-        BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(state, blockAccess, pos));
-        BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState, blockAccess, pos));
+        BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(actualState));
+        BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState));
         if (pipeline.shouldProbeSoftVanillaSpecialBlock(state, contextState, blockAccess, pos)) {
             BlockRendererDispatcherHooks.SOFT_VANILLA_SPECIAL_START_VERTEX.set(startVertex);
             pipeline.logSoftVanillaSpecialBlockProbe("dispatcher-head", state, blockAccess, pos, startVertex, startVertex, null,
@@ -103,10 +142,20 @@ public class BlockRendererDispatcherMixin {
         } else {
             BlockRendererDispatcherHooks.PROBE_START_VERTEX.remove();
         }
-        if (pipeline.isFramedBlockDiagnosticTarget(state) && bufferBuilder != null) {
-            BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.set(com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder));
-        } else {
+            if (pipeline.isFramedBlockDiagnosticTarget(state) && bufferBuilder != null) {
+                BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.set(com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(bufferBuilder));
+            } else {
+                BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.remove();
+            }
+        } catch (RuntimeException | LinkageError ignored) {
+            // CCL and other dispatcher wrappers must be able to continue when
+            // an optional AUSM compatibility lookup is unavailable.
+            TerrainRenderProbeState.clearTerrainDispatchStart();
+            BlockRendererDispatcherHooks.PROBE_START_VERTEX.remove();
             BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.remove();
+            BlockRendererDispatcherHooks.SOFT_VANILLA_SPECIAL_START_VERTEX.remove();
+            BlockRendererDispatcherHooks.LIQUID_RENDER.remove();
+            BlockRenderContext.clear();
         }
     }
 
@@ -213,7 +262,7 @@ public class BlockRendererDispatcherMixin {
         }
     }
 
-    @Inject(method = "renderBlock", at = @At("RETURN"), cancellable = true)
+    @Inject(method = "func_175018_a(Lnet/minecraft/block/state/IBlockState;Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/world/IBlockAccess;Lnet/minecraft/client/renderer/BufferBuilder;)Z", at = @At("RETURN"), remap = false, cancellable = true)
     private void ausm$afterRenderBlock(IBlockState state, BlockPos pos, IBlockAccess blockAccess, BufferBuilder bufferBuilder, CallbackInfoReturnable<Boolean> cir) {
         if (ausm$appendBloomFallbackIfMissing(state, pos, blockAccess, bufferBuilder)) {
             cir.setReturnValue(true);
@@ -241,6 +290,7 @@ public class BlockRendererDispatcherMixin {
         BlockRendererDispatcherHooks.PROBE_START_VERTEX.remove();
         BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.remove();
         BlockRendererDispatcherHooks.SOFT_VANILLA_SPECIAL_START_VERTEX.remove();
+        BlockRendererDispatcherHooks.LIQUID_RENDER.remove();
         BlockRenderContext.clear();
     }
 

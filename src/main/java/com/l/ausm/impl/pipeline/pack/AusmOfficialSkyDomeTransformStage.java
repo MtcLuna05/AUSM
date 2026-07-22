@@ -193,7 +193,8 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
 	                    vec4 color = texture2D(colortex0, uv);
 	                    float depth = ausmOfficialSceneDepth(uv);
 	                    bool ausmOfficialSkyPixel = depth > 0.999 && !ausmOfficialHasNearbySceneGeometry(uv);
-	                    if (ausmUiSkyRepair > 0 && ausmOfficialShouldRepairUiSkyPixel(depth, color.rgb, uv)) {
+                    if (ausmUiSkyRepair > 0 && ausmOfficialSkyPixel
+                            && ausmOfficialShouldRepairUiSkyPixel(depth, color.rgb, uv)) {
 	                        color.rgb = ausmOfficialUiSkyColor(uv);
 	                    } else if (ausmOfficialShouldRepairSkyPixel(depth, color.rgb, uv) && ausmSkyboxRepair > 0) {
 	                        color.rgb = ausmOfficialSkyColor(uv);
@@ -461,7 +462,8 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
 	                    }
 	                    float depth = ausmOfficialSceneDepth(uv);
 		                    bool ausmOfficialSkyPixel = depth > 0.999 && !ausmOfficialHasNearbySceneGeometry(uv);
-	                    if (ausmUiSkyRepair > 0 && ausmOfficialShouldRepairUiSkyPixel(depth, ausmOfficialFinalColor.rgb, uv)) {
+                    if (ausmUiSkyRepair > 0 && ausmOfficialSkyPixel
+                            && ausmOfficialShouldRepairUiSkyPixel(depth, ausmOfficialFinalColor.rgb, uv)) {
 	                        ausmOfficialFinalColor.rgb = ausmOfficialUiSkyColor(uv);
 	                    } else if (ausmOfficialShouldRepairSkyPixel(depth, ausmOfficialFinalColor.rgb, uv) && ausmSkyboxRepair > 0) {
 	                        ausmOfficialFinalColor.rgb = ausmOfficialSkyColor(uv);

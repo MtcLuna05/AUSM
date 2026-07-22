@@ -26,7 +26,7 @@ public final class TerrainCompileCoordinator {
         CompileState state = STATE.get();
         if (state.depth++ == 0) {
             state.decisions.clear();
-            java.util.Arrays.fill(state.dynamicFallbackKnown, false);
+            state.nextGeneration();
         }
     }
 
@@ -97,13 +97,13 @@ public final class TerrainCompileCoordinator {
         // Only editable Blockcraftery frames require position-sensitive material
         // inspection. Cache that reflection-heavy lookup once per section cell,
         // rather than repeating it for every native Celeritas render layer.
-        if (!isBlockcrafteryState(state) || blockAccess == null || pos == null) {
+        if (!decision.blockcraftery || blockAccess == null || pos == null) {
             return false;
         }
         CompileState compileState = STATE.get();
         int localIndex = localSectionIndex(pos);
-        if (!compileState.dynamicFallbackKnown[localIndex]) {
-            compileState.dynamicFallbackKnown[localIndex] = true;
+        if (compileState.dynamicFallbackGeneration[localIndex] != compileState.generation) {
+            compileState.dynamicFallbackGeneration[localIndex] = compileState.generation;
             compileState.dynamicFallback[localIndex] = pipeline.shouldUseCeleritasForgeFallback(state, blockAccess, pos);
         }
         return compileState.dynamicFallback[localIndex];
@@ -113,7 +113,7 @@ public final class TerrainCompileCoordinator {
         CompileState compileState = STATE.get();
         CompileDecision decision = compileState.decisions.get(state);
         if (decision == null) {
-            decision = new CompileDecision(pipeline.shouldUseCeleritasForgeFallback(state));
+            decision = new CompileDecision(pipeline.shouldUseCeleritasForgeFallback(state), isBlockcrafteryState(state));
             compileState.decisions.put(state, decision);
         }
         return decision;
@@ -128,18 +128,29 @@ public final class TerrainCompileCoordinator {
 
     private static final class CompileState {
         private final IdentityHashMap<IBlockState, CompileDecision> decisions = new IdentityHashMap<>();
-        private final boolean[] dynamicFallbackKnown = new boolean[16 * 16 * 16];
+        private final int[] dynamicFallbackGeneration = new int[16 * 16 * 16];
         private final boolean[] dynamicFallback = new boolean[16 * 16 * 16];
+        private int generation = 1;
         private int depth;
+
+        private void nextGeneration() {
+            generation++;
+            if (generation == 0) {
+                java.util.Arrays.fill(dynamicFallbackGeneration, 0);
+                generation = 1;
+            }
+        }
     }
 
     private static final class CompileDecision {
         private final boolean forgeFallback;
+        private final boolean blockcraftery;
         private int knownLayers;
         private int renderedLayers;
 
-        private CompileDecision(boolean forgeFallback) {
+        private CompileDecision(boolean forgeFallback, boolean blockcraftery) {
             this.forgeFallback = forgeFallback;
+            this.blockcraftery = blockcraftery;
         }
     }
 }

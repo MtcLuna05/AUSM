@@ -38,9 +38,9 @@ import java.util.function.IntSupplier;
 public final class AusmBloomRenderer {
     private static final int HALF_RESOLUTION_DIVISOR = 2;
     private static final int BLUR_ITERATIONS = 2;
-    private static final float BLOOM_STRENGTH = 1.65F;
+    private static final float BLOOM_STRENGTH = 0.825F;
     private static final float BLOOM_DIRECT_DEBUG_STRENGTH = 0.0F;
-    private static final float FRAMEBUFFER_BLOOM_STRENGTH = 1.05F;
+    private static final float FRAMEBUFFER_BLOOM_STRENGTH = 0.525F;
     private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
     private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = false;
     private static final int BLOOM_RENDER_LOG_LIMIT = 0;

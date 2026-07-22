@@ -19,11 +19,9 @@ import java.util.BitSet;
 
 @Mixin(targets = "net.minecraft.client.renderer.BlockModelRenderer$AmbientOcclusionFace")
 public class AmbientOcclusionFaceMixin {
-
     @Inject(method = "updateVertexBrightness", at = @At("RETURN"))
     private void ausm$captureSeparateAo(IBlockAccess blockAccess, IBlockState state, BlockPos centerPos, EnumFacing direction, float[] faceShape, BitSet shapeState, CallbackInfo ci) {
-        if (BlockRenderContext.separateAoEligible()) {
-            BlockRenderContext.setQuadAo(com.l.ausm.impl.util.MinecraftReflectionCompat.ambientOcclusionFaceVertexColorMultiplier(this));
-        }
+        BlockRenderContext.setQuadAoIfEligible(
+                MinecraftReflectionCompat.ambientOcclusionFaceVertexColorMultiplier(this));
     }
 }

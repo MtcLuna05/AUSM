@@ -99,8 +99,7 @@ public final class DynamicLightManager {
     public static boolean shouldApplyToBlockRenderLightQuery(BlockPos pos) {
         return active
                 && pos != null
-                && BlockRenderContext.blockAccess() != null
-                && BlockRenderContext.blockPos() != null;
+                && BlockRenderContext.hasWorldBlockContext();
     }
 
     public static int applyPackedLight(BlockPos pos, int packedLight) {

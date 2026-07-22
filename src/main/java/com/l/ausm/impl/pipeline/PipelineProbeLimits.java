@@ -27,7 +27,7 @@ final class PipelineProbeLimits {
     static final int MAX_DIRECT_PRESENTATION_SNAPSHOT_LOGS = 0;
     static final int MAX_GUI_RECOVERED_BACKGROUND_LOGS = 0;
     static final int MAX_PRE_FINAL_DIRECT_PRESENT_LOGS = 0;
-    static final int MAX_PRESENTATION_BOUNDARY_LOGS = 0;
+    static final int MAX_PRESENTATION_BOUNDARY_LOGS = 64;
     static final int MAX_TERRAIN_GRID_PROBE_LOGS = 0;
     static final int TERRAIN_GRID_PROBE_COLUMNS = 5;
     static final int TERRAIN_GRID_PROBE_ROWS = 5;

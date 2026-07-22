@@ -3,6 +3,7 @@ package com.l.ausm.impl.mixin.pipeline;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.AppliedEnergisticsFacadeQuadMetadata;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
+import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.BlockModelRenderer;
@@ -29,8 +30,8 @@ public class BlockModelRendererMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/BufferBuilder;putColorMultiplier(FFFI)V")
     )
     private void ausm$separateAoAfterColorMultiplier(BufferBuilder bufferBuilder, float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex) {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((bufferBuilder), new String[] {"func_178978_a", "putColorMultiplier"},
-                new Class<?>[] {float.class, float.class, float.class, int.class}, (redMultiplier), (greenMultiplier), (blueMultiplier), (vertexIndex));;
+        ((IBufferBuilderExtension) bufferBuilder).ausm$putColorMultiplier(
+                redMultiplier, greenMultiplier, blueMultiplier, vertexIndex);
         if (vertexIndex == 1) {
             ausm$currentQuadMetadata.remove();
             BlockRenderContext.clearQuadOverrides();
@@ -66,7 +67,7 @@ public class BlockModelRendererMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/BufferBuilder;addVertexData([I)V")
     )
     private void ausm$addVertexDataWithQuadEmissionClear(BufferBuilder bufferBuilder, int[] vertexData) {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((bufferBuilder), new String[] {"func_178981_a", "addVertexData"}, new Class<?>[] {int[].class}, (vertexData));;
+        ((IBufferBuilderExtension) bufferBuilder).ausm$addVertexData(vertexData);
     }
 
     @Redirect(
@@ -75,7 +76,8 @@ public class BlockModelRendererMixin {
     )
     private int ausm$useAe2CableBusTintFallback(BlockColors blockColors, IBlockState state, IBlockAccess blockAccess,
                                                 BlockPos pos, int tintIndex) {
-        int color = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((blockColors), new String[] {"func_186724_a", "colorMultiplier"}, new Class<?>[] {net.minecraft.block.state.IBlockState.class, net.minecraft.world.IBlockAccess.class, net.minecraft.util.math.BlockPos.class, int.class}, 0xFFFFFF, (state), (blockAccess), (pos), (tintIndex));
+        int color = MinecraftReflectionCompat.blockColorMultiplier(
+                blockColors, state, blockAccess, pos, tintIndex);
         AppliedEnergisticsFacadeQuadMetadata.Metadata metadata = ausm$currentQuadMetadata.get();
         int ae2Color = metadata != null ? metadata.tintColor(tintIndex) : -1;
         if (ae2Color >= 0) {

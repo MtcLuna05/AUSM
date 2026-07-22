@@ -5,36 +5,34 @@ import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
-import com.l.ausm.impl.pipeline.PipelineContext;
-import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 public final class SeparateAoColorWriter {
+    private static final boolean LITTLE_ENDIAN = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
 
     private SeparateAoColorWriter() {
     }
 
-    public static void rewriteExistingColor(BufferBuilder bufferBuilder, float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex) {
-        VertexFormat vertexFormat = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder);
-        if (!ExtendedVertexFormats.isPipelineBlock(vertexFormat)
-                || !PipelineContext.getInstance().shouldSeparateAo()
-                || !BlockRenderContext.separateAoEligible()
-                || !BlockRenderContext.hasQuadAo()) {
+    public static void rewriteExistingColor(VertexFormat vertexFormat, ByteBuffer byteBuffer, int colorOffset,
+                                            float redMultiplier, float greenMultiplier, float blueMultiplier,
+                                            int vertexIndex) {
+        if (!ExtendedVertexFormats.isPipelineBlock(vertexFormat)) {
             return;
         }
 
         float inferredAo = Math.max(redMultiplier, Math.max(greenMultiplier, blueMultiplier));
-        float ao = clamp(BlockRenderContext.separateAoForVertex(vertexIndex, inferredAo), 0.0f, 1.0f);
+        float capturedAo = BlockRenderContext.separateAoForVertexIfEligible(vertexIndex, inferredAo);
+        if (Float.isNaN(capturedAo)) {
+            return;
+        }
+        float ao = clamp(capturedAo, 0.0f, 1.0f);
         if (ao <= 0.0001f) {
             return;
         }
 
-        ByteBuffer byteBuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferByteBuffer(bufferBuilder);
-        int colorOffset = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((bufferBuilder), new String[] {"func_78909_a", "getColorIndex"}, new Class<?>[] {int.class}, -1, (vertexIndex)) * 4;
         if (byteBuffer == null) {
             return;
         }
@@ -57,12 +55,9 @@ public final class SeparateAoColorWriter {
         }
     }
 
-    public static void rewriteForgeQuadData(BufferBuilder bufferBuilder, int[] quadData) {
-        VertexFormat vertexFormat = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder);
+    public static void rewriteForgeQuadData(VertexFormat vertexFormat, int[] quadData) {
         if (!ExtendedVertexFormats.isPipelineBlock(vertexFormat)
-                || !PipelineContext.getInstance().shouldSeparateAo()
-                || !BlockRenderContext.separateAoEligible()
-                || !BlockRenderContext.hasQuadAo()
+                || !BlockRenderContext.separateAoAvailable()
                 || quadData == null) {
             return;
         }
@@ -82,13 +77,13 @@ public final class SeparateAoColorWriter {
     }
 
     private static int separateAoColor(int color, float ao) {
-        return ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN
+        return LITTLE_ENDIAN
                 ? separateAoLittleEndian(color, ao)
                 : separateAoBigEndian(color, ao);
     }
 
     private static float inferredAo(int color) {
-        if (ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN) {
+        if (LITTLE_ENDIAN) {
             int red = color & 0xFF;
             int green = (color >> 8) & 0xFF;
             int blue = (color >> 16) & 0xFF;

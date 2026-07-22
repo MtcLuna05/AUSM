@@ -15,6 +15,7 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 
@@ -28,26 +29,90 @@ public class BotaniaSkyblockSkyRendererMixin {
 
     @Inject(method = "render", at = @At("HEAD"), remap = false)
     private void ausm$probeF1Entry(float partialTicks, WorldClient world, Minecraft minecraft, CallbackInfo ci) {
+        // This renderer is also reached through Astral's delegated
+        // compatibility branch, which can bypass RenderGlobal's owned-sky
+        // entry point. Establish the authoritative backing at the renderer
+        // boundary before Botania's base geometry is suppressed.
+        PipelineContext.getInstance().renderShaderlessBotaniaSkyBacking(
+                partialTicks, world, minecraft);
         ausm$probeF1State("entry", minecraft);
     }
 
     @Inject(method = "render", at = @At("RETURN"), remap = false)
     private void ausm$probeF1Exit(float partialTicks, WorldClient world, Minecraft minecraft, CallbackInfo ci) {
-        ausm$sealSkyAlphaWhenGuiHidden(minecraft);
         ausm$probeF1State("exit", minecraft);
     }
 
-    private static void ausm$sealSkyAlphaWhenGuiHidden(Minecraft minecraft) {
-        if (minecraft == null || !MinecraftReflectionCompat.hideGui(MinecraftReflectionCompat.gameSettings(minecraft))) {
-            return;
-        }
-        // Botania leaves the world framebuffer with fractional alpha. Normal HUD
-        // compositing happens to hide it, while F1 exposes it during presentation.
-        // Seal only alpha, preserving Botania's exact RGB sky output.
-        GL11.glColorMask(false, false, false, true);
-        GL11.glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
-        GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
-        GL11.glColorMask(true, true, true, true);
+    @Redirect(
+            method = "render",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179147_l()V"
+            ),
+            require = 0,
+            remap = false
+    )
+    private void ausm$enableRealBotaniaBlend() {
+        MinecraftReflectionCompat.invoke(
+                GlStateManager.class,
+                new String[] {"func_179147_l", "enableBlend"},
+                MinecraftReflectionCompat.NO_PARAMETERS);
+        GL11.glEnable(GL11.GL_BLEND);
+    }
+
+    @Inject(
+            method = "render",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_187428_a(Lnet/minecraft/client/renderer/GlStateManager$SourceFactor;Lnet/minecraft/client/renderer/GlStateManager$DestFactor;Lnet/minecraft/client/renderer/GlStateManager$SourceFactor;Lnet/minecraft/client/renderer/GlStateManager$DestFactor;)V",
+                    ordinal = 0,
+                    shift = At.Shift.AFTER
+            ),
+            require = 0,
+            remap = false
+    )
+    private void ausm$forceInitialBotaniaBlend(float partialTicks, WorldClient world, Minecraft minecraft, CallbackInfo ci) {
+        ausm$forceRealBlend(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
+    }
+
+    @Inject(
+            method = "render",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_187428_a(Lnet/minecraft/client/renderer/GlStateManager$SourceFactor;Lnet/minecraft/client/renderer/GlStateManager$DestFactor;Lnet/minecraft/client/renderer/GlStateManager$SourceFactor;Lnet/minecraft/client/renderer/GlStateManager$DestFactor;)V",
+                    ordinal = 1,
+                    shift = At.Shift.AFTER
+            ),
+            require = 0,
+            remap = false
+    )
+    private void ausm$forceAdditiveBotaniaBlend(float partialTicks, WorldClient world, Minecraft minecraft, CallbackInfo ci) {
+        ausm$forceRealBlend(GL11.GL_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO);
+    }
+
+    @Redirect(
+            method = "render",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179120_a(IIII)V"
+            ),
+            require = 0,
+            remap = false
+    )
+    private void ausm$forceIntegerBotaniaBlend(int sourceFactor, int destFactor,
+                                               int sourceFactorAlpha, int destFactorAlpha) {
+        MinecraftReflectionCompat.invoke(
+                GlStateManager.class,
+                new String[] {"func_179120_a", "tryBlendFuncSeparate"},
+                new Class<?>[] {int.class, int.class, int.class, int.class},
+                sourceFactor, destFactor, sourceFactorAlpha, destFactorAlpha);
+        ausm$forceRealBlend(sourceFactor, destFactor, sourceFactorAlpha, destFactorAlpha);
+    }
+
+    private static void ausm$forceRealBlend(int sourceFactor, int destFactor,
+                                            int sourceFactorAlpha, int destFactorAlpha) {
+        GL11.glEnable(GL11.GL_BLEND);
+        GL14.glBlendFuncSeparate(sourceFactor, destFactor, sourceFactorAlpha, destFactorAlpha);
     }
 
     @Redirect(

@@ -93,7 +93,10 @@ public final class GpomFramedMaterialCompat {
         if (emission <= 0) {
             emission = Math.max(stateVisualEmission(primary), stateVisualEmission(secondary));
         }
-        if (!bloom) {
+        boolean bloomFeaturePresent = features != null
+                && MinecraftReflectionCompat.callBoolean(features, new String[] {"hasKey"},
+                new Class<?>[] {String.class}, false, "bloom");
+        if (!bloom && !bloomFeaturePresent) {
             bloom = stateHasBloomLayer(primary) || stateHasBloomLayer(secondary);
         }
         return new Material(true, emission, bloom, primary, secondary);

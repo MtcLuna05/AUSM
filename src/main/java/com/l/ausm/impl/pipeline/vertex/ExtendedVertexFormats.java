@@ -16,6 +16,17 @@ import java.nio.ByteBuffer;
  * Registry for our extended vertex formats containing shader-specific attributes.
  */
 public class ExtendedVertexFormats {
+    private static final Class<?>[] INT_PARAMETER = {int.class};
+    private static final String[] SIZE_NAMES = {"func_177338_f", "getSize"};
+    private static final String[] INTEGER_SIZE_NAMES = {"func_181719_f", "getIntegerSize"};
+    private static final String[] ELEMENT_COUNT_NAMES = {"func_177345_h", "getElementCount"};
+    private static final String[] ELEMENT_NAMES = {"func_177348_c", "getElement"};
+    private static final String[] OFFSET_NAMES = {"func_181720_d", "getOffset"};
+    private static final String[] HAS_COLOR_NAMES = {"func_177346_d", "hasColor"};
+    private static final String[] COLOR_OFFSET_NAMES = {"func_177340_e", "getColorOffset"};
+    private static final String[] HAS_NORMAL_NAMES = {"func_177350_b", "hasNormal"};
+    private static final String[] HAS_UV_OFFSET_NAMES = {"func_177347_a", "hasUvOffset"};
+    private static final String[] UV_OFFSET_NAMES = {"func_177344_b", "getUvOffsetById"};
 
     public static VertexFormat PIPELINE_BLOCK;
     public static VertexFormat PIPELINE_ENTITY;
@@ -34,6 +45,12 @@ public class ExtendedVertexFormats {
     public static int PIPELINE_ENTITY_MC_ENTITY_OFFSET;
     public static int PIPELINE_ENTITY_MID_TEX_COORD_OFFSET;
     public static int PIPELINE_ENTITY_TANGENT_OFFSET;
+    private static final int PIPELINE_BLOCK_SIZE = 56;
+    private static final int PIPELINE_ENTITY_SIZE = 48;
+    private static final int PIPELINE_BLOCK_ELEMENT_COUNT = 10;
+    private static final int PIPELINE_ENTITY_ELEMENT_COUNT = 8;
+    private static VertexFormatElement pipelineBlockFirstElement;
+    private static VertexFormatElement pipelineEntityFirstElement;
 
     // These elements mirror Iris' terrain payload order:
     // mc_Entity, mc_midTexCoord, at_tangent, at_midBlock.
@@ -60,6 +77,7 @@ public class ExtendedVertexFormats {
         addElement(PIPELINE_BLOCK, MC_MID_TEX_COORD);
         addElement(PIPELINE_BLOCK, AT_TANGENT);
         addElement(PIPELINE_BLOCK, AT_MID_BLOCK);
+        pipelineBlockFirstElement = rawElement(PIPELINE_BLOCK, 0);
         PIPELINE_BLOCK_NORMAL_OFFSET = getOffset(PIPELINE_BLOCK, 4);
         PIPELINE_BLOCK_MC_ENTITY_OFFSET = getOffset(PIPELINE_BLOCK, 6);
         PIPELINE_BLOCK_MID_TEX_COORD_OFFSET = getOffset(PIPELINE_BLOCK, 7);
@@ -76,6 +94,7 @@ public class ExtendedVertexFormats {
         addElement(PIPELINE_ENTITY, MC_ENTITY);
         addElement(PIPELINE_ENTITY, MC_MID_TEX_COORD);
         addElement(PIPELINE_ENTITY, AT_TANGENT);
+        pipelineEntityFirstElement = rawElement(PIPELINE_ENTITY, 0);
         PIPELINE_ENTITY_NORMAL_OFFSET = getOffset(PIPELINE_ENTITY, 3);
         PIPELINE_ENTITY_MC_ENTITY_OFFSET = getOffset(PIPELINE_ENTITY, 5);
         PIPELINE_ENTITY_MID_TEX_COORD_OFFSET = getOffset(PIPELINE_ENTITY, 6);
@@ -101,53 +120,104 @@ public class ExtendedVertexFormats {
     }
 
     public static int size(VertexFormat format) {
+        if (format == PIPELINE_BLOCK) {
+            return PIPELINE_BLOCK_SIZE;
+        }
+        if (format == PIPELINE_ENTITY) {
+            return PIPELINE_ENTITY_SIZE;
+        }
         return format != null ? MinecraftReflectionCompat.callInt(format,
-                new String[] {"func_177338_f", "getSize"}, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
+                SIZE_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
     }
 
     public static int integerSize(VertexFormat format) {
+        if (format == PIPELINE_BLOCK) {
+            return PIPELINE_BLOCK_SIZE / Integer.BYTES;
+        }
+        if (format == PIPELINE_ENTITY) {
+            return PIPELINE_ENTITY_SIZE / Integer.BYTES;
+        }
         return format != null ? MinecraftReflectionCompat.callInt(format,
-                new String[] {"func_181719_f", "getIntegerSize"}, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
+                INTEGER_SIZE_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
     }
 
     public static int elementCount(VertexFormat format) {
+        if (format == PIPELINE_BLOCK) {
+            return PIPELINE_BLOCK_ELEMENT_COUNT;
+        }
+        if (format == PIPELINE_ENTITY) {
+            return PIPELINE_ENTITY_ELEMENT_COUNT;
+        }
         return format != null ? MinecraftReflectionCompat.callInt(format,
-                new String[] {"func_177345_h", "getElementCount"}, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
+                ELEMENT_COUNT_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
     }
 
     public static VertexFormatElement element(VertexFormat format, int index) {
+        if (index == 0) {
+            if (format == PIPELINE_BLOCK) {
+                return pipelineBlockFirstElement;
+            }
+            if (format == PIPELINE_ENTITY) {
+                return pipelineEntityFirstElement;
+            }
+        }
+        return rawElement(format, index);
+    }
+
+    private static VertexFormatElement rawElement(VertexFormat format, int index) {
         return format != null ? MinecraftReflectionCompat.call(format, VertexFormatElement.class, null,
-                new String[] {"func_177348_c", "getElement"}, new Class<?>[] {int.class}, index) : null;
+                ELEMENT_NAMES, INT_PARAMETER, index) : null;
     }
 
     public static int offset(VertexFormat format, int index) {
         return format != null ? MinecraftReflectionCompat.callInt(format,
-                new String[] {"func_181720_d", "getOffset"}, new Class<?>[] {int.class}, -1, index) : -1;
+                OFFSET_NAMES, INT_PARAMETER, -1, index) : -1;
     }
 
     public static boolean hasColor(VertexFormat format) {
+        if (format == PIPELINE_BLOCK || format == PIPELINE_ENTITY) {
+            return true;
+        }
         return format != null && MinecraftReflectionCompat.callBoolean(format,
-                new String[] {"func_177346_d", "hasColor"}, MinecraftReflectionCompat.NO_PARAMETERS, false);
+                HAS_COLOR_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, false);
     }
 
     public static int colorOffset(VertexFormat format) {
+        if (format == PIPELINE_BLOCK || format == PIPELINE_ENTITY) {
+            return 12;
+        }
         return format != null ? MinecraftReflectionCompat.callInt(format,
-                new String[] {"func_177340_e", "getColorOffset"}, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
+                COLOR_OFFSET_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
     }
 
     public static boolean hasNormal(VertexFormat format) {
+        if (format == PIPELINE_BLOCK || format == PIPELINE_ENTITY) {
+            return true;
+        }
         return format != null && MinecraftReflectionCompat.callBoolean(format,
-                new String[] {"func_177350_b", "hasNormal"}, MinecraftReflectionCompat.NO_PARAMETERS, false);
+                HAS_NORMAL_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, false);
     }
 
     public static boolean hasUvOffset(VertexFormat format, int id) {
+        if (format == PIPELINE_BLOCK) {
+            return id == 0 || id == 1;
+        }
+        if (format == PIPELINE_ENTITY) {
+            return id == 0;
+        }
         return format != null && MinecraftReflectionCompat.callBoolean(format,
-                new String[] {"func_177347_a", "hasUvOffset"}, new Class<?>[] {int.class}, false, id);
+                HAS_UV_OFFSET_NAMES, INT_PARAMETER, false, id);
     }
 
     public static int uvOffsetById(VertexFormat format, int id) {
+        if ((format == PIPELINE_BLOCK || format == PIPELINE_ENTITY) && id == 0) {
+            return 16;
+        }
+        if (format == PIPELINE_BLOCK && id == 1) {
+            return 24;
+        }
         return format != null ? MinecraftReflectionCompat.callInt(format,
-                new String[] {"func_177344_b", "getUvOffsetById"}, new Class<?>[] {int.class}, -1, id) : -1;
+                UV_OFFSET_NAMES, INT_PARAMETER, -1, id) : -1;
     }
 
     private static void addElement(VertexFormat format, VertexFormatElement element) {

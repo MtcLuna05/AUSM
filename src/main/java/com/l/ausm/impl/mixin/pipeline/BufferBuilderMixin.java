@@ -12,6 +12,7 @@ import com.l.ausm.impl.pipeline.vertex.SeparateAoColorWriter;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.compat.TerrainRenderProbeState;
+import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.client.renderer.vertex.VertexFormatElement;
@@ -29,7 +30,6 @@ import org.lwjgl.opengl.GL11;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.ByteOrder;
-import java.util.Arrays;
 
 @Mixin(BufferBuilder.class)
 public class BufferBuilderMixin implements IBufferBuilderExtension {
@@ -44,6 +44,12 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Unique
     private static final ThreadLocal<int[]> AUSM$VERTEX_SCRATCH = ThreadLocal.withInitial(() -> new int[16]);
+
+    @Unique
+    private static final ThreadLocal<float[]> AUSM$NORMAL_SCRATCH = ThreadLocal.withInitial(() -> new float[3]);
+
+    @Unique
+    private static final boolean AUSM$LITTLE_ENDIAN = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
 
     @Shadow(remap = false)
     private ByteBuffer field_179001_a;
@@ -81,6 +87,12 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     @Shadow(remap = false)
     public native void func_178965_a();
 
+    @Shadow(remap = false)
+    public native void func_178981_a(int[] vertexData);
+
+    @Shadow(remap = false)
+    public native void func_178978_a(float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex);
+
     @Override
     public void ausm$forceResetDrawingState() {
         field_179010_r = false;
@@ -112,8 +124,37 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         return ausm$shaderlessBloomMetadata;
     }
 
+    @Override
+    public VertexFormat ausm$vertexFormat() {
+        return field_179011_q;
+    }
+
+    @Override
+    public ByteBuffer ausm$byteBuffer() {
+        return field_179001_a;
+    }
+
+    @Override
+    public int ausm$vertexCount() {
+        return field_178997_d;
+    }
+
+    @Override
+    public void ausm$addVertexData(int[] vertexData) {
+        func_178981_a(vertexData);
+    }
+
+    @Override
+    public void ausm$putColorMultiplier(float redMultiplier, float greenMultiplier,
+                                        float blueMultiplier, int vertexIndex) {
+        func_178978_a(redMultiplier, greenMultiplier, blueMultiplier, vertexIndex);
+    }
+
     @ModifyVariable(method = "func_181668_a", at = @At("HEAD"), argsOnly = true)
     private VertexFormat ausm$usePipelineEntityFormat(VertexFormat original) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return original;
+        }
         if (ausm$isCodeChickenBakingBuffer()) {
             return original;
         }
@@ -126,41 +167,12 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     @Unique
     private boolean ausm$isVanillaItemVertexFormat(VertexFormat format) {
         return format != null
-                && ausm$vertexFormatInt(format, "func_177338_f", "getSize") == 28
-                && ausm$vertexFormatInt(format, "func_177345_h", "getElementCount") == 4
-                && ausm$vertexFormatBoolean(format, "func_177346_d", "hasColor")
-                && ausm$vertexFormatBoolean(format, "func_177350_b", "hasNormal")
-                && ausm$vertexFormatBoolean(format, "func_177347_a", "hasUvOffset", 0)
-                && !ausm$vertexFormatBoolean(format, "func_177347_a", "hasUvOffset", 1);
-    }
-
-    @Unique
-    private static int ausm$vertexFormatInt(VertexFormat format, String srgName, String mcpName) {
-        Object value = ausm$invokeVertexFormat(format, srgName, mcpName);
-        return value instanceof Number ? ((Number) value).intValue() : -1;
-    }
-
-    @Unique
-    private static boolean ausm$vertexFormatBoolean(VertexFormat format, String srgName, String mcpName, Object... args) {
-        Object value = ausm$invokeVertexFormat(format, srgName, mcpName, args);
-        return value instanceof Boolean && (Boolean) value;
-    }
-
-    @Unique
-    private static Object ausm$invokeVertexFormat(VertexFormat format, String srgName, String mcpName, Object... args) {
-        Class<?>[] parameterTypes = new Class<?>[args.length];
-        for (int index = 0; index < args.length; index++) {
-            parameterTypes[index] = args[index] instanceof Integer ? int.class : args[index].getClass();
-        }
-        try {
-            return format.getClass().getMethod(srgName, parameterTypes).invoke(format, args);
-        } catch (ReflectiveOperationException ignored) {
-            try {
-                return format.getClass().getMethod(mcpName, parameterTypes).invoke(format, args);
-            } catch (ReflectiveOperationException ignoredAgain) {
-                return null;
-            }
-        }
+                && ExtendedVertexFormats.size(format) == 28
+                && ExtendedVertexFormats.elementCount(format) == 4
+                && ExtendedVertexFormats.hasColor(format)
+                && ExtendedVertexFormats.hasNormal(format)
+                && ExtendedVertexFormats.hasUvOffset(format, 0)
+                && !ExtendedVertexFormats.hasUvOffset(format, 1);
     }
 
     @Unique
@@ -170,6 +182,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "putBulkData", at = @At("HEAD"), cancellable = true)
     private void ausm$expandBulkVanillaVertexData(ByteBuffer sourceBuffer, CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return;
+        }
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q) || sourceBuffer == null) {
             ausm$rewriteVanillaEmissiveBulkData(sourceBuffer, ci);
             return;
@@ -190,27 +205,35 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         int sourceIntStride = sourceStride / Integer.BYTES;
         int[] scratch = ausm$vertexScratch(targetIntStride);
         boolean compatibilityEmissiveBoost = ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost();
-        int packedEntity = packedEntity();
-        int packedEntityHigh = packedEntityHigh();
+        long packedEntityData = BlockRenderContext.packedEntityData();
+        int packedEntity = (int) packedEntityData;
+        int packedEntityHigh = (int) (packedEntityData >>> 32);
         int midBlockEmission = BlockRenderContext.midBlockEmission();
+        int packedLocalPosition = BlockRenderContext.packedLocalPosition();
+        boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
+        int customLiquidTint = BlockRenderContext.customLiquidTint();
+        int vanillaLightmapEmission = compatibilityEmissiveBoost ? BlockRenderContext.vanillaLightmapEmission() : 0;
+        boolean agricraftCrop = BlockRenderContext.isAgricraftCrop();
+        int agricraftPackedLight = agricraftCrop ? BlockRenderContext.packedLightmap() : 0;
         ausm$logVertexExpandProbe("bulk-in", sourceBytes, sourceStride, targetStride, vertexBase, vertexTotal, -1, compatibilityEmissiveBoost);
         func_181670_b(vertexTotal * targetStride + targetStride);
         field_178999_b.position(func_181664_j());
         for (int vertex = 0; vertex < vertexTotal; vertex++) {
-            Arrays.fill(scratch, 0, targetIntStride, 0);
             for (int sourceInt = 0; sourceInt < sourceIntStride; sourceInt++) {
                 scratch[sourceInt] = source.getInt();
             }
-            ausm$sanitizeAgricraftCropVertex(scratch, 0, sourceIntStride);
-            ausm$applyBloomMaskVertexData(scratch, 0);
-            ausm$applyCustomLiquidTintVertexData(scratch, 0);
-            ausm$applyEmissiveLightmap(scratch, 0, compatibilityEmissiveBoost);
+            ausm$clearVertexScratchTail(scratch, sourceIntStride, targetIntStride);
+            ausm$sanitizeAgricraftCropVertex(scratch, 0, sourceIntStride, agricraftCrop, agricraftPackedLight);
+            ausm$applyBloomMaskVertexData(scratch, 0, bloomMaskFallback);
+            ausm$applyCustomLiquidTintVertexData(scratch, 0, bloomMaskFallback, customLiquidTint);
+            ausm$applyEmissiveLightmap(scratch, 0, vanillaLightmapEmission);
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity;
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh;
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
                     Float.intBitsToFloat(scratch[0]),
                     Float.intBitsToFloat(scratch[1]),
                     Float.intBitsToFloat(scratch[2]),
+                    packedLocalPosition,
                     midBlockEmission
             );
             field_178999_b.put(scratch, 0, targetIntStride);
@@ -230,6 +253,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_178981_a", at = @At("HEAD"), cancellable = true)
     private void ausm$expandVanillaQuadData(int[] vertexData, CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return;
+        }
         if (vertexData == null) {
             return;
         }
@@ -257,26 +283,35 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         int vertexTotal = vertexData.length / sourceStride;
         int[] scratch = ausm$vertexScratch(targetStride);
         boolean compatibilityEmissiveBoost = ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost();
-        int packedEntity = packedEntity();
-        int packedEntityHigh = packedEntityHigh();
+        long packedEntityData = BlockRenderContext.packedEntityData();
+        int packedEntity = (int) packedEntityData;
+        int packedEntityHigh = (int) (packedEntityData >>> 32);
         int midBlockEmission = BlockRenderContext.midBlockEmission();
+        int packedLocalPosition = BlockRenderContext.packedLocalPosition();
+        boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
+        int customLiquidTint = BlockRenderContext.customLiquidTint();
+        int vanillaLightmapEmission = compatibilityEmissiveBoost ? BlockRenderContext.vanillaLightmapEmission() : 0;
+        boolean agricraftCrop = BlockRenderContext.isAgricraftCrop();
+        int agricraftPackedLight = agricraftCrop ? BlockRenderContext.packedLightmap() : 0;
         ausm$logVertexExpandProbe("quad-in", vertexData.length, sourceStride, targetStride, vertexBase, vertexTotal, -1, compatibilityEmissiveBoost);
         func_181670_b(vertexTotal * ExtendedVertexFormats.size(field_179011_q) + ExtendedVertexFormats.size(field_179011_q));
         field_178999_b.position(func_181664_j());
         for (int vertex = 0; vertex < vertexTotal; vertex++) {
             int source = vertex * sourceStride;
-            Arrays.fill(scratch, 0, targetStride, 0);
-            System.arraycopy(vertexData, source, scratch, 0, Math.min(sourceStride, targetStride));
-            ausm$sanitizeAgricraftCropVertex(scratch, 0, sourceStride);
-            ausm$applyBloomMaskVertexData(scratch, 0);
-            ausm$applyCustomLiquidTintVertexData(scratch, 0);
-            ausm$applyEmissiveLightmap(scratch, 0, compatibilityEmissiveBoost);
+            int copyInts = Math.min(sourceStride, targetStride);
+            System.arraycopy(vertexData, source, scratch, 0, copyInts);
+            ausm$clearVertexScratchTail(scratch, copyInts, targetStride);
+            ausm$sanitizeAgricraftCropVertex(scratch, 0, sourceStride, agricraftCrop, agricraftPackedLight);
+            ausm$applyBloomMaskVertexData(scratch, 0, bloomMaskFallback);
+            ausm$applyCustomLiquidTintVertexData(scratch, 0, bloomMaskFallback, customLiquidTint);
+            ausm$applyEmissiveLightmap(scratch, 0, vanillaLightmapEmission);
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity;
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh;
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
                     Float.intBitsToFloat(scratch[0]),
                     Float.intBitsToFloat(scratch[1]),
                     Float.intBitsToFloat(scratch[2]),
+                    packedLocalPosition,
                     midBlockEmission
             );
             field_178999_b.put(scratch, 0, targetStride);
@@ -359,6 +394,16 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         return scratch;
     }
 
+    @Unique
+    private static void ausm$clearVertexScratchTail(int[] scratch, int from, int to) {
+        if (scratch == null || from >= to) {
+            return;
+        }
+        for (int index = Math.max(0, from); index < to; index++) {
+            scratch[index] = 0;
+        }
+    }
+
     private static int ausm$pipelineBlockVertexStride(int[] vertexData, int targetStride) {
         int sourceInts = vertexData != null ? vertexData.length : 0;
         if (sourceInts <= 0) {
@@ -393,8 +438,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         return sourceInts % targetStride == 0 ? targetStride : -1;
     }
 
-    private static void ausm$sanitizeAgricraftCropVertex(int[] expandedData, int target, int sourceStride) {
-        if (!BlockRenderContext.isAgricraftCrop()
+    private static void ausm$sanitizeAgricraftCropVertex(int[] expandedData, int target, int sourceStride,
+                                                         boolean agricraftCrop, int packedLightmap) {
+        if (!agricraftCrop
                 || expandedData == null
                 || (sourceStride != 7 && sourceStride != 8 && sourceStride != 14)
                 || target < 0
@@ -404,7 +450,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         // AgriCraft/InfinityLib emits dynamic crop quads through an ITEM-like
         // tessellator. If those quads are later treated as BLOCK vertices, UV0
         // or packed normal data lands in UV1/lightmap and appears as blue bands.
-        expandedData[target + 6] = BlockRenderContext.packedLightmap();
+        expandedData[target + 6] = packedLightmap;
     }
 
     private static int ausm$pipelineBlockBulkStride(ByteBuffer source, int sourceBytes, int targetStride) {
@@ -436,7 +482,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     }
 
     private boolean ausm$rewriteVanillaEmissiveVertexData(int[] vertexData, CallbackInfo ci) {
-        if (!ausm$shouldRewriteVanillaEmissiveData() || vertexData == null) {
+        if (!ausm$canRewriteVanillaEmissiveData() || vertexData == null) {
+            return false;
+        }
+        if (!ausm$shouldMutateVanillaEmissiveData()) {
+            ausm$markCurrentContextShaderlessBloomMetadata();
             return false;
         }
 
@@ -445,17 +495,23 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return false;
         }
 
-        int[] rewrittenData = vertexData.clone();
-        int vertexTotal = rewrittenData.length / targetStride;
+        int vertexTotal = vertexData.length / targetStride;
+        int[] scratch = ausm$vertexScratch(targetStride);
+        boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
+        int customLiquidTint = BlockRenderContext.customLiquidTint();
+        int blockAlpha = BlockRenderContext.blockAlpha();
+        int colorOffset = ExtendedVertexFormats.colorOffset(field_179011_q) / Integer.BYTES;
+        int targetBytes = targetStride * Integer.BYTES;
+        func_181670_b(vertexData.length * Integer.BYTES + targetBytes);
+        field_178999_b.position(func_181664_j());
         for (int vertex = 0; vertex < vertexTotal; vertex++) {
-            ausm$applyBloomMaskVertexData(rewrittenData, vertex * targetStride);
-            ausm$applyCustomLiquidTintVertexData(rewrittenData, vertex * targetStride);
-            ausm$applyVanillaEmissiveAttributes(rewrittenData, vertex * targetStride);
+            int source = vertex * targetStride;
+            System.arraycopy(vertexData, source, scratch, 0, targetStride);
+            ausm$applyVanillaEmissiveAttributes(scratch, 0, bloomMaskFallback, customLiquidTint, blockAlpha,
+                    colorOffset);
+            field_178999_b.put(scratch, 0, targetStride);
         }
 
-        func_181670_b(rewrittenData.length * Integer.BYTES + ExtendedVertexFormats.size(field_179011_q));
-        field_178999_b.position(func_181664_j());
-        field_178999_b.put(rewrittenData);
         field_178997_d += vertexTotal;
         ausm$markCurrentContextShaderlessBloomMetadata();
         ci.cancel();
@@ -463,7 +519,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     }
 
     private boolean ausm$rewriteVanillaEmissiveBulkData(ByteBuffer sourceBuffer, CallbackInfo ci) {
-        if (!ausm$shouldRewriteVanillaEmissiveData() || sourceBuffer == null) {
+        if (!ausm$canRewriteVanillaEmissiveData() || sourceBuffer == null) {
+            return false;
+        }
+        if (!ausm$shouldMutateVanillaEmissiveData()) {
+            ausm$markCurrentContextShaderlessBloomMetadata();
             return false;
         }
 
@@ -476,27 +536,34 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
 
         int vertexTotal = sourceBytes / (targetStride * Integer.BYTES);
-        int[] rewrittenData = new int[vertexTotal * targetStride];
-        for (int index = 0; index < rewrittenData.length; index++) {
-            rewrittenData[index] = source.getInt();
-        }
+        int[] scratch = ausm$vertexScratch(targetStride);
+        boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
+        int customLiquidTint = BlockRenderContext.customLiquidTint();
+        int blockAlpha = BlockRenderContext.blockAlpha();
+        int colorOffset = ExtendedVertexFormats.colorOffset(field_179011_q) / Integer.BYTES;
+        int targetBytes = targetStride * Integer.BYTES;
+        func_181670_b(sourceBytes + targetBytes);
+        field_178999_b.position(func_181664_j());
         for (int vertex = 0; vertex < vertexTotal; vertex++) {
-            ausm$applyBloomMaskVertexData(rewrittenData, vertex * targetStride);
-            ausm$applyCustomLiquidTintVertexData(rewrittenData, vertex * targetStride);
-            ausm$applyVanillaEmissiveAttributes(rewrittenData, vertex * targetStride);
+            for (int index = 0; index < targetStride; index++) {
+                scratch[index] = source.getInt();
+            }
+            ausm$applyVanillaEmissiveAttributes(scratch, 0, bloomMaskFallback, customLiquidTint, blockAlpha,
+                    colorOffset);
+            field_178999_b.put(scratch, 0, targetStride);
         }
 
-        func_181670_b(rewrittenData.length * Integer.BYTES + ExtendedVertexFormats.size(field_179011_q));
-        field_178999_b.position(func_181664_j());
-        field_178999_b.put(rewrittenData);
         field_178997_d += vertexTotal;
         ausm$markCurrentContextShaderlessBloomMetadata();
         ci.cancel();
         return true;
     }
 
-    private boolean ausm$shouldRewriteVanillaEmissiveData() {
-        return (BlockRenderContext.blockEmission() > 0 || BlockRenderContext.customLiquidTint() >= 0)
+    private boolean ausm$canRewriteVanillaEmissiveData() {
+        return (BlockRenderContext.blockEmission() > 0
+                || BlockRenderContext.bloomMaskFallback()
+                || BlockRenderContext.customLiquidTint() >= 0
+                || BlockRenderContext.blockAlpha() >= 0)
                 && field_179011_q != null
                 && !ExtendedVertexFormats.isPipelineBlock(field_179011_q)
                 && !ExtendedVertexFormats.isPipelineEntity(field_179011_q)
@@ -504,6 +571,13 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                 && ExtendedVertexFormats.hasUvOffset(field_179011_q, 1)
                 && ExtendedVertexFormats.colorOffset(field_179011_q) % Integer.BYTES == 0
                 && ExtendedVertexFormats.uvOffsetById(field_179011_q, 1) % Integer.BYTES == 0;
+    }
+
+    @Unique
+    private static boolean ausm$shouldMutateVanillaEmissiveData() {
+        return BlockRenderContext.bloomMaskFallback()
+                || BlockRenderContext.customLiquidTint() >= 0
+                || BlockRenderContext.blockAlpha() >= 0;
     }
 
     @Unique
@@ -527,18 +601,23 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     }
 
     private void ausm$applyVanillaEmissiveAttributes(int[] vertexData, int vertexBase) {
-        if (BlockRenderContext.bloomMaskFallback()) {
-            return;
-        }
-        if (vertexData == null || vertexBase < 0) {
+        ausm$applyVanillaEmissiveAttributes(vertexData, vertexBase, BlockRenderContext.bloomMaskFallback(),
+                BlockRenderContext.customLiquidTint(), BlockRenderContext.blockAlpha(),
+                ExtendedVertexFormats.colorOffset(field_179011_q) / Integer.BYTES);
+    }
+
+    private void ausm$applyVanillaEmissiveAttributes(int[] vertexData, int vertexBase, boolean bloomMaskFallback,
+                                                     int customLiquidTint, int blockAlpha, int colorOffset) {
+        ausm$applyBloomMaskVertexData(vertexData, vertexBase, bloomMaskFallback);
+        if (bloomMaskFallback || vertexData == null || vertexBase < 0) {
             return;
         }
 
-        int colorIndex = vertexBase + ExtendedVertexFormats.colorOffset(field_179011_q) / Integer.BYTES;
+        int colorIndex = vertexBase + colorOffset;
         if (colorIndex >= 0 && colorIndex < vertexData.length) {
             int before = vertexData[colorIndex];
-            int color = ausm$applyCustomLiquidTintColor(vertexData[colorIndex]);
-            vertexData[colorIndex] = ausm$applyBlockAlpha(color);
+            int color = ausm$applyCustomLiquidTintColor(vertexData[colorIndex], customLiquidTint);
+            vertexData[colorIndex] = ausm$applyBlockAlpha(color, blockAlpha);
             PipelineContext pipeline = PipelineContext.getInstance();
             if (pipeline.currentProblemProbesEnabled()) {
                 pipeline.logCurrentRenderContextProbe("buffer-vanilla-data-color",
@@ -619,6 +698,10 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_181675_d", at = @At("HEAD"))
     private void ausm$applyEmissiveLightmap(CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            ausm$clearCurrentLiquidPipelineAttributes();
+            return;
+        }
         ausm$sanitizeCurrentAgricraftCropVertex();
         ausm$applyBloomMaskCurrentVertex();
         ausm$applyCustomLiquidTintCurrentVertex();
@@ -670,6 +753,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_181675_d", at = @At("HEAD"))
     private void ausm$writeBlockEntityAttribute(CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return;
+        }
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q) && !ExtendedVertexFormats.isPipelineEntity(field_179011_q)) {
             return;
         }
@@ -693,6 +779,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_181675_d", at = @At("RETURN"))
     private void ausm$writeDerivedBlockAttributes(CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return;
+        }
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)) {
             return;
         }
@@ -708,6 +797,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_181675_d", at = @At("RETURN"))
     private void ausm$writeDerivedEntityAttributes(CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return;
+        }
         if (!ExtendedVertexFormats.isPipelineEntity(field_179011_q)) {
             return;
         }
@@ -723,6 +815,12 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_181675_d", at = @At("RETURN"))
     private void ausm$resetPipelineVertexCursorAfterNonQuad(CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            if (ExtendedVertexFormats.isPipelineBlock(field_179011_q)) {
+                ausm$resetPipelineVertexCursor();
+            }
+            return;
+        }
         if (ExtendedVertexFormats.isPipelineBlock(field_179011_q)
                 && !((field_179006_k == GL11.GL_QUADS && field_178997_d % 4 == 0)
                 || (field_179006_k == GL11.GL_TRIANGLES && field_178997_d % 3 == 0))) {
@@ -730,8 +828,27 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
     }
 
+    @Unique
+    private void ausm$clearCurrentLiquidPipelineAttributes() {
+        if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)) {
+            return;
+        }
+        int stride = ExtendedVertexFormats.size(field_179011_q);
+        int start = field_178997_d * stride + ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET;
+        int end = field_178997_d * stride + stride;
+        if (start < 0 || end > field_179001_a.capacity() || start >= end) {
+            return;
+        }
+        for (int offset = start; offset < end; offset++) {
+            field_179001_a.put(offset, (byte) 0);
+        }
+    }
+
     @Inject(method = "func_178987_a", at = @At("RETURN"))
     private void ausm$refreshMidBlockAfterRawQuadTranslation(double x, double y, double z, CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return;
+        }
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q) || field_178997_d < 4) {
             return;
         }
@@ -742,12 +859,16 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return;
         }
 
+        int packedLocalPosition = BlockRenderContext.packedLocalPosition();
+        int midBlockEmission = BlockRenderContext.midBlockEmission();
         for (int vertex = 0; vertex < 4; vertex++) {
             int vertexBase = base + vertex * stride;
             field_179001_a.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET, BlockRenderContext.midBlock(
                     field_179001_a.getFloat(vertexBase),
                     field_179001_a.getFloat(vertexBase + 4),
-                    field_179001_a.getFloat(vertexBase + 8)
+                    field_179001_a.getFloat(vertexBase + 8),
+                    packedLocalPosition,
+                    midBlockEmission
             ));
         }
     }
@@ -837,7 +958,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         float v3u = field_179001_a.getFloat(base + lastVertexOffset + 16);
         float v3v = field_179001_a.getFloat(base + lastVertexOffset + 20);
 
-        float[] normal = new float[3];
+        float[] normal = AUSM$NORMAL_SCRATCH.get();
         IrisVertexMath.computeFaceNormal(normal,
                 v0x, v0y, v0z,
                 v1x, v1y, v1z,
@@ -850,6 +971,8 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                 v2x, v2y, v2z, v2u, v2v);
         float midU = vertexAmount == 4 ? (v0u + v1u + v2u + v3u) * 0.25f : (v0u + v1u + v2u) / 3.0f;
         float midV = vertexAmount == 4 ? (v0v + v1v + v2v + v3v) * 0.25f : (v0v + v1v + v2v) / 3.0f;
+        int packedLocalPosition = BlockRenderContext.packedLocalPosition();
+        int midBlockEmission = BlockRenderContext.midBlockEmission();
 
         for (int vertex = 0; vertex < vertexAmount; vertex++) {
             int vertexBase = base + vertex * stride;
@@ -871,17 +994,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             field_179001_a.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET, BlockRenderContext.midBlock(
                     field_179001_a.getFloat(vertexBase),
                     field_179001_a.getFloat(vertexBase + 4),
-                    field_179001_a.getFloat(vertexBase + 8)
+                    field_179001_a.getFloat(vertexBase + 8),
+                    packedLocalPosition,
+                    midBlockEmission
             ));
         }
-    }
-
-    private static int packedEntity() {
-        return (BlockRenderContext.blockEntityId() & 0xFFFF) | (BlockRenderContext.renderType() << 16);
-    }
-
-    private static int packedEntityHigh() {
-        return BlockRenderContext.metadata() & 0xFFFF;
     }
 
     private static void ausm$applyEmissiveLightmap(int[] vertexData, int vertexBase, boolean compatibilityBoost) {
@@ -889,11 +1006,18 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return;
         }
         int blockEmission = BlockRenderContext.vanillaLightmapEmission();
+        ausm$applyEmissiveLightmap(vertexData, vertexBase, blockEmission);
+        if (blockEmission > 0) {
+            PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
+        }
+    }
+
+    @Unique
+    private static void ausm$applyEmissiveLightmap(int[] vertexData, int vertexBase, int blockEmission) {
         if (blockEmission <= 0 || vertexData == null || vertexBase < 0 || vertexBase + 6 >= vertexData.length) {
             return;
         }
         vertexData[vertexBase + 6] = ausm$emissiveLightmap(vertexData[vertexBase + 6], blockEmission);
-        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
     }
 
     private static int ausm$emissiveLightmap(int packedLightmap, int blockEmission) {
@@ -933,7 +1057,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         float v3u = field_179001_a.getFloat(base + lastVertexOffset + 16);
         float v3v = field_179001_a.getFloat(base + lastVertexOffset + 20);
 
-        float[] normal = new float[3];
+        float[] normal = AUSM$NORMAL_SCRATCH.get();
         IrisVertexMath.computeFaceNormal(normal,
                 v0x, v0y, v0z,
                 v1x, v1y, v1z,
@@ -969,6 +1093,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_178978_a", at = @At("HEAD"))
     private void ausm$captureTranslucentAlpha(float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex, CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            ausm$capturedTranslucentAlpha = -1;
+            ausm$capturedTranslucentAlphaOffset = -1;
+            return;
+        }
         ausm$capturedTranslucentAlpha = -1;
         ausm$capturedTranslucentAlphaOffset = -1;
         BlockRenderLayer layer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
@@ -1003,6 +1132,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_178978_a", at = @At("RETURN"))
     private void ausm$separateAmbientOcclusion(float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex, CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return;
+        }
         if (vertexIndex <= 0 || vertexIndex > field_178997_d) {
             return;
         }
@@ -1014,7 +1146,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         if (BlockRenderContext.bloomMaskFallback()) {
             ausm$applyBloomMaskExistingVertex(vertexIndex);
         }
-        SeparateAoColorWriter.rewriteExistingColor((BufferBuilder) (Object) this, redMultiplier, greenMultiplier, blueMultiplier, vertexIndex);
+        int aoColorOffset = func_78909_a(vertexIndex) * Integer.BYTES;
+        SeparateAoColorWriter.rewriteExistingColor(field_179011_q, field_179001_a, aoColorOffset,
+                redMultiplier, greenMultiplier, blueMultiplier, vertexIndex);
         ausm$applyCustomLiquidTintExistingVertex(vertexIndex);
         if (BlockRenderContext.bloomMaskFallback()) {
             ausm$applyBloomMaskExistingVertex(vertexIndex);
@@ -1023,23 +1157,35 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Unique
     private static void ausm$applyBloomMaskVertexData(int[] vertexData, int vertexBase) {
-        if (!BlockRenderContext.bloomMaskFallback() || vertexData == null || vertexBase < 0 || vertexBase + 6 >= vertexData.length) {
+        boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
+        ausm$applyBloomMaskVertexData(vertexData, vertexBase, bloomMaskFallback);
+        if (bloomMaskFallback) {
+            PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
+        }
+    }
+
+    @Unique
+    private static void ausm$applyBloomMaskVertexData(int[] vertexData, int vertexBase, boolean bloomMaskFallback) {
+        if (!bloomMaskFallback || vertexData == null || vertexBase < 0 || vertexBase + 6 >= vertexData.length) {
             return;
         }
         vertexData[vertexBase + 6] = ausm$emissiveLightmap(vertexData[vertexBase + 6], 15);
-        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
     }
 
     @Unique
     private static void ausm$applyCustomLiquidTintVertexData(int[] vertexData, int vertexBase) {
-        if (BlockRenderContext.bloomMaskFallback()
-                || BlockRenderContext.customLiquidTint() < 0
-                || vertexData == null
-                || vertexBase < 0
+        ausm$applyCustomLiquidTintVertexData(vertexData, vertexBase, BlockRenderContext.bloomMaskFallback(),
+                BlockRenderContext.customLiquidTint());
+    }
+
+    @Unique
+    private static void ausm$applyCustomLiquidTintVertexData(int[] vertexData, int vertexBase,
+                                                            boolean bloomMaskFallback, int customLiquidTint) {
+        if (bloomMaskFallback || customLiquidTint < 0 || vertexData == null || vertexBase < 0
                 || vertexBase + 3 >= vertexData.length) {
             return;
         }
-        vertexData[vertexBase + 3] = ausm$applyCustomLiquidTintColor(vertexData[vertexBase + 3]);
+        vertexData[vertexBase + 3] = ausm$applyCustomLiquidTintColor(vertexData[vertexBase + 3], customLiquidTint);
     }
 
     @Unique
@@ -1118,22 +1264,30 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Unique
     private static int ausm$applyBlockAlpha(int color) {
-        int alpha = BlockRenderContext.blockAlpha();
+        return ausm$applyBlockAlpha(color, BlockRenderContext.blockAlpha());
+    }
+
+    @Unique
+    private static int ausm$applyBlockAlpha(int color, int alpha) {
         if (alpha < 0) {
             return color;
         }
-        return ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN
+        return AUSM$LITTLE_ENDIAN
                 ? (color & 0x00FFFFFF) | (alpha << 24)
                 : (color & 0xFFFFFF00) | alpha;
     }
 
     @Unique
     private static int ausm$applyCustomLiquidTintColor(int color) {
-        int tint = BlockRenderContext.customLiquidTint();
+        return ausm$applyCustomLiquidTintColor(color, BlockRenderContext.customLiquidTint());
+    }
+
+    @Unique
+    private static int ausm$applyCustomLiquidTintColor(int color, int tint) {
         if (tint < 0) {
             return color;
         }
-        return ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN
+        return AUSM$LITTLE_ENDIAN
                 ? (color & 0xFF000000) | (tint & 0x00FFFFFF)
                 : (tint & 0xFFFFFF00) | (color & 0x000000FF);
     }

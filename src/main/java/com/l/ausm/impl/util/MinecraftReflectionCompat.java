@@ -2,6 +2,7 @@ package com.l.ausm.impl.util;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
+import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
 import net.minecraft.block.material.Material;
 import net.minecraft.client.Minecraft;
 import net.minecraft.block.state.IBlockState;
@@ -114,6 +115,8 @@ public final class MinecraftReflectionCompat {
     private static final Set<MethodKey> MISSING_METHODS = ConcurrentHashMap.newKeySet();
     private static final ThreadLocal<MethodLookupCache> THREAD_METHOD_LOOKUP_CACHE =
             ThreadLocal.withInitial(MethodLookupCache::new);
+    private static final ThreadLocal<BufferBuilder> THREAD_FLUID_STAGING_BUFFER =
+            ThreadLocal.withInitial(() -> new BufferBuilder(512));
     private static final ConcurrentMap<FieldKey, Field> FIELD_CACHE = new ConcurrentHashMap<>();
     private static final Set<FieldKey> MISSING_FIELDS = ConcurrentHashMap.newKeySet();
     private static final ConcurrentMap<StateValueMethodKey, Method> STATE_VALUE_METHOD_CACHE = new ConcurrentHashMap<>();
@@ -146,6 +149,22 @@ public final class MinecraftReflectionCompat {
             TileEntity.class, double.class, double.class, double.class, float.class, int.class, float.class
     };
     private static final Class<?>[] AXIS_ALIGNED_BB_PARAMETERS = {net.minecraft.util.math.AxisAlignedBB.class};
+    private static final MethodHandle MINECRAFT_INSTANCE_HANDLE = staticMethodHandle(
+            Minecraft.class, new String[] {"func_71410_x", "getMinecraft"}, NO_PARAMETERS
+    );
+    private static final MethodHandle RESOURCE_NAMESPACE_HANDLE = methodHandle(
+            ResourceLocation.class,
+            new String[] {"func_110624_b", "getResourceDomain", "getNamespace"},
+            NO_PARAMETERS
+    );
+    private static final MethodHandle RESOURCE_PATH_HANDLE = methodHandle(
+            ResourceLocation.class,
+            new String[] {"func_110623_a", "getResourcePath", "getPath"},
+            NO_PARAMETERS
+    );
+    private static final Field MINECRAFT_CURRENT_SCREEN_FIELD = firstField(
+            Minecraft.class, "field_71462_r", "currentScreen"
+    );
     private static final Field VEC_X_FIELD = firstField(Vec3d.class, "field_72450_a", "x");
     private static final Field VEC_Y_FIELD = firstField(Vec3d.class, "field_72448_b", "y");
     private static final Field VEC_Z_FIELD = firstField(Vec3d.class, "field_72449_c", "z");
@@ -163,6 +182,31 @@ public final class MinecraftReflectionCompat {
             IBlockState.class,
             new String[] {"func_185899_b", "getActualState"},
             new Class<?>[] {IBlockAccess.class, BlockPos.class}
+    );
+    private static final MethodHandle STATE_MATERIAL_HANDLE = methodHandle(
+            IBlockState.class, new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS
+    );
+    private static final MethodHandle STATE_RENDER_TYPE_HANDLE = methodHandle(
+            IBlockState.class, new String[] {"func_185911_a", "getRenderType"}, NO_PARAMETERS
+    );
+    private static final MethodHandle STATE_LIGHT_VALUE_HANDLE = methodHandle(
+            IBlockState.class, new String[] {"func_185906_d", "getLightValue"}, NO_PARAMETERS
+    );
+    private static final MethodHandle STATE_PACKED_LIGHTMAP_HANDLE = methodHandle(
+            IBlockState.class,
+            new String[] {"func_185889_a", "getPackedLightmapCoords"},
+            new Class<?>[] {IBlockAccess.class, BlockPos.class}
+    );
+    private static final MethodHandle BAKED_QUAD_SPRITE_HANDLE = methodHandle(
+            BakedQuad.class, new String[] {"func_187508_a", "getSprite"}, NO_PARAMETERS
+    );
+    private static final MethodHandle BAKED_QUAD_VERTEX_DATA_HANDLE = methodHandle(
+            BakedQuad.class, new String[] {"func_178209_a", "getVertexData"}, NO_PARAMETERS
+    );
+    private static final MethodHandle BLOCK_COLOR_MULTIPLIER_HANDLE = methodHandle(
+            BlockColors.class,
+            new String[] {"func_186724_a", "func_189991_a", "colorMultiplier"},
+            new Class<?>[] {IBlockState.class, IBlockAccess.class, BlockPos.class, int.class}
     );
     private static final MethodHandle BLOCK_POS_X_HANDLE = methodHandle(
             BlockPos.class, new String[] {"func_177958_n", "getX"}, NO_PARAMETERS
@@ -189,14 +233,25 @@ public final class MinecraftReflectionCompat {
             EntityLivingBase.class, new String[] {"func_184592_cb", "getHeldItemOffhand"}, NO_PARAMETERS
     );
     private static final Field ENTITY_DEAD_FIELD = firstField(Entity.class, "field_70128_L", "isDead");
+    private static final ClassValue<Field> AMBIENT_OCCLUSION_MULTIPLIER_FIELDS = new ClassValue<Field>() {
+        @Override
+        protected Field computeValue(Class<?> type) {
+            return firstField(type, "field_178206_b", "vertexColorMultiplier");
+        }
+    };
 
     private MinecraftReflectionCompat() {
     }
 
     public static Minecraft minecraft() {
-        try {
-            return Minecraft.getMinecraft();
-        } catch (Throwable ignored) {
+        if (MINECRAFT_INSTANCE_HANDLE != null) {
+            try {
+                Object value = MINECRAFT_INSTANCE_HANDLE.invoke();
+                if (value instanceof Minecraft) {
+                    return (Minecraft) value;
+                }
+            } catch (Throwable ignored) {
+            }
         }
         return callStatic(Minecraft.class, Minecraft.class, null, new String[] {"func_71410_x", "getMinecraft"}, NO_PARAMETERS);
     }
@@ -206,7 +261,15 @@ public final class MinecraftReflectionCompat {
     }
 
     public static GuiScreen currentScreen(Minecraft minecraft) {
-        return field(minecraft, GuiScreen.class, null, "field_71462_r", "currentScreen");
+        if (minecraft == null || MINECRAFT_CURRENT_SCREEN_FIELD == null) {
+            return null;
+        }
+        try {
+            Object value = MINECRAFT_CURRENT_SCREEN_FIELD.get(minecraft);
+            return value instanceof GuiScreen ? (GuiScreen) value : null;
+        } catch (ReflectiveOperationException | IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     public static WorldProvider worldProvider(World world) {
@@ -762,6 +825,10 @@ public final class MinecraftReflectionCompat {
     }
 
     public static Material stateMaterial(IBlockState state) {
+        Object direct = invokeReference(STATE_MATERIAL_HANDLE, state);
+        if (direct instanceof Material) {
+            return (Material) direct;
+        }
         return call(state, Material.class, null,
                 new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS);
     }
@@ -777,6 +844,10 @@ public final class MinecraftReflectionCompat {
     }
 
     public static EnumBlockRenderType stateRenderType(IBlockState state) {
+        Object direct = invokeReference(STATE_RENDER_TYPE_HANDLE, state);
+        if (direct instanceof EnumBlockRenderType) {
+            return (EnumBlockRenderType) direct;
+        }
         return call(state, EnumBlockRenderType.class, null,
                 new String[] {"func_185911_a", "getRenderType"}, NO_PARAMETERS);
     }
@@ -787,6 +858,10 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int stateLightValue(IBlockState state) {
+        int direct = invokeInt(STATE_LIGHT_VALUE_HANDLE, state, Integer.MIN_VALUE);
+        if (direct != Integer.MIN_VALUE) {
+            return direct;
+        }
         return callInt(state, new String[] {"func_185906_d", "getLightValue"}, NO_PARAMETERS, 0);
     }
 
@@ -802,6 +877,10 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int statePackedLightmapCoords(IBlockState state, IBlockAccess access, BlockPos pos) {
+        int direct = invokeInt2(STATE_PACKED_LIGHTMAP_HANDLE, state, access, pos, Integer.MIN_VALUE);
+        if (direct != Integer.MIN_VALUE) {
+            return direct;
+        }
         if (state != null && access != null && pos != null) {
             Object value = invoke(state, new String[] {"func_185889_a", "getPackedLightmapCoords"},
                     new Class<?>[] {IBlockAccess.class, BlockPos.class}, access, pos);
@@ -1033,12 +1112,11 @@ public final class MinecraftReflectionCompat {
         if (cached != null) {
             return cached;
         }
-        String namespace;
-        try {
-            namespace = location.getNamespace();
-        } catch (Throwable ignored) {
-            namespace = call(location, String.class, "", new String[] {"func_110624_b", "getResourceDomain", "getNamespace"}, NO_PARAMETERS);
-        }
+        Object direct = invokeReference(RESOURCE_NAMESPACE_HANDLE, location);
+        String namespace = direct instanceof String
+                ? (String) direct
+                : call(location, String.class, "",
+                new String[] {"func_110624_b", "getResourceDomain", "getNamespace"}, NO_PARAMETERS);
         String existing = RESOURCE_NAMESPACE_CACHE.putIfAbsent(location, namespace);
         return existing != null ? existing : namespace;
     }
@@ -1051,12 +1129,11 @@ public final class MinecraftReflectionCompat {
         if (cached != null) {
             return cached;
         }
-        String path;
-        try {
-            path = location.getPath();
-        } catch (Throwable ignored) {
-            path = call(location, String.class, "", new String[] {"func_110623_a", "getResourcePath", "getPath"}, NO_PARAMETERS);
-        }
+        Object direct = invokeReference(RESOURCE_PATH_HANDLE, location);
+        String path = direct instanceof String
+                ? (String) direct
+                : call(location, String.class, "",
+                new String[] {"func_110623_a", "getResourcePath", "getPath"}, NO_PARAMETERS);
         String existing = RESOURCE_PATH_CACHE.putIfAbsent(location, path);
         return existing != null ? existing : path;
     }
@@ -1774,6 +1851,79 @@ public final class MinecraftReflectionCompat {
                 new String[] {"func_175602_ab", "getBlockRendererDispatcher"}, NO_PARAMETERS);
     }
 
+    public static boolean renderLiquidBlock(BlockRendererDispatcher dispatcher, IBlockAccess access,
+                                             IBlockState state, BlockPos pos, BufferBuilder buffer) {
+        if (dispatcher == null || access == null || state == null || pos == null || buffer == null) {
+            return false;
+        }
+        try {
+            Object fluidRenderer = getField(dispatcher, "field_175025_e", "fluidRenderer");
+            VertexFormat blockFormat = blockFormat();
+            if (fluidRenderer == null || blockFormat == null) {
+                return false;
+            }
+
+            BufferBuilder staging = THREAD_FLUID_STAGING_BUFFER.get();
+            forceResetBufferDrawingState(staging);
+            bufferBegin(staging, GL11.GL_QUADS, blockFormat);
+            bufferSetTranslation(staging,
+                    fieldDouble(buffer, 0.0D, "field_179004_l", "xOffset"),
+                    fieldDouble(buffer, 0.0D, "field_179005_m", "yOffset"),
+                    fieldDouble(buffer, 0.0D, "field_179002_n", "zOffset"));
+
+            Object rawResult = invokePropagating(fluidRenderer,
+                    new String[] {"func_178270_a", "renderFluid"},
+                    new Class<?>[] {IBlockAccess.class, IBlockState.class, BlockPos.class, BufferBuilder.class},
+                    access, state, pos, staging);
+            boolean rendered = rawResult instanceof Boolean && (Boolean) rawResult;
+            int vertices = bufferVertexCount(staging);
+            int bytes = vertices * callInt(blockFormat,
+                    new String[] {"func_177338_f", "getSize"}, NO_PARAMETERS, 0);
+            ByteBuffer stagingBytes = bufferByteBuffer(staging);
+            if (!rendered || vertices <= 0 || bytes <= 0 || stagingBytes == null || bytes > stagingBytes.capacity()) {
+                return false;
+            }
+
+            ByteBuffer source = stagingBytes.duplicate();
+            source.position(0);
+            source.limit(bytes);
+            int before = bufferVertexCount(buffer);
+            BlockRendererDispatcherHooks.LIQUID_RENDER.remove();
+            try {
+                invoke(buffer, new String[] {"putBulkData"}, new Class<?>[] {ByteBuffer.class}, source);
+            } finally {
+                BlockRendererDispatcherHooks.LIQUID_RENDER.set(Boolean.TRUE);
+            }
+            return bufferVertexCount(buffer) > before;
+        } catch (RuntimeException | LinkageError ignored) {
+            return false;
+        }
+    }
+
+    public static boolean hasField(Object target, String... names) {
+        if (target == null) {
+            return false;
+        }
+        for (String name : names) {
+            if (findField(target.getClass(), name) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static boolean stateIsLiquid(IBlockState state) {
+        if (state == null) {
+            return false;
+        }
+        try {
+            Object material = invoke(state, new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS);
+            return callBoolean(material, new String[] {"func_76224_d", "isLiquid"}, NO_PARAMETERS, false);
+        } catch (RuntimeException | LinkageError ignored) {
+            return false;
+        }
+    }
+
     public static IBakedModel blockModel(BlockRendererDispatcher dispatcher, IBlockState state) {
         return call(dispatcher, IBakedModel.class, null,
                 new String[] {"func_184389_a", "getModelForState"},
@@ -1804,6 +1954,10 @@ public final class MinecraftReflectionCompat {
     }
 
     public static TextureAtlasSprite bakedQuadSprite(BakedQuad quad) {
+        Object direct = invokeReference(BAKED_QUAD_SPRITE_HANDLE, quad);
+        if (direct instanceof TextureAtlasSprite) {
+            return (TextureAtlasSprite) direct;
+        }
         Object value = invoke(quad, new String[] {"func_187508_a", "getSprite"}, NO_PARAMETERS);
         if (value instanceof TextureAtlasSprite) {
             return (TextureAtlasSprite) value;
@@ -1813,6 +1967,10 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int[] bakedQuadVertexData(BakedQuad quad) {
+        Object direct = invokeReference(BAKED_QUAD_VERTEX_DATA_HANDLE, quad);
+        if (direct instanceof int[]) {
+            return (int[]) direct;
+        }
         Object value = invoke(quad, new String[] {"func_178209_a", "getVertexData"}, NO_PARAMETERS);
         if (value instanceof int[]) {
             return (int[]) value;
@@ -1839,6 +1997,18 @@ public final class MinecraftReflectionCompat {
         } catch (RuntimeException | LinkageError ignored) {
             return -1;
         }
+    }
+
+    public static int blockColorMultiplier(BlockColors blockColors, IBlockState state, IBlockAccess blockAccess,
+                                           BlockPos pos, int tintIndex) {
+        int direct = invokeInt4(BLOCK_COLOR_MULTIPLIER_HANDLE, blockColors, state, blockAccess, pos, tintIndex,
+                Integer.MIN_VALUE);
+        if (direct != Integer.MIN_VALUE) {
+            return direct;
+        }
+        return callInt(blockColors, new String[] {"func_186724_a", "func_189991_a", "colorMultiplier"},
+                new Class<?>[] {IBlockState.class, IBlockAccess.class, BlockPos.class, int.class},
+                0xFFFFFF, state, blockAccess, pos, tintIndex);
     }
 
     public static boolean bakedQuadHasTintIndex(BakedQuad quad) {
@@ -1948,6 +2118,9 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int bufferVertexCount(BufferBuilder buffer) {
+        if (buffer instanceof IBufferBuilderExtension extension) {
+            return extension.ausm$vertexCount();
+        }
         return intValue(invoke(buffer, new String[] {"func_178989_h", "getVertexCount"}, NO_PARAMETERS), 0);
     }
 
@@ -1985,11 +2158,17 @@ public final class MinecraftReflectionCompat {
     }
 
     public static VertexFormat bufferVertexFormat(BufferBuilder buffer) {
+        if (buffer instanceof IBufferBuilderExtension extension) {
+            return extension.ausm$vertexFormat();
+        }
         Object value = invoke(buffer, BUFFER_VERTEX_FORMAT_NAMES, NO_PARAMETERS);
         return value instanceof VertexFormat ? (VertexFormat) value : null;
     }
 
     public static ByteBuffer bufferByteBuffer(BufferBuilder buffer) {
+        if (buffer instanceof IBufferBuilderExtension extension) {
+            return extension.ausm$byteBuffer();
+        }
         Object value = invoke(buffer, new String[] {"func_178966_f", "getByteBuffer"}, NO_PARAMETERS);
         return value instanceof ByteBuffer ? (ByteBuffer) value : null;
     }
@@ -2060,6 +2239,19 @@ public final class MinecraftReflectionCompat {
     }
 
     public static float[] ambientOcclusionFaceVertexColorMultiplier(Object ambientOcclusionFace) {
+        if (ambientOcclusionFace == null) {
+            return null;
+        }
+        Field field = AMBIENT_OCCLUSION_MULTIPLIER_FIELDS.get(ambientOcclusionFace.getClass());
+        if (field != null) {
+            try {
+                Object value = field.get(ambientOcclusionFace);
+                if (value instanceof float[]) {
+                    return (float[]) value;
+                }
+            } catch (ReflectiveOperationException | IllegalArgumentException ignored) {
+            }
+        }
         Object value = getField(ambientOcclusionFace, "field_178206_b", "vertexColorMultiplier");
         return value instanceof float[] ? (float[]) value : null;
     }
@@ -2342,6 +2534,40 @@ public final class MinecraftReflectionCompat {
         }
         try {
             return (int) handle.invoke(target);
+        } catch (Throwable ignored) {
+            return fallback;
+        }
+    }
+
+    private static Object invokeReference(MethodHandle handle, Object target) {
+        if (target == null || handle == null) {
+            return null;
+        }
+        try {
+            return handle.invoke(target);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static int invokeInt2(MethodHandle handle, Object target, Object first, Object second, int fallback) {
+        if (target == null || first == null || second == null || handle == null) {
+            return fallback;
+        }
+        try {
+            return (int) handle.invoke(target, first, second);
+        } catch (Throwable ignored) {
+            return fallback;
+        }
+    }
+
+    private static int invokeInt4(MethodHandle handle, Object target, Object first, Object second, Object third,
+                                  int fourth, int fallback) {
+        if (target == null || handle == null) {
+            return fallback;
+        }
+        try {
+            return (int) handle.invoke(target, first, second, third, fourth);
         } catch (Throwable ignored) {
             return fallback;
         }

@@ -102,9 +102,29 @@ public class MinecraftMixin {
         int width = com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc);
         int height = com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc);
         context.logFramebufferPresentationBoundary("runGameLoop-after-vanilla-before-direct", framebuffer, width, height, true);
-        if (context.shouldDirectPresentFramebuffer()) {
+        if (context.isActive() && context.shouldDirectPresentFramebuffer()) {
             context.presentFramebufferDirectly(framebuffer, width, height);
             context.logFramebufferPresentationBoundary("runGameLoop-after-direct", framebuffer, width, height, true);
+        }
+    }
+
+    @Inject(method = "func_175601_h()V", at = @At("HEAD"), remap = false, require = 0)
+    private void ausm$presentShaderlessFramebufferBeforeDisplayUpdate(CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldDirectPresentFramebuffer()) {
+            Minecraft mc = (Minecraft) (Object) this;
+            Framebuffer framebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+            context.logFramebufferPresentationBoundary("runGameLoop-before-shaderless-direct", framebuffer,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), true);
+            context.presentFramebufferDirectly(
+                    framebuffer,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc)
+            );
+            context.logFramebufferPresentationBoundary("runGameLoop-after-shaderless-direct", framebuffer,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), true);
         }
     }
 
