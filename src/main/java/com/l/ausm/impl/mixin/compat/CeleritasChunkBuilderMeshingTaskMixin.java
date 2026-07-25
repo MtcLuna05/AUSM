@@ -41,9 +41,13 @@ public abstract class CeleritasChunkBuilderMeshingTaskMixin {
     @Unique
     private static volatile boolean ausm$getBufferForLayerUnavailable;
     @Unique
+    private static final AtomicInteger ausm$nativeRenderFailureCount = new AtomicInteger();
+    @Unique
     private static final AtomicInteger ausm$blockcrafteryBloomProbeCount = new AtomicInteger();
     @Unique
-    private static final AtomicInteger ausm$nativeRenderFailureCount = new AtomicInteger();
+    private static final AtomicInteger ausm$liquidRouteProbeCount = new AtomicInteger();
+    @Unique
+    private static final AtomicInteger ausm$specialLayerProbeCount = new AtomicInteger();
 
     @Inject(
             method = "execute(Lorg/embeddedt/embeddium/impl/render/chunk/compile/ChunkBuildContext;Lorg/embeddedt/embeddium/impl/util/task/CancellationToken;)Lorg/embeddedt/embeddium/impl/render/chunk/compile/ChunkBuildOutput;",
@@ -99,23 +103,52 @@ public abstract class CeleritasChunkBuilderMeshingTaskMixin {
             @Coerce Object cancellationToken
     ) {
         PipelineContext pipeline = PipelineContext.getInstance();
-        if (AusmBloomLayer.isBloomLayer(layer)
-                && pipeline.isBlockcrafteryEditableState(state)
-                && blockAccess instanceof net.minecraft.world.IBlockAccess) {
-            boolean materialBloom = pipeline.gpomFramedMaterialHasBloom(
-                    (net.minecraft.world.IBlockAccess) blockAccess, pos);
-            int probe = ausm$blockcrafteryBloomProbeCount.incrementAndGet();
-            if (probe <= 64) {
-                com.l.ausm.impl.MainMod.LOGGER.info(
-                        "[AUSMBlockcrafteryBloomLayerProbe] call={} thread={} pos={} state={} layer={} materialBloom={} access={}",
-                        probe, Thread.currentThread().getName(), pos, state, layer, materialBloom,
-                        blockAccess.getClass().getName());
-            }
-            if (!materialBloom) {
-                return;
-            }
+        boolean liquid = com.l.ausm.impl.util.MinecraftReflectionCompat.stateIsLiquidOrWater(state);
+        boolean forgeFallback = blockAccess instanceof net.minecraft.world.IBlockAccess
+                && TerrainCompileCoordinator.requiresForgeFallback(state,
+                (net.minecraft.world.IBlockAccess) blockAccess, pos, pipeline);
+        if (liquid && ausm$liquidRouteProbeCount.incrementAndGet() <= 128) {
+            BufferBuilder probeBuffer = ausm$getBufferForLayer(buildContext, layer);
+            com.l.ausm.impl.MainMod.LOGGER.info(
+                    "[AUSMCeleritasLiquidRouteProbe] stage=enter state={} layer={} forgeFallback={} pipelineActive={} buffer={} format={} vertices={}",
+                    state, layer, forgeFallback, pipeline.isPipelineActive(), probeBuffer,
+                    probeBuffer != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(probeBuffer) : null,
+                    probeBuffer != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(probeBuffer) : -1);
+        }
+        boolean fire = com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsFire(state);
+        boolean twilightPortal = pipeline.isCeleritasTwilightPortalState(state);
+        if ((fire || twilightPortal) && ausm$specialLayerProbeCount.incrementAndGet() <= 64) {
+            com.l.ausm.impl.MainMod.LOGGER.info(
+                    "[AUSMSpecialBlockRouteProbe] state={} kind={} layer={} forgeFallback={} renderType={} pipelineActive={} access={}",
+                    state, fire ? "fire" : "twilight-portal", layer, forgeFallback,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderType(state),
+                    pipeline.isPipelineActive(), blockAccess != null ? blockAccess.getClass().getName() : "null");
+        }
+        boolean blockcraftery = pipeline.isBlockcrafteryEditableState(state);
+        boolean inheritedBloom = blockAccess instanceof net.minecraft.world.IBlockAccess
+                && pipeline.gpomFramedMaterialHasBloom((net.minecraft.world.IBlockAccess) blockAccess, pos);
+        int inheritedEmission = blockAccess instanceof net.minecraft.world.IBlockAccess
+                ? pipeline.gpomFramedMaterialEmission((net.minecraft.world.IBlockAccess) blockAccess, pos) : 0;
+        if (blockcraftery && (inheritedBloom || inheritedEmission > 0)
+                && ausm$blockcrafteryBloomProbeCount.incrementAndGet() <= 64) {
+            com.l.ausm.impl.MainMod.LOGGER.info(
+                    "[AUSMCeleritasBlockcrafteryBloomProbe] pos={} layer={} inheritedBloom={} inheritedEmission={}",
+                    pos, layer, inheritedBloom, inheritedEmission);
+        }
+        if (blockcraftery && AusmBloomLayer.isBloomLayer(layer)
+                && (!(blockAccess instanceof net.minecraft.world.IBlockAccess)
+                || !pipeline.gpomFramedMaterialHasBloom((net.minecraft.world.IBlockAccess) blockAccess, pos))) {
+            return;
         }
         if (ausm$renderForgeFallback(state, pos, blockAccess, layer, buildContext)) {
+            if (liquid && ausm$liquidRouteProbeCount.get() <= 128) {
+                BufferBuilder probeBuffer = ausm$getBufferForLayer(buildContext, layer);
+                com.l.ausm.impl.MainMod.LOGGER.info(
+                        "[AUSMCeleritasLiquidRouteProbe] stage=forge-return state={} layer={} buffer={} format={} vertices={}",
+                        state, layer, probeBuffer,
+                        probeBuffer != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(probeBuffer) : null,
+                        probeBuffer != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(probeBuffer) : -1);
+            }
             return;
         }
         if (!ausm$invokeNativeRenderBlock(renderer, state, pos, blockAccess, layer)) {

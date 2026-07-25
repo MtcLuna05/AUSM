@@ -6,7 +6,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.network.NetHandlerPlayClient;
-import net.minecraft.network.PacketBuffer;
 import net.minecraft.network.play.server.SPacketChunkData;
 import net.minecraft.network.play.server.SPacketBlockAction;
 import net.minecraft.network.play.server.SPacketBlockChange;
@@ -26,14 +25,24 @@ import net.minecraft.network.play.server.SPacketTimeUpdate;
 import net.minecraft.network.play.server.SPacketUnloadChunk;
 import net.minecraft.network.play.server.SPacketUpdateHealth;
 import net.minecraft.network.play.server.SPacketUpdateTileEntity;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.tileentity.TileEntity;
+import net.minecraft.util.math.BlockPos;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
 @Mixin(NetHandlerPlayClient.class)
 public class NetHandlerPlayClientMixin {
+    @Unique
+    private static final AtomicInteger ausm$tileEntityRepairProbeCount = new AtomicInteger();
+    @Unique
+    private static final int AUSM_TILE_ENTITY_REPAIR_PROBE_LIMIT = 32;
     @Unique
     private double ausm$preTeleportX;
     @Unique
@@ -47,7 +56,7 @@ public class NetHandlerPlayClientMixin {
 
     @Inject(method = {"func_147273_a", "handleUpdateTileEntity"}, at = @At("HEAD"), cancellable = true)
     private void ausm$ignoreUpdateTileEntityWithoutWorld(SPacketUpdateTileEntity packetIn, CallbackInfo ci) {
-        if (ausm$worldUnavailable()) {
+        if (ausm$world() == null) {
             ci.cancel();
         }
     }
@@ -227,9 +236,9 @@ public class NetHandlerPlayClientMixin {
     }
 
     @Inject(method = {"func_147263_a", "handleChunkData"}, at = @At("HEAD"), cancellable = true)
-    private void ausm$dropMalformedChunkData(SPacketChunkData packetIn, CallbackInfo ci) {
+    private void ausm$ignoreChunkDataWithoutWorld(SPacketChunkData packetIn, CallbackInfo ci) {
         WorldClient world = ausm$world();
-        if (world == null || packetIn == null || !ausm$isChunkDataReadable(packetIn)) {
+        if (world == null || packetIn == null) {
             ci.cancel();
         }
     }
@@ -238,6 +247,7 @@ public class NetHandlerPlayClientMixin {
     private void ausm$queueShaderChunkRefresh(SPacketChunkData packetIn, CallbackInfo ci) {
         WorldClient world = ausm$world();
         if (world != null && packetIn != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((packetIn), new String[] {"func_149274_i", "isFullChunk"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
+            ausm$repairMissingChunkTileEntities(world, packetIn);
             int chunkX = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((packetIn), new String[] {"func_149273_e", "getChunkX"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0);
             int chunkZ = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((packetIn), new String[] {"func_149271_f", "getChunkZ"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0);
             PipelineContext.getInstance().queueShaderChunkRefresh(world, chunkX, chunkZ);
@@ -247,6 +257,49 @@ public class NetHandlerPlayClientMixin {
                     chunkZ,
                     "chunk-data"
             );
+        }
+    }
+
+    @Unique
+    private static void ausm$repairMissingChunkTileEntities(WorldClient world, SPacketChunkData packet) {
+        List<NBTTagCompound> tags = MinecraftReflectionCompat.chunkDataTileEntityTags(packet);
+        if (tags.isEmpty()) {
+            return;
+        }
+        int packetChunkX = MinecraftReflectionCompat.callInt(packet,
+                new String[] {"func_149273_e", "getChunkX"}, MinecraftReflectionCompat.NO_PARAMETERS, Integer.MIN_VALUE);
+        int packetChunkZ = MinecraftReflectionCompat.callInt(packet,
+                new String[] {"func_149271_f", "getChunkZ"}, MinecraftReflectionCompat.NO_PARAMETERS, Integer.MIN_VALUE);
+        int repaired = 0;
+        int unresolved = 0;
+        for (NBTTagCompound tag : tags) {
+            if (tag == null) {
+                continue;
+            }
+            int x = MinecraftReflectionCompat.nbtInteger(tag, "x", Integer.MIN_VALUE);
+            int y = MinecraftReflectionCompat.nbtInteger(tag, "y", Integer.MIN_VALUE);
+            int z = MinecraftReflectionCompat.nbtInteger(tag, "z", Integer.MIN_VALUE);
+            if (x == Integer.MIN_VALUE || y < 0 || y >= 256 || z == Integer.MIN_VALUE
+                    || (x >> 4) != packetChunkX || (z >> 4) != packetChunkZ) {
+                unresolved++;
+                continue;
+            }
+            BlockPos pos = new BlockPos(x, y, z);
+            if (MinecraftReflectionCompat.blockAccessTileEntity(world, pos) != null) {
+                continue;
+            }
+            TileEntity tileEntity = MinecraftReflectionCompat.createTileEntity(world, tag);
+            if (MinecraftReflectionCompat.worldSetTileEntity(world, pos, tileEntity)) {
+                repaired++;
+            } else {
+                unresolved++;
+            }
+        }
+        if ((repaired > 0 || unresolved > 0)
+                && ausm$tileEntityRepairProbeCount.incrementAndGet() <= AUSM_TILE_ENTITY_REPAIR_PROBE_LIMIT) {
+            com.l.ausm.impl.MainMod.LOGGER.info(
+                    "[AUSMTileEntityChunkRepair] chunk={},{} tags={} repaired={} unresolved={}",
+                    packetChunkX, packetChunkZ, tags.size(), repaired, unresolved);
         }
     }
 
@@ -261,71 +314,4 @@ public class NetHandlerPlayClientMixin {
         return ausm$world() == null || mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null;
     }
 
-    @Unique
-    private boolean ausm$isChunkDataReadable(SPacketChunkData packetIn) {
-        WorldClient world = ausm$world();
-        if (world == null) {
-            return false;
-        }
-        PacketBuffer buffer = null;
-        int readerIndex = -1;
-        try {
-            buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.call(packetIn, PacketBuffer.class, null, new String[] {"func_186946_a", "getReadBuffer"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
-            if (buffer == null) {
-                return false;
-            }
-            readerIndex = buffer.readerIndex();
-            int sections = com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((packetIn), new String[] {"func_149276_g", "getExtractedSize"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0);
-            boolean hasSkyLight = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.providerHasSkyLight(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world));
-
-            if ((sections & ~0xFFFF) != 0) {
-                return false;
-            }
-
-            for (int section = 0; section < 16; section++) {
-                if ((sections & (1 << section)) == 0) {
-                    continue;
-                }
-
-                if (!com.l.ausm.impl.util.MinecraftReflectionCompat.readChunkBlockStateContainer(buffer)) {
-                    return false;
-                }
-
-                if (!ausm$skipChunkBytes(buffer, 2048)) {
-                    return false;
-                }
-
-                if (hasSkyLight && !ausm$skipChunkBytes(buffer, 2048)) {
-                    return false;
-                }
-            }
-
-            if (com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((packetIn), new String[] {"func_149274_i", "isFullChunk"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
-                int biomePayloadBytes = buffer.readableBytes();
-                if (biomePayloadBytes == 256) {
-                    return ausm$skipChunkBytes(buffer, 256);
-                }
-
-                return biomePayloadBytes > 0 && com.l.ausm.impl.util.MinecraftReflectionCompat.call(buffer, int[].class, new int[0], new String[] {"func_189424_c", "readVarIntArray"}, new Class<?>[] {int.class}, biomePayloadBytes).length == 256;
-            }
-
-            return true;
-        } catch (RuntimeException ignored) {
-            return false;
-        } finally {
-            if (buffer != null && readerIndex >= 0) {
-                buffer.readerIndex(readerIndex);
-            }
-        }
-    }
-
-    @Unique
-    private boolean ausm$skipChunkBytes(PacketBuffer buffer, int byteCount) {
-        if (buffer.readableBytes() < byteCount) {
-            return false;
-        }
-
-        buffer.skipBytes(byteCount);
-        return true;
-    }
 }

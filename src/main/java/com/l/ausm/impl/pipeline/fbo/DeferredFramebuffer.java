@@ -438,12 +438,24 @@ public class DeferredFramebuffer {
             return false;
         }
         int count = 0;
+        int colorAttachment0 = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(
+                net.minecraft.client.renderer.OpenGlHelper.class,
+                org.lwjgl.opengl.GL30.GL_COLOR_ATTACHMENT0,
+                "field_153200_g",
+                "GL_COLOR_ATTACHMENT0");
         for (int i = 0; i < attachments.length && i < maxSlots; i++) {
             Attachment attachment = attachments[i];
             if (!hasColorAttachment(attachment)) {
                 continue;
             }
-            if (count >= cached.length || cached[count] != com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL30.GL_COLOR_ATTACHMENT0, "field_153200_g", "GL_COLOR_ATTACHMENT0") + i) {
+            int expected = colorAttachment0 + i;
+            if (count >= cached.length || cached[count] != expected) {
+                return false;
+            }
+            // Vanilla and mod renderers can change GL_DRAW_BUFFER* without
+            // changing the framebuffer object. The Java-side cache is only a
+            // hint; verify the live state before skipping glDrawBuffers.
+            if (GL11.glGetInteger(GL20.GL_DRAW_BUFFER0 + count) != expected) {
                 return false;
             }
             count++;

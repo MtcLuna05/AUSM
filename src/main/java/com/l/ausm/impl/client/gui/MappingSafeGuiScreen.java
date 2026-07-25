@@ -5,6 +5,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
+import org.lwjgl.input.Mouse;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -34,6 +35,17 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
     }
 
     protected void ausm$handleMouseInput() throws IOException {
+    }
+
+    protected void ausm$mouseReleased(int mouseX, int mouseY, int mouseButton) {
+        for (GuiButton button : buttonList) {
+            MinecraftReflectionCompat.invoke(
+                    button,
+                    new String[] {"func_146118_a", "mouseReleased"},
+                    new Class<?>[] {int.class, int.class},
+                    mouseX,
+                    mouseY);
+        }
     }
 
     protected void ausm$actionPerformed(GuiButton button) throws IOException {
@@ -143,6 +155,18 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
     public final void func_146274_d() throws IOException {
         ausm$syncRuntimeScreenState();
         ausm$handleMouseInput();
+
+        int mouseX = Mouse.getEventX() * this.width / MinecraftReflectionCompat.displayWidth(this.mc);
+        int mouseY = this.height - Mouse.getEventY() * this.height
+                / MinecraftReflectionCompat.displayHeight(this.mc) - 1;
+        int mouseButton = Mouse.getEventButton();
+        if (mouseButton != -1) {
+            if (Mouse.getEventButtonState()) {
+                ausm$mouseClicked(mouseX, mouseY, mouseButton);
+            } else {
+                ausm$mouseReleased(mouseX, mouseY, mouseButton);
+            }
+        }
     }
 
     protected final void func_146284_a(GuiButton button) throws IOException {

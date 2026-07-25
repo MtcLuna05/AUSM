@@ -25,6 +25,7 @@ import java.util.function.Supplier;
  */
 public class UniformRegistry {
     private static final int MAX_PROGRAM_UNIFORM_CACHE_ENTRIES = 128;
+    private static final boolean SKY_UNIFORM_PROBES_ENABLED = false;
     private static final AtomicInteger SKY_UNIFORM_PROBE_COUNT = new AtomicInteger();
 
     private final Map<String, UniformBinding<?>> bindings = new HashMap<>();
@@ -162,7 +163,7 @@ public class UniformRegistry {
     }
 
     private void probeSkyRepairUniforms(ShaderProgram program, List<ResolvedUniformBinding> activeBindings) {
-        if (program == null) {
+        if (!SKY_UNIFORM_PROBES_ENABLED || program == null) {
             return;
         }
         int skyboxLocation = program.getUniformLocation("ausmSkyboxRepair");

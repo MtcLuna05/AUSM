@@ -19,15 +19,22 @@ public final class NothiriumBypass {
     private static Method allChangedMethod;
     private static Method disposeMethod;
     private static Method setupMethod;
+    private static Method renderUtilCameraXMethod;
+    private static Method renderUtilCameraYMethod;
+    private static Method renderUtilCameraZMethod;
+    private static Method renderUtilFrustumMethod;
+    private static Method renderUtilFrameMethod;
     private static int blockUpdateLogs;
     private static int rendererRecoveryLogs;
     private static int rendererSetupLogs;
     private static int rendererSetupFailureLogs;
     private static int hybridMaintenanceLogs;
+    private static int renderUtilProbeLogs;
     private static long lastIsolatedMainSetupNanos;
     private static final int BLOCK_UPDATE_LOG_LIMIT = 0;
     private static final int RENDERER_RECOVERY_LOG_LIMIT = 0;
     private static final int RENDERER_SETUP_LOG_LIMIT = 0;
+    private static final int RENDER_UTIL_PROBE_LOG_LIMIT = 0;
     private static final long ISOLATED_MAIN_SETUP_INTERVAL_NANOS = 15_000_000L;
 
     private NothiriumBypass() {
@@ -162,10 +169,40 @@ public final class NothiriumBypass {
             return false;
         }
         try {
+            logRenderUtilState("before-setup");
             setupMethod.invoke(null);
+            logRenderUtilState("after-setup");
             return true;
         } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
             return false;
+        }
+    }
+
+    private static void logRenderUtilState(String stage) {
+        if (renderUtilProbeLogs >= RENDER_UTIL_PROBE_LOG_LIMIT) {
+            return;
+        }
+        try {
+            Class<?> renderUtil = Class.forName("meldexun.renderlib.util.RenderUtil", false,
+                    NothiriumBypass.class.getClassLoader());
+            if (renderUtilCameraXMethod == null) {
+                renderUtilCameraXMethod = renderUtil.getMethod("getCameraX");
+                renderUtilCameraYMethod = renderUtil.getMethod("getCameraY");
+                renderUtilCameraZMethod = renderUtil.getMethod("getCameraZ");
+                renderUtilFrustumMethod = renderUtil.getMethod("getFrustum");
+                renderUtilFrameMethod = renderUtil.getMethod("getFrame");
+            }
+            renderUtilProbeLogs++;
+            MainMod.LOGGER.info(
+                    "[AUSMNothiriumRenderUtilProbe] call={} stage={} camera={}/{}/{} frustum={} frame={}",
+                    renderUtilProbeLogs,
+                    stage,
+                    renderUtilCameraXMethod.invoke(null),
+                    renderUtilCameraYMethod.invoke(null),
+                    renderUtilCameraZMethod.invoke(null),
+                    renderUtilFrustumMethod.invoke(null) == null ? "null" : "present",
+                    renderUtilFrameMethod.invoke(null));
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
         }
     }
 
@@ -261,6 +298,13 @@ public final class NothiriumBypass {
         }
 
         if (PipelineContext.getInstance().shouldForceVanillaTerrainRenderer()) {
+            return true;
+        }
+        // AUSM renders shaderpack shadows through vanilla RenderGlobal. Letting
+        // Nothirium handle setupTerrain here replaces its main-camera lists
+        // with the light-space frustum, leaving only the camera section visible
+        // when the later gbuffer terrain passes consume those lists.
+        if (PipelineContext.getInstance().isShadowPassActive()) {
             return true;
         }
         if (isNothiriumRendererDisposed()) {
@@ -408,7 +452,7 @@ public final class NothiriumBypass {
     }
 
     private static void logHybridMaintenance(String stage, boolean setup) {
-        if (hybridMaintenanceLogs >= 8) {
+        if (hybridMaintenanceLogs >= 0) {
             return;
         }
         hybridMaintenanceLogs++;

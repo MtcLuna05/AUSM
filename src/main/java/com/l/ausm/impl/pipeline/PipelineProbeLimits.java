@@ -27,7 +27,9 @@ final class PipelineProbeLimits {
     static final int MAX_DIRECT_PRESENTATION_SNAPSHOT_LOGS = 0;
     static final int MAX_GUI_RECOVERED_BACKGROUND_LOGS = 0;
     static final int MAX_PRE_FINAL_DIRECT_PRESENT_LOGS = 0;
-    static final int MAX_PRESENTATION_BOUNDARY_LOGS = 64;
+    static final int MAX_PRESENTATION_BOUNDARY_LOGS = 0;
+    static final int MAX_FULLSCREEN_SAMPLER_PROBE_LOGS = 0;
+    static final int MAX_FLUID_MATERIAL_PROBE_LOGS = 0;
     static final int MAX_TERRAIN_GRID_PROBE_LOGS = 0;
     static final int TERRAIN_GRID_PROBE_COLUMNS = 5;
     static final int TERRAIN_GRID_PROBE_ROWS = 5;
@@ -48,6 +50,9 @@ final class PipelineProbeLimits {
     static final int MAX_HAND_ITEM_DRAW_STATE_LOGS = 0;
     static final int MAX_HAND_GBUFFER_PROBE_LOGS = 0;
     static final int MAX_HAND_PASS_BIND_LOGS = 0;
+    static final int MAX_SPECIAL_LAYER_PROBE_LOGS = 0;
+    static final int MAX_PIPELINE_PASS_PROBE_LOGS = 0;
+    static final int MAX_LAYER_OUTPUT_PROBE_LOGS = 0;
     static final int MAX_SHADERLESS_LIGHT_STATE_PROBE_LOGS = 0;
     static final int MAX_SKY_DOME_WORLD_PROBE_LOGS = 0;
     static final int MAX_SKY_DOME_GUI_PROBE_LOGS = 0;

@@ -1,20 +1,23 @@
 package com.l.ausm.impl.mixin.compat;
 
-import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
-import com.l.ausm.impl.pipeline.compat.RenderingRegressionProbes;
-import net.minecraft.util.BlockRenderLayer;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
+import net.minecraft.util.BlockRenderLayer;
+import net.minecraft.client.multiplayer.ChunkProviderClient;
+import net.minecraft.world.World;
+import net.minecraft.world.chunk.Chunk;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.nio.FloatBuffer;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(targets = "org.taumc.celeritas.impl.render.terrain.CeleritasWorldRenderer", remap = false)
@@ -23,15 +26,190 @@ public abstract class CeleritasWorldRendererMixin {
     private static final ThreadLocal<FloatBuffer[]> ausm$matrixBuffers = ThreadLocal.withInitial(() ->
             new FloatBuffer[] {BufferUtils.createFloatBuffer(16), BufferUtils.createFloatBuffer(16)});
     @Unique
-    private static final AtomicInteger ausm$matrixProbeCount = new AtomicInteger();
-    @Unique
     private static volatile Constructor<?> ausm$matrixConstructor;
     @Unique
     private static volatile boolean ausm$matrixConstructorUnavailable;
+    @Unique
+    private static final int AUSM_CELERITAS_DRAW_PROBE_LIMIT = 48;
+    @Unique
+    private static final AtomicInteger ausm$drawProbeCount = new AtomicInteger();
+    @Unique
+    private static final AtomicInteger ausm$trackerRepairAttempts = new AtomicInteger();
+    @Unique
+    private static final int AUSM_CELERITAS_TRACKER_REPAIR_LIMIT = 8;
+    @Unique
+    private static volatile int ausm$trackerRepairWorldIdentity;
+
+    @Inject(method = "drawChunkLayer(Lnet/minecraft/util/BlockRenderLayer;DDD)V", at = @At("HEAD"), remap = false)
+    private void ausm$probeDrawChunkLayerHead(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
+                                               CallbackInfo ci) {
+        Object renderer = (Object) this;
+        if (ausm$invokeInt(renderer, "getVisibleChunkCount", -1) == 0) {
+            ausm$repairTrackerFromLoadedChunks(renderer);
+        }
+        ausm$logDrawProbe("head", layer);
+    }
+
+    @Inject(method = "drawChunkLayer(Lnet/minecraft/util/BlockRenderLayer;DDD)V", at = @At("RETURN"), remap = false)
+    private void ausm$probeDrawChunkLayerReturn(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ,
+                                                 CallbackInfo ci) {
+        ausm$logDrawProbe("return", layer);
+    }
+
+    @Unique
+    private void ausm$logDrawProbe(String stage, BlockRenderLayer layer) {
+        if (!PipelineContext.getInstance().isPipelineActive()) {
+            return;
+        }
+        int ordinal = ausm$drawProbeCount.incrementAndGet();
+        if (ordinal > AUSM_CELERITAS_DRAW_PROBE_LIMIT) {
+            return;
+        }
+        Object renderer = (Object) this;
+        int visible = ausm$invokeInt(renderer, "getVisibleChunkCount", -1);
+        boolean complete = ausm$invokeBoolean(renderer, "isTerrainRenderComplete", false);
+        Object manager = ausm$invoke(renderer, "getRenderSectionManager");
+        String debug = ausm$invokeString(renderer, "getChunksDebugString", "unknown");
+        int glError = GL11.glGetError();
+        com.l.ausm.impl.MainMod.LOGGER.info(
+                "[AUSMCeleritasDrawProbe] call={} stage={} layer={} visible={} complete={} renderer={} manager={} chunks='{}' glProgram={} arrayBuffer={} glError={}",
+                ordinal,
+                stage,
+                layer,
+                visible,
+                complete,
+                renderer.getClass().getName(),
+                manager != null ? manager.getClass().getName() : "null",
+                debug,
+                GL11.glGetInteger(org.lwjgl.opengl.GL20.GL_CURRENT_PROGRAM),
+                GL11.glGetInteger(org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER_BINDING),
+                glError
+        );
+    }
+
+    @Unique
+    private static void ausm$repairTrackerFromLoadedChunks(Object renderer) {
+        Object worldObject = com.l.ausm.impl.util.MinecraftReflectionCompat.field(
+                renderer, Object.class, null, "world");
+        if (!(worldObject instanceof World world)) {
+            return;
+        }
+        ChunkProviderClient provider = com.l.ausm.impl.util.MinecraftReflectionCompat.call(
+                world,
+                ChunkProviderClient.class,
+                null,
+                new String[] {"func_72863_F", "getChunkProvider"},
+                com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+        Object loadedObject = com.l.ausm.impl.util.MinecraftReflectionCompat.field(
+                provider, Object.class, null, "field_73236_b", "loadedChunks");
+        if (!(loadedObject instanceof Map<?, ?> loaded) || loaded.isEmpty()) {
+            return;
+        }
+
+        Object tracker = ausm$chunkTracker(world);
+        if (tracker == null) {
+            return;
+        }
+        Method statusAdded = ausm$method(tracker, "onChunkStatusAdded", int.class, int.class, int.class);
+        if (statusAdded == null) {
+            return;
+        }
+        int worldIdentity = System.identityHashCode(world);
+        if (ausm$trackerRepairWorldIdentity != worldIdentity) {
+            ausm$trackerRepairWorldIdentity = worldIdentity;
+            ausm$trackerRepairAttempts.set(0);
+        }
+        int attempt = ausm$trackerRepairAttempts.incrementAndGet();
+        if (attempt > AUSM_CELERITAS_TRACKER_REPAIR_LIMIT) {
+            return;
+        }
+        int added = 0;
+        for (Object value : loaded.values()) {
+            if (!(value instanceof Chunk chunk)) {
+                continue;
+            }
+            int chunkX = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(
+                    chunk, Integer.MIN_VALUE, "field_76635_g", "x");
+            int chunkZ = com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(
+                    chunk, Integer.MIN_VALUE, "field_76647_h", "z");
+            if (chunkX == Integer.MIN_VALUE || chunkZ == Integer.MIN_VALUE) {
+                continue;
+            }
+            try {
+                statusAdded.invoke(tracker, chunkX, chunkZ, 3);
+                added++;
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+                break;
+            }
+        }
+        com.l.ausm.impl.MainMod.LOGGER.info(
+                "[AUSMCeleritasTrackerRepair] attempt={} loaded={} statusAdded={} visibleBefore={}",
+                attempt,
+                loaded.size(),
+                added,
+                ausm$invokeInt(renderer, "getVisibleChunkCount", -1)
+        );
+    }
+
+    @Unique
+    private static Object ausm$chunkTracker(Object world) {
+        try {
+            Class<?> holder = Class.forName(
+                    "org.embeddedt.embeddium.impl.render.chunk.map.ChunkTrackerHolder",
+                    false,
+                    CeleritasWorldRendererMixin.class.getClassLoader());
+            Method get = holder.getMethod("get", Object.class);
+            return get.invoke(null, world);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            return null;
+        }
+    }
+
+    @Unique
+    private static Method ausm$method(Object target, String name, Class<?>... parameterTypes) {
+        try {
+            Method method = target.getClass().getMethod(name, parameterTypes);
+            method.setAccessible(true);
+            return method;
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            return null;
+        }
+    }
+
+    @Unique
+    private static Object ausm$invoke(Object target, String name) {
+        if (target == null) {
+            return null;
+        }
+        try {
+            Method method = target.getClass().getMethod(name);
+            method.setAccessible(true);
+            return method.invoke(target);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            return null;
+        }
+    }
+
+    @Unique
+    private static int ausm$invokeInt(Object target, String name, int fallback) {
+        Object value = ausm$invoke(target, name);
+        return value instanceof Number ? ((Number) value).intValue() : fallback;
+    }
+
+    @Unique
+    private static boolean ausm$invokeBoolean(Object target, String name, boolean fallback) {
+        Object value = ausm$invoke(target, name);
+        return value instanceof Boolean ? (Boolean) value : fallback;
+    }
+
+    @Unique
+    private static String ausm$invokeString(Object target, String name, String fallback) {
+        Object value = ausm$invoke(target, name);
+        return value != null ? String.valueOf(value) : fallback;
+    }
 
     @Inject(method = "createChunkRenderMatrices", at = @At("HEAD"), cancellable = true, remap = false)
     private void ausm$useActivePipelineMatrices(CallbackInfoReturnable<Object> cir) {
-        RenderingRegressionProbes.celeritas("create-matrices-head", null, 0.0D, 0.0D, 0.0D, null);
         if (!PipelineContext.getInstance().isPipelineActive()) {
             return;
         }
@@ -54,43 +232,10 @@ public abstract class CeleritasWorldRendererMixin {
         try {
             Object matrices = constructor.newInstance(projection, modelView);
             cir.setReturnValue(matrices);
-            int probe = ausm$matrixProbeCount.incrementAndGet();
-            if (probe <= 24) {
-                MainMod.LOGGER.info(
-                        "[AUSMCeleritasMatrices] call={} projectionDiag={}/{}/{} modelDiag={}/{}/{} translation={}/{}/{}",
-                        probe,
-                        projection.get(0), projection.get(5), projection.get(10),
-                        modelView.get(0), modelView.get(5), modelView.get(10),
-                        modelView.get(12), modelView.get(13), modelView.get(14));
-            }
         } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
             ausm$matrixConstructorUnavailable = true;
-            MainMod.LOGGER.warn("[CeleritasCompat] Failed to construct live AUSM chunk matrices", error);
+            com.l.ausm.impl.MainMod.LOGGER.warn("[CeleritasCompat] Failed to construct live AUSM chunk matrices", error);
         }
-    }
-
-    @Inject(method = "createChunkRenderMatrices", at = @At("RETURN"), remap = false)
-    private void ausm$probeReturnedMatrices(CallbackInfoReturnable<Object> cir) {
-        RenderingRegressionProbes.celeritas("create-matrices-return", null, 0.0D, 0.0D, 0.0D,
-                cir.getReturnValue());
-    }
-
-    @Inject(
-            method = "drawChunkLayer(Lnet/minecraft/util/BlockRenderLayer;DDD)V",
-            at = @At("HEAD"),
-            remap = false
-    )
-    private void ausm$probeLayerHead(BlockRenderLayer layer, double x, double y, double z, CallbackInfo ci) {
-        RenderingRegressionProbes.celeritas("draw-layer-head", layer, x, y, z, null);
-    }
-
-    @Inject(
-            method = "drawChunkLayer(Lnet/minecraft/util/BlockRenderLayer;DDD)V",
-            at = @At("RETURN"),
-            remap = false
-    )
-    private void ausm$probeLayerReturn(BlockRenderLayer layer, double x, double y, double z, CallbackInfo ci) {
-        RenderingRegressionProbes.celeritas("draw-layer-return", layer, x, y, z, null);
     }
 
     @Unique
@@ -115,7 +260,7 @@ public abstract class CeleritasWorldRendererMixin {
                 return cached;
             } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
                 ausm$matrixConstructorUnavailable = true;
-                MainMod.LOGGER.warn("[CeleritasCompat] Live AUSM chunk matrix bridge unavailable", error);
+                com.l.ausm.impl.MainMod.LOGGER.warn("[CeleritasCompat] Live AUSM chunk matrix bridge unavailable", error);
                 return null;
             }
         }

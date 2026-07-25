@@ -8,7 +8,9 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.Tessellator;
+import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.renderer.vertex.VertexBuffer;
+import net.minecraft.util.ResourceLocation;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -25,9 +27,12 @@ import java.nio.FloatBuffer;
 @Mixin(targets = "vazkii.botania.client.render.world.SkyblockSkyRenderer", remap = false)
 public class BotaniaSkyblockSkyRendererMixin {
     private static boolean ausm$loggedBaseSuppression;
+    private static boolean ausm$loggedOwnedDetailSuppression;
     private static int ausm$normalStateProbeCalls;
     private static int ausm$hiddenStateProbeCalls;
     private boolean ausm$shaderedVoidPhase;
+    private boolean ausm$skipBotaniaDetails;
+    private String ausm$assetTexture = "unbound";
 
     @Inject(method = "render", at = @At("HEAD"), remap = false)
     private void ausm$probeF1Entry(float partialTicks, WorldClient world, Minecraft minecraft, CallbackInfo ci) {
@@ -36,6 +41,9 @@ public class BotaniaSkyblockSkyRendererMixin {
         // entry point. Establish the authoritative backing at the renderer
         // boundary before Botania's base geometry is suppressed.
         PipelineContext context = PipelineContext.getInstance();
+        ausm$assetTexture = "unbound";
+        ausm$skipBotaniaDetails = true;
+        context.clearSkyDetailAsset();
         context.renderShaderlessBotaniaSkyBacking(
                 partialTicks, world, minecraft);
         ausm$shaderedVoidPhase = context.isActive()
@@ -43,9 +51,8 @@ public class BotaniaSkyblockSkyRendererMixin {
                 && context.isCustomVoidWorldSkyEnabled(world);
         if (ausm$shaderedVoidPhase) {
             context.beginPhase(WorldRenderingPhase.SKY);
+            context.renderShaderedOwnedVoidSkyBase(world, minecraft);
         }
-        context.logShaderedSkyGeometryProbe("botania-entry");
-        ausm$probeF1State("entry", minecraft);
     }
 
     @Inject(
@@ -65,21 +72,23 @@ public class BotaniaSkyblockSkyRendererMixin {
             return;
         }
         PipelineContext context = PipelineContext.getInstance();
-        context.logShaderedSkyGeometryProbe("botania-base-complete");
+        // Keep Botania's authored planet, ribbon, and rainbow textures in the
+        // clean textured-sky pass. The shader uses ausmSkyDetailKind to accept
+        // only these three detail classes and rejects unrelated sky quads.
+        ausm$skipBotaniaDetails = false;
         context.endPass();
         context.beginPhase(WorldRenderingPhase.CUSTOM_SKY);
-        context.logShaderedSkyGeometryProbe("botania-textured-begin");
     }
 
     @Inject(method = "render", at = @At("RETURN"), remap = false)
     private void ausm$probeF1Exit(float partialTicks, WorldClient world, Minecraft minecraft, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        context.logShaderedSkyGeometryProbe("botania-exit");
         if (ausm$shaderedVoidPhase) {
             context.endPass();
             ausm$shaderedVoidPhase = false;
         }
-        ausm$probeF1State("exit", minecraft);
+        ausm$skipBotaniaDetails = false;
+        context.clearSkyDetailAsset();
     }
 
     @Redirect(
@@ -148,6 +157,30 @@ public class BotaniaSkyblockSkyRendererMixin {
         ausm$forceRealBlend(sourceFactor, destFactor, sourceFactorAlpha, destFactorAlpha);
     }
 
+    @Redirect(
+            method = "render",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/texture/TextureManager;func_110577_a(Lnet/minecraft/util/ResourceLocation;)V"
+            ),
+            require = 0,
+            remap = false
+    )
+    private void ausm$bindAndTrackSkyAsset(TextureManager textureManager, ResourceLocation location) {
+        ausm$assetTexture = MinecraftReflectionCompat.resourceString(location);
+        PipelineContext context = PipelineContext.getInstance();
+        context.setSkyDetailAsset(ausm$assetTexture);
+        if (ausm$shaderedVoidPhase && ausm$skipBotaniaDetails && ausm$isBotaniaDetailTexture()) {
+            // Some Botania builds do not expose the enableTexture2D call used by
+            // the earlier phase hook. Switch at the authoritative texture bind
+            // so authored skybox/rainbow textures reach gbuffers_skytextured.
+            ausm$skipBotaniaDetails = false;
+            context.endPass();
+            context.beginPhase(WorldRenderingPhase.CUSTOM_SKY);
+        }
+        MinecraftReflectionCompat.bindTexture(textureManager, location);
+    }
+
     private static void ausm$forceRealBlend(int sourceFactor, int destFactor,
                                             int sourceFactorAlpha, int destFactorAlpha) {
         GL11.glEnable(GL11.GL_BLEND);
@@ -199,19 +232,34 @@ public class BotaniaSkyblockSkyRendererMixin {
             method = "render",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/Tessellator;func_78381_a()V",
-                    ordinal = 0
+                    target = "Lnet/minecraft/client/renderer/Tessellator;func_78381_a()V"
             ),
             require = 0,
             remap = false
     )
-    private void ausm$drawOrSuppressSunsetFan(Tessellator tessellator) {
-        if (ausm$shouldSuppressBase()) {
+    private void ausm$drawAndProbeSkyAsset(Tessellator tessellator) {
+        PipelineContext.getInstance().uploadSkyDetailUniforms();
+        boolean suppressBase = "unbound".equals(ausm$assetTexture) && ausm$shouldSuppressBase();
+        boolean suppressOwnedDetail = ausm$shaderedVoidPhase
+                && ausm$skipBotaniaDetails
+                && !ausm$isBotaniaDetailTexture();
+        boolean suppressDuplicateCelestial = ausm$shaderedVoidPhase
+                && ("minecraft:textures/environment/sun.png".equals(ausm$assetTexture)
+                || "minecraft:textures/environment/moon_phases.png".equals(ausm$assetTexture));
+        if (suppressBase || suppressOwnedDetail || suppressDuplicateCelestial) {
             MinecraftReflectionCompat.forceResetBufferDrawingState(
                     MinecraftReflectionCompat.tessellatorBuffer(tessellator));
-            return;
+        } else {
+            MinecraftReflectionCompat.tessellatorDraw(tessellator);
         }
-        MinecraftReflectionCompat.tessellatorDraw(tessellator);
+    }
+
+    private boolean ausm$isBotaniaDetailTexture() {
+        String texture = ausm$assetTexture != null ? ausm$assetTexture.toLowerCase(java.util.Locale.ROOT) : "";
+        // Custom Void owns planets procedurally. Keep only Botania's authored
+        // ribbon/skybox and rainbow textures in the textured detail phase.
+        return texture.contains("botania:")
+                && (texture.contains("skybox") || texture.contains("rainbow"));
     }
 
     private static boolean ausm$shouldSuppressBase() {

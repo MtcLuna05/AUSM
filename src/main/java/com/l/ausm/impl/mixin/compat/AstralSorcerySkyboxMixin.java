@@ -75,6 +75,7 @@ public class AstralSorcerySkyboxMixin {
     @Inject(method = "renderSun", at = @At("HEAD"), cancellable = true, remap = false)
     private void ausm$beginAstralSun(CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.setSkyDetailKind(6);
         context.beginPhase(WorldRenderingPhase.SUN);
         if (context.shouldSuppressVanillaSunGeometry()) {
             ausm$logSuppression();
@@ -85,12 +86,15 @@ public class AstralSorcerySkyboxMixin {
 
     @Inject(method = "renderSun", at = @At("RETURN"), remap = false)
     private void ausm$endAstralSun(CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
+        context.clearSkyDetailAsset();
     }
 
     @Inject(method = "renderSolarEclipseSun", at = @At("HEAD"), cancellable = true, remap = false)
     private void ausm$beginAstralSolarEclipseSun(@Coerce Object skyHandler, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.setSkyDetailKind(6);
         context.beginPhase(WorldRenderingPhase.ASTRAL_SOLAR_ECLIPSE);
         if (context.shouldSuppressVanillaSunGeometry()) {
             ausm$logSuppression();
@@ -101,12 +105,15 @@ public class AstralSorcerySkyboxMixin {
 
     @Inject(method = "renderSolarEclipseSun", at = @At("RETURN"), remap = false)
     private void ausm$endAstralSolarEclipseSun(@Coerce Object skyHandler, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
+        context.clearSkyDetailAsset();
     }
 
     @Inject(method = "renderMoon", at = @At("HEAD"), cancellable = true, remap = false)
     private void ausm$beginAstralMoon(CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.setSkyDetailKind(6);
         context.beginPhase(WorldRenderingPhase.MOON);
         if (context.shouldSuppressVanillaMoonGeometry()) {
             ausm$logSuppression();
@@ -117,12 +124,19 @@ public class AstralSorcerySkyboxMixin {
 
     @Inject(method = "renderMoon", at = @At("RETURN"), remap = false)
     private void ausm$endAstralMoon(CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
+        context.clearSkyDetailAsset();
     }
 
-    @Inject(method = "renderStars(Lnet/minecraft/world/World;F)V", at = @At("HEAD"), remap = false)
+    @Inject(method = "renderStars(Lnet/minecraft/world/World;F)V", at = @At("HEAD"), cancellable = true, remap = false)
     private void ausm$beginAstralStars(World world, float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (context.shouldSuppressShaderedAstralStars()) {
+            ci.cancel();
+            return;
+        }
+        context.setSkyDetailKind(4);
         context.beginPhase(WorldRenderingPhase.ASTRAL_STARS);
         if (context.shouldSuppressShaderlessOwnedSkyBaseGeometry()) {
             com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
@@ -134,9 +148,18 @@ public class AstralSorcerySkyboxMixin {
         }
     }
 
+    @Inject(method = "renderConstellations(Lnet/minecraft/world/World;F)V", at = @At("HEAD"), cancellable = true, remap = false)
+    private static void ausm$suppressShaderedAstralConstellations(World world, float partialTicks, CallbackInfo ci) {
+        if (PipelineContext.getInstance().shouldSuppressShaderedAstralConstellations()) {
+            ci.cancel();
+        }
+    }
+
     @Inject(method = "renderStars(Lnet/minecraft/world/World;F)V", at = @At("RETURN"), remap = false)
     private void ausm$endAstralStars(World world, float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().endPass();
+        PipelineContext context = PipelineContext.getInstance();
+        context.endPass();
+        context.clearSkyDetailAsset();
     }
 
     @Redirect(

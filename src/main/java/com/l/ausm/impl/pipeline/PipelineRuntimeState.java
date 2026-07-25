@@ -213,16 +213,7 @@ import java.util.stream.Stream;
  */
 abstract class PipelineRuntimeState {
     protected static final PipelineContext INSTANCE = new PipelineContext();
-    protected static final ICamera ALWAYS_VISIBLE_CAMERA = new ICamera() {
-        @Override
-        public boolean isBoundingBoxInFrustum(AxisAlignedBB box) {
-            return true;
-        }
-
-        @Override
-        public void setPosition(double x, double y, double z) {
-        }
-    };
+    protected static final ICamera ALWAYS_VISIBLE_CAMERA = createAlwaysVisibleCamera();
     protected static final FloatBuffer IRIS_LIGHTMAP_TEXTURE_MATRIX = PipelineFrameValues.createIrisLightmapTextureMatrix();
     protected static final boolean FRAMED_BLOCK_DIAGNOSTICS_ENABLED =
             MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS > 0
@@ -231,6 +222,33 @@ abstract class PipelineRuntimeState {
     protected static final boolean CURRENT_PROBLEM_PROBES_ENABLED = MAX_CURRENT_PROBLEM_PROBE_LOGS > 0;
     protected static boolean celeritasShadowCameraWarningLogged;
     protected volatile boolean shaderlessVoidWorldSkyLightEligible;
+
+    private static ICamera createAlwaysVisibleCamera() {
+        InvocationHandler handler = (proxy, method, args) -> {
+            String name = method.getName();
+            if ("func_78546_a".equals(name) || "isBoundingBoxInFrustum".equals(name)) {
+                return true;
+            }
+            if ("func_78547_a".equals(name) || "setPosition".equals(name)) {
+                return null;
+            }
+            if ("toString".equals(name)) {
+                return "AUSM_ALWAYS_VISIBLE_CAMERA";
+            }
+            if ("hashCode".equals(name)) {
+                return System.identityHashCode(proxy);
+            }
+            if ("equals".equals(name)) {
+                return args != null && args.length == 1 && proxy == args[0];
+            }
+            return null;
+        };
+        return (ICamera) Proxy.newProxyInstance(
+                PipelineRuntimeState.class.getClassLoader(),
+                new Class<?>[]{ICamera.class},
+                handler
+        );
+    }
 
     protected final PingPongManager pingPongManager = new PingPongManager();
     protected final IrisLightmapTexture irisLightmapTexture = new IrisLightmapTexture();
@@ -354,6 +372,7 @@ abstract class PipelineRuntimeState {
     protected int finalColorProbeLogs = 0;
     protected int compositeChainProbeLogs = 0;
     protected int deferredBoundaryProbeLogs = 0;
+    protected int fullscreenSamplerProbeLogs = 0;
     protected int preDeferredColorRestoreLogs = 0;
     protected int terrainGridProbeLogs = 0;
     protected int distantHorizonsColorProbeLogs = 0;
@@ -391,6 +410,8 @@ abstract class PipelineRuntimeState {
     protected final float[] currentAstralConstellationColor = new float[]{1.0f, 1.0f, 1.0f};
     protected final float[] currentAstralTierColor = new float[]{1.0f, 1.0f, 1.0f};
     protected float currentAstralSolarEclipseFactor;
+    /** Shader-visible kind of the currently submitted modded sky detail. */
+    protected int currentSkyDetailKind;
     protected float currentAlphaTestReference = 0.1f;
     protected float shadowMapDistance = 128.0f;
     protected float voxelDistance = 0.0f;
@@ -554,6 +575,8 @@ abstract class PipelineRuntimeState {
     protected int nothiriumShadowInvalidFrames = 0;
     protected int nothiriumShadowSuppressedFrames = 0;
     protected int nothiriumShadowSuppressionLogs = 0;
+    protected int nothiriumShadowVerticalHoldFrames = 0;
+    protected int nothiriumShadowVerticalHoldLogs = 0;
     protected World pendingBetterPortalsPortalBlockWorld;
     protected BlockPos pendingBetterPortalsPortalBlockPos;
     protected IBlockState pendingBetterPortalsPortalBlockOldState;
@@ -592,6 +615,10 @@ abstract class PipelineRuntimeState {
     protected final Deque<String> guiItemProbeNames = new ArrayDeque<>();
     protected int waterRoutingProbeLogs = 0;
     protected int waterAttachmentDeltaProbeLogs = 0;
+    protected int specialLayerProbeLogs = 0;
+    protected int pipelinePassProbeLogs = 0;
+    protected int layerOutputProbeLogs = 0;
+    protected int shadowTargetProbeLogs = 0;
     protected final ByteBuffer[] waterAttachmentBefore = new ByteBuffer[2];
     protected final ByteBuffer[] waterAttachmentAfter = new ByteBuffer[2];
     protected final int[] waterAttachmentProbeWidths = new int[2];
@@ -692,6 +719,7 @@ abstract class PipelineRuntimeState {
     protected final Set<String> framedBlockDiagnosticKeys = ConcurrentHashMap.newKeySet();
     protected final AtomicInteger blockcrafteryDiagnosticCount = new AtomicInteger();
     protected final AtomicInteger blockcrafteryBloomDecisionProbeCount = new AtomicInteger();
+    protected final AtomicInteger framedQuadMaterialProbeCount = new AtomicInteger();
     protected final AtomicInteger architectureCraftDiagnosticCount = new AtomicInteger();
     protected final AtomicInteger framedPriorityDiagnosticCount = new AtomicInteger();
     protected final Set<String> currentProblemProbeKeys = ConcurrentHashMap.newKeySet();
@@ -922,6 +950,8 @@ abstract class PipelineRuntimeState {
         uniformRegistry.registerVec3("ausmAstralConstellationColor", () -> currentAstralConstellationColor.clone());
         uniformRegistry.registerVec3("ausmAstralTierColor", () -> currentAstralTierColor.clone());
         uniformRegistry.registerFloat("ausmAstralSolarEclipse", () -> currentAstralSolarEclipseFactor);
+        uniformRegistry.registerInt("ausmSkyDetailKind", () -> currentSkyDetailKind);
+        uniformRegistry.registerVec2i("ausmSkyDetailTextureSize", PipelineGlState::boundTextureSize);
         uniformRegistry.registerVec4("ausmVoidSkyParams", () -> new float[]{1.0f, 1.0f, 1.0f, 1.0f});
         uniformRegistry.registerInt("ausmSimpleVoidWorld", () -> isSimpleVoidWorld(renderWorld(mc)) ? 1 : 0);
         uniformRegistry.registerInt("ausmSkyboxRepair", () -> shouldRepairCurrentSkybox(mc) ? 1 : 0);
@@ -1126,7 +1156,7 @@ abstract class PipelineRuntimeState {
         uniformRegistry.registerFloat("velocity", this::cameraVelocity);
 
         uniformRegistry.registerVec3("upPosition", PipelineContext::upPosition);
-        uniformRegistry.registerVec3("skyColor", () -> skyColor(mc));
+        uniformRegistry.registerVec3("skyColor", () -> shaderSkyColor(mc));
         uniformRegistry.registerVec3("fogColor", () -> effectiveFogColor(mc));
         uniformRegistry.registerVec4("iris_FogColor", () -> {
             float[] color = effectiveFogColor(mc);
@@ -1286,6 +1316,36 @@ abstract class PipelineRuntimeState {
         return new float[]{0.5f, 0.7f, 1.0f};
     }
 
+    protected float[] shaderSkyColor(Minecraft mc) {
+        World world = renderWorld(mc);
+        if (!isSimpleVoidWorld(world)) {
+            return skyColor(mc);
+        }
+        float daylight = simpleVoidDaylight(world, mc);
+        return new float[]{0.5f * daylight, 0.66275f * daylight, daylight};
+    }
+
+    protected float[] simpleVoidOverworldFogColor(Minecraft mc) {
+        World world = renderWorld(mc);
+        float daylight = simpleVoidDaylight(world, mc);
+        return new float[]{
+                0.7529412f * (daylight * 0.94f + 0.06f),
+                0.84705883f * (daylight * 0.94f + 0.06f),
+                daylight * 0.91f + 0.09f
+        };
+    }
+
+    protected static float simpleVoidDaylight(World world, Minecraft mc) {
+        if (world == null) {
+            return 1.0f;
+        }
+        float partialTicks = mc != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc) : 0.0f;
+        float angle = com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks);
+        return Math.max(0.0f, Math.min(1.0f,
+                (float) Math.cos(angle * Math.PI * 2.0) * 2.0f + 0.5f));
+    }
+
     protected float effectiveFogStart(Minecraft mc) {
         if (shouldUseNestedPortalFogFallback(mc)) {
             return isNetherRenderWorld(mc) ? 0.0f : portalFogFar(mc) * 0.75f;
@@ -1338,6 +1398,9 @@ abstract class PipelineRuntimeState {
             }
             float[] fogColor = currentGlFogColor();
             return isProbablyUnsetFogColor(fogColor) ? netherFogColor(mc) : dampenNetherFogColor(fogColor);
+        }
+        if (isSimpleVoidWorld(renderWorld(mc))) {
+            return simpleVoidOverworldFogColor(mc);
         }
         float[] fogColor = GL11.glIsEnabled(GL11.GL_FOG) ? currentGlFogColor() : null;
         return isProbablyUnsetFogColor(fogColor) ? overworldFogColor(mc) : fogColor;
@@ -1992,6 +2055,7 @@ abstract class PipelineRuntimeState {
             ShaderLoadingScreen.setTotalSteps(usingCachedPrograms ? 9 : shaderLoadingStepCount(properties));
             ShaderLoadingMap loadingMap = usingCachedPrograms ? null : new ShaderLoadingMap();
             shaderProperties = properties;
+            bloomRenderer.configure(pack, properties);
             ShaderBlockLayerOverrides.install(properties.blockIds());
             ShaderSamplerState.setBreaksAnisotropy(properties.renderSettings().breaksAnisotropy());
             shadowMapDistance = parseFloatSettingWithComment(pack, properties, "shadowDistance", "SHADOWHPL", 128.0f);
@@ -2096,6 +2160,7 @@ abstract class PipelineRuntimeState {
             isPipelineActive = pingPongManager.isInitialized();
             activeSkyPipelineProbeLogs = 0;
             compositeChainProbeLogs = 0;
+            fullscreenSamplerProbeLogs = 0;
             resetChunkFadeState(true);
             activeCompiledPipelineCacheKey = cacheKey;
             long loadedProgramCount = programs.values().stream().filter(PipelineProgram::hasOwnProgram).count();
@@ -2170,6 +2235,7 @@ abstract class PipelineRuntimeState {
             ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
             programSet = cachedPrograms.programSet;
             shaderProperties = properties;
+            bloomRenderer.configure(pack, properties);
             ShaderBlockLayerOverrides.install(properties.blockIds());
             ShaderSamplerState.setBreaksAnisotropy(properties.renderSettings().breaksAnisotropy());
             packDirectives = properties.packDirectives().withComputeDirectives(programSet.computeDirectives());
@@ -2408,6 +2474,7 @@ abstract class PipelineRuntimeState {
         shadowMapCoverageStableFrames = 0;
         nothiriumShadowInvalidFrames = 0;
         nothiriumShadowSuppressedFrames = 0;
+        nothiriumShadowVerticalHoldFrames = 0;
         resetShadowRenderCache();
         MainMod.LOGGER.debug(
                 "[Pipeline] Blank shadow textures initialized: {}x{} (shadowMapResolution={} option={} changedOption={} activeConst={} profile={} distanceSlider={} qualitySlider={})",
@@ -2940,12 +3007,12 @@ abstract class PipelineRuntimeState {
     }
 
     protected void logWaterLikeMaterialProbe(IBlockState state, IBlockAccess blockAccess, BlockPos pos, int id, String source) {
-        if (!DEBUG_PROBES_ENABLED || state == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsWater(state)) {
+        if (state == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.stateIsLiquidOrWater(state)) {
             return;
         }
 
         int call = waterLikeMaterialProbeCount.incrementAndGet();
-        if (call > 96) {
+        if (call > MAX_FLUID_MATERIAL_PROBE_LOGS) {
             return;
         }
 
@@ -2962,7 +3029,7 @@ abstract class PipelineRuntimeState {
     }
 
     protected static int waterLikeFluidFallbackId(IBlockState state) {
-        if (state == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsWater(state)) {
+        if (state == null || !com.l.ausm.impl.util.MinecraftReflectionCompat.stateIsLiquidOrWater(state)) {
             return 0;
         }
 
@@ -3037,7 +3104,11 @@ abstract class PipelineRuntimeState {
     }
 
     public boolean shouldProbeBlockcrafteryTransparency(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return false;
+        if (!isBlockcrafteryEditableBlock(state) || blockAccess == null || pos == null) {
+            return false;
+        }
+        return gpomFramedMaterialEmission(state, blockAccess, pos) > 0
+                || gpomFramedMaterialHasBloom(state, blockAccess, pos);
     }
 
     public void logBlockcrafteryTransparencyProbe(String source, IBlockState state, IBlockAccess blockAccess,
@@ -3167,11 +3238,11 @@ abstract class PipelineRuntimeState {
     }
 
     public boolean isFramedBlockDiagnosticTarget(IBlockState state) {
-        return false;
+        return isBlockcrafteryEditableBlock(state);
     }
 
     public boolean framedBlockDiagnosticsEnabled() {
-        return false;
+        return true;
     }
 
     public boolean currentProblemProbesEnabled() {
@@ -3186,9 +3257,52 @@ abstract class PipelineRuntimeState {
         return isBlockcrafteryEditableBlock(state);
     }
 
+    public void applyFramedQuadMaterial(String spriteName) {
+        if (!BlockRenderContext.hasWorldBlockContext()) {
+            return;
+        }
+        IBlockAccess blockAccess = BlockRenderContext.blockAccess();
+        BlockPos pos = BlockRenderContext.blockPos();
+        IBlockState framedState = com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessBlockState(blockAccess, pos);
+        if (!isBlockcrafteryEditableBlock(framedState)) {
+            return;
+        }
+
+        GpomFramedMaterialCompat.Material material = GpomFramedMaterialCompat.material(blockAccess, pos);
+        IBlockState ownerState = GpomFramedMaterialCompat.stateForSprite(material, spriteName);
+        if (ownerState == null) {
+            BlockRenderContext.clearQuadOverrides();
+            BlockRenderContext.setQuadFramedBloomBoost(false);
+            return;
+        }
+
+        int ownerId = blockEntityIdForActualState(ownerState, blockAccess, pos);
+        int ownerEmission = blockRenderEmissionForState(ownerState, blockAccess, pos);
+        BlockRenderContext.setQuadBlockMetadata(
+                ownerId,
+                (short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(ownerState),
+                blockMetadataForActualState(ownerState),
+                ownerEmission
+        );
+        BlockRenderContext.setQuadFramedBloomBoost(
+                ownerEmission > 0 || stateHasBloomLayerGeometry(ownerState)
+        );
+        int probe = framedQuadMaterialProbeCount.incrementAndGet();
+        if (probe <= 0) {
+            MainMod.LOGGER.info("[AUSMFramedQuadMaterialProbe] call={} pos={} sprite={} primary={} secondary={} owner={} id={} emission={} layer={}",
+                    probe, pos, spriteName, diagnosticStateName(material.primary()),
+                    diagnosticStateName(material.secondary()), diagnosticStateName(ownerState),
+                    ownerId, ownerEmission, com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
+        }
+    }
+
     public boolean shouldUseCeleritasForgeFallback(IBlockState state) {
         if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
             return false;
+        }
+        if (com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterialIsFire(state)
+                || isCeleritasTwilightPortalState(state)) {
+            return true;
         }
         // ArchitectureCraft's shape model consumes TileShape material and
         // shape data through its Forge dispatcher. Celeritas's compact model
@@ -3813,7 +3927,30 @@ abstract class PipelineRuntimeState {
     }
 
     protected void logShaderedVoidSkyTargetProbe(String stage, Framebuffer target) {
-        // Probe disabled.
+        if (!DEBUG_PROBES_ENABLED
+                || !isPipelineActive
+                || target == null
+                || stage == null
+                || !stage.contains("final")
+                || shaderedVoidSkyTargetProbeLogs++ >= 12) {
+            return;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        MainMod.LOGGER.info(
+                "[AUSMShaderedVoidSkyTargetProbe] call={} stage={} screen={} paused={} target={} color={} depth={} drawFbo={} readFbo={} drawBuf={} readBuf={}",
+                shaderedVoidSkyTargetProbeLogs,
+                stage,
+                mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) != null
+                        ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc).getClass().getName() : "none",
+                mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc),
+                describeFramebufferTargetDetailed(target),
+                framebufferSamples(target),
+                framebufferDepthSamples(target),
+                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL11.GL_DRAW_BUFFER),
+                GL11.glGetInteger(GL11.GL_READ_BUFFER)
+        );
     }
 
     protected void logShaderedVoidSkyAttachmentProbe(String stage, String detail) {
@@ -4578,6 +4715,9 @@ abstract class PipelineRuntimeState {
             return false;
         }
         GpomFramedMaterialCompat.Material material = GpomFramedMaterialCompat.material(blockAccess, pos);
+        if (!material.bloom() && material.emission() <= 0) {
+            return false;
+        }
         int probe = blockcrafteryBloomDecisionProbeCount.incrementAndGet();
         if (probe <= 64) {
             MainMod.LOGGER.info("[AUSMBlockcrafteryBloomProbe] call={} thread={} pos={} state={} access={} present={} emission={} bloom={} primary={} secondary={} layer={} bloomLayer={}",
@@ -5429,15 +5569,15 @@ abstract class PipelineRuntimeState {
     }
 
     public boolean shouldSuppressVanillaSunGeometry() {
-        return false;
+        return shouldSuppressShaderedVoidCelestialGeometry();
     }
 
     public boolean shouldSuppressVanillaMoonGeometry() {
-        return false;
+        return shouldSuppressShaderedVoidCelestialGeometry();
     }
 
     protected boolean shouldSuppressShaderedVoidCelestialGeometry() {
-        return false;
+        return shouldSuppressShaderedSimpleVoidSkyBaseGeometry();
     }
 
     public boolean shouldSuppressVanillaStarsGeometry() {
@@ -5483,7 +5623,8 @@ abstract class PipelineRuntimeState {
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return world != null
                 && isSimpleVoidWorld(world)
-                && shouldUseShaderlessOwnedSky(mc)
+                && (shouldUseShaderlessOwnedSky(mc)
+                    || isPipelineActive && isCustomVoidWorldSkyEnabled(world))
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
     }
@@ -5609,6 +5750,20 @@ abstract class PipelineRuntimeState {
         return shouldSuppressShaderedSimpleVoidSkyBaseGeometry();
     }
 
+    public boolean shouldSuppressShaderedAstralStars() {
+        return isPipelineActive
+                && !optionBoolean(shaderProperties, ASTRAL_NATIVE_STARS_OPTION, true);
+    }
+
+    public boolean shouldSuppressShaderedAstralConstellations() {
+        return isPipelineActive
+                && !optionBoolean(shaderProperties, ASTRAL_NATIVE_CONSTELLATIONS_OPTION, true);
+    }
+
+    public boolean shouldSuppressShaderedAstralStarsAndConstellations() {
+        return shouldSuppressShaderedAstralStars() || shouldSuppressShaderedAstralConstellations();
+    }
+
     public boolean shouldSuppressAstralUpperSkyGeometry() {
         return shouldSuppressShaderedAstralLowerSky() || shouldSuppressShaderlessSimpleVoidSkyBaseGeometry();
     }
@@ -5624,7 +5779,14 @@ abstract class PipelineRuntimeState {
     }
 
     protected boolean shouldSuppressShaderedSimpleVoidSkyBaseGeometry() {
-        return false;
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
+        return isPipelineActive
+                && world != null
+                && isSimpleVoidWorld(world)
+                && isCustomVoidWorldSkyEnabled(world)
+                && !isRenderingBetterPortalsNestedView()
+                && !isRenderingBetterPortalsRenderPass();
     }
 
     protected void logSkySuppressionDecision(String route, Minecraft mc, World world, boolean result) {
@@ -6267,9 +6429,19 @@ abstract class PipelineRuntimeState {
     }
 
     public int renderNothiriumTerrainLayer(BlockRenderLayer layer, float partialTicks, Entity viewEntity) {
-        if (!setupNothiriumShaderedMainTerrainLists(false)) {
-            return -1;
+        int visibleCount = renderNothiriumVisibleTerrainLayer(layer, partialTicks, viewEntity);
+        if (!shouldRetrySparseNothiriumTerrainAfterSetup(layer, visibleCount) || viewEntity == null) {
+            return visibleCount;
         }
+
+        // Nothirium's normal RenderGlobal hook has already populated the lists
+        // for the current frame. Only rebuild its camera/frustum lists after a
+        // sparse draw; doing setup before every layer made shadered terrain pay
+        // the full renderer update cost even when the existing lists were valid.
+        if (!setupNothiriumShaderedMainTerrainLists(false)) {
+            return visibleCount;
+        }
+
         return renderNothiriumVisibleTerrainLayer(layer, partialTicks, viewEntity);
     }
 
@@ -6283,13 +6455,30 @@ abstract class PipelineRuntimeState {
                 com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
         double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity),
                 com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        return nothiriumShadowRenderer.renderVisibleLayerAllowingVanillaStride(
+        int rendererDrawn = nothiriumShadowRenderer.renderVisibleLayerAllowingVanillaStride(
                 layer,
                 cameraX,
                 cameraY,
                 cameraZ,
                 nothiriumFallbackBlockEntityId(layer),
                 nothiriumFallbackRenderType(layer)
+        );
+        if (rendererDrawn > 0 || !shouldSupplementSparseNothiriumTerrainFromProvider(layer, rendererDrawn)) {
+            return rendererDrawn;
+        }
+
+        // Nothirium can finish a chunk compile after its renderer-owned setup
+        // pass has already built empty visibility lists. Draw the same ready
+        // provider chunks directly until a later setup pass repopulates them.
+        return nothiriumShadowRenderer.renderProviderLayerSchedulingCompiles(
+                layer,
+                cameraX,
+                cameraY,
+                cameraZ,
+                nothiriumProviderSparseTerrainDistance(layer),
+                nothiriumFallbackBlockEntityId(layer),
+                nothiriumFallbackRenderType(layer),
+                false
         );
     }
 
@@ -6404,23 +6593,11 @@ abstract class PipelineRuntimeState {
     }
 
     protected boolean shouldRetrySparseNothiriumTerrainAfterSetup(BlockRenderLayer layer, int visibleCount) {
-        return layer != null
-                && visibleCount >= 0
-                && visibleCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
-                && nothiriumShaderedMainSetupFrame != pipelineFrameId;
+        return false;
     }
 
     protected boolean shouldRepairSparseNothiriumMainTerrain(BlockRenderLayer layer, int visibleCount) {
-        if (!isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || visibleCount < 0
-                || visibleCount >= HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS
-                || !isNothiriumSparseMainTerrainRepairPass(layer)) {
-            return false;
-        }
-        return nothiriumSparseMainRepairFrame == Long.MIN_VALUE
-                || pipelineFrameId - nothiriumSparseMainRepairFrame >= NOTHIRIUM_SPARSE_MAIN_REPAIR_COOLDOWN_FRAMES;
+        return false;
     }
 
     protected boolean isNothiriumSparseMainTerrainRepairPass(BlockRenderLayer layer) {
@@ -6514,22 +6691,14 @@ abstract class PipelineRuntimeState {
     }
 
     protected boolean shouldSupplementSparseNothiriumTerrainFromProvider(BlockRenderLayer layer, int visibleCount) {
-        if (!isPipelineActive
-                || !worldFrameActive
-                || renderingShadowMap
-                || !ENABLE_NOTHIRIUM_PROVIDER_SUPPLEMENT
-                || layer == null
-                || visibleCount < 0) {
-            return false;
-        }
-        if (layer == BlockRenderLayer.TRANSLUCENT) {
-            return visibleCount < Math.max(NOTHIRIUM_PROVIDER_SUPPLEMENT_SPARSE_TRANSLUCENT_DRAWS, 64);
-        }
-        return visibleCount < HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS;
+        return false;
     }
 
     protected double nothiriumProviderSparseTerrainDistance(BlockRenderLayer layer) {
-        return layer == BlockRenderLayer.TRANSLUCENT ? 128.0D : 192.0D;
+        // Nothirium's provider fallback must not hide a ready VBO behind a
+        // second AUSM distance cap. Nothirium has already validated the chunk
+        // and the draw path still rejects invalid buffers and ranges.
+        return -1.0D;
     }
 
     protected int nothiriumProviderSparseTerrainMaxChunks(BlockRenderLayer layer) {
@@ -6800,6 +6969,12 @@ abstract class PipelineRuntimeState {
             return true;
         }
 
+        maintainNothiriumShaderedMainTerrainChunks();
+        // Nothirium completes chunk compilation asynchronously and queues the
+        // VBO upload on its render thread. Drain that queue before setup builds
+        // the visibility lists, otherwise freshly compiled chunks remain absent
+        // until a later renderer-owned setup pass.
+        nothiriumShadowRenderer.drainUploads();
         boolean setup = NothiriumBypass.setupForShaderedMainTerrainBridge();
         if (setup) {
             if (afterCompileUpload) {
@@ -6809,6 +6984,64 @@ abstract class PipelineRuntimeState {
             }
         }
         return setup;
+    }
+
+    private void maintainNothiriumShaderedMainTerrainChunks() {
+        if (nothiriumShaderedMainSetupFrame == pipelineFrameId) {
+            return;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        RenderGlobal renderGlobal = mc == null
+                ? null
+                : com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc);
+        if (renderGlobal == null) {
+            return;
+        }
+        try {
+            // Shaderless Nothirium receives this maintenance from EntityRenderer.
+            // Shadered terrain replaces that draw sequence, so keep the same
+            // dirty-section queue and dispatcher upload phase alive here.
+            com.l.ausm.impl.util.MinecraftReflectionCompat.updateChunks(
+                    renderGlobal,
+                    System.nanoTime() + 4_000_000L
+            );
+        } catch (RuntimeException | LinkageError ignored) {
+            // The normal Nothirium setup remains usable if another renderer owns
+            // the update hook for this frame.
+        }
+    }
+
+    /**
+     * RenderLib refreshes Nothirium's camera/frustum snapshot from the vanilla
+     * RenderGlobal setup hook. Shadered world rendering can reach the Nothirium
+     * bridge without traversing that hook, leaving visibility traversal rooted
+     * at the current section only.
+     */
+    private void prepareNothiriumShaderedMainTerrainCamera() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        if (mc == null) {
+            return;
+        }
+        net.minecraft.client.renderer.RenderGlobal renderGlobal =
+                com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc);
+        Entity viewEntity = com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(mc);
+        if (renderGlobal == null || viewEntity == null) {
+            return;
+        }
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setupTerrain(
+                    renderGlobal,
+                    viewEntity,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc),
+                    ALWAYS_VISIBLE_CAMERA,
+                    (int) pipelineFrameId,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(
+                            com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc))
+            );
+        } catch (RuntimeException | LinkageError ignored) {
+            // Nothirium's own setup remains the fallback if another renderer
+            // owns the vanilla setup hook for this frame.
+        }
     }
 
     protected boolean forceSetupNothiriumShaderedMainTerrainListsAfterRepair() {
@@ -7567,7 +7800,33 @@ abstract class PipelineRuntimeState {
         boolean previousProgramGeometric = activeProgramGeometric;
         activePhase = phase;
         boolean bound = bindPass(pass);
+        logPipelinePassProbe(pass, phase, bound);
         passStack.push(new PassScope(bound, previousPass, previousShaderKey, previousPhase, previousProgramTessellated, previousProgramGeometric));
+    }
+
+    protected void logPipelinePassProbe(RenderPass pass, WorldRenderingPhase phase, boolean bound) {
+        if (pipelinePassProbeLogs >= MAX_PIPELINE_PASS_PROBE_LOGS) {
+            return;
+        }
+        pipelinePassProbeLogs++;
+        PipelineProgram declared = pass != null ? programs.get(pass) : null;
+        PipelineProgram effective = pass != null ? effectivePipelineProgram(pass) : null;
+        ShaderProgram shader = effective != null ? effective.shaderProgram() : null;
+        MainMod.LOGGER.info(
+                "[AUSMPassProbe] call={} pass={} phase={} bound={} active={} worldFrame={} shadow={} declared={} effective={} shader={} declaredBuffers={} effectiveBuffers={}",
+                pipelinePassProbeLogs,
+                pass,
+                phase,
+                bound,
+                isPipelineActive,
+                worldFrameActive,
+                renderingShadowMap,
+                declared != null && declared.enabled(),
+                effective != null ? effective.pass() : "none",
+                shader != null ? shader.getId() : -1,
+                declared != null ? declared.drawBuffers() : "none",
+                effective != null ? effective.drawBuffers() : "none"
+        );
     }
 
     public boolean beginPhaseIfActive(WorldRenderingPhase phase) {
@@ -7597,6 +7856,7 @@ abstract class PipelineRuntimeState {
 
     public void beginAstralConstellationPhase(Object constellation, WorldRenderingPhase phase) {
         setAstralConstellationColors(constellation);
+        currentSkyDetailKind = 5;
         beginPhase(phase);
     }
 
@@ -7606,7 +7866,63 @@ abstract class PipelineRuntimeState {
 
     public void endAstralConstellationPhase() {
         endPass();
+        currentSkyDetailKind = 0;
         resetAstralConstellationColors();
+    }
+
+    /**
+     * Publishes the detail currently being submitted by a compatibility renderer.
+     * Values are intentionally numeric so shaderpacks do not need string handling.
+     * 1 Botania planet, 2 Botania ribbon/skybox, 3 Botania rainbow,
+     * 4 Astral stars, 5 Astral constellation, 6 Astral sun/moon.
+     */
+    public void setSkyDetailAsset(String resourceName) {
+        currentSkyDetailKind = skyDetailKind(resourceName);
+    }
+
+    public void setSkyDetailKind(int kind) {
+        currentSkyDetailKind = Math.max(0, Math.min(6, kind));
+    }
+
+    public void clearSkyDetailAsset() {
+        currentSkyDetailKind = 0;
+    }
+
+    /** Uploads per-draw detail state after a renderer changes its bound texture. */
+    public void uploadSkyDetailUniforms() {
+        if (!isPipelineActive || activePass == null) {
+            return;
+        }
+        PipelineProgram pipelineProgram = effectivePipelineProgram(activePass);
+        ShaderProgram program = pipelineProgram != null ? pipelineProgram.shaderProgram() : null;
+        if (program == null || GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM) != program.getId()) {
+            return;
+        }
+        uniformRegistry.upload(program, "ausmSkyDetailKind");
+        uniformRegistry.upload(program, "ausmSkyDetailTextureSize");
+        uniformRegistry.upload(program, "ausmAstralConstellationColor");
+        uniformRegistry.upload(program, "ausmAstralTierColor");
+        uniformRegistry.upload(program, "ausmAstralSolarEclipse");
+    }
+
+    protected static int skyDetailKind(String resourceName) {
+        if (resourceName == null) {
+            return 0;
+        }
+        String name = resourceName.toLowerCase(java.util.Locale.ROOT);
+        if (!name.contains("botania:")) {
+            return 0;
+        }
+        if (name.contains("planet")) {
+            return 1;
+        }
+        if (name.contains("rainbow")) {
+            return 3;
+        }
+        if (name.contains("skybox") || name.contains("ribbon")) {
+            return 2;
+        }
+        return 0;
     }
 
     protected void setAstralConstellationColors(Object constellation) {
@@ -7707,6 +8023,11 @@ abstract class PipelineRuntimeState {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
         restoreVanillaFixedFunctionTextureState(mc);
+        if (isPipelineActive && worldFrameActive && activePass != null
+                && (getPhase() == WorldRenderingPhase.HAND_SOLID
+                || getPhase() == WorldRenderingPhase.HAND_TRANSLUCENT)) {
+            bindPass(activePass);
+        }
     }
 
     public void prepareUntexturedEmissiveWorldRenderState() {
@@ -8668,6 +8989,18 @@ abstract class PipelineRuntimeState {
         applyGbufferDepthState(activePass);
     }
 
+    /**
+     * Celeritas binds its native chunk shader in begin() before configuring
+     * the batch vertex state. Restore AUSM after that setup point so the batch
+     * draws into the shaderpack MRTs without rebinding once per chunk.
+     */
+    public void rebindActivePipelinePassAfterRendererSetup() {
+        if (!isPipelineActive || !worldFrameActive || activePass == null || activePass.stage() != ProgramStage.GBUFFERS) {
+            return;
+        }
+        bindPass(activePass);
+    }
+
     protected void logWaterRoutingProbe(String stage, PipelineProgram pipelineProgram, List<Attachment> drawBuffers) {
         if (!isPipelineActive
                 || !pingPongManager.isInitialized()
@@ -8721,6 +9054,42 @@ abstract class PipelineRuntimeState {
         );
     }
 
+    public void logSpecialLayerProbe(String stage) {
+        if (!isPipelineActive
+                || !pingPongManager.isInitialized()
+                || specialLayerProbeLogs >= MAX_SPECIAL_LAYER_PROBE_LOGS) {
+            return;
+        }
+        specialLayerProbeLogs++;
+        DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
+        int drawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        StringBuilder drawBuffers = new StringBuilder();
+        for (int slot = 0; slot < 5; slot++) {
+            if (slot > 0) {
+                drawBuffers.append(';');
+            }
+            drawBuffers.append(slot).append('=').append(GL11.glGetInteger(GL20.GL_DRAW_BUFFER0 + slot));
+        }
+        MainMod.LOGGER.info(
+                "[AUSMSpecialLayerProbe] call={} stage={} activePass={} phase={} worldFrame={} skip={} drawFbo={} drawBuffers={} program={} color={} composite={} normal={} depth={} gl={}",
+                specialLayerProbeLogs,
+                stage,
+                activePass,
+                getPhase(),
+                worldFrameActive,
+                shouldSkipAllMainGbufferRendering(),
+                drawFramebuffer,
+                drawBuffers,
+                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
+                deferredFramebufferColorSamples(framebuffer, Attachment.COLOR),
+                deferredFramebufferColorSamples(framebuffer, Attachment.COMPOSITE),
+                deferredFramebufferColorSamples(framebuffer, Attachment.NORMAL),
+                framebuffer != null && framebuffer.isUsable()
+                        ? framebufferIdDepthSamples(framebuffer.getFramebufferId(), framebuffer.getWidth(), framebuffer.getHeight(), GL30.GL_COLOR_ATTACHMENT0)
+                        : "none",
+                glStateSummary());
+    }
+
     protected void configureShadowDrawBuffers(PipelineProgram pipelineProgram, List<Attachment> drawBuffers) {
         if (shadowFramebuffer == null || pipelineProgram.stage() != ProgramStage.SHADOW) {
             return;
@@ -8742,6 +9111,7 @@ abstract class PipelineRuntimeState {
             return;
         }
 
+        logLayerOutputProbe(activePass, activePhase);
         PipelineProgram pipelineProgram = programs.get(activePass);
         ShaderProgram program = pipelineProgram != null ? pipelineProgram.effectiveProgram(programs) : null;
         if (program != null) {
@@ -8763,6 +9133,37 @@ abstract class PipelineRuntimeState {
             activeProgramTessellated = scope.previousProgramTessellated();
             activeProgramGeometric = scope.previousProgramGeometric();
         }
+    }
+
+    protected void logLayerOutputProbe(RenderPass pass, WorldRenderingPhase phase) {
+        if (pass == null
+                || layerOutputProbeLogs >= MAX_LAYER_OUTPUT_PROBE_LOGS
+                || !(pass.stage() == ProgramStage.GBUFFERS
+                || pass.stage() == ProgramStage.SHADOW)) {
+            return;
+        }
+        layerOutputProbeLogs++;
+        DeferredFramebuffer framebuffer = pingPongManager.getReadBuffer();
+        String color = deferredFramebufferColorSamples(framebuffer, Attachment.COLOR);
+        String composite = deferredFramebufferColorSamples(framebuffer, Attachment.COMPOSITE);
+        String normal = deferredFramebufferColorSamples(framebuffer, Attachment.NORMAL);
+        String depth = framebuffer != null && framebuffer.isUsable()
+                ? deferredDepthSampleSummary(framebuffer, -1)
+                : "none";
+        int glError = GL11.glGetError();
+        MainMod.LOGGER.info(
+                "[AUSMLayerOutputProbe] call={} pass={} phase={} color={} composite={} normal={} depth={} fbo={} glProgram={} glError={}",
+                layerOutputProbeLogs,
+                pass,
+                phase,
+                color,
+                composite,
+                normal,
+                depth,
+                framebuffer != null ? framebuffer.getFramebufferId() : -1,
+                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
+                glError
+        );
     }
 
     public void resize(int width, int height) {

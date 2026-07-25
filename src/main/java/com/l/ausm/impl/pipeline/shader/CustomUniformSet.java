@@ -11,10 +11,12 @@ import org.lwjgl.opengl.GL20;
 import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Small Iris-style custom uniform container.
@@ -36,6 +38,7 @@ public final class CustomUniformSet {
     private final Map<String, float[]> resolvedScratch = new HashMap<>();
     private final Map<String, CompiledExpression> unresolvedScratch = new LinkedHashMap<>();
     private final Map<String, float[]> uniformValueScratch = new HashMap<>();
+    private final Set<String> resolvedDynamicKeys = new HashSet<>();
 
     private CustomUniformSet(
             Map<String, String> expressions,
@@ -118,9 +121,15 @@ public final class CustomUniformSet {
     private Map<String, float[]> uniformValuesForFrame(Map<String, float[]> builtins) {
         Map<String, float[]> resolved = builtins;
         if (!compiledVariables.isEmpty()) {
-            resolvedScratch.clear();
+            // Keep the stable builtin key set in the backing table. Clearing
+            // and rebuilding it on every pass was the dominant shadered
+            // allocation source in JFR profiles.
+            for (String key : resolvedDynamicKeys) {
+                resolvedScratch.remove(key);
+            }
+            resolvedDynamicKeys.clear();
             resolvedScratch.putAll(builtins);
-            resolveVariablesInto(compiledVariables, resolvedScratch, unresolvedScratch, smoothStates);
+            resolveVariablesInto(compiledVariables, resolvedScratch, unresolvedScratch, smoothStates, resolvedDynamicKeys);
             resolved = resolvedScratch;
         }
 
@@ -175,7 +184,8 @@ public final class CustomUniformSet {
             Map<String, CompiledExpression> variables,
             Map<String, float[]> resolved,
             Map<String, CompiledExpression> unresolved,
-            Map<Integer, SmoothState> smoothStates
+            Map<Integer, SmoothState> smoothStates,
+            Set<String> dynamicKeys
     ) {
         if (variables.isEmpty()) {
             return;
@@ -192,20 +202,26 @@ public final class CustomUniformSet {
                 if (values.length == 0) {
                     continue;
                 }
-                putResolvedValue(resolved, entry.getKey(), values);
+                putResolvedValue(resolved, entry.getKey(), values, dynamicKeys);
                 iterator.remove();
                 progressed = true;
             }
         } while (progressed && !unresolved.isEmpty());
     }
 
-    private static void putResolvedValue(Map<String, float[]> resolved, String name, float[] values) {
+    private static void putResolvedValue(Map<String, float[]> resolved, String name, float[] values,
+                                         Set<String> dynamicKeys) {
         resolved.put(name, values);
+        dynamicKeys.add(name);
         int count = Math.min(values.length, 4);
         for (int i = 0; i < count; i++) {
             float[] component = new float[]{values[i]};
-            resolved.put(name + "." + "xyzw".charAt(i), component);
-            resolved.put(name + "." + "rgba".charAt(i), component);
+            String xyzwKey = name + "." + "xyzw".charAt(i);
+            String rgbaKey = name + "." + "rgba".charAt(i);
+            resolved.put(xyzwKey, component);
+            resolved.put(rgbaKey, component);
+            dynamicKeys.add(xyzwKey);
+            dynamicKeys.add(rgbaKey);
         }
     }
 

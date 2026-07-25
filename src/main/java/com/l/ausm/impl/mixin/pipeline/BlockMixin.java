@@ -1,6 +1,7 @@
 package com.l.ausm.impl.mixin.pipeline;
 
 import com.l.ausm.impl.pipeline.pack.ShaderBlockLayerOverrides;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.BlockRenderLayer;
@@ -13,6 +14,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public class BlockMixin {
     @Inject(method = "canRenderInLayer", at = @At("HEAD"), cancellable = true, remap = false)
     private void ausm$thermalTankLayers(IBlockState state, BlockRenderLayer layer, CallbackInfoReturnable<Boolean> cir) {
+        // Some Forge BlockFluidBase implementations do not advertise their
+        // translucent layer consistently to asynchronous chunk compilers.
+        // Keep every liquid on the vanilla translucent route, including
+        // Astral Sorcery's liquidstarlight, in shadered and shaderless modes.
+        if (MinecraftReflectionCompat.stateIsLiquidOrWater(state)) {
+            cir.setReturnValue(layer == BlockRenderLayer.TRANSLUCENT);
+            return;
+        }
         BlockRenderLayer shaderLayer = ShaderBlockLayerOverrides.layerFor(state);
         if (shaderLayer != null) {
             cir.setReturnValue(layer == shaderLayer);

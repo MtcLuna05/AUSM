@@ -98,10 +98,12 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         }
         // Celeritas prevents LoliASM's BufferBuilder primer interface from being
         // applied even when Nothirium remains the selected terrain renderer.
-        if (celeritasPresent() && (NAUGHTHIRIUM_FLOAT_VERTEX_CONSUMER.equals(name) || NAUGHTHIRIUM_FLOAT_VERTEX_CONSUMER.equals(transformedName))) {
+        if (shouldStripNaughthiriumHooks()
+                && (NAUGHTHIRIUM_FLOAT_VERTEX_CONSUMER.equals(name) || NAUGHTHIRIUM_FLOAT_VERTEX_CONSUMER.equals(transformedName))) {
             return stripLoliTextureHook(basicClass);
         }
-        if (celeritasPresent() && (NAUGHTHIRIUM_RENDER_TASK_MIXIN.equals(name) || NAUGHTHIRIUM_RENDER_TASK_MIXIN.equals(transformedName))) {
+        if (shouldStripNaughthiriumHooks()
+                && (NAUGHTHIRIUM_RENDER_TASK_MIXIN.equals(name) || NAUGHTHIRIUM_RENDER_TASK_MIXIN.equals(transformedName))) {
             return stripHandlers(basicClass);
         }
         if (!TARGET.equals(name) && !TARGET.equals(transformedName)) {
@@ -309,6 +311,13 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
 
     private static boolean useCeleritasRenderer() {
         return celeritasPresent();
+    }
+
+    private static boolean shouldStripNaughthiriumHooks() {
+        // AUSM owns the vertex metadata contract whenever Nothirium is the
+        // active backend. LoliASM's optional Naughthirium hooks can append a
+        // different primer/compile path even without Celeritas installed.
+        return celeritasPresent() || nothiriumPresent();
     }
 
     private static boolean modPresent(String... prefixes) {

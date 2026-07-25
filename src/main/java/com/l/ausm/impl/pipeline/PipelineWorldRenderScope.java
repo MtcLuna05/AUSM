@@ -537,7 +537,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
     }
 
     public void prepareVanillaParticleRenderingState() {
-        // Probe disabled.
+        restoreVanillaWorldPassState(false, true);
 }
 
     protected void startVanillaParticleRecovery() {
@@ -829,13 +829,8 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
 
     protected boolean shouldUseNothiriumMainTerrainBridge() {
         return isPipelineActive
-                && worldFrameActive
                 && isNothiriumLoaded()
-                && !CeleritasCompat.installed()
-                && NothiriumShadowRenderer.isAvailable()
-                && !shouldForceVanillaTerrainRenderer()
-                && !BetterPortalsCompat.isRenderingRenderPass()
-                && !BetterPortalsCompat.isMainViewSwapRecoveryActive();
+                && NothiriumShadowRenderer.isAvailable();
     }
 
     protected boolean shouldSuppressNothiriumShadowTerrain() {
@@ -2408,6 +2403,10 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         if (world == null || viewEntity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) == null) {
             return;
         }
+        if (shouldPreserveNothiriumShadowDuringVerticalRecovery()) {
+            lastShadowFrameId = pipelineFrameId;
+            return;
+        }
         if (shouldSkipStationaryShadowMap(world, viewEntity, partialTicks)) {
             lastShadowFrameId = pipelineFrameId;
             return;
@@ -2428,6 +2427,10 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         GL11.glPushMatrix();
 
         try {
+            // Mark the shadow scope before setupTerrain. The transformed
+            // Nothirium handler consults this state to leave light-space setup
+            // to vanilla and preserve its main-camera visibility lists.
+            renderingShadowMap = true;
             setupShadowCamera(viewEntity, partialTicks);
             ICamera shadowCamera = createShadowCamera(viewEntity, partialTicks);
             // Iris disables chunk occlusion culling while building the shadow terrain list.
@@ -2448,8 +2451,28 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             }
 
             clearColoredLightImages();
-            boolean renderShadowTerrain = shaderProperties.renderSettings().shadowTerrain()
+            // A shaderpack shadow program is meaningless without terrain depth.
+            // Treat the active shadow program as an explicit terrain request;
+            // stale/pack-local shadowTerrain=false must not silently produce a
+            // permanently clear shadow map.
+            boolean shadowTerrainCandidates = shadowHealthLogAttempts < 4
                     && hasShadowTerrainCandidates(mc, viewEntity, partialTicks);
+            // The candidate scan only sees vanilla RenderChunk layer buffers.
+            // Celeritas/Nothirium can own those buffers while the active world
+            // pass still has visible terrain, so it cannot gate shadow terrain.
+            boolean renderShadowTerrain = hasActiveShadowProgram();
+            if (shadowHealthLogAttempts < 4) {
+                MainMod.LOGGER.info(
+                        "[ShadowHealth] setup frame={} terrainRequested={} terrainCandidates={} nothirium={} fbo={} depthTex={} snapshotTex={}",
+                        pipelineFrameId,
+                        renderShadowTerrain,
+                        shadowTerrainCandidates,
+                        useNothiriumShadowBridge,
+                        shadowFramebuffer.framebufferId(),
+                        shadowFramebuffer.depthTextureId(),
+                        shadowFramebuffer.depthSnapshotTextureId()
+                );
+            }
             if (useNothiriumShadowBridge) {
                 nothiriumShadowRenderer.drainUploads();
             }
@@ -2464,7 +2487,6 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             TextureBinder.restoreDefaultTextureUnit();
             com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
 
-            renderingShadowMap = true;
             int solidCount = -1;
             int cutoutMippedCount = -1;
             int cutoutCount = -1;
@@ -2537,6 +2559,34 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             TextureBinder.restoreDefaultTextureUnit();
             BetterPortalsCompat.logRenderStateDiagnostic("pipeline:shadow-end world=" + safeDimensionId(world));
         }
+    }
+
+    protected boolean shouldPreserveNothiriumShadowDuringVerticalRecovery() {
+        if (!shadowMapUsable || !shouldUseNothiriumShadowBridge()) {
+            nothiriumShadowVerticalHoldFrames = 0;
+            return false;
+        }
+
+        float verticalDelta = cameraVerticalDelta();
+        if (verticalDelta > SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION) {
+            nothiriumShadowVerticalHoldFrames = NOTHIRIUM_SHADOW_VERTICAL_RECOVERY_HOLD_FRAMES;
+        } else if (nothiriumShadowVerticalHoldFrames > 0) {
+            nothiriumShadowVerticalHoldFrames--;
+        }
+        if (nothiriumShadowVerticalHoldFrames <= 0) {
+            return false;
+        }
+
+        if (nothiriumShadowVerticalHoldLogs < 4) {
+            nothiriumShadowVerticalHoldLogs++;
+            MainMod.LOGGER.info(
+                    "[ShadowHealth] Preserving last usable Nothirium shadow map during vertical visibility recovery. verticalDelta={} holdFrames={} frame={}",
+                    verticalDelta,
+                    nothiriumShadowVerticalHoldFrames,
+                    pipelineFrameId
+            );
+        }
+        return true;
     }
 
     protected boolean shouldSkipStationaryShadowMap(World world, Entity viewEntity, float partialTicks) {
@@ -2675,24 +2725,6 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
 
         if (injected > 0 && GLContext.getCapabilities().OpenGL42) {
             GL42.glMemoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT);
-        }
-        if (coloredLightInjectionProbeLogs < 24) {
-            coloredLightInjectionProbeLogs++;
-            MainMod.LOGGER.info(
-                    "[AUSMColoredLightInjection] probe={} frame={} dimension={} volume={}x{}x{} tiles={}/{} projectRedMatches={} injected={} candidates={} glError={}",
-                    coloredLightInjectionProbeLogs,
-                    pipelineFrameId,
-                    safeDimensionId(world),
-                    dimensions[0],
-                    dimensions[1],
-                    dimensions[2],
-                    scanCount,
-                    tileEntityCount,
-                    projectRedMatches,
-                    injected,
-                    syntheticLightCandidates.size(),
-                    GL11.glGetError()
-            );
         }
     }
 
@@ -3039,7 +3071,43 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
             double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
             double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-            return nothiriumShadowRenderer.renderLayer(layer, cameraX, cameraY, cameraZ, shadowRenderCullDistance());
+            // The shadow pass runs after opaque terrain setup, so these lists
+            // contain the real Nothirium VBOs for the current camera. Do not
+            // scan the full async provider or fall through to stale vanilla
+            // RenderChunks; both paths are expensive and the latter draws no
+            // geometry while Nothirium owns the terrain buffers.
+            return Math.max(0, nothiriumShadowRenderer.renderVisibleLayerAllowingVanillaStride(
+                    layer,
+                    cameraX,
+                    cameraY,
+                    cameraZ,
+                    nothiriumFallbackBlockEntityId(layer),
+                    nothiriumFallbackRenderType(layer),
+                    shadowRenderCullDistance()
+            ));
+        }
+
+        // RenderGlobal's pass-2 container can report a nonzero chunk count
+        // without submitting geometry to the shader-owned shadow FBO. Build
+        // and draw the view-frustum container first while the shadow target
+        // and camera are active.
+        int beforeFbo = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        ShadowFramebuffer.DepthStats beforeDepth = shadowTargetProbeLogs < 0
+                ? shadowFramebuffer.readDepthStats(1) : null;
+        int directCount = renderShadowBlockLayerFromViewFrustum(mc, layer, partialTicks, viewEntity);
+        if (shadowTargetProbeLogs < 0) {
+            shadowTargetProbeLogs++;
+            ShadowFramebuffer.DepthStats afterDepth = shadowFramebuffer.readDepthStats(1);
+            MainMod.LOGGER.info(
+                    "[AUSMShadowTargetRouteProbe] call={} layer={} targetFbo={} beforeFbo={} afterFbo={} directCount={} beforeDepth={} afterDepth={} viewport={}x{}",
+                    shadowTargetProbeLogs, layer, shadowFramebuffer.framebufferId(), beforeFbo,
+                    GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING), directCount,
+                    beforeDepth != null ? beforeDepth.nonClear() + "/" + beforeDepth.total() : "disabled",
+                    afterDepth.nonClear() + "/" + afterDepth.total(),
+                    shadowFramebuffer.resolution(), shadowFramebuffer.resolution());
+        }
+        if (directCount > 0) {
+            return directCount;
         }
 
         RenderGlobal renderGlobal = com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc);
@@ -3047,10 +3115,10 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             return 0;
         }
         int count = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, 2, viewEntity);
-        if (count != 0) {
+        if (count > 0) {
             return count;
         }
-        return renderShadowBlockLayerFromViewFrustum(mc, layer, partialTicks, viewEntity);
+        return 0;
     }
 
     protected void updateShadowMapUsability(int solidCount, int cutoutMippedCount, int cutoutCount, int translucentCount, int blockEntityCount) {
@@ -3061,12 +3129,24 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             shadowMapCoverageStableFrames = 0;
             return;
         }
-        ShadowFramebuffer.DepthStats stats = shadowFramebuffer.readDepthStats(4);
         boolean terrainPopulated = solidCount > 0
                 || cutoutMippedCount > 0
                 || cutoutCount > 0
                 || translucentCount > 0;
         boolean drawPopulated = terrainPopulated || blockEntityCount > 0;
+        // glReadPixels synchronizes the render thread with the GPU. Validate
+        // the map while it is warming up, then trust successful draw submission
+        // until the pipeline or world resets shadowMapUsable.
+        if (shadowMapUsable) {
+            shadowMapPopulated = drawPopulated;
+            shadowMapSparseForSampling = false;
+            if (!drawPopulated) {
+                shadowMapUsable = false;
+                shadowMapCoverageStableFrames = 0;
+            }
+            return;
+        }
+        ShadowFramebuffer.DepthStats stats = shadowFramebuffer.readDepthStats(4);
         boolean populated = terrainPopulated
                 || (!shouldUseNothiriumShadowBridge() && stats.nonClear() > 0);
         shadowMapPopulated = populated || drawPopulated;
@@ -3100,7 +3180,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             if (nothiriumShadowInvalidFrames >= NOTHIRIUM_SHADOW_SUPPRESS_AFTER_INVALID_FRAMES) {
                 nothiriumShadowInvalidFrames = 0;
                 nothiriumShadowSuppressedFrames = Math.max(nothiriumShadowSuppressedFrames, NOTHIRIUM_SHADOW_SUPPRESS_FRAMES);
-                if (nothiriumShadowSuppressionLogs < 0) {
+                if (nothiriumShadowSuppressionLogs < 4) {
                     nothiriumShadowSuppressionLogs++;
                     MainMod.LOGGER.info(
                             "[ShadowHealth] Suppressing Nothirium shadow terrain after repeated invalid output. nonClear={}/{} terrainDraws={} blockEntities={} suppressFrames={} dim={}",
@@ -3118,7 +3198,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             nothiriumShadowSuppressedFrames = 0;
         }
 
-        if (!shadowHealthLogged && shadowHealthLogAttempts < 0) {
+        if (!shadowHealthLogged && shadowHealthLogAttempts < 4) {
             shadowHealthLogAttempts++;
             shadowHealthLogged = populated && shadowMapUsable;
             MainMod.LOGGER.info(
@@ -3146,7 +3226,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         }
         if (stats.nonClear() > 0
                 && (sparseNothiriumShadow || unstableSparseShadow)
-                && shadowMapSuppressedLogs < 0) {
+                && shadowMapSuppressedLogs < 4) {
             shadowMapSuppressedLogs++;
             MainMod.LOGGER.info(
                     "[ShadowHealth] Sparse Nothirium shadow map observed; keeping real shadow textures bound. reason={} dim={} nonClear={}/{} minNonClear={} terrainDraws={} minTerrainDraws={} stableFrames={}/{} verticalDelta={} upwardThreshold={} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
@@ -3168,7 +3248,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
                     blockEntityCount
             );
         }
-        if (drawPopulated && !shadowMapUsable && shadowMapInvalidLogs < 0) {
+        if (drawPopulated && !shadowMapUsable && shadowMapInvalidLogs < 4) {
             shadowMapInvalidLogs++;
             MainMod.LOGGER.info(
                     "[ShadowHealth] Shadow map draw produced clear/sparse depth; keeping real shadow textures bound. nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
@@ -5050,6 +5130,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
                     ? -1
                     : renderNothiriumTerrainLayer(layer, (float) partialTicks, viewEntity);
             if (nothiriumCount >= 0) {
+                rebindActiveTerrainPassAfterNothiriumNativeDraw();
                 if (nothiriumCount > 0) {
                     markNothiriumPipelineTranslucentBridge(layer);
                 }
@@ -5072,6 +5153,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             int count = NothiriumBypass.shouldBypass()
                     ? renderForcedVanillaTerrainLayer(renderGlobal, layer, partialTicks, pass, viewEntity)
                     : com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, pass, viewEntity);
+            rebindActiveTerrainPassForForcedVanillaFallback();
             recordTerrainLayerCount(layer, count);
             recordShaderlessTerrainLayerCount(layer, count);
             logWorldLayerDiag("vanilla", layer, pass, count, viewEntity);
@@ -5525,9 +5607,11 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
                 && worldFrameActive
                 && !renderingShadowMap
                 && !renderingGuiScreen()
+                && nothiriumHybridVanillaMaintenanceFrames > 0
                 && !(ENABLE_SAFE_TERRAIN_FALLBACKS && hardwareSafeVanillaTerrain)
                 && !(ENABLE_SAFE_TERRAIN_FALLBACKS && softVanillaTerrainRenderer)
-                && nothiriumHybridVanillaMaintenanceFrames > 0;
+                && isNothiriumLoaded()
+                && NothiriumShadowRenderer.isAvailable();
     }
 
     public String nothiriumHybridVanillaMaintenanceReason() {

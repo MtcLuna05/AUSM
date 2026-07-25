@@ -5,6 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.impl.pipeline.fbo.DeferredFramebuffer;
 import com.l.ausm.impl.pipeline.fbo.ShadowFramebuffer;
@@ -58,6 +59,8 @@ public class TextureBinder {
     private static int shadowDepthSampler = -1;
     private static int shadowDepthHardwareSampler = -1;
     private static int maxCombinedTextureUnits = -1;
+    private static final int MAX_SHADOW_BINDING_PROBE_LOGS = 0;
+    private static int shadowBindingProbeCount;
 
     /**
      * Binds the multiple render targets (MRTs) from the "read" framebuffer 
@@ -121,41 +124,74 @@ public class TextureBinder {
     public static void bindShadowTextures(RenderPass pass) {
         PipelineContext context = PipelineContext.getInstance();
         boolean rawShadowTex0 = pass == RenderPass.COMPOSITE1;
-        if (context.shouldUseNeutralShadowTextures()) {
+        boolean neutral = context.shouldUseNeutralShadowTextures();
+        if (neutral) {
             bindNeutralShadowTextures(context.shouldUseShadowHardwareFiltering(), rawShadowTex0);
-            return;
-        }
-
-        int shadowDepthTexture = context.getShadowDepthTexture();
-        int shadowDepthSnapshotTexture = context.getShadowDepthSnapshotTexture();
-        if (shadowDepthTexture == -1 || shadowDepthSnapshotTexture == -1) {
-            return;
-        }
-
-        if (rawShadowTex0) {
-            int rawShadowDepthTexture = context.getRawShadowDepthTexture();
-            if (rawShadowDepthTexture != -1) {
-                bindRawDepthTexture(SHADOWTEX0_TEXTURE_UNIT, rawShadowDepthTexture);
+        } else {
+            int shadowDepthTexture = context.getShadowDepthTexture();
+            int shadowDepthSnapshotTexture = context.getShadowDepthSnapshotTexture();
+            if (shadowDepthTexture != -1 && shadowDepthSnapshotTexture != -1) {
+                if (rawShadowTex0) {
+                    int rawShadowDepthTexture = context.getRawShadowDepthTexture();
+                    if (rawShadowDepthTexture != -1) {
+                        bindRawDepthTexture(SHADOWTEX0_TEXTURE_UNIT, rawShadowDepthTexture);
+                    } else {
+                        bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture, true);
+                    }
+                } else {
+                    bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture, true);
+                }
+                bindShadowDepthTexture(SHADOWTEX1_TEXTURE_UNIT, shadowDepthSnapshotTexture, true);
+                if (supportsSamplerObjects()) {
+                    bindShadowDepthTexture(SHADOWTEX0_HW_TEXTURE_UNIT, shadowDepthTexture, true);
+                    bindShadowDepthTexture(SHADOWTEX1_HW_TEXTURE_UNIT, shadowDepthSnapshotTexture, true);
+                } else {
+                    context.configureShadowDepthTextureCompareMode();
+                }
+                for (int i = 0; i < ShadowFramebuffer.SHADOW_COLOR_TARGET_COUNT; i++) {
+                    int shadowColorTexture = context.getShadowColorTexture(i);
+                    if (shadowColorTexture != -1) {
+                        bindRawTexture(shadowColorTextureUnit(i), shadowColorTexture);
+                    }
+                }
             } else {
-                bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture, true);
+                neutral = true;
+                bindNeutralShadowTextures(context.shouldUseShadowHardwareFiltering(), rawShadowTex0);
             }
-        } else {
-            bindShadowDepthTexture(SHADOWTEX0_TEXTURE_UNIT, shadowDepthTexture, true);
         }
-        bindShadowDepthTexture(SHADOWTEX1_TEXTURE_UNIT, shadowDepthSnapshotTexture, true);
-        if (supportsSamplerObjects()) {
-            bindShadowDepthTexture(SHADOWTEX0_HW_TEXTURE_UNIT, shadowDepthTexture, true);
-            bindShadowDepthTexture(SHADOWTEX1_HW_TEXTURE_UNIT, shadowDepthSnapshotTexture, true);
-        } else {
-            context.configureShadowDepthTextureCompareMode();
-        }
-        for (int i = 0; i < ShadowFramebuffer.SHADOW_COLOR_TARGET_COUNT; i++) {
-            int shadowColorTexture = context.getShadowColorTexture(i);
-            if (shadowColorTexture != -1) {
-                bindRawTexture(shadowColorTextureUnit(i), shadowColorTexture);
-            }
+        if (shadowBindingProbeCount < MAX_SHADOW_BINDING_PROBE_LOGS) {
+            shadowBindingProbeCount++;
+            MainMod.LOGGER.info(
+                    "[AUSMShadowBindingProbe] call={} pass={} neutral={} populated={} usable={} shadow0={} snapshot={} raw={} bound0={} bound1={} compare0={} compare1={} units={}/{} glError={}",
+                    shadowBindingProbeCount, pass, neutral, context.isShadowMapPopulated(),
+                    context.isShadowMapUsable(), context.getShadowDepthTexture(),
+                    context.getShadowDepthSnapshotTexture(), context.getRawShadowDepthTexture(),
+                    boundTexture(SHADOWTEX0_TEXTURE_UNIT), boundTexture(SHADOWTEX1_TEXTURE_UNIT),
+                    boundTextureParameter(SHADOWTEX0_TEXTURE_UNIT, GL14.GL_TEXTURE_COMPARE_MODE),
+                    boundTextureParameter(SHADOWTEX1_TEXTURE_UNIT, GL14.GL_TEXTURE_COMPARE_MODE),
+                    SHADOWTEX0_TEXTURE_UNIT, SHADOWTEX1_TEXTURE_UNIT, GL11.glGetError());
         }
         restoreDefaultTextureUnit();
+    }
+
+    private static int boundTexture(int textureUnit) {
+        int previous = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        try {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnit);
+            return GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        } finally {
+            GL13.glActiveTexture(previous);
+        }
+    }
+
+    private static int boundTextureParameter(int textureUnit, int parameter) {
+        int previous = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        try {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnit);
+            return GL11.glGetTexParameteri(GL11.GL_TEXTURE_2D, parameter);
+        } finally {
+            GL13.glActiveTexture(previous);
+        }
     }
 
     public static void bindMaterialFallbackTextures() {
@@ -414,67 +450,81 @@ public class TextureBinder {
     }
 
     private static int neutralShadowDepthTexture(boolean hardwareFiltering) {
-        if (neutralShadowDepthTexture == -1) {
-            neutralShadowDepthTexture = GL11.glGenTextures();
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowDepthTexture);
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        try {
+            if (neutralShadowDepthTexture == -1) {
+                neutralShadowDepthTexture = GL11.glGenTextures();
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowDepthTexture);
+                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
+                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_DEPTH_TEXTURE_MODE, GL11.GL_LUMINANCE);
+                FloatBuffer depth = org.lwjgl.BufferUtils.createFloatBuffer(1);
+                depth.put(1.0f).flip();
+                GL11.glTexImage2D(
+                        GL11.GL_TEXTURE_2D,
+                        0,
+                        GL14.GL_DEPTH_COMPONENT32,
+                        1,
+                        1,
+                        0,
+                        GL11.GL_DEPTH_COMPONENT,
+                        GL11.GL_FLOAT,
+                        depth
+                );
+            } else {
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowDepthTexture);
+            }
+            GL11.glTexParameteri(
+                    GL11.GL_TEXTURE_2D,
+                    GL14.GL_TEXTURE_COMPARE_MODE,
+                        GL14.GL_COMPARE_R_TO_TEXTURE
+            );
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
+            return neutralShadowDepthTexture;
+        } finally {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
+            GL13.glActiveTexture(previousActiveTexture);
+        }
+    }
+
+    private static int neutralShadowRawDepthTexture() {
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        try {
+            if (neutralShadowRawDepthTexture == -1) {
+                neutralShadowRawDepthTexture = GL11.glGenTextures();
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowRawDepthTexture);
+                FloatBuffer depth = org.lwjgl.BufferUtils.createFloatBuffer(1);
+                depth.put(1.0f).flip();
+                GL11.glTexImage2D(
+                        GL11.GL_TEXTURE_2D,
+                        0,
+                        GL14.GL_DEPTH_COMPONENT32,
+                        1,
+                        1,
+                        0,
+                        GL11.GL_DEPTH_COMPONENT,
+                        GL11.GL_FLOAT,
+                        depth
+                );
+            } else {
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowRawDepthTexture);
+            }
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
-            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_MODE, GL11.GL_NONE);
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_DEPTH_TEXTURE_MODE, GL11.GL_LUMINANCE);
-            FloatBuffer depth = org.lwjgl.BufferUtils.createFloatBuffer(1);
-            depth.put(1.0f).flip();
-            GL11.glTexImage2D(
-                    GL11.GL_TEXTURE_2D,
-                    0,
-                    GL14.GL_DEPTH_COMPONENT32,
-                    1,
-                    1,
-                    0,
-                    GL11.GL_DEPTH_COMPONENT,
-                    GL11.GL_FLOAT,
-                    depth
-            );
-        } else {
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowDepthTexture);
+            return neutralShadowRawDepthTexture;
+        } finally {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
+            GL13.glActiveTexture(previousActiveTexture);
         }
-        GL11.glTexParameteri(
-                GL11.GL_TEXTURE_2D,
-                GL14.GL_TEXTURE_COMPARE_MODE,
-                    GL14.GL_COMPARE_R_TO_TEXTURE
-        );
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
-        return neutralShadowDepthTexture;
-    }
-
-    private static int neutralShadowRawDepthTexture() {
-        if (neutralShadowRawDepthTexture == -1) {
-            neutralShadowRawDepthTexture = GL11.glGenTextures();
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowRawDepthTexture);
-            FloatBuffer depth = org.lwjgl.BufferUtils.createFloatBuffer(1);
-            depth.put(1.0f).flip();
-            GL11.glTexImage2D(
-                    GL11.GL_TEXTURE_2D,
-                    0,
-                    GL14.GL_DEPTH_COMPONENT32,
-                    1,
-                    1,
-                    0,
-                    GL11.GL_DEPTH_COMPONENT,
-                    GL11.GL_FLOAT,
-                    depth
-            );
-        } else {
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowRawDepthTexture);
-        }
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_MODE, GL11.GL_NONE);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_DEPTH_TEXTURE_MODE, GL11.GL_LUMINANCE);
-        return neutralShadowRawDepthTexture;
     }
 
     public static boolean supportsSamplerObjects() {
@@ -532,13 +582,20 @@ public class TextureBinder {
     }
 
     private static int createFallbackTexture(byte r, byte g, byte b, byte a) {
-        int texture = GL11.glGenTextures();
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
-        ByteBuffer pixel = org.lwjgl.BufferUtils.createByteBuffer(4);
-        pixel.put(r).put(g).put(b).put(a).flip();
-        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, 1, 1, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
-        return texture;
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        try {
+            int texture = GL11.glGenTextures();
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            ByteBuffer pixel = org.lwjgl.BufferUtils.createByteBuffer(4);
+            pixel.put(r).put(g).put(b).put(a).flip();
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, 1, 1, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
+            return texture;
+        } finally {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
+            GL13.glActiveTexture(previousActiveTexture);
+        }
     }
 }

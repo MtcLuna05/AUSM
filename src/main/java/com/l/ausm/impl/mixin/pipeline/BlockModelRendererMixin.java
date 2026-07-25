@@ -58,7 +58,9 @@ public class BlockModelRendererMixin {
         }
         BlockRenderContext.clearQuadOverrides();
         TextureAtlasSprite sprite = quad != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadSprite(quad) : null;
-        BlockRenderContext.setQuadSprite(sprite != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite) : null);
+        String spriteName = sprite != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite) : null;
+        BlockRenderContext.setQuadSprite(spriteName);
+        PipelineContext.getInstance().applyFramedQuadMaterial(spriteName);
         return com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadVertexData(quad);
     }
 

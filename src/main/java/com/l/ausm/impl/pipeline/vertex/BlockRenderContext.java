@@ -5,6 +5,7 @@ import net.minecraft.world.IBlockAccess;
 
 public final class BlockRenderContext {
     public static final int BLOOM_ONLY_MASK_EMISSION = 16;
+    public static final int FRAMED_BLOOM_BOOST_MARKER = 150;
 
     private static final ThreadLocal<State> CURRENT = ThreadLocal.withInitial(State::new);
 
@@ -44,7 +45,10 @@ public final class BlockRenderContext {
         short renderType = state.hasQuadRenderTypeOverride ? state.quadRenderTypeOverride : state.renderType;
         short metadata = state.hasQuadMetadataOverride ? state.quadMetadataOverride : state.metadata;
         int low = (blockEntityId & 0xFFFF) | (renderType << 16);
-        return (low & 0xFFFFFFFFL) | ((long) (metadata & 0xFFFF) << 32);
+        int framedBloomMarker = framedBloomBoost(state) ? FRAMED_BLOOM_BOOST_MARKER : 0;
+        return (low & 0xFFFFFFFFL)
+                | ((long) (metadata & 0xFFFF) << 32)
+                | ((long) framedBloomMarker << 48);
     }
 
     public static void setLocalBlockPos(int x, int y, int z) {
@@ -124,6 +128,20 @@ public final class BlockRenderContext {
         return blockEmission(current());
     }
 
+    public static void setFramedBloomBoost(boolean framedBloomBoost) {
+        current().framedBloomBoost = framedBloomBoost;
+    }
+
+    public static boolean framedBloomBoost() {
+        return framedBloomBoost(current());
+    }
+
+    public static void setQuadFramedBloomBoost(boolean framedBloomBoost) {
+        State state = current();
+        state.quadFramedBloomBoostOverride = framedBloomBoost;
+        state.hasQuadFramedBloomBoostOverride = true;
+    }
+
     public static void setBlockAlpha(int alpha) {
         current().blockAlpha = alpha >= 0 ? clamp(alpha, 0, 255) : -1;
     }
@@ -191,6 +209,13 @@ public final class BlockRenderContext {
         state.hasQuadRenderTypeOverride = false;
         state.hasQuadMetadataOverride = false;
         state.hasQuadEmissionOverride = false;
+        state.hasQuadFramedBloomBoostOverride = false;
+    }
+
+    private static boolean framedBloomBoost(State state) {
+        return state.hasQuadFramedBloomBoostOverride
+                ? state.quadFramedBloomBoostOverride
+                : state.framedBloomBoost;
     }
 
     public static int midBlock(float x, float y, float z) {
@@ -385,6 +410,8 @@ public final class BlockRenderContext {
         private int customLiquidTint = -1;
         private boolean crystalOnlyEmission;
         private boolean bloomOnlyEmission;
+        private boolean framedBloomBoost;
+        private boolean quadFramedBloomBoostOverride;
         private int quadEmissionOverride;
         private int quadBlockEntityIdOverride;
         private short quadRenderTypeOverride;
@@ -393,6 +420,7 @@ public final class BlockRenderContext {
         private boolean hasQuadBlockEntityIdOverride;
         private boolean hasQuadRenderTypeOverride;
         private boolean hasQuadMetadataOverride;
+        private boolean hasQuadFramedBloomBoostOverride;
         private boolean separateAoEligible;
         private boolean hasQuadAo;
         private float quadAo0;
@@ -423,6 +451,8 @@ public final class BlockRenderContext {
             customLiquidTint = -1;
             crystalOnlyEmission = false;
             bloomOnlyEmission = false;
+            framedBloomBoost = false;
+            quadFramedBloomBoostOverride = false;
             quadEmissionOverride = 0;
             quadBlockEntityIdOverride = 0;
             quadRenderTypeOverride = 0;
@@ -431,6 +461,7 @@ public final class BlockRenderContext {
             hasQuadBlockEntityIdOverride = false;
             hasQuadRenderTypeOverride = false;
             hasQuadMetadataOverride = false;
+            hasQuadFramedBloomBoostOverride = false;
             separateAoEligible = false;
             hasQuadAo = false;
             quadAo0 = 0.0F;

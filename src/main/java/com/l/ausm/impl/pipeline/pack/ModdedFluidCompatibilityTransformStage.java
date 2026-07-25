@@ -31,7 +31,7 @@ public final class ModdedFluidCompatibilityTransformStage implements ShaderTrans
         }
         String replacement = matcher.group(1)
                 + "\n    // " + MATERIAL_MARKER
-                + "\n    if (mat >= 32620 && mat <= 32645) mat = 32000;";
+                + "\n    if (mat >= 32620 && mat <= 32639) mat = 32000;";
         return matcher.replaceFirst(Matcher.quoteReplacement(replacement));
     }
 }

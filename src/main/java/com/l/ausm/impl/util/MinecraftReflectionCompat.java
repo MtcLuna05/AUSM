@@ -2,6 +2,7 @@ package com.l.ausm.impl.util;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
+import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
 import net.minecraft.block.material.Material;
 import net.minecraft.client.Minecraft;
@@ -66,7 +67,9 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.ItemBlock;
 import net.minecraft.network.PacketBuffer;
+import net.minecraft.network.play.server.SPacketChunkData;
 import net.minecraft.init.MobEffects;
+import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.potion.Potion;
 import net.minecraft.potion.PotionEffect;
 import net.minecraft.tileentity.TileEntity;
@@ -198,6 +201,9 @@ public final class MinecraftReflectionCompat {
     );
     private static final MethodHandle STATE_MATERIAL_HANDLE = methodHandle(
             IBlockState.class, new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS
+    );
+    private static final MethodHandle MATERIAL_IS_LIQUID_HANDLE = methodHandle(
+            Material.class, new String[] {"func_76224_d", "isLiquid"}, NO_PARAMETERS
     );
     private static final MethodHandle STATE_RENDER_TYPE_HANDLE = methodHandle(
             IBlockState.class, new String[] {"func_185911_a", "getRenderType"}, NO_PARAMETERS
@@ -418,6 +424,32 @@ public final class MinecraftReflectionCompat {
     public static TileEntity blockAccessTileEntity(IBlockAccess access, BlockPos pos) {
         return call(access, TileEntity.class, null, new String[] {"func_175625_s", "getTileEntity"},
                 new Class<?>[] {BlockPos.class}, pos);
+    }
+
+    @SuppressWarnings("unchecked")
+    public static List<NBTTagCompound> chunkDataTileEntityTags(SPacketChunkData packet) {
+        Object value = invoke(packet, new String[] {"func_189554_f", "getTileEntityTags"}, NO_PARAMETERS);
+        return value instanceof List<?> ? (List<NBTTagCompound>) value : Collections.emptyList();
+    }
+
+    public static int nbtInteger(NBTTagCompound tag, String key, int fallback) {
+        return callInt(tag, new String[] {"func_74762_e", "getInteger"},
+                new Class<?>[] {String.class}, fallback, key);
+    }
+
+    public static TileEntity createTileEntity(World world, NBTTagCompound tag) {
+        return callStatic(TileEntity.class, TileEntity.class, null,
+                new String[] {"func_190200_a", "create"},
+                new Class<?>[] {World.class, NBTTagCompound.class}, world, tag);
+    }
+
+    public static boolean worldSetTileEntity(World world, BlockPos pos, TileEntity tileEntity) {
+        if (world == null || pos == null || tileEntity == null) {
+            return false;
+        }
+        invoke(world, new String[] {"func_175690_a", "setTileEntity"},
+                new Class<?>[] {BlockPos.class, TileEntity.class}, pos, tileEntity);
+        return blockAccessTileEntity(world, pos) != null;
     }
 
     @SuppressWarnings("unchecked")
@@ -2135,7 +2167,24 @@ public final class MinecraftReflectionCompat {
             Object fluidRenderer = getField(dispatcher, "field_175025_e", "fluidRenderer");
             VertexFormat blockFormat = blockFormat();
             if (fluidRenderer == null || blockFormat == null) {
+                logAstralLiquidRendererProbe("missing-renderer-or-format", state, buffer, fluidRenderer, -1, -1, false, null);
                 return false;
+            }
+
+            // Nothirium/Celeritas may provide AUSM's 56-byte terrain format.
+            // Render directly into that buffer so BufferBuilder's metadata
+            // hooks can expand each vanilla fluid vertex correctly; copying
+            // 32-byte vanilla vertices into it corrupts the destination
+            // stride and makes custom fluids disappear.
+            if (ExtendedVertexFormats.isPipelineBlock(bufferVertexFormat(buffer))) {
+                Object rawResult = invokePropagating(fluidRenderer,
+                        new String[] {"func_178270_a", "renderFluid"},
+                        new Class<?>[] {IBlockAccess.class, IBlockState.class, BlockPos.class, BufferBuilder.class},
+                        access, state, pos, buffer);
+                boolean rendered = rawResult instanceof Boolean && (Boolean) rawResult;
+                logAstralLiquidRendererProbe("pipeline-direct", state, buffer, fluidRenderer,
+                        bufferVertexCount(buffer), bufferVertexCount(buffer), rendered, null);
+                return rendered;
             }
 
             BufferBuilder staging = THREAD_FLUID_STAGING_BUFFER.get();
@@ -2156,6 +2205,8 @@ public final class MinecraftReflectionCompat {
                     new String[] {"func_177338_f", "getSize"}, NO_PARAMETERS, 0);
             ByteBuffer stagingBytes = bufferByteBuffer(staging);
             if (!rendered || vertices <= 0 || bytes <= 0 || stagingBytes == null || bytes > stagingBytes.capacity()) {
+                logAstralLiquidRendererProbe("staging-empty-or-invalid", state, staging, fluidRenderer,
+                        vertices, bufferVertexCount(buffer), rendered, null);
                 return false;
             }
 
@@ -2169,10 +2220,36 @@ public final class MinecraftReflectionCompat {
             } finally {
                 BlockRendererDispatcherHooks.LIQUID_RENDER.set(Boolean.TRUE);
             }
-            return bufferVertexCount(buffer) > before;
-        } catch (RuntimeException | LinkageError ignored) {
+            boolean copied = bufferVertexCount(buffer) > before;
+            logAstralLiquidRendererProbe("staging-copy", state, buffer, fluidRenderer,
+                    vertices, bufferVertexCount(buffer), copied, null);
+            return copied;
+        } catch (RuntimeException | LinkageError failure) {
+            logAstralLiquidRendererProbe("exception", state, buffer, null, -1, -1, false, failure);
             return false;
         }
+    }
+
+    private static void logAstralLiquidRendererProbe(String stage, IBlockState state, BufferBuilder buffer,
+                                                     Object fluidRenderer, int rendererVertices, int bufferVertices,
+                                                     boolean rendered, Throwable failure) {
+        if (state == null || !state.toString().toLowerCase(java.util.Locale.ROOT).contains("liquidstarlight")) {
+            return;
+        }
+        int call = BlockRendererDispatcherHooks.LIQUID_RENDERER_PROBE_COUNT.incrementAndGet();
+        if (call > 96) {
+            return;
+        }
+        com.l.ausm.impl.MainMod.LOGGER.info(
+                "[AUSMAstralLiquidRendererProbe] call={} stage={} renderer={} rendered={} rendererVertices={} bufferVertices={} bufferFormat={} rendererError={}",
+                call,
+                stage,
+                fluidRenderer != null ? fluidRenderer.getClass().getName() : "null",
+                rendered,
+                rendererVertices,
+                bufferVertices,
+                buffer != null ? bufferVertexFormat(buffer) : null,
+                failure != null ? failure.getClass().getName() + ":" + failure.getMessage() : "none");
     }
 
     public static boolean hasField(Object target, String... names) {
@@ -2191,12 +2268,47 @@ public final class MinecraftReflectionCompat {
         if (state == null) {
             return false;
         }
-        try {
-            Object material = invoke(state, new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS);
-            return callBoolean(material, new String[] {"func_76224_d", "isLiquid"}, NO_PARAMETERS, false);
-        } catch (RuntimeException | LinkageError ignored) {
+        Object material = invokeReference(STATE_MATERIAL_HANDLE, state);
+        if (material != null && MATERIAL_IS_LIQUID_HANDLE != null) {
+            try {
+                return (boolean) MATERIAL_IS_LIQUID_HANDLE.invoke(material);
+            } catch (Throwable ignored) {
+                return false;
+            }
+        }
+        return material != null && callBoolean(material,
+                new String[] {"func_76224_d", "isLiquid"}, NO_PARAMETERS, false);
+    }
+
+    public static boolean stateIsLiquidOrWater(IBlockState state) {
+        return stateIsLiquid(state)
+                || stateMaterialIsWater(state)
+                || stateRenderType(state) == EnumBlockRenderType.LIQUID
+                || stateHasFluidLikeRegistryName(state);
+    }
+
+    public static boolean stateIsVanillaLiquid(IBlockState state) {
+        ResourceLocation name = state != null && blockFromState(state) != null
+                ? blockRegistryName(blockFromState(state)) : null;
+        if (name == null || !"minecraft".equals(resourceNamespace(name))) {
             return false;
         }
+        String path = resourcePathLower(name);
+        return "water".equals(path) || "flowing_water".equals(path)
+                || "lava".equals(path) || "flowing_lava".equals(path);
+    }
+
+    private static boolean stateHasFluidLikeRegistryName(IBlockState state) {
+        if (state == null || blockFromState(state) == null) {
+            return false;
+        }
+        ResourceLocation name = blockRegistryName(blockFromState(state));
+        if (name == null) {
+            return false;
+        }
+        String path = resourcePathLower(name);
+        String className = blockFromState(state).getClass().getName().toLowerCase(java.util.Locale.ROOT);
+        return path.contains("fluid") || path.contains("liquid") || className.contains("fluid");
     }
 
     public static IBakedModel blockModel(BlockRendererDispatcher dispatcher, IBlockState state) {

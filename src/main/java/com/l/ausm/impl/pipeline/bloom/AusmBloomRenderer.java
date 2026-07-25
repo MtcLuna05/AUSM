@@ -6,6 +6,11 @@ import com.l.ausm.impl.mixin.pipeline.EntityRendererAccessor;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.fbo.DeferredFramebuffer;
 import com.l.ausm.impl.pipeline.matrix.MatrixState;
+import com.l.ausm.impl.pipeline.pack.PipelineShaderSettings;
+import com.l.ausm.impl.pipeline.pack.ShaderPack;
+import com.l.ausm.impl.pipeline.pack.ShaderPackLayout;
+import com.l.ausm.impl.pipeline.pack.ShaderPreprocessor;
+import com.l.ausm.impl.pipeline.pack.ShaderProperties;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -37,14 +42,19 @@ import java.util.function.IntSupplier;
 
 public final class AusmBloomRenderer {
     private static final int HALF_RESOLUTION_DIVISOR = 2;
-    private static final int BLUR_ITERATIONS = 2;
-    private static final float BLOOM_STRENGTH = 0.825F;
+    private static final int DEFAULT_BLUR_ITERATIONS = 2;
+    private static final float DEFAULT_BLOOM_STRENGTH = 0.825F;
+    private static final String BLOOM_VERTEX_PATH = "ausm/bloom.vsh";
+    private static final String BLOOM_FRAGMENT_PATH = "ausm/bloom.fsh";
+    private static final String BLOOM_STRENGTH_SETTING = "ausmBloomStrength";
+    private static final String BLOOM_BLUR_ITERATIONS_SETTING = "ausmBloomBlurIterations";
     private static final float BLOOM_DIRECT_DEBUG_STRENGTH = 0.0F;
     private static final float FRAMEBUFFER_BLOOM_STRENGTH = 0.525F;
     private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
     private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = false;
     private static final int BLOOM_RENDER_LOG_LIMIT = 0;
     private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 8;
+    private static final int BLOOM_PROBE_LIMIT = 0;
     private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_FACTOR = -1.0F;
     private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_UNITS = -4.0F;
 
@@ -64,6 +74,11 @@ public final class AusmBloomRenderer {
     private int blurProgram = -1;
     private int compositeProgram = -1;
     private int emissiveExtractProgram = -1;
+    private String compositeVertexSource = VERTEX_SHADER;
+    private String compositeFragmentSource = COMPOSITE_FRAGMENT_SHADER;
+    private float bloomStrength = DEFAULT_BLOOM_STRENGTH;
+    private int blurIterations = DEFAULT_BLUR_ITERATIONS;
+    private boolean shaderPackCompositeOverride;
     private boolean layerBloomPending;
     private boolean loggedLayerRenderer;
     private boolean loggedShaderlessEmissiveRenderer;
@@ -82,6 +97,54 @@ public final class AusmBloomRenderer {
     private boolean globalFacadesBloomResolved;
     private Method globalFacadesBloomMethod;
     private boolean loggedGlobalFacadesBloomBridge;
+
+    public void configure(ShaderPack pack, ShaderProperties properties) {
+        resetShaderPackConfiguration();
+        if (pack == null || properties == null) {
+            return;
+        }
+
+        bloomStrength = clamp(
+                PipelineShaderSettings.parseFloatSetting(pack, properties, BLOOM_STRENGTH_SETTING, DEFAULT_BLOOM_STRENGTH),
+                0.0F,
+                8.0F
+        );
+        blurIterations = Math.max(0, Math.min(8,
+                PipelineShaderSettings.parseIntSetting(pack, properties, BLOOM_BLUR_ITERATIONS_SETTING, DEFAULT_BLUR_ITERATIONS)));
+
+        ShaderPackLayout layout = ShaderPackLayout.detect(pack);
+        String vertexPath = layout.rootPath(BLOOM_VERTEX_PATH);
+        String fragmentPath = layout.rootPath(BLOOM_FRAGMENT_PATH);
+        try {
+            if (pack.hasResource(vertexPath)) {
+                String source = ShaderPreprocessor.processShaderSource(
+                        pack, vertexPath, properties.options(), null, GL20.GL_VERTEX_SHADER);
+                if (source != null && !source.isBlank()) {
+                    compositeVertexSource = source;
+                    shaderPackCompositeOverride = true;
+                }
+            }
+            if (pack.hasResource(fragmentPath)) {
+                String source = ShaderPreprocessor.processShaderSource(
+                        pack, fragmentPath, properties.options(), null, GL20.GL_FRAGMENT_SHADER);
+                if (source != null && !source.isBlank()) {
+                    compositeFragmentSource = source;
+                    shaderPackCompositeOverride = true;
+                }
+            }
+        } catch (Exception error) {
+            compositeVertexSource = VERTEX_SHADER;
+            compositeFragmentSource = COMPOSITE_FRAGMENT_SHADER;
+            shaderPackCompositeOverride = false;
+            MainMod.LOGGER.warn("[AUSMBloom] Failed to load shaderpack bloom override; using built-in bloom.", error);
+        }
+
+        if (shaderPackCompositeOverride) {
+            MainMod.LOGGER.info(
+                    "[AUSMBloom] Using shaderpack bloom override for '{}' (strength={}, blurIterations={}).",
+                    pack.getName(), bloomStrength, blurIterations);
+        }
+    }
 
     public int renderBloomLayer(RenderGlobal renderGlobal, double partialTicks, int pass, Entity entity,
                                 DeferredFramebuffer pipelineDepthSource, Framebuffer minecraftDepthSource,
@@ -290,6 +353,7 @@ public final class AusmBloomRenderer {
         blurProgram = -1;
         compositeProgram = -1;
         emissiveExtractProgram = -1;
+        resetShaderPackConfiguration();
     }
 
     private boolean compositePendingLayerBloom(Framebuffer target, boolean captureState) {
@@ -308,7 +372,7 @@ public final class AusmBloomRenderer {
         try {
             if (runBlurChain(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget))) {
                 boolean useSceneDepthMask = copyDepthTexture(target, false);
-                compositeBlurredBloom(target, BLOOM_STRENGTH, preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
+                compositeBlurredBloom(target, bloomStrength, preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
                 if (BLOOM_DIRECT_DEBUG_STRENGTH > 0.0F) {
                     compositeTexture(target, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget), BLOOM_DIRECT_DEBUG_STRENGTH,
                             preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
@@ -337,11 +401,65 @@ public final class AusmBloomRenderer {
     }
 
     private void logBloomFrameProbe(int rendered, int passedSamples, boolean sharedMinecraftDepth, boolean deferComposite) {
-        // Bloom diagnostics are disabled outside focused F1 investigations.
+        if (bloomFrameProbeCalls >= BLOOM_PROBE_LIMIT) {
+            return;
+        }
+        bloomFrameProbeCalls++;
+        MainMod.LOGGER.info(
+                "[AUSMBloomFrameProbe] call={} rendered={} samples={} sharedDepth={} deferred={} layer={} downsample={} blur={} pending={} glProgram={} glError={}",
+                bloomFrameProbeCalls,
+                rendered,
+                passedSamples,
+                sharedMinecraftDepth,
+                deferComposite,
+                sampleFramebufferColor(bloomLayerTarget),
+                sampleFramebufferColor(bloomDownsampleTarget),
+                sampleFramebufferColor(bloomBlurTarget),
+                layerBloomPending,
+                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
+                GL11.glGetError()
+        );
     }
 
     private void logBloomCompositeProbe(Framebuffer target, boolean sceneDepthMask, boolean composited) {
-        // Bloom diagnostics are disabled outside focused F1 investigations.
+        if (bloomCompositeProbeCalls >= BLOOM_PROBE_LIMIT) {
+            return;
+        }
+        bloomCompositeProbeCalls++;
+        MainMod.LOGGER.info(
+                "[AUSMBloomCompositeProbe] call={} composited={} sceneDepthMask={} layer={} downsample={} target={} glError={}",
+                bloomCompositeProbeCalls,
+                composited,
+                sceneDepthMask,
+                sampleFramebufferColor(bloomLayerTarget),
+                sampleFramebufferColor(bloomDownsampleTarget),
+                sampleFramebufferColor(target),
+                GL11.glGetError()
+        );
+    }
+
+    private static String sampleFramebufferColor(Framebuffer framebuffer) {
+        if (framebuffer == null) {
+            return "null";
+        }
+        int width = Math.max(1, MinecraftReflectionCompat.framebufferWidth(framebuffer));
+        int height = Math.max(1, MinecraftReflectionCompat.framebufferHeight(framebuffer));
+        int framebufferId = MinecraftReflectionCompat.framebufferObject(framebuffer);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        FloatBuffer sample = BufferUtils.createFloatBuffer(4);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebufferId);
+            GL11.glReadBuffer(framebufferId == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadPixels(width / 2, height / 2, 1, 1, GL11.GL_RGBA, GL11.GL_FLOAT, sample);
+            return framebufferId + "@" + width + "x" + height + "="
+                    + sample.get(0) + "," + sample.get(1) + "," + sample.get(2) + "," + sample.get(3);
+        } catch (RuntimeException | LinkageError error) {
+            return "error=" + error.getClass().getSimpleName();
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL11.glReadBuffer(previousReadBuffer);
+        }
     }
 
     private void renderFramebufferBloom(Framebuffer target) {
@@ -382,7 +500,7 @@ public final class AusmBloomRenderer {
         bindTextureUniform(copyProgram, "source", sourceTexture, 0);
         drawFullscreenQuad();
 
-        for (int i = 0; i < BLUR_ITERATIONS; i++) {
+        for (int i = 0; i < blurIterations; i++) {
             bindHalfTarget(bloomBlurTarget);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(blurProgram);
             bindTextureUniform(blurProgram, "source", com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), 0);
@@ -412,7 +530,7 @@ public final class AusmBloomRenderer {
         setUniform1f(thresholdProgram, "threshold", FRAMEBUFFER_BLOOM_THRESHOLD);
         drawFullscreenQuad();
 
-        for (int i = 0; i < BLUR_ITERATIONS; i++) {
+        for (int i = 0; i < blurIterations; i++) {
             bindHalfTarget(bloomBlurTarget);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(blurProgram);
             bindTextureUniform(blurProgram, "source", com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), 0);
@@ -460,7 +578,11 @@ public final class AusmBloomRenderer {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         GL11.glEnable(GL11.GL_TEXTURE_2D);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
+        // Additive ONE+ONE blending clips the first channel that reaches one,
+        // turning saturated colored bloom into white. Screen-style blending
+        // keeps the hue while still accumulating over the scene.
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+                GL11.GL_ONE_MINUS_DST_COLOR, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
 
@@ -521,7 +643,9 @@ public final class AusmBloomRenderer {
             // Read Nothirium VBO data directly when present. Its renderer is never
             // invoked here because it would replace AUSM's frontend program/state.
             int rendered = PipelineContext.getInstance().renderAusmOwnedNothiriumBloomGeometry(partialTicks, entity);
-            if (rendered < 0) {
+            if (rendered <= 0) {
+                // A sparse or not-yet-uploaded Nothirium BLOOM list must not
+                // suppress the normal RenderGlobal BLOOM layer.
                 rendered = com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlockLayer(renderGlobal, bloomLayer, partialTicks, pass, entity);
             }
             return rendered;
@@ -835,9 +959,36 @@ public final class AusmBloomRenderer {
 
     private int compositeProgram() {
         if (compositeProgram == -1) {
-            compositeProgram = createProgram("composite", COMPOSITE_FRAGMENT_SHADER);
+            compositeProgram = createProgram(
+                    shaderPackCompositeOverride ? "shaderpack-composite" : "composite",
+                    compositeVertexSource,
+                    compositeFragmentSource,
+                    false
+            );
+            if (compositeProgram == -1 && shaderPackCompositeOverride) {
+                MainMod.LOGGER.warn("[AUSMBloom] Shaderpack bloom override failed; using built-in bloom composite.");
+                compositeProgram = createProgram("composite-fallback", VERTEX_SHADER, COMPOSITE_FRAGMENT_SHADER, false);
+            }
         }
         return compositeProgram;
+    }
+
+    private void resetShaderPackConfiguration() {
+        deleteProgram(compositeProgram);
+        compositeProgram = -1;
+        compositeVertexSource = VERTEX_SHADER;
+        compositeFragmentSource = COMPOSITE_FRAGMENT_SHADER;
+        bloomStrength = DEFAULT_BLOOM_STRENGTH;
+        blurIterations = DEFAULT_BLUR_ITERATIONS;
+        shaderPackCompositeOverride = false;
+        loggedProgramFailure = false;
+    }
+
+    private static float clamp(float value, float minimum, float maximum) {
+        if (!Float.isFinite(value)) {
+            return minimum;
+        }
+        return Math.max(minimum, Math.min(maximum, value));
     }
 
     private int emissiveExtractProgram() {
@@ -1281,13 +1432,15 @@ public final class AusmBloomRenderer {
                 if (vertexEmission <= 0.0) {
                     discard;
                 }
-                vec4 albedo = texture2D(terrain, textureCoords) * vertexColor;
-                if (albedo.a <= 0.003921569) {
-                    discard;
-                }
-                float emissionMask = smoothstep(0.04, 0.45, vertexEmission);
-                vec3 bloom = albedo.rgb * (1.15 + vertexEmission * 4.25) * emissionMask;
-                gl_FragColor = vec4(bloom, albedo.a * emissionMask);
+            vec4 albedo = texture2D(terrain, textureCoords) * vertexColor;
+            if (albedo.a <= 0.003921569) {
+                discard;
+            }
+            float emissionMask = smoothstep(0.04, 0.45, vertexEmission);
+            vec3 bloom = albedo.rgb * (1.15 + vertexEmission * 4.25) * emissionMask;
+            float bloomPeak = max(bloom.r, max(bloom.g, bloom.b));
+            bloom /= 1.0 + max(bloomPeak - 1.0, 0.0) * 0.5;
+            gl_FragColor = vec4(bloom, albedo.a * emissionMask);
             }
             """;
 
@@ -1355,6 +1508,7 @@ public final class AusmBloomRenderer {
                     }
                 }
                 vec3 source = texture2D(bloom, textureCoords).rgb;
+                source = source / (1.0 + max(source, vec3(0.0)));
                 gl_FragColor = vec4(source * strength, 1.0);
             }
             """;

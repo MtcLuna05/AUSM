@@ -48,13 +48,24 @@ public final class TerrainCompileCoordinator {
         // a block back into a normal terrain layer without leaving a second
         // bloom-only mesh behind.
         if (AusmBloomLayer.isBloomLayer(layer)) {
-            // A Blockcraftery host does not advertise its inherited material's
-            // layer. Let the position-aware Celeritas render hook decide from
-            // GPOM's framed material metadata instead.
+            // Let the position-aware render hook inspect GPOM's material. It
+            // will discard hosts without bloom and route inherited bloom
+            // materials through the Forge dispatcher.
             if (decision.blockcraftery) {
                 return true;
             }
             return MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer);
+        }
+        // Fire and Twilight portals may advertise only the compatibility BLOOM
+        // layer after the shader bridge changes their render-layer query. Keep
+        // their real base geometry in the normal terrain pass as well.
+        if (MinecraftReflectionCompat.stateMaterialIsFire(state)
+                && layer == BlockRenderLayer.CUTOUT) {
+            return true;
+        }
+        if (pipeline.isCeleritasTwilightPortalState(state)
+                && layer == BlockRenderLayer.TRANSLUCENT) {
+            return true;
         }
         if (decision.forgeFallback) {
             if (MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer)) {
@@ -95,6 +106,12 @@ public final class TerrainCompileCoordinator {
                                                 PipelineContext pipeline) {
         if (state == null) {
             return false;
+        }
+        // Custom fluids own their mesh through Forge's fluid renderer. The
+        // Celeritas renderer only sees the host block model and can silently
+        // omit the liquid surface, so keep every liquid on the dispatcher path.
+        if (MinecraftReflectionCompat.stateIsLiquidOrWater(state)) {
+            return true;
         }
         CompileDecision decision = decision(state, pipeline);
         if (decision.forgeFallback) {

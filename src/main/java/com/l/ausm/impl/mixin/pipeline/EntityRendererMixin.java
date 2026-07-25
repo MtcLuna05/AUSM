@@ -451,6 +451,7 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassBeforeLitParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.logSpecialLayerProbe("before-lit-particles");
         if (context.shouldRenderParticlesWithVanillaState()) {
             context.beginTranslucents();
             context.prepareVanillaParticleRenderingState();
@@ -480,6 +481,7 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassAfterLitParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.logSpecialLayerProbe("after-lit-particles");
         if (context.shouldBypassWorldPassRendering() || context.shouldRenderParticlesWithVanillaState()) {
             return;
         }
@@ -497,6 +499,7 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassBeforeParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.logSpecialLayerProbe("before-particles");
         if (context.shouldRenderParticlesWithVanillaState()) {
             context.prepareVanillaParticleRenderingState();
             return;
@@ -525,6 +528,7 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassAfterParticles(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.logSpecialLayerProbe("after-particles");
         if (context.shouldBypassWorldPassRendering() || context.shouldRenderParticlesWithVanillaState()) {
             return;
         }
@@ -537,6 +541,7 @@ public class EntityRendererMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/particle/ParticleManager;func_78872_b(Lnet/minecraft/entity/Entity;F)V")
     )
     private void ausm$renderLitParticlesIfGbufferRenderingEnabled(ParticleManager particleManager, Entity entity, float partialTicks) {
+        PipelineContext.getInstance().logSpecialLayerProbe("lit-particles-redirect");
         if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
             com.l.ausm.impl.util.MinecraftReflectionCompat.renderLitParticles(particleManager, entity, partialTicks);
         }
@@ -547,6 +552,7 @@ public class EntityRendererMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/particle/ParticleManager;func_78874_a(Lnet/minecraft/entity/Entity;F)V")
     )
     private void ausm$renderParticlesIfGbufferRenderingEnabled(ParticleManager particleManager, Entity entity, float partialTicks) {
+        PipelineContext.getInstance().logSpecialLayerProbe("particles-redirect");
         if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
             com.l.ausm.impl.util.MinecraftReflectionCompat.renderParticles(particleManager, entity, partialTicks);
         }
@@ -695,10 +701,12 @@ public class EntityRendererMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78476_b(FI)V")
     )
     private void ausm$renderHandIfGbufferRenderingEnabled(EntityRenderer renderer, float partialTicks, int pass) {
+        PipelineContext.getInstance().logSpecialLayerProbe("before-hand-redirect");
         if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
             PipelineContext.getInstance().prepareVanillaHandRenderState();
             func_78476_b(partialTicks, pass);
         }
+        PipelineContext.getInstance().logSpecialLayerProbe("after-hand-redirect");
     }
 
     @Redirect(
@@ -781,6 +789,7 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassBeforeHand(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.logSpecialLayerProbe("before-hand");
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }
@@ -803,6 +812,7 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassAfterHand(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        context.logSpecialLayerProbe("after-hand");
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }

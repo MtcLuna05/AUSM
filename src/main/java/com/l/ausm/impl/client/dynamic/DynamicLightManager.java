@@ -25,6 +25,7 @@ import net.minecraftforge.fml.relauncher.Side;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Mod.EventBusSubscriber(value = Side.CLIENT, modid = Reference.MODID)
 public final class DynamicLightManager {
@@ -36,6 +37,7 @@ public final class DynamicLightManager {
     private static World previousWorld;
     private static int ticks;
     private static int lastLoggedSourceCount = -1;
+    private static final AtomicInteger lightApplicationProbeLogs = new AtomicInteger();
     private DynamicLightManager() {
     }
 
@@ -98,8 +100,7 @@ public final class DynamicLightManager {
 
     public static boolean shouldApplyToBlockRenderLightQuery(BlockPos pos) {
         return active
-                && pos != null
-                && BlockRenderContext.hasWorldBlockContext();
+                && pos != null;
     }
 
     public static int applyPackedLight(BlockPos pos, int packedLight) {
@@ -112,7 +113,16 @@ public final class DynamicLightManager {
         if (dynamicLight <= blockLight) {
             return packedLight;
         }
-        return (packedLight & 0xFFFF0000) | (dynamicLight << 4);
+        int adjusted = (packedLight & 0xFFFF0000) | (dynamicLight << 4);
+        if (lightApplicationProbeLogs.getAndIncrement() < 16) {
+            MainMod.LOGGER.info("[DynamicLights] applied pos={} packed=0x{} dynamic={} result=0x{} context={}",
+                    pos,
+                    Integer.toHexString(packedLight),
+                    dynamicLight,
+                    Integer.toHexString(adjusted),
+                    BlockRenderContext.hasWorldBlockContext());
+        }
+        return adjusted;
     }
 
     public static void refreshAfterConfigChange() {

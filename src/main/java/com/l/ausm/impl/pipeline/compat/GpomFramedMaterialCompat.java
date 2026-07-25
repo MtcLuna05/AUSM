@@ -3,20 +3,32 @@ package com.l.ausm.impl.pipeline.compat;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.BlockRendererDispatcher;
+import net.minecraft.client.renderer.block.model.BakedQuad;
+import net.minecraft.client.renderer.block.model.IBakedModel;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.tileentity.TileEntity;
+import net.minecraft.util.BlockRenderLayer;
+import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.world.IBlockAccess;
 import net.minecraftforge.fml.common.registry.ForgeRegistries;
 
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
 /** Reads only GPOM's persisted framed-material contract. */
 public final class GpomFramedMaterialCompat {
     private static final String FRAMED_DATA_CLASS = "com.l.gpom.compat.framed.FramedMaterialData";
-    private static final String EFFECTIVE_STATE_CLASS = "com.l.gpom.compat.framed.FramedBlockEffectiveState";
     private static final String FRAMED_DATA_TAG = "gpom:material_state";
     private static final Class<?>[] NO_PARAMETERS = new Class<?>[0];
     private static final Material EMPTY = new Material(false, 0, false, null, null);
+    private static final ConcurrentMap<String, Set<String>> STATE_SPRITES = new ConcurrentHashMap<>();
 
     private GpomFramedMaterialCompat() {
     }
@@ -49,12 +61,20 @@ public final class GpomFramedMaterialCompat {
             if (liveMaterial.present()) {
                 return liveMaterial;
             }
-            Material effective = effectiveMaterial(backingWorld, pos);
-            if (effective.present()) {
-                return effective;
+        }
+
+        IBlockAccess clientWorld = MinecraftReflectionCompat.world(MinecraftReflectionCompat.minecraft());
+        if (clientWorld != null && clientWorld != blockAccess && clientWorld != backingWorld) {
+            Material liveMaterial = material(MinecraftReflectionCompat.blockAccessTileEntity(clientWorld, pos));
+            if (liveMaterial.present()) {
+                return liveMaterial;
+            }
+            liveMaterial = persistedMaterial(MinecraftReflectionCompat.blockAccessTileEntity(clientWorld, pos));
+            if (liveMaterial.present()) {
+                return liveMaterial;
             }
         }
-        return effectiveMaterial(blockAccess, pos);
+        return EMPTY;
     }
 
     public static Material material(Object tile) {
@@ -69,6 +89,64 @@ public final class GpomFramedMaterialCompat {
 
         NBTTagCompound data = (NBTTagCompound) rawData;
         return materialFromData(tile, data);
+    }
+
+    public static IBlockState stateForSprite(Material material, String spriteName) {
+        if (material == null || !material.present() || spriteName == null || spriteName.isBlank()) {
+            return null;
+        }
+        String normalized = spriteName.toLowerCase(java.util.Locale.ROOT);
+        if (stateSprites(material.primary()).contains(normalized)) {
+            return material.primary();
+        }
+        if (stateSprites(material.secondary()).contains(normalized)) {
+            return material.secondary();
+        }
+        return null;
+    }
+
+    private static Set<String> stateSprites(IBlockState state) {
+        if (state == null) {
+            return Set.of();
+        }
+        String key = MinecraftReflectionCompat.stateString(state);
+        return STATE_SPRITES.computeIfAbsent(key, ignored -> scanStateSprites(state));
+    }
+
+    private static Set<String> scanStateSprites(IBlockState state) {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        BlockRendererDispatcher dispatcher = MinecraftReflectionCompat.blockRendererDispatcher(minecraft);
+        IBakedModel model = MinecraftReflectionCompat.blockModel(dispatcher, state);
+        if (model == null) {
+            return Set.of();
+        }
+
+        Set<String> sprites = new HashSet<>();
+        BlockRenderLayer previousLayer = MinecraftReflectionCompat.currentRenderLayer();
+        try {
+            for (BlockRenderLayer layer : BlockRenderLayer.values()) {
+                MinecraftReflectionCompat.setCurrentRenderLayer(layer);
+                collectSprites(sprites, MinecraftReflectionCompat.bakedModelQuads(model, state, null, 0L));
+                for (EnumFacing side : EnumFacing.values()) {
+                    collectSprites(sprites, MinecraftReflectionCompat.bakedModelQuads(model, state, side, 0L));
+                }
+            }
+        } catch (RuntimeException | LinkageError ignored) {
+            return Set.copyOf(sprites);
+        } finally {
+            MinecraftReflectionCompat.setCurrentRenderLayer(previousLayer);
+        }
+        return Set.copyOf(sprites);
+    }
+
+    private static void collectSprites(Set<String> sprites, java.util.List<BakedQuad> quads) {
+        for (BakedQuad quad : quads) {
+            TextureAtlasSprite sprite = MinecraftReflectionCompat.bakedQuadSprite(quad);
+            String name = sprite != null ? MinecraftReflectionCompat.spriteIconName(sprite) : null;
+            if (name != null && !name.isBlank()) {
+                sprites.add(name.toLowerCase(java.util.Locale.ROOT));
+            }
+        }
     }
 
     private static Material materialFromData(Object tile, NBTTagCompound data) {
@@ -165,33 +243,6 @@ public final class GpomFramedMaterialCompat {
                     new Class<?>[] {Object.class, String.class}, tile, source);
         } catch (ClassNotFoundException | LinkageError ignored) {
             return null;
-        }
-    }
-
-    private static Material effectiveMaterial(IBlockAccess blockAccess, BlockPos pos) {
-        try {
-            Class<?> effectiveState = Class.forName(EFFECTIVE_STATE_CLASS, false,
-                    GpomFramedMaterialCompat.class.getClassLoader());
-            IBlockState primary = MinecraftReflectionCompat.call(effectiveState, IBlockState.class, null,
-                    new String[] {"state"}, new Class<?>[] {IBlockAccess.class, BlockPos.class}, blockAccess, pos);
-            if (primary == null) {
-                return EMPTY;
-            }
-            int emission = Math.max(0, MinecraftReflectionCompat.stateLightValue(primary));
-            boolean bloom = false;
-            net.minecraft.block.Block block = MinecraftReflectionCompat.blockFromState(primary);
-            if (block != null) {
-                for (net.minecraft.util.BlockRenderLayer layer : net.minecraft.util.BlockRenderLayer.values()) {
-                    if ("BLOOM".equals(layer.name())
-                            && MinecraftReflectionCompat.blockCanRenderInLayer(block, primary, layer)) {
-                        bloom = true;
-                        break;
-                    }
-                }
-            }
-            return new Material(true, emission, bloom, primary, null);
-        } catch (ClassNotFoundException | LinkageError ignored) {
-            return EMPTY;
         }
     }
 

@@ -93,14 +93,9 @@ public class WorldDynamicLightMixin {
     private void ausm$invalidateShaderlessBloomMetadataOnRenderUpdate(int minX, int minY, int minZ,
                                                                       int maxX, int maxY, int maxZ,
                                                                       CallbackInfo ci) {
-        PipelineContext.getInstance().handleShaderlessBloomRenderUpdateRange(
-                (World) (Object) this,
-                minX,
-                minY,
-                minZ,
-                maxX,
-                maxY,
-                maxZ
-        );
+        World world = (World) (Object) this;
+        PipelineContext context = PipelineContext.getInstance();
+        context.handleShaderlessBloomRenderUpdateRange(world, minX, minY, minZ, maxX, maxY, maxZ);
+        context.handleClientBlockRenderUpdateRange(world, minX, minY, minZ, maxX, maxY, maxZ);
     }
 }

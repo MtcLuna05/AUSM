@@ -64,11 +64,6 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     @Unique
     private static final AtomicInteger AUSM_SHADERLESS_COMPILE_LIGHT_PROBES = new AtomicInteger();
 
-    @Unique
-    private static final AtomicInteger AUSM_LUMINOUS_COMPILE_PROBES = new AtomicInteger();
-
-    @Unique
-    private static final AtomicInteger AUSM_BLOCKCRAFTERY_BLOOM_LAYER_PROBES = new AtomicInteger();
 
     @Shadow(remap = false)
     private IBlockAccess chunkCache;
@@ -220,6 +215,20 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         return NothiriumPipelineCompat.pipelineBlockFormat(original);
     }
 
+    @ModifyArg(
+            method = "compileSection(Lnet/minecraft/client/renderer/RegionRenderCacheBuilder;)Lmeldexun/nothirium/api/renderer/chunk/RenderChunkTaskResult;",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/BufferBuilder;func_181668_a(ILnet/minecraft/client/renderer/vertex/VertexFormat;)V",
+                    remap = false
+            ),
+            index = 1,
+            remap = false
+    )
+    private VertexFormat ausm$usePipelineBlockFormatForSectionBuffers(VertexFormat original) {
+        return NothiriumPipelineCompat.pipelineBlockFormat(original);
+    }
+
     @Redirect(
             method = "renderBlockState",
             at = @At(
@@ -239,23 +248,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                                                     RegionRenderCacheBuilder regionBuffers) {
         PipelineContext pipeline = PipelineContext.getInstance();
         if (AusmBloomLayer.isBloomLayer(layer) && pipeline.isBlockcrafteryEditableState(state)) {
-            boolean materialBloom = pipeline.gpomFramedMaterialHasBloom(chunkCache, pos);
-            int probe = AUSM_BLOCKCRAFTERY_BLOOM_LAYER_PROBES.incrementAndGet();
-            if (probe <= 64) {
-                MainMod.LOGGER.info(
-                        "[AUSMNothiriumBlockcrafteryBloomLayerProbe] call={} thread={} pos={} state={} layer={} materialBloom={} materialEmission={} currentLayer={} access={}",
-                        probe,
-                        Thread.currentThread().getName(),
-                        pos,
-                        pipeline.diagnosticStateName(state),
-                        layer,
-                        materialBloom,
-                        pipeline.gpomFramedMaterialEmission(chunkCache, pos),
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
-                        chunkCache != null ? chunkCache.getClass().getName() : "null"
-                );
-            }
-            return materialBloom;
+            return pipeline.gpomFramedMaterialHasBloom(chunkCache, pos);
         }
         if (ausm$canRenderInLayer(block, state, layer)) {
             return true;
@@ -305,45 +298,6 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         }
 
         ausm$fireCutoutFallbackStart = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer);
-    }
-
-    @Inject(method = "renderBlockState", at = @At("HEAD"), remap = false)
-    private void ausm$probeLuminousLayerDecision(IBlockState state, BlockPos pos, VisibilityGraph visibilityGraph,
-                                                 RegionRenderCacheBuilder regionBuffers, CallbackInfo ci) {
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        if (!ausm$isLuminousBlock(block)) {
-            return;
-        }
-        int call = AUSM_LUMINOUS_COMPILE_PROBES.incrementAndGet();
-        if (call > 16) {
-            return;
-        }
-        PipelineContext pipeline = PipelineContext.getInstance();
-        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        MainMod.LOGGER.info(
-                "[AUSMLuminousCompile] call={} pos={} class={} current={} natural={} bloomLayer={} nativeSolid={} nativeBloom={} solid={} bloom={} forceVanilla={}",
-                call,
-                pos,
-                block.getClass().getName(),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockRenderLayer(block),
-                bloomLayer,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockCanRenderInLayer(block, state, BlockRenderLayer.SOLID),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockCanRenderInLayer(block, state, bloomLayer),
-                TerrainCompileCoordinator.canRenderInLayer(block, state, BlockRenderLayer.SOLID, pipeline),
-                TerrainCompileCoordinator.canRenderInLayer(block, state, bloomLayer, pipeline),
-                pipeline.shouldForceVanillaTerrainRenderer()
-        );
-    }
-
-    @Unique
-    private static boolean ausm$isLuminousBlock(Block block) {
-        for (Class<?> type = block != null ? block.getClass() : null; type != null; type = type.getSuperclass()) {
-            if ("lumien.randomthings.block.BlockBlockLuminousBase".equals(type.getName())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     @Inject(
@@ -428,6 +382,8 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         int framedShaderlessExtractionEmission = pipeline.shaderlessFramedBloomExtractionEmission(state, chunkCache, pos);
         blockEmission = Math.max(blockEmission, framedShaderlessExtractionEmission);
         BlockRenderContext.setBlockEmission(blockEmission);
+        // Blockcraftery material ownership is resolved per baked quad.
+        BlockRenderContext.setFramedBloomBoost(false);
         BlockRenderContext.setBloomOnlyEmission(framedShaderlessExtractionEmission > 0);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, chunkCache, pos));
         BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, chunkCache, pos));

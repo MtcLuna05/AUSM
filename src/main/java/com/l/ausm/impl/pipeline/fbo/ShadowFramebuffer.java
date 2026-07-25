@@ -23,15 +23,12 @@ import java.nio.IntBuffer;
 import java.util.Arrays;
 
 /**
- * Minimal shadow depth target.
- *
- * This first rebuild intentionally exposes valid OptiFine shadow textures
- * without rendering terrain into them yet. Both textures are cleared to depth
- * 1.0, which means "fully lit" for packs that sample shadowtex0/1.
+ * Shaderpack-compatible shadow depth/color target.
  */
 public final class ShadowFramebuffer {
     public static final int SHADOW_COLOR_TARGET_COUNT = ShaderRenderTargetSettings.SHADOW_COLOR_TARGET_COUNT;
     private int fboId = -1;
+    private int depthCopyFboId = -1;
     private int depthTextureId = -1;
     private int depthSnapshotTextureId = -1;
     private int rawDepthTextureId = -1;
@@ -43,6 +40,7 @@ public final class ShadowFramebuffer {
     private final ByteBuffer colorMaskBuffer = org.lwjgl.BufferUtils.createByteBuffer(4);
     private final FloatBuffer clearColorBuffer = org.lwjgl.BufferUtils.createFloatBuffer(4);
     private final FloatBuffer depthReadBuffer = org.lwjgl.BufferUtils.createFloatBuffer(1);
+    private int depthCopyProbeCount;
 
     public ShadowFramebuffer(int resolution, ShaderRenderTargetSettings settings) {
         this.resolution = resolution;
@@ -75,6 +73,25 @@ public final class ShadowFramebuffer {
         for (int i = 0; i < colorTextureIds.length; i++) {
             colorTextureIds[i] = allocateColorTexture(i);
         }
+
+        depthCopyFboId = com.l.ausm.impl.util.MinecraftReflectionCompat.glGenFramebuffers();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), depthCopyFboId);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
+                GL11.GL_TEXTURE_2D, depthSnapshotTextureId, 0);
+        GL11.glDrawBuffer(GL11.GL_NONE);
+        GL11.glReadBuffer(GL11.GL_NONE);
+        int copyStatus = com.l.ausm.impl.util.MinecraftReflectionCompat.glCheckFramebufferStatus(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer());
+        if (copyStatus != com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(
+                net.minecraft.client.renderer.OpenGlHelper.class,
+                org.lwjgl.opengl.GL30.GL_FRAMEBUFFER_COMPLETE, "field_153202_i", "GL_FRAMEBUFFER_COMPLETE")) {
+            MainMod.LOGGER.error("Shadow depth-copy framebuffer is not complete! Status: {}", copyStatus);
+        }
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
                 com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(),
                 com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
@@ -263,6 +280,10 @@ public final class ShadowFramebuffer {
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
     }
 
+    public int framebufferId() {
+        return fboId;
+    }
+
     private void bindForRendering(boolean[] writeColors) {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
         GL11.glViewport(0, 0, resolution, resolution);
@@ -335,16 +356,93 @@ public final class ShadowFramebuffer {
     public void copyDepthToSnapshot() {
         SavedFramebufferState previous = saveFramebufferState();
         int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, depthSnapshotTextureId);
-        GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, resolution, resolution);
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, rawDepthTextureId);
-        GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, resolution, resolution);
+        blitDepthToTexture(depthSnapshotTextureId);
+        blitDepthToTexture(rawDepthTextureId);
+        if (depthCopyProbeCount < 0) {
+            depthCopyProbeCount++;
+            DepthStats source = readDepthStats(2);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, depthSnapshotTextureId);
+            String snapshot = textureDepthSummary();
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, rawDepthTextureId);
+            String raw = textureDepthSummary();
+            MainMod.LOGGER.info(
+                    "[AUSMShadowDepthCopyProbe] call={} fbo={} depthTex={} snapshotTex={} rawTex={} source={} snapshot={} raw={} drawFbo={} readFbo={} readBuffer={} glError={}",
+                    depthCopyProbeCount, fboId, depthTextureId, depthSnapshotTextureId, rawDepthTextureId,
+                    source.nonClear() + "/" + source.total(), snapshot, raw,
+                    GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+                    GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
+                    GL11.glGetInteger(GL11.GL_READ_BUFFER), GL11.glGetError());
+        }
         generateDepthMipmap(0, depthTextureId);
         generateDepthMipmap(1, depthSnapshotTextureId);
         generateDepthMipmap(0, rawDepthTextureId);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
         previous.restore();
+    }
+
+    private void blitDepthToTexture(int targetTexture) {
+        if (depthCopyFboId == -1 || targetTexture == -1) {
+            return;
+        }
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
+                    GL11.GL_TEXTURE_2D, depthTextureId, 0);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, fboId);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, depthCopyFboId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
+                    GL30.GL_DRAW_FRAMEBUFFER,
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
+                    GL11.GL_TEXTURE_2D, targetTexture, 0);
+            GL11.glReadBuffer(GL11.GL_NONE);
+            GL11.glDrawBuffer(GL11.GL_NONE);
+            GL30.glBlitFramebuffer(
+                    0, 0, resolution, resolution,
+                    0, 0, resolution, resolution,
+                    GL11.GL_DEPTH_BUFFER_BIT, GL11.GL_NEAREST);
+        } finally {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glBindFramebuffer(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(), fboId);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebufferTexture2D(
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glFramebuffer(),
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glDepthAttachment(),
+                    GL11.GL_TEXTURE_2D, depthTextureId, 0);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+            GL11.glReadBuffer(previousReadBuffer);
+            GL11.glDrawBuffer(previousDrawBuffer);
+        }
+    }
+
+    private String textureDepthSummary() {
+        int pixelCount = resolution * resolution;
+        FloatBuffer values = org.lwjgl.BufferUtils.createFloatBuffer(pixelCount);
+        try {
+            GL11.glGetTexImage(GL11.GL_TEXTURE_2D, 0, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, values);
+            int stride = Math.max(1, pixelCount / 1024);
+            float min = 1.0f;
+            float max = 0.0f;
+            int nonClear = 0;
+            for (int i = 0; i < pixelCount; i += stride) {
+                float value = values.get(i);
+                min = Math.min(min, value);
+                max = Math.max(max, value);
+                if (value < 0.9999f) {
+                    nonClear++;
+                }
+            }
+            return nonClear + "/" + ((pixelCount + stride - 1) / stride)
+                    + ",min=" + min + ",max=" + max;
+        } catch (RuntimeException | LinkageError failure) {
+            return "error=" + failure.getClass().getSimpleName();
+        }
     }
 
     public void configureDepthTextureCompareMode() {
@@ -517,6 +615,10 @@ public final class ShadowFramebuffer {
     }
 
     public void delete() {
+        if (depthCopyFboId != -1) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteFramebuffers(depthCopyFboId);
+            depthCopyFboId = -1;
+        }
         if (fboId != -1) {
             com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteFramebuffers(fboId);
             fboId = -1;

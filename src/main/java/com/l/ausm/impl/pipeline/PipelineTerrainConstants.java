@@ -39,6 +39,7 @@ final class PipelineTerrainConstants {
     static final int SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES = 4;
     static final int SPARSE_SHADOW_STABLE_FRAMES = 2;
     static final float SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION = 0.003F;
+    static final int NOTHIRIUM_SHADOW_VERTICAL_RECOVERY_HOLD_FRAMES = 8;
     static final int NOTHIRIUM_SHADOW_SUPPRESS_AFTER_INVALID_FRAMES = 1;
     static final int NOTHIRIUM_SHADOW_SUPPRESS_FRAMES = 160;
 
@@ -47,7 +48,7 @@ final class PipelineTerrainConstants {
     static final int HARDWARE_TERRAIN_FALLBACK_SPARSE_OPAQUE_DRAWS = 96;
     static final int NOTHIRIUM_PROVIDER_SUPPLEMENT_SPARSE_OPAQUE_DRAWS = 48;
     static final int NOTHIRIUM_PROVIDER_SUPPLEMENT_SPARSE_TRANSLUCENT_DRAWS = 8;
-    static final boolean ENABLE_NOTHIRIUM_PROVIDER_SUPPLEMENT = false;
+    static final boolean ENABLE_NOTHIRIUM_PROVIDER_SUPPLEMENT = true;
     static final int HARDWARE_TERRAIN_FALLBACK_REFRESH_COOLDOWN_FRAMES = 12;
     static final boolean ENABLE_SAFE_TERRAIN_FALLBACKS = false;
     static final int NOTHIRIUM_NON_SOLID_REPAIR_COOLDOWN_FRAMES = 8;

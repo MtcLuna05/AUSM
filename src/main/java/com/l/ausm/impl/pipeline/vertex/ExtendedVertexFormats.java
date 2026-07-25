@@ -11,6 +11,7 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
 
 import java.nio.ByteBuffer;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Registry for our extended vertex formats containing shader-specific attributes.
@@ -51,6 +52,7 @@ public class ExtendedVertexFormats {
     private static final int PIPELINE_ENTITY_ELEMENT_COUNT = 8;
     private static VertexFormatElement pipelineBlockFirstElement;
     private static VertexFormatElement pipelineEntityFirstElement;
+    private static final ConcurrentHashMap<VertexFormat, Integer> ELEMENT_COUNT_CACHE = new ConcurrentHashMap<>();
 
     // These elements mirror Iris' terrain payload order:
     // mc_Entity, mc_midTexCoord, at_tangent, at_midBlock.
@@ -148,8 +150,17 @@ public class ExtendedVertexFormats {
         if (format == PIPELINE_ENTITY) {
             return PIPELINE_ENTITY_ELEMENT_COUNT;
         }
-        return format != null ? MinecraftReflectionCompat.callInt(format,
-                ELEMENT_COUNT_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
+        if (format == null) {
+            return -1;
+        }
+        Integer cached = ELEMENT_COUNT_CACHE.get(format);
+        if (cached != null) {
+            return cached;
+        }
+        int count = MinecraftReflectionCompat.callInt(format,
+                ELEMENT_COUNT_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, -1);
+        Integer existing = ELEMENT_COUNT_CACHE.putIfAbsent(format, count);
+        return existing != null ? existing : count;
     }
 
     public static VertexFormatElement element(VertexFormat format, int index) {

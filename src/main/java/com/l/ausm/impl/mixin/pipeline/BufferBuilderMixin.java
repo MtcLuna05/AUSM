@@ -1,5 +1,6 @@
 package com.l.ausm.impl.mixin.pipeline;
 
+import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
@@ -30,6 +31,7 @@ import org.lwjgl.opengl.GL11;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.ByteOrder;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(BufferBuilder.class)
 public class BufferBuilderMixin implements IBufferBuilderExtension {
@@ -50,6 +52,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Unique
     private static final boolean AUSM$LITTLE_ENDIAN = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
+
+    @Unique
+    private static final AtomicInteger AUSM$LIQUID_PAYLOAD_PROBES = new AtomicInteger();
 
     @Shadow(remap = false)
     private ByteBuffer field_179001_a;
@@ -182,9 +187,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "putBulkData", at = @At("HEAD"), cancellable = true)
     private void ausm$expandBulkVanillaVertexData(ByteBuffer sourceBuffer, CallbackInfo ci) {
-        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
-            return;
-        }
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q) || sourceBuffer == null) {
             ausm$rewriteVanillaEmissiveBulkData(sourceBuffer, ci);
             return;
@@ -215,6 +217,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         int vanillaLightmapEmission = compatibilityEmissiveBoost ? BlockRenderContext.vanillaLightmapEmission() : 0;
         boolean agricraftCrop = BlockRenderContext.isAgricraftCrop();
         int agricraftPackedLight = agricraftCrop ? BlockRenderContext.packedLightmap() : 0;
+        ausm$probeLiquidPayload("bulk", packedEntityData, targetStride, vertexTotal);
         ausm$logVertexExpandProbe("bulk-in", sourceBytes, sourceStride, targetStride, vertexBase, vertexTotal, -1, compatibilityEmissiveBoost);
         func_181670_b(vertexTotal * targetStride + targetStride);
         field_178999_b.position(func_181664_j());
@@ -253,9 +256,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_178981_a", at = @At("HEAD"), cancellable = true)
     private void ausm$expandVanillaQuadData(int[] vertexData, CallbackInfo ci) {
-        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
-            return;
-        }
         if (vertexData == null) {
             return;
         }
@@ -286,6 +286,8 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         long packedEntityData = BlockRenderContext.packedEntityData();
         int packedEntity = (int) packedEntityData;
         int packedEntityHigh = (int) (packedEntityData >>> 32);
+        ausm$probeLiquidPayload("quad", packedEntityData,
+                ExtendedVertexFormats.size(field_179011_q), vertexTotal);
         int midBlockEmission = BlockRenderContext.midBlockEmission();
         int packedLocalPosition = BlockRenderContext.packedLocalPosition();
         boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
@@ -698,10 +700,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_181675_d", at = @At("HEAD"))
     private void ausm$applyEmissiveLightmap(CallbackInfo ci) {
-        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
-            ausm$clearCurrentLiquidPipelineAttributes();
-            return;
-        }
         ausm$sanitizeCurrentAgricraftCropVertex();
         ausm$applyBloomMaskCurrentVertex();
         ausm$applyCustomLiquidTintCurrentVertex();
@@ -753,9 +751,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_181675_d", at = @At("HEAD"))
     private void ausm$writeBlockEntityAttribute(CallbackInfo ci) {
-        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
-            return;
-        }
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q) && !ExtendedVertexFormats.isPipelineEntity(field_179011_q)) {
             return;
         }
@@ -774,14 +769,12 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         field_179001_a.putShort(offset, entityId);
         field_179001_a.putShort(offset + 2, BlockRenderContext.renderType());
         field_179001_a.putShort(offset + 4, ExtendedVertexFormats.isPipelineEntity(field_179011_q) ? (short) 0 : BlockRenderContext.metadata());
-        field_179001_a.putShort(offset + 6, (short) 0);
+        field_179001_a.putShort(offset + 6, (short) (BlockRenderContext.framedBloomBoost()
+                ? BlockRenderContext.FRAMED_BLOOM_BOOST_MARKER : 0));
     }
 
     @Inject(method = "func_181675_d", at = @At("RETURN"))
     private void ausm$writeDerivedBlockAttributes(CallbackInfo ci) {
-        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
-            return;
-        }
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)) {
             return;
         }
@@ -815,12 +808,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_181675_d", at = @At("RETURN"))
     private void ausm$resetPipelineVertexCursorAfterNonQuad(CallbackInfo ci) {
-        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
-            if (ExtendedVertexFormats.isPipelineBlock(field_179011_q)) {
-                ausm$resetPipelineVertexCursor();
-            }
-            return;
-        }
         if (ExtendedVertexFormats.isPipelineBlock(field_179011_q)
                 && !((field_179006_k == GL11.GL_QUADS && field_178997_d % 4 == 0)
                 || (field_179006_k == GL11.GL_TRIANGLES && field_178997_d % 3 == 0))) {
@@ -828,27 +815,8 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
     }
 
-    @Unique
-    private void ausm$clearCurrentLiquidPipelineAttributes() {
-        if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)) {
-            return;
-        }
-        int stride = ExtendedVertexFormats.size(field_179011_q);
-        int start = field_178997_d * stride + ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET;
-        int end = field_178997_d * stride + stride;
-        if (start < 0 || end > field_179001_a.capacity() || start >= end) {
-            return;
-        }
-        for (int offset = start; offset < end; offset++) {
-            field_179001_a.put(offset, (byte) 0);
-        }
-    }
-
     @Inject(method = "func_178987_a", at = @At("RETURN"))
     private void ausm$refreshMidBlockAfterRawQuadTranslation(double x, double y, double z, CallbackInfo ci) {
-        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
-            return;
-        }
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q) || field_178997_d < 4) {
             return;
         }
@@ -1290,6 +1258,30 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         return AUSM$LITTLE_ENDIAN
                 ? (color & 0xFF000000) | (tint & 0x00FFFFFF)
                 : (tint & 0xFFFFFF00) | (color & 0x000000FF);
+    }
+
+    @Unique
+    private static void ausm$probeLiquidPayload(String source, long packedEntityData,
+                                                int stride, int vertexTotal) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() == null) {
+            return;
+        }
+        int call = AUSM$LIQUID_PAYLOAD_PROBES.incrementAndGet();
+        if (call > 64) {
+            return;
+        }
+        MainMod.LOGGER.info(
+                "[AUSMLiquidVertexPayloadProbe] call={} source={} id={} renderType={} metadata={} emission={} stride={} vertices={} layer={}",
+                call,
+                source,
+                (int) packedEntityData & 0xFFFF,
+                (int) (packedEntityData >>> 16) & 0xFFFF,
+                (int) (packedEntityData >>> 32) & 0xFFFF,
+                BlockRenderContext.midBlockEmission(),
+                stride,
+                vertexTotal,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer()
+        );
     }
 
     @Unique
