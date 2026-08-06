@@ -4,9 +4,11 @@ import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
+import com.l.ausm.impl.pipeline.compat.BlockcrafteryContainedStateCompat;
 import com.l.ausm.impl.pipeline.compat.NothiriumPipelineCompat;
 import com.l.ausm.impl.pipeline.compat.TerrainCompileCoordinator;
 import com.l.ausm.impl.pipeline.compat.TerrainRenderProbeState;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
@@ -36,6 +38,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.lang.reflect.Field;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(targets = "meldexun.nothirium.mc.renderer.chunk.RenderChunkTaskCompile", remap = false)
@@ -59,10 +63,46 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private static final AtomicInteger AUSM_EMISSIVE_FALLBACK_LOGS = new AtomicInteger();
 
     @Unique
+    private static final int AUSM_BLOOM_ONLY_BASE_FALLBACK_LOG_LIMIT = 16;
+
+    @Unique
+    private static final AtomicInteger AUSM_BLOOM_ONLY_BASE_FALLBACK_LOGS = new AtomicInteger();
+
+    @Unique
+    private static final int AUSM_BLOOM_BASE_ROUTE_PROBE_LIMIT = 0;
+
+    @Unique
+    private static final AtomicInteger AUSM_BLOOM_BASE_ROUTE_PROBES = new AtomicInteger();
+
+    @Unique
+    private static final int AUSM_BLOOM_VERTEX_PROBE_LIMIT = 24;
+
+    @Unique
+    private static final AtomicInteger AUSM_NATIVE_BLOOM_VERTEX_PROBES = new AtomicInteger();
+
+    @Unique
     private static final int AUSM_SHADERLESS_COMPILE_LIGHT_PROBE_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_SHADERLESS_COMPILE_LIGHT_PROBES = new AtomicInteger();
+
+    @Unique
+    private static final int AUSM_ENDERIO_GLASS_LAYER_PROBE_LIMIT = 16;
+
+    @Unique
+    private static final AtomicInteger AUSM_ENDERIO_GLASS_LAYER_PROBES = new AtomicInteger();
+
+    @Unique
+    private static final int AUSM_FRAMED_BLOOM_ROUTE_PROBE_LIMIT = 32;
+
+    @Unique
+    private static final AtomicInteger AUSM_FRAMED_BLOOM_ROUTE_PROBES = new AtomicInteger();
+
+    @Unique
+    private static final int AUSM_FRAMED_BLOOM_FINAL_PROBE_LIMIT = 32;
+
+    @Unique
+    private static final AtomicInteger AUSM_FRAMED_BLOOM_FINAL_PROBES = new AtomicInteger();
 
 
     @Shadow(remap = false)
@@ -75,7 +115,61 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private int ausm$fireCutoutFallbackStart = -1;
 
     @Unique
+    private int ausm$bloomOnlyBaseFallbackStart = -1;
+
+    @Unique
+    private BlockRenderLayer ausm$bloomOnlyBaseFallbackLayer = null;
+
+    @Unique
+    private IBlockState ausm$bloomOnlyBaseFallbackState = null;
+
+    @Unique
+    private boolean ausm$bloomBaseRouteProbeTarget = false;
+
+    @Unique
+    private String ausm$bloomBaseRouteProbeKind = "";
+
+    @Unique
+    private IBlockState ausm$bloomBaseRouteProbeEffectiveState = null;
+
+    @Unique
+    private BlockRenderLayer ausm$bloomBaseRouteProbeCurrentLayer = null;
+
+    @Unique
+    private BlockRenderLayer ausm$bloomBaseRouteProbeBaseLayer = null;
+
+    @Unique
+    private int ausm$bloomBaseRouteProbeCurrentStart = -1;
+
+    @Unique
+    private int ausm$bloomBaseRouteProbeBaseStart = -1;
+
+    @Unique
+    private int ausm$bloomBaseRouteProbeBloomStart = -1;
+
+    @Unique
     private int ausm$emissiveFallbackStart = -1;
+
+    @Unique
+    private int ausm$nativeBloomProbeStart = -1;
+
+    @Unique
+    private BlockRenderLayer ausm$nativeBloomProbeLayer = null;
+
+    @Unique
+    private boolean ausm$framedBloomRouteProbeTarget = false;
+
+    @Unique
+    private IBlockState ausm$framedBloomRouteProbeContainedState = null;
+
+    @Unique
+    private BlockRenderLayer ausm$framedBloomRouteProbeCurrentLayer = null;
+
+    @Unique
+    private int ausm$framedBloomRouteProbeCurrentStart = -1;
+
+    @Unique
+    private int ausm$framedBloomRouteProbeBloomStart = -1;
 
     @Unique
     private int ausm$framedDiagnosticStart = -1;
@@ -247,8 +341,35 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                                                     VisibilityGraph visibilityGraph,
                                                     RegionRenderCacheBuilder regionBuffers) {
         PipelineContext pipeline = PipelineContext.getInstance();
-        if (AusmBloomLayer.isBloomLayer(layer) && pipeline.isBlockcrafteryEditableState(state)) {
-            return pipeline.gpomFramedMaterialHasBloom(chunkCache, pos);
+        // EnderIO's fused-glass block itself reports SOLID, even though its
+        // smart model may provide the material through CUTOUT/TRANSLUCENT.
+        // This is also needed for native EnderIO glass, not just a copied
+        // Blockcraftery contained state.
+        BlockRenderLayer extractedEnderIoLayer = BlockcrafteryContainedStateCompat.enderIoGlassRenderLayer(state);
+        if (extractedEnderIoLayer != null && layer != null && !AusmBloomLayer.isBloomLayer(layer)) {
+            int enderIoProbe = AUSM_ENDERIO_GLASS_LAYER_PROBES.incrementAndGet();
+            if (enderIoProbe <= AUSM_ENDERIO_GLASS_LAYER_PROBE_LIMIT) {
+                MainMod.LOGGER.info("[AUSMEnderIoGlassLayerProbe] call={} pos={} requestedLayer={} extractedLayer={} declaredLayer={} state={}",
+                        enderIoProbe, pos, layer, extractedEnderIoLayer,
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.blockRenderLayer(block),
+                        ausm$stateName(state));
+            }
+            return layer == extractedEnderIoLayer;
+        }
+        if (pipeline.isBlockcrafteryEditableState(state)) {
+            IBlockState contained = pipeline.inheritedBlockcrafteryRenderState(state, chunkCache, pos);
+            if (contained != null) {
+                BlockRenderLayer containedEnderIoLayer = BlockcrafteryContainedStateCompat
+                        .enderIoGlassRenderLayer(contained);
+                if (containedEnderIoLayer != null && layer != null && !AusmBloomLayer.isBloomLayer(layer)) {
+                    return layer == containedEnderIoLayer;
+                }
+                // Filled frames are the contained block for every terrain
+                // layer, including native BLOOM.  No GPOM shape or material
+                // route remains in this decision.
+                return ausm$canRenderStateInLayer(contained, layer);
+            }
+            return ausm$canRenderInLayer(block, state, layer);
         }
         if (ausm$canRenderInLayer(block, state, layer)) {
             return true;
@@ -266,19 +387,56 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private void ausm$captureFireCutoutStart(IBlockState state, BlockPos pos, VisibilityGraph visibilityGraph,
                                              RegionRenderCacheBuilder regionBuffers, CallbackInfo ci) {
         ausm$fireCutoutFallbackStart = -1;
+        ausm$bloomOnlyBaseFallbackStart = -1;
+        ausm$bloomOnlyBaseFallbackLayer = null;
+        ausm$bloomOnlyBaseFallbackState = null;
         ausm$emissiveFallbackStart = -1;
+        ausm$nativeBloomProbeStart = -1;
+        ausm$nativeBloomProbeLayer = null;
+        ausm$resetFramedBloomRouteProbe();
+        ausm$resetBloomBaseRouteProbe();
         PipelineContext pipeline = PipelineContext.getInstance();
+        IBlockState effectiveState = pipeline.effectiveBlockRenderState(state, chunkCache, pos);
+        ausm$beginFramedBloomRouteProbe(state, pos, regionBuffers, pipeline);
+        ausm$beginBloomBaseRouteProbe(state, effectiveState, pos, regionBuffers, pipeline);
         if (pipeline.shouldForceVanillaTerrainRenderer()) {
             return;
         }
-        IBlockState effectiveState = pipeline.effectiveBlockRenderState(state, chunkCache, pos);
         IBlockState inheritedBloomState = pipeline.inheritedBloomRenderState(state, chunkCache, pos);
+        BlockRenderLayer currentLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
+        if (ausm$isRandomThingsLuminousState(state) && ausm$isNativeBloomOverlayLayer(currentLayer)
+                && regionBuffers != null) {
+            // Quantum Things emits a SOLID base and a separate translucent
+            // _t overlay. Only the latter is the native bloom source that a
+            // framed material must reproduce; recording the base exhausted
+            // the bounded diagnostic budget before that comparison existed.
+            BufferBuilder nativeBloomBuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(
+                    regionBuffers, currentLayer);
+            ausm$nativeBloomProbeLayer = currentLayer;
+            ausm$nativeBloomProbeStart = nativeBloomBuffer != null
+                    ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(nativeBloomBuffer)
+                    : -1;
+        }
+        IBlockState bloomOnlyState = ausm$isNativeBloomOnlyBlock(effectiveState)
+                ? effectiveState
+                : ausm$isNativeBloomOnlyBlock(state) ? state : null;
+        if (bloomOnlyState != null && !pipeline.isBlockcrafteryEditableState(state) && regionBuffers != null) {
+            BlockRenderLayer baseLayer = ausm$bloomFallbackLayer(bloomOnlyState);
+            BufferBuilder baseBuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(
+                    regionBuffers, baseLayer);
+            if (baseBuffer != null) {
+                ausm$bloomOnlyBaseFallbackState = bloomOnlyState;
+                ausm$bloomOnlyBaseFallbackLayer = baseLayer;
+                ausm$bloomOnlyBaseFallbackStart = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(baseBuffer);
+                ausm$bloomBaseRouteProbeBaseLayer = baseLayer;
+                ausm$bloomBaseRouteProbeBaseStart = ausm$bloomOnlyBaseFallbackStart;
+            }
+        }
         boolean originalFire = ausm$isFireFallbackTarget(state);
         boolean effectiveFire = ausm$isFireFallbackTarget(effectiveState);
         BufferBuilder buffer = regionBuffers != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, BlockRenderLayer.CUTOUT) : null;
         boolean framedState = pipeline.isFramedBlockDiagnosticTarget(state);
-        boolean forcedFramedBloom = framedState
-                && pipeline.framedBloomFallbackEmission(state, chunkCache, pos) > 0;
+        boolean forcedFramedBloom = false;
         IBlockState emissiveState = ausm$isEmissiveBloomFallbackTarget(inheritedBloomState)
                 ? inheritedBloomState
                 : forcedFramedBloom ? state : framedState ? null : ausm$isEmissiveBloomFallbackTarget(effectiveState) ? effectiveState : state;
@@ -298,6 +456,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         }
 
         ausm$fireCutoutFallbackStart = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer);
+        if (ausm$bloomBaseRouteProbeTarget && ausm$bloomBaseRouteProbeBaseStart < 0) {
+            ausm$bloomBaseRouteProbeBaseLayer = BlockRenderLayer.CUTOUT;
+            ausm$bloomBaseRouteProbeBaseStart = ausm$fireCutoutFallbackStart;
+        }
     }
 
     @Inject(
@@ -319,6 +481,23 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         if (naturalLayer != null
                 && com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer() == null) {
             com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(naturalLayer);
+        }
+        ausm$captureFramedBloomRouteLayer(bufferBuilder);
+        // The render-layer thread local is initialized immediately above on
+        // Nothirium's first pass.  Capturing only at renderBlockState HEAD
+        // therefore missed native luminous blocks on that pass and left the
+        // framed/native comparison without its source data.
+        if (ausm$nativeBloomProbeStart < 0 && ausm$isRandomThingsLuminousState(state)
+                && bufferBuilder != null) {
+            BlockRenderLayer nativeLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
+            BufferBuilder nativeBuffer = ausm$isNativeBloomOverlayLayer(nativeLayer)
+                    ? com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(bufferBuilder, nativeLayer)
+                    : null;
+            if (nativeBuffer != null) {
+                ausm$nativeBloomProbeLayer = nativeLayer;
+                ausm$nativeBloomProbeStart =
+                        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(nativeBuffer);
+            }
         }
         PipelineContext pipeline = PipelineContext.getInstance();
         ausm$terrainCompileProbeLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
@@ -345,6 +524,8 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                     com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos)
             );
             BlockRenderContext.setWorldBlockContext(chunkCache, pos);
+            BlockRenderContext.setFramedMaterialOwner(pipeline.isBlockcrafteryEditableState(state)
+                    && !pipeline.shouldReplaceFilledBlockcrafteryFrame(state, chunkCache, pos));
             BlockRenderContext.setAgricraftCrop(false);
             BlockRenderContext.setPackedLightmap(0);
             BlockRenderContext.setBlockEmission(0);
@@ -367,24 +548,17 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         BlockRenderContext.setMetadata(pipeline.blockMetadataForActualState(actualState));
         BlockRenderContext.setLocalBlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos));
         BlockRenderContext.setWorldBlockContext(chunkCache, pos);
+        BlockRenderContext.setFramedMaterialOwner(pipeline.isBlockcrafteryEditableState(state)
+                && !pipeline.shouldReplaceFilledBlockcrafteryFrame(state, chunkCache, pos));
         BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
         int packedLightmap = ausm$packedLightmap(contextState, chunkCache, pos);
         BlockRenderContext.setPackedLightmap(packedLightmap);
         int blockEmission = pipeline.shouldUseShaderlessBloomEmission()
                 ? pipeline.blockShaderlessBloomEmission(state, chunkCache, pos)
-                : (pipeline.shouldInheritFramedEmissionInBasePass(state)
-                || BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null)
-                        ? pipeline.blockRenderEmissionWithFramedInheritance(state, chunkCache, pos)
-                        : pipeline.blockRenderEmission(state, chunkCache, pos);
-        if (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null) {
-            blockEmission = Math.max(blockEmission, pipeline.framedBloomFallbackEmission(state, chunkCache, pos));
-        }
-        int framedShaderlessExtractionEmission = pipeline.shaderlessFramedBloomExtractionEmission(state, chunkCache, pos);
-        blockEmission = Math.max(blockEmission, framedShaderlessExtractionEmission);
+                : pipeline.blockRenderEmission(state, chunkCache, pos);
         BlockRenderContext.setBlockEmission(blockEmission);
-        // Blockcraftery material ownership is resolved per baked quad.
         BlockRenderContext.setFramedBloomBoost(false);
-        BlockRenderContext.setBloomOnlyEmission(framedShaderlessExtractionEmission > 0);
+        BlockRenderContext.setBloomOnlyEmission(false);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, chunkCache, pos));
         BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, chunkCache, pos));
         BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(actualState));
@@ -541,6 +715,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                 );
             }
         }
+        ausm$logNativeBloomVertexProbe(state, pos, bufferBuilder);
         ausm$logTerrainCompileBlockProbe(state, pos, bufferBuilder, ci.isCancelled());
         ausm$framedDiagnosticStart = -1;
         ausm$framedDiagnosticLayer = null;
@@ -589,54 +764,494 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private void ausm$renderBloomOnlyFallback(IBlockState state, BlockPos pos, VisibilityGraph visibilityGraph,
                                               RegionRenderCacheBuilder regionBuffers, CallbackInfo ci) {
         PipelineContext pipeline = PipelineContext.getInstance();
-        if (!pipeline.isManualBloomExtractionEnabled()) {
-            return;
-        }
-        if (pipeline.isBlockcrafteryEditableState(state)
-                && !pipeline.gpomFramedMaterialHasBloom(chunkCache, pos)) {
-            return;
-        }
-        IBlockState effectiveState = pipeline.effectiveBlockRenderState(state, chunkCache, pos);
-        IBlockState inheritedBloomState = pipeline.inheritedBloomRenderState(state, chunkCache, pos);
-        if (ausm$renderMissingFireCutoutFallback(state, effectiveState, pos, regionBuffers)) {
-            return;
-        }
-        IBlockState fallbackTarget = inheritedBloomState != null ? inheritedBloomState : effectiveState;
-        if (ausm$renderStackedEmissiveBloomLayer(state, fallbackTarget, pos, regionBuffers)) {
-            return;
-        }
-        if (!ausm$isBloomOnlyModelBlock(fallbackTarget) || pos == null || regionBuffers == null) {
-            return;
-        }
-
-        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        BlockRenderLayer fallbackLayer = ausm$bloomFallbackLayer(fallbackTarget);
-        BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, fallbackLayer);
-        if (buffer == null) {
-            return;
-        }
-
-        if (!((IBufferBuilderExtension) buffer).ausm$isDrawing()) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, 7, NothiriumPipelineCompat.pipelineBlockFormat(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFormat()));
-            int originX = Math.floorDiv(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos), 16) * 16;
-            int originY = Math.floorDiv(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos), 16) * 16;
-            int originZ = Math.floorDiv(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos), 16) * 16;
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferSetTranslation(buffer, -originX, -originY, -originZ);
-        }
-
-        BlockRenderLayer previousLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
-        int start = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer);
-        boolean rendered = false;
+        String route = "none";
         try {
-            // Keep the model in its native BLOOM render layer while storing the
-            // resulting geometry in a vanilla Nothirium pass.
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(bloomLayer);
-            BlockRendererDispatcher dispatcher = com.l.ausm.impl.util.MinecraftReflectionCompat.blockRendererDispatcher(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
-            rendered = dispatcher != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlock(dispatcher, fallbackTarget, pos, chunkCache, buffer);
+            if (pipeline.shouldReplaceFilledBlockcrafteryFrame(state, chunkCache, pos)) {
+                route = "contained-block-native";
+                return;
+            }
+            IBlockState effectiveState = pipeline.effectiveBlockRenderState(state, chunkCache, pos);
+            IBlockState inheritedBloomState = pipeline.inheritedBloomRenderState(state, chunkCache, pos);
+            if (ausm$renderMissingBloomOnlyBaseFallback(state, pos, regionBuffers)) {
+                route = "bloom-only-base";
+                return;
+            }
+            if (ausm$renderMissingFireCutoutFallback(state, effectiveState, pos, regionBuffers)) {
+                route = "fire-cutout";
+                return;
+            }
+            if (!pipeline.isManualBloomExtractionEnabled()) {
+                route = "skip-stacked-manual-disabled";
+                return;
+            }
+            IBlockState fallbackTarget = inheritedBloomState != null ? inheritedBloomState : effectiveState;
+            if (ausm$renderStackedEmissiveBloomLayer(state, fallbackTarget, pos, regionBuffers)) {
+                route = "stacked-emissive";
+                return;
+            }
         } finally {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(previousLayer);
+            ausm$logFramedBloomRouteProbe(state, pos, regionBuffers, pipeline, route);
+            ausm$resetFramedBloomRouteProbe();
+            ausm$logBloomBaseRouteProbe(route, state, pos, regionBuffers, pipeline);
+            ausm$resetBloomBaseRouteProbe();
+        }
+    }
+
+    @Unique
+    private void ausm$beginFramedBloomRouteProbe(IBlockState state, BlockPos pos,
+                                                   RegionRenderCacheBuilder regionBuffers, PipelineContext pipeline) {
+        if (regionBuffers == null || !pipeline.isBlockcrafteryEditableState(state)) {
+            return;
+        }
+        IBlockState contained = pipeline.inheritedBlockcrafteryRenderState(state, chunkCache, pos);
+        // Shadered Bloom does not use the shaderless extractor, so its source
+        // predicate is intentionally false while the actual framed source is
+        // active.  Ask the shared framed decision instead; it covers native
+        // Bloom-layer geometry and contained emission alike.
+        if (contained == null || !pipeline.hasContainedFrameBloom(state, chunkCache, pos)) {
+            return;
+        }
+        ausm$framedBloomRouteProbeTarget = true;
+        ausm$framedBloomRouteProbeContainedState = contained;
+        ausm$framedBloomRouteProbeBloomStart = ausm$layerVertexCount(regionBuffers, AusmBloomLayer.layer());
+    }
+
+    @Unique
+    private void ausm$captureFramedBloomRouteLayer(RegionRenderCacheBuilder regionBuffers) {
+        if (!ausm$framedBloomRouteProbeTarget || ausm$framedBloomRouteProbeCurrentStart >= 0 || regionBuffers == null) {
+            return;
+        }
+        BlockRenderLayer layer = MinecraftReflectionCompat.currentRenderLayer();
+        ausm$framedBloomRouteProbeCurrentLayer = layer;
+        ausm$framedBloomRouteProbeCurrentStart = ausm$layerVertexCount(regionBuffers, layer);
+    }
+
+    @Unique
+    private void ausm$logFramedBloomRouteProbe(IBlockState state, BlockPos pos, RegionRenderCacheBuilder regionBuffers,
+                                                PipelineContext pipeline, String route) {
+        if (!ausm$framedBloomRouteProbeTarget) {
+            return;
+        }
+        int call = AUSM_FRAMED_BLOOM_ROUTE_PROBES.incrementAndGet();
+        if (call > AUSM_FRAMED_BLOOM_ROUTE_PROBE_LIMIT) {
+            return;
+        }
+        IBlockState contained = ausm$framedBloomRouteProbeContainedState;
+        BlockRenderLayer current = ausm$framedBloomRouteProbeCurrentLayer;
+        BlockRenderLayer bloom = AusmBloomLayer.layer();
+        int currentEnd = ausm$layerVertexCount(regionBuffers, current);
+        int bloomEnd = ausm$layerVertexCount(regionBuffers, bloom);
+        MainMod.LOGGER.info(
+                "[AUSMFramedBloomRouteProbe] call={} pos={} route={} currentLayer={} bloomLayer={} currentDelta={} bloomDelta={} containedCurrent={} containedBloom={} replace={} manual={} host={} contained={}",
+                call,
+                pos,
+                route,
+                current,
+                bloom,
+                ausm$delta(ausm$framedBloomRouteProbeCurrentStart, currentEnd),
+                ausm$delta(ausm$framedBloomRouteProbeBloomStart, bloomEnd),
+                ausm$canRenderStateInLayer(contained, current),
+                ausm$canRenderStateInLayer(contained, bloom),
+                pipeline.shouldReplaceFilledBlockcrafteryFrame(state, chunkCache, pos),
+                pipeline.isManualBloomExtractionEnabled(),
+                ausm$stateName(state),
+                ausm$stateName(contained));
+        ausm$logFramedBloomFinalCompileProbe(pos, regionBuffers, bloom,
+                ausm$framedBloomRouteProbeBloomStart, bloomEnd);
+    }
+
+    @Unique
+    private static void ausm$logFramedBloomFinalCompileProbe(BlockPos pos, RegionRenderCacheBuilder regionBuffers,
+                                                               BlockRenderLayer bloomLayer, int start, int end) {
+        if (regionBuffers == null || start < 0 || end - start < 4
+                || AUSM_FRAMED_BLOOM_FINAL_PROBES.get() >= AUSM_FRAMED_BLOOM_FINAL_PROBE_LIMIT) {
+            return;
+        }
+        BufferBuilder buffer = bloomLayer != null
+                ? MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, bloomLayer) : null;
+        if (!(buffer instanceof IBufferBuilderExtension extension)) {
+            return;
+        }
+        VertexFormat format = extension.ausm$vertexFormat();
+        int stride = ExtendedVertexFormats.size(format);
+        ByteBuffer raw = extension.ausm$byteBuffer();
+        if (!ExtendedVertexFormats.isPipelineBlock(format) || stride <= 0 || raw == null
+                || (long) end * stride > raw.capacity()) {
+            return;
+        }
+        int entityOffset = ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET;
+        int markerVertices = 0;
+        int firstMarker = -1;
+        ByteBuffer bytes = raw.duplicate().order(raw.order() != null ? raw.order() : ByteOrder.nativeOrder());
+        for (int vertex = start; vertex < end; vertex++) {
+            int offset = vertex * stride + entityOffset + 6;
+            if (bytes.getShort(offset) == (short) BlockRenderContext.FRAMED_BLOOM_OVERLAY_PROBE_MARKER) {
+                markerVertices++;
+                if (firstMarker < 0) {
+                    firstMarker = vertex;
+                }
+            }
+        }
+        int call = AUSM_FRAMED_BLOOM_FINAL_PROBES.incrementAndGet();
+        if (markerVertices == 0) {
+            MainMod.LOGGER.warn("[AUSMFramedBloomFinalProbe] call={} pos={} start={} end={} markerVertices=0 expectedMarker={}",
+                    call, pos, start, end, BlockRenderContext.FRAMED_BLOOM_OVERLAY_PROBE_MARKER);
+            return;
+        }
+        MainMod.LOGGER.info("[AUSMFramedBloomFinalProbe] call={} pos={} start={} end={} markerVertices={} firstMarker={} quad={}",
+                call, pos, start, end, markerVertices, firstMarker,
+                ausm$describePipelineQuad(bytes, firstMarker * stride, stride));
+    }
+
+    @Unique
+    private void ausm$resetFramedBloomRouteProbe() {
+        ausm$framedBloomRouteProbeTarget = false;
+        ausm$framedBloomRouteProbeContainedState = null;
+        ausm$framedBloomRouteProbeCurrentLayer = null;
+        ausm$framedBloomRouteProbeCurrentStart = -1;
+        ausm$framedBloomRouteProbeBloomStart = -1;
+    }
+
+    @Unique
+    private static boolean ausm$isRandomThingsLuminousState(IBlockState state) {
+        Block block = MinecraftReflectionCompat.blockFromState(state);
+        ResourceLocation registryName = MinecraftReflectionCompat.blockRegistryName(block);
+        return registryName != null
+                && "randomthings".equals(MinecraftReflectionCompat.resourceNamespace(registryName))
+                && "luminousblock".equals(MinecraftReflectionCompat.resourcePath(registryName));
+    }
+
+    @Unique
+    private static boolean ausm$isNativeBloomOverlayLayer(BlockRenderLayer layer) {
+        return layer == BlockRenderLayer.TRANSLUCENT || AusmBloomLayer.isBloomLayer(layer);
+    }
+
+    @Unique
+    private void ausm$logNativeBloomVertexProbe(
+            IBlockState state,
+            BlockPos pos,
+            RegionRenderCacheBuilder regionBuffers
+    ) {
+        if (ausm$nativeBloomProbeStart < 0 || !ausm$isRandomThingsLuminousState(state)
+                || !ausm$isNativeBloomOverlayLayer(ausm$nativeBloomProbeLayer)
+                || AUSM_NATIVE_BLOOM_VERTEX_PROBES.get() >= AUSM_BLOOM_VERTEX_PROBE_LIMIT
+                || regionBuffers == null) {
+            return;
+        }
+        BlockRenderLayer layer = ausm$nativeBloomProbeLayer;
+        BufferBuilder buffer = layer != null
+                ? MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, layer)
+                : null;
+        if (!(buffer instanceof IBufferBuilderExtension extension)) {
+            return;
+        }
+        int end = extension.ausm$vertexCount();
+        VertexFormat format = extension.ausm$vertexFormat();
+        int stride = ExtendedVertexFormats.size(format);
+        ByteBuffer raw = extension.ausm$byteBuffer();
+        if (end - ausm$nativeBloomProbeStart < 4
+                || !ExtendedVertexFormats.isPipelineBlock(format)
+                || stride <= 0
+                || raw == null) {
+            return;
+        }
+        int call = AUSM_NATIVE_BLOOM_VERTEX_PROBES.incrementAndGet();
+        if (call <= AUSM_BLOOM_VERTEX_PROBE_LIMIT) {
+            MainMod.LOGGER.info(
+                "[AUSMBloomVertexProbe] kind=native call={} pos={} layer={} bloomLayer={} start={} end={} quad={}",
+                call,
+                pos,
+                layer,
+                AusmBloomLayer.layer(),
+                ausm$nativeBloomProbeStart,
+                    end,
+                    ausm$describePipelineQuad(raw, ausm$nativeBloomProbeStart * stride, stride));
+        }
+    }
+
+    @Unique
+    private static String ausm$describePipelineQuad(ByteBuffer raw, int byteStart, int stride) {
+        ByteBuffer bytes = raw.duplicate().order(raw.order() != null ? raw.order() : ByteOrder.nativeOrder());
+        StringBuilder result = new StringBuilder();
+        for (int vertex = 0; vertex < 4; vertex++) {
+            int base = byteStart + vertex * stride;
+            if (vertex > 0) {
+                result.append(';');
+            }
+            result.append(ausm$describePipelineVertex(
+                    bytes.getFloat(base),
+                    bytes.getFloat(base + 4),
+                    bytes.getFloat(base + 8),
+                    bytes.getInt(base + 12),
+                    bytes.getFloat(base + 16),
+                    bytes.getFloat(base + 20),
+                    bytes.getInt(base + 24),
+                    bytes.getInt(base + ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET),
+                    bytes.getLong(base + ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET),
+                    bytes.getFloat(base + ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET),
+                    bytes.getFloat(base + ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET + 4),
+                    bytes.getInt(base + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET)));
+        }
+        return result.toString();
+    }
+
+    @Unique
+    private static String ausm$describePipelineVertex(
+            float x,
+            float y,
+            float z,
+            int color,
+            float u,
+            float v,
+            int light,
+            int normal,
+            long entity,
+            float midU,
+            float midV,
+            int midBlock
+    ) {
+        return "p=" + x + "/" + y + "/" + z
+                + ",c=" + Integer.toHexString(color)
+                + ",uv=" + u + "/" + v
+                + ",light=" + Integer.toHexString(light)
+                + ",normal=" + Integer.toHexString(normal)
+                + ",entity=" + (short) (entity & 0xFFFF) + "/"
+                + (short) ((entity >>> 16) & 0xFFFF) + "/"
+                + (short) ((entity >>> 32) & 0xFFFF) + "/"
+                + (short) ((entity >>> 48) & 0xFFFF)
+                + ",midUv=" + midU + "/" + midV
+                + ",midBlock=" + Integer.toHexString(midBlock);
+    }
+
+    @Unique
+    private void ausm$beginBloomBaseRouteProbe(
+            IBlockState state,
+            IBlockState effectiveState,
+            BlockPos pos,
+            RegionRenderCacheBuilder regionBuffers,
+            PipelineContext pipeline
+    ) {
+        if (AUSM_BLOOM_BASE_ROUTE_PROBES.get() >= AUSM_BLOOM_BASE_ROUTE_PROBE_LIMIT) {
+            return;
+        }
+        boolean fire = ausm$isFireFallbackTarget(state) || ausm$isFireFallbackTarget(effectiveState);
+        boolean twilightPortal = pipeline.isCeleritasTwilightPortalState(state)
+                || pipeline.isCeleritasTwilightPortalState(effectiveState);
+        if (!fire && !twilightPortal) {
+            return;
         }
 
+        ausm$bloomBaseRouteProbeTarget = true;
+        ausm$bloomBaseRouteProbeKind = fire && twilightPortal
+                ? "fire+twilight-portal" : fire ? "fire" : "twilight-portal";
+        ausm$bloomBaseRouteProbeEffectiveState = effectiveState;
+        ausm$bloomBaseRouteProbeCurrentLayer =
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
+        ausm$bloomBaseRouteProbeCurrentStart = ausm$layerVertexCount(
+                regionBuffers, ausm$bloomBaseRouteProbeCurrentLayer);
+        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
+        ausm$bloomBaseRouteProbeBloomStart = ausm$layerVertexCount(regionBuffers, bloomLayer);
+
+        IBlockState candidate = effectiveState != null ? effectiveState : state;
+        ausm$bloomBaseRouteProbeBaseLayer = fire
+                ? BlockRenderLayer.CUTOUT : ausm$bloomFallbackLayer(candidate);
+        ausm$bloomBaseRouteProbeBaseStart = ausm$layerVertexCount(
+                regionBuffers, ausm$bloomBaseRouteProbeBaseLayer);
+    }
+
+    @Unique
+    private void ausm$logBloomBaseRouteProbe(
+            String route,
+            IBlockState state,
+            BlockPos pos,
+            RegionRenderCacheBuilder regionBuffers,
+            PipelineContext pipeline
+    ) {
+        if (!ausm$bloomBaseRouteProbeTarget) {
+            return;
+        }
+        int probe = AUSM_BLOOM_BASE_ROUTE_PROBES.incrementAndGet();
+        if (probe > AUSM_BLOOM_BASE_ROUTE_PROBE_LIMIT) {
+            return;
+        }
+
+        IBlockState effectiveState = ausm$bloomBaseRouteProbeEffectiveState;
+        BlockRenderLayer currentLayer = ausm$bloomBaseRouteProbeCurrentLayer;
+        BlockRenderLayer baseLayer = ausm$bloomBaseRouteProbeBaseLayer;
+        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
+        int currentEnd = ausm$layerVertexCount(regionBuffers, currentLayer);
+        int baseEnd = ausm$layerVertexCount(regionBuffers, baseLayer);
+        int bloomEnd = ausm$layerVertexCount(regionBuffers, bloomLayer);
+        MainMod.LOGGER.info(
+                "[AUSMBloomBaseRouteProbe] call={} thread={} kind={} route={} pos={} currentLayer={} baseLayer={} bloomLayer={} currentStart={} currentEnd={} currentDelta={} baseStart={} baseEnd={} baseDelta={} bloomStart={} bloomEnd={} bloomDelta={} manualExtraction={} pipelineActive={} forceVanilla={} original={} effective={} originalRenderType={} effectiveRenderType={} originalNatural={} effectiveNatural={} originalNativeBloomOnly={} effectiveNativeBloomOnly={} originalLayers={}/{}/{}/{}/{} effectiveLayers={}/{}/{}/{}/{} solidBuffer={} cutoutMippedBuffer={} cutoutBuffer={} translucentBuffer={} bloomBuffer={}",
+                probe,
+                Thread.currentThread().getName(),
+                ausm$bloomBaseRouteProbeKind,
+                route,
+                pos,
+                currentLayer,
+                baseLayer,
+                bloomLayer,
+                ausm$bloomBaseRouteProbeCurrentStart,
+                currentEnd,
+                ausm$delta(ausm$bloomBaseRouteProbeCurrentStart, currentEnd),
+                ausm$bloomBaseRouteProbeBaseStart,
+                baseEnd,
+                ausm$delta(ausm$bloomBaseRouteProbeBaseStart, baseEnd),
+                ausm$bloomBaseRouteProbeBloomStart,
+                bloomEnd,
+                ausm$delta(ausm$bloomBaseRouteProbeBloomStart, bloomEnd),
+                pipeline.isManualBloomExtractionEnabled(),
+                pipeline.isPipelineActive(),
+                pipeline.shouldForceVanillaTerrainRenderer(),
+                ausm$stateName(state),
+                ausm$stateName(effectiveState),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderType(state),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderType(effectiveState),
+                ausm$naturalRenderLayer(state),
+                ausm$naturalRenderLayer(effectiveState),
+                ausm$isNativeBloomOnlyBlock(state),
+                ausm$isNativeBloomOnlyBlock(effectiveState),
+                ausm$canRenderStateInLayer(state, BlockRenderLayer.SOLID),
+                ausm$canRenderStateInLayer(state, BlockRenderLayer.CUTOUT_MIPPED),
+                ausm$canRenderStateInLayer(state, BlockRenderLayer.CUTOUT),
+                ausm$canRenderStateInLayer(state, BlockRenderLayer.TRANSLUCENT),
+                ausm$canRenderStateInLayer(state, bloomLayer),
+                ausm$canRenderStateInLayer(effectiveState, BlockRenderLayer.SOLID),
+                ausm$canRenderStateInLayer(effectiveState, BlockRenderLayer.CUTOUT_MIPPED),
+                ausm$canRenderStateInLayer(effectiveState, BlockRenderLayer.CUTOUT),
+                ausm$canRenderStateInLayer(effectiveState, BlockRenderLayer.TRANSLUCENT),
+                ausm$canRenderStateInLayer(effectiveState, bloomLayer),
+                ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.SOLID),
+                ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.CUTOUT_MIPPED),
+                ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.CUTOUT),
+                ausm$layerCompileBufferDetails(regionBuffers, BlockRenderLayer.TRANSLUCENT),
+                ausm$layerCompileBufferDetails(regionBuffers, bloomLayer)
+        );
+    }
+
+    @Unique
+    private static int ausm$layerVertexCount(RegionRenderCacheBuilder regionBuffers, BlockRenderLayer layer) {
+        if (regionBuffers == null || layer == null) {
+            return -1;
+        }
+        BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(
+                regionBuffers, layer);
+        return buffer != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer) : -1;
+    }
+
+    @Unique
+    private static int ausm$delta(int start, int end) {
+        return start >= 0 && end >= 0 ? end - start : -1;
+    }
+
+    @Unique
+    private void ausm$resetBloomBaseRouteProbe() {
+        ausm$bloomBaseRouteProbeTarget = false;
+        ausm$bloomBaseRouteProbeKind = "";
+        ausm$bloomBaseRouteProbeEffectiveState = null;
+        ausm$bloomBaseRouteProbeCurrentLayer = null;
+        ausm$bloomBaseRouteProbeBaseLayer = null;
+        ausm$bloomBaseRouteProbeCurrentStart = -1;
+        ausm$bloomBaseRouteProbeBaseStart = -1;
+        ausm$bloomBaseRouteProbeBloomStart = -1;
+    }
+
+    @Unique
+    private boolean ausm$renderMissingBloomOnlyBaseFallback(
+            IBlockState originalState,
+            BlockPos pos,
+            RegionRenderCacheBuilder regionBuffers
+    ) {
+        IBlockState fallbackState = ausm$bloomOnlyBaseFallbackState;
+        BlockRenderLayer baseLayer = ausm$bloomOnlyBaseFallbackLayer;
+        int baseStart = ausm$bloomOnlyBaseFallbackStart;
+        try {
+            if (fallbackState == null || baseLayer == null || baseStart < 0
+                    || pos == null || regionBuffers == null) {
+                return false;
+            }
+
+            BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(
+                    regionBuffers, baseLayer);
+            if (buffer == null) {
+                return false;
+            }
+            int normalDelta = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer) - baseStart;
+            if (normalDelta > 0) {
+                ausm$logBloomOnlyBaseFallback("base-present", originalState, fallbackState, pos,
+                        baseLayer, normalDelta, false, 0);
+                return true;
+            }
+
+            if (!((IBufferBuilderExtension) buffer).ausm$isDrawing()) {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, 7,
+                        NothiriumPipelineCompat.pipelineBlockFormat(
+                                com.l.ausm.impl.util.MinecraftReflectionCompat.blockFormat()));
+                int originX = Math.floorDiv(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos), 16) * 16;
+                int originY = Math.floorDiv(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos), 16) * 16;
+                int originZ = Math.floorDiv(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos), 16) * 16;
+                com.l.ausm.impl.util.MinecraftReflectionCompat.bufferSetTranslation(
+                        buffer, -originX, -originY, -originZ);
+            }
+
+            BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
+            if (bloomLayer == null) {
+                return false;
+            }
+            BlockRenderLayer previousLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
+            int fallbackStart = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer);
+            boolean rendered;
+            try {
+                // CTM's layer=BLOOM removes these quads from the default pass.
+                // Keep the bloom mesh and copy the same model into its normal
+                // terrain buffer so bloom overlays scene geometry.
+                com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(bloomLayer);
+                BlockRendererDispatcher dispatcher = com.l.ausm.impl.util.MinecraftReflectionCompat
+                        .blockRendererDispatcher(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
+                rendered = dispatcher != null && com.l.ausm.impl.util.MinecraftReflectionCompat.renderBlock(
+                        dispatcher, fallbackState, pos, chunkCache, buffer);
+            } finally {
+                com.l.ausm.impl.util.MinecraftReflectionCompat.setCurrentRenderLayer(previousLayer);
+            }
+            int fallbackDelta = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer) - fallbackStart;
+            ausm$logBloomOnlyBaseFallback("stacked", originalState, fallbackState, pos,
+                    baseLayer, normalDelta, rendered, fallbackDelta);
+            return fallbackDelta > 0;
+        } finally {
+            ausm$bloomOnlyBaseFallbackStart = -1;
+            ausm$bloomOnlyBaseFallbackLayer = null;
+            ausm$bloomOnlyBaseFallbackState = null;
+        }
+    }
+
+    @Unique
+    private static void ausm$logBloomOnlyBaseFallback(
+            String mode,
+            IBlockState originalState,
+            IBlockState fallbackState,
+            BlockPos pos,
+            BlockRenderLayer baseLayer,
+            int normalDelta,
+            boolean rendered,
+            int fallbackDelta
+    ) {
+        int index = AUSM_BLOOM_ONLY_BASE_FALLBACK_LOGS.incrementAndGet();
+        if (index > AUSM_BLOOM_ONLY_BASE_FALLBACK_LOG_LIMIT) {
+            return;
+        }
+        MainMod.LOGGER.info(
+                "[AUSMBloomOnlyBaseFallback] mode={} pos={} original={} fallback={} baseLayer={} normalDelta={} rendered={} fallbackDelta={}",
+                mode,
+                pos,
+                ausm$stateName(originalState),
+                ausm$stateName(fallbackState),
+                baseLayer,
+                normalDelta,
+                rendered,
+                fallbackDelta
+        );
     }
 
     @Unique
@@ -646,13 +1261,13 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             BlockPos pos,
             RegionRenderCacheBuilder regionBuffers
     ) {
-        boolean framedState = PipelineContext.getInstance().isFramedBlockDiagnosticTarget(renderState);
-        boolean forcedFramedBloom = framedState
-                && PipelineContext.getInstance().framedBloomFallbackEmission(renderState, chunkCache, pos) > 0;
+        if (PipelineContext.getInstance().isFramedBlockDiagnosticTarget(renderState)) {
+            return false;
+        }
         IBlockState fallbackSourceState = ausm$isEmissiveBloomFallbackSource(fallbackTarget)
                 ? fallbackTarget
-                : forcedFramedBloom ? renderState : framedState ? null : renderState;
-        boolean emissiveTarget = forcedFramedBloom || ausm$isEmissiveBloomFallbackSource(fallbackSourceState);
+                : renderState;
+        boolean emissiveTarget = ausm$isEmissiveBloomFallbackSource(fallbackSourceState);
         IBlockState fallbackRenderState = PipelineContext.getInstance()
                 .inheritedBloomGeometryRenderState(renderState, fallbackSourceState);
         try {
@@ -676,12 +1291,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             }
 
             boolean textureBloomSource = PipelineContext.getInstance().stateUsesTextureBloomSource(fallbackSourceState);
-            boolean solidBloomMaskFallback = framedState && !textureBloomSource;
-            IBlockState fallbackGeometryState = solidBloomMaskFallback ? renderState : fallbackRenderState;
-            BlockRenderLayer renderLayer = framedState
-                    ? ausm$framedGeometryLayer(fallbackGeometryState, fallbackSourceState)
-                    : ausm$bloomFallbackLayer(fallbackSourceState);
-            BlockRenderLayer bufferLayer = framedState ? renderLayer : ausm$bloomFallbackLayer(fallbackSourceState);
+            boolean solidBloomMaskFallback = false;
+            IBlockState fallbackGeometryState = fallbackRenderState;
+            BlockRenderLayer renderLayer = ausm$bloomFallbackLayer(fallbackSourceState);
+            BlockRenderLayer bufferLayer = renderLayer;
             BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, bufferLayer);
             if (buffer == null) {
                 ausm$logEmissiveFallback("skip-missing-buffer", renderState, fallbackRenderState,
@@ -925,14 +1538,16 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     }
 
     @Unique
-    private static boolean ausm$isBloomOnlyModelBlock(IBlockState state) {
+    private static boolean ausm$isNativeBloomOnlyBlock(IBlockState state) {
         Block block = ausm$block(state);
         if (state == null || block == null || com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderType(state) == EnumBlockRenderType.INVISIBLE) {
             return false;
         }
 
         BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        if (bloomLayer == null || !ausm$canRenderInLayer(block, state, bloomLayer)) {
+        if (bloomLayer == null
+                || !com.l.ausm.impl.util.MinecraftReflectionCompat.blockCanRenderInLayer(
+                        block, state, bloomLayer)) {
             return false;
         }
 
@@ -940,7 +1555,8 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             if (layer == null || AusmBloomLayer.isBloomLayer(layer)) {
                 continue;
             }
-            if (ausm$canRenderInLayer(block, state, layer)) {
+            if (com.l.ausm.impl.util.MinecraftReflectionCompat.blockCanRenderInLayer(
+                    block, state, layer)) {
                 return false;
             }
         }

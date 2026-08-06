@@ -26,7 +26,7 @@ import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.bloom.BloomExtractionPlan;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomRenderer;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
-import com.l.ausm.impl.pipeline.compat.GpomFramedMaterialCompat;
+import com.l.ausm.impl.pipeline.compat.BlockcrafteryContainedStateCompat;
 import com.l.ausm.impl.pipeline.compat.NothiriumBypass;
 import com.l.ausm.impl.pipeline.compat.NothiriumShadowRenderer;
 import com.l.ausm.impl.pipeline.compat.ProjectRedIlluminationCompat;
@@ -572,11 +572,12 @@ abstract class PipelineRuntimeState {
     protected boolean shadowMapUsable = false;
     protected boolean shadowMapSparseForSampling = false;
     protected int shadowMapCoverageStableFrames = 0;
+    protected int invalidShadowTerrainFrames = 0;
+    protected int invalidShadowTerrainSuppressedFrames = 0;
+    protected int invalidShadowTerrainSuppressionLogs = 0;
     protected int nothiriumShadowInvalidFrames = 0;
     protected int nothiriumShadowSuppressedFrames = 0;
     protected int nothiriumShadowSuppressionLogs = 0;
-    protected int nothiriumShadowVerticalHoldFrames = 0;
-    protected int nothiriumShadowVerticalHoldLogs = 0;
     protected World pendingBetterPortalsPortalBlockWorld;
     protected BlockPos pendingBetterPortalsPortalBlockPos;
     protected IBlockState pendingBetterPortalsPortalBlockOldState;
@@ -607,6 +608,7 @@ abstract class PipelineRuntimeState {
     protected int shadowHealthLogAttempts = 0;
     protected int shadowMapInvalidLogs = 0;
     protected int shadowMapSuppressedLogs = 0;
+    protected int shadowFrameTimingProbeLogs = 0;
     protected int guiRenderDepth = 0;
     protected int guiEntityPreviewStateDepth = 0;
     protected int guiModelStateProbeLogs = 0;
@@ -614,6 +616,7 @@ abstract class PipelineRuntimeState {
     protected int guiItemModelProbeLogs = 0;
     protected final Deque<String> guiItemProbeNames = new ArrayDeque<>();
     protected int waterRoutingProbeLogs = 0;
+    protected int waterDuplicateProbeLogs = 0;
     protected int waterAttachmentDeltaProbeLogs = 0;
     protected int specialLayerProbeLogs = 0;
     protected int pipelinePassProbeLogs = 0;
@@ -719,7 +722,10 @@ abstract class PipelineRuntimeState {
     protected final Set<String> framedBlockDiagnosticKeys = ConcurrentHashMap.newKeySet();
     protected final AtomicInteger blockcrafteryDiagnosticCount = new AtomicInteger();
     protected final AtomicInteger blockcrafteryBloomDecisionProbeCount = new AtomicInteger();
+    protected final AtomicInteger blockcrafteryRouteProbeCount = new AtomicInteger();
+    protected final Set<String> framedQuadMaterialProbeKeys = ConcurrentHashMap.newKeySet();
     protected final AtomicInteger framedQuadMaterialProbeCount = new AtomicInteger();
+    protected final AtomicInteger framedBloomQuadGateProbeCount = new AtomicInteger();
     protected final AtomicInteger architectureCraftDiagnosticCount = new AtomicInteger();
     protected final AtomicInteger framedPriorityDiagnosticCount = new AtomicInteger();
     protected final Set<String> currentProblemProbeKeys = ConcurrentHashMap.newKeySet();
@@ -2179,6 +2185,15 @@ abstract class PipelineRuntimeState {
             ShaderCompileNotifications.finishReload(pack.getName());
             syntheticLightCandidates.clear();
             resetColoredLightAudit();
+            // Startup can build a provisional Nothirium mesh before this pack's
+            // block-id rules are installed. Preserve a fresh probe window for
+            // the real rebuild below, which is the data the shader consumes.
+            resetFramedMaterialProbes();
+            // The initial Nothirium rebuild may complete some loaded sections
+            // while the internal pack is still active.  Force the normal,
+            // delayed Bloom terrain refresh after the real pack is live so
+            // every visible GPOM frame is recompiled with a valid BLOOM buffer.
+            scheduleBloomTerrainRefresh("shader-pack-initialized");
             if (wasPipelineActive) {
                 NothiriumBypass.markAllChanged();
                 scheduleWorldTerrainRefresh(true, true, 0);
@@ -2472,9 +2487,10 @@ abstract class PipelineRuntimeState {
         shadowMapUsable = false;
         shadowMapSparseForSampling = false;
         shadowMapCoverageStableFrames = 0;
+        invalidShadowTerrainFrames = 0;
+        invalidShadowTerrainSuppressedFrames = 0;
         nothiriumShadowInvalidFrames = 0;
         nothiriumShadowSuppressedFrames = 0;
-        nothiriumShadowVerticalHoldFrames = 0;
         resetShadowRenderCache();
         MainMod.LOGGER.debug(
                 "[Pipeline] Blank shadow textures initialized: {}x{} (shadowMapResolution={} option={} changedOption={} activeConst={} profile={} distanceSlider={} qualitySlider={})",
@@ -2984,11 +3000,12 @@ abstract class PipelineRuntimeState {
         }
 
         ShaderBlockIdMap.BlockIdRules blockIds = shaderProperties.blockIds();
+        int mappedId = 0;
         if (!blockIds.isEmpty()) {
-            int id = blockIds.idFor(pipelineState);
-            if (id != 0) {
-                logWaterLikeMaterialProbe(pipelineState, blockAccess, pos, id, "mapped");
-                return id;
+            mappedId = blockIds.idFor(pipelineState);
+            if (mappedId != 0) {
+                logWaterLikeMaterialProbe(pipelineState, blockAccess, pos, mappedId, "mapped");
+                return mappedId;
             }
         }
 
@@ -3000,6 +3017,13 @@ abstract class PipelineRuntimeState {
 
         logWaterLikeMaterialProbe(pipelineState, blockAccess, pos, 0, "unmapped");
         return 0;
+    }
+
+    protected void resetFramedMaterialProbes() {
+        blockcrafteryRouteProbeCount.set(0);
+        framedQuadMaterialProbeCount.set(0);
+        framedBloomQuadGateProbeCount.set(0);
+        framedQuadMaterialProbeKeys.clear();
     }
 
     public int customLiquidTintColor(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -3096,19 +3120,23 @@ abstract class PipelineRuntimeState {
     }
 
     public IBlockState inheritedBlockcrafteryRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (!isBlockcrafteryEditableBlock(state)) {
-            return null;
-        }
-        GpomFramedMaterialCompat.Material material = GpomFramedMaterialCompat.material(blockAccess, pos);
-        return material.present() ? material.primary() : null;
+        return BlockcrafteryContainedStateCompat.containedState(state, blockAccess, pos);
+    }
+
+    /**
+     * Filled Blockcraftery frames are compiled as the contained block itself.
+     * This is deliberately independent of every GPOM visual/material field.
+     */
+    public boolean shouldReplaceFilledBlockcrafteryFrame(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        return inheritedBlockcrafteryRenderState(state, blockAccess, pos) != null;
     }
 
     public boolean shouldProbeBlockcrafteryTransparency(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
         if (!isBlockcrafteryEditableBlock(state) || blockAccess == null || pos == null) {
             return false;
         }
-        return gpomFramedMaterialEmission(state, blockAccess, pos) > 0
-                || gpomFramedMaterialHasBloom(state, blockAccess, pos);
+        return containedFrameEmission(state, blockAccess, pos) > 0
+                || containedFrameHasBloom(state, blockAccess, pos);
     }
 
     public void logBlockcrafteryTransparencyProbe(String source, IBlockState state, IBlockAccess blockAccess,
@@ -3242,58 +3270,80 @@ abstract class PipelineRuntimeState {
     }
 
     public boolean framedBlockDiagnosticsEnabled() {
-        return true;
+        return false;
     }
 
     public boolean currentProblemProbesEnabled() {
-        return false;
+        return CURRENT_PROBLEM_PROBES_ENABLED;
     }
 
     protected static boolean debugProbeLoggingEnabled() {
-        return false;
+        return DEBUG_PROBES_ENABLED;
     }
 
     public boolean isBlockcrafteryEditableState(IBlockState state) {
         return isBlockcrafteryEditableBlock(state);
     }
 
-    public void applyFramedQuadMaterial(String spriteName) {
-        if (!BlockRenderContext.hasWorldBlockContext()) {
+    public void logBlockcrafteryRouteProbe(
+            String stage,
+            IBlockState state,
+            IBlockAccess blockAccess,
+            BlockPos pos,
+            BufferBuilder buffer,
+            int startVertex,
+            int endVertex,
+            Boolean result
+    ) {
+        if (blockcrafteryRouteProbeCount.get() >= MAX_BLOCKCRAFTERY_ROUTE_PROBE_LOGS) {
             return;
         }
-        IBlockAccess blockAccess = BlockRenderContext.blockAccess();
-        BlockPos pos = BlockRenderContext.blockPos();
-        IBlockState framedState = com.l.ausm.impl.util.MinecraftReflectionCompat.blockAccessBlockState(blockAccess, pos);
-        if (!isBlockcrafteryEditableBlock(framedState)) {
+        int probe = blockcrafteryRouteProbeCount.incrementAndGet();
+        if (probe > MAX_BLOCKCRAFTERY_ROUTE_PROBE_LOGS) {
             return;
         }
+        IBlockState actualState = actualBlockRenderState(state, blockAccess, pos);
+        IBlockState effectiveState = effectiveBlockRenderState(state, actualState, blockAccess, pos);
+        MainMod.LOGGER.info(
+                "[AUSMBlockcrafteryRouteProbe] call={} stage={} thread={} pos={} layer={} result={} start={} end={} delta={} host={} actual={} effective={} containedPresent={} contained={} containedEmission={} containedBloom={} contextPresent={} contextPos={} sameContextAccess={} blockId={} renderType={} metadata={} emission={} bloomBoost={} buffer={} format={} access={} pipelineActive={}",
+                probe,
+                stage,
+                Thread.currentThread().getName(),
+                pos,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
+                result,
+                startVertex,
+                endVertex,
+                startVertex >= 0 && endVertex >= 0 ? endVertex - startVertex : -1,
+                diagnosticStateName(state),
+                diagnosticStateName(actualState),
+                diagnosticStateName(effectiveState),
+                effectiveState != null,
+                diagnosticStateName(effectiveState),
+                effectiveState != null ? blockRenderEmissionForState(effectiveState, blockAccess, pos) : 0,
+                effectiveState != null && stateHasBloomLayerGeometry(effectiveState),
+                BlockRenderContext.hasWorldBlockContext(),
+                BlockRenderContext.blockPos(),
+                BlockRenderContext.blockAccess() == blockAccess,
+                BlockRenderContext.blockEntityId(),
+                BlockRenderContext.renderType(),
+                BlockRenderContext.metadata(),
+                BlockRenderContext.blockEmission(),
+                BlockRenderContext.framedBloomBoost(),
+                buffer,
+                buffer != null
+                        ? com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(buffer) : null,
+                blockAccess != null ? blockAccess.getClass().getName() : "null",
+                isPipelineActive
+        );
+    }
 
-        GpomFramedMaterialCompat.Material material = GpomFramedMaterialCompat.material(blockAccess, pos);
-        IBlockState ownerState = GpomFramedMaterialCompat.stateForSprite(material, spriteName);
-        if (ownerState == null) {
+    public boolean applyFramedQuadMaterial(BakedQuad quad, String spriteName) {
+        if (BlockRenderContext.isFramedMaterialOwner()) {
             BlockRenderContext.clearQuadOverrides();
             BlockRenderContext.setQuadFramedBloomBoost(false);
-            return;
         }
-
-        int ownerId = blockEntityIdForActualState(ownerState, blockAccess, pos);
-        int ownerEmission = blockRenderEmissionForState(ownerState, blockAccess, pos);
-        BlockRenderContext.setQuadBlockMetadata(
-                ownerId,
-                (short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(ownerState),
-                blockMetadataForActualState(ownerState),
-                ownerEmission
-        );
-        BlockRenderContext.setQuadFramedBloomBoost(
-                ownerEmission > 0 || stateHasBloomLayerGeometry(ownerState)
-        );
-        int probe = framedQuadMaterialProbeCount.incrementAndGet();
-        if (probe <= 0) {
-            MainMod.LOGGER.info("[AUSMFramedQuadMaterialProbe] call={} pos={} sprite={} primary={} secondary={} owner={} id={} emission={} layer={}",
-                    probe, pos, spriteName, diagnosticStateName(material.primary()),
-                    diagnosticStateName(material.secondary()), diagnosticStateName(ownerState),
-                    ownerId, ownerEmission, com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
-        }
+        return true;
     }
 
     public boolean shouldUseCeleritasForgeFallback(IBlockState state) {
@@ -3339,12 +3389,6 @@ abstract class PipelineRuntimeState {
 
     public boolean shouldUseCeleritasForgeFallback(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
         if (isBlockcrafteryEditableState(state)) {
-            return true;
-        }
-        if (blockAccess != null
-                && pos != null
-                && (gpomFramedMaterialEmission(state, blockAccess, pos) > 0
-                || gpomFramedMaterialHasBloom(state, blockAccess, pos))) {
             return true;
         }
         return shouldUseCeleritasForgeFallback(state);
@@ -3426,11 +3470,6 @@ abstract class PipelineRuntimeState {
 
         IBlockState effectiveState = effectiveBlockRenderState(state, blockAccess, pos);
         IBlockState inheritedBloomState = inheritedBloomRenderState(state, blockAccess, pos);
-        if (isBlockcrafteryEditableBlock(state)
-                && blockcrafteryLightEmission(state) <= 0
-                && !isBloomOrEmissiveInheritedState(inheritedBloomState, blockAccess, pos)) {
-            return;
-        }
         IBlockState inheritedGeometryState = inheritedBloomGeometryRenderState(state, inheritedBloomState);
         BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
         boolean priority = isPriorityFramedDiagnosticName(state)
@@ -3490,7 +3529,7 @@ abstract class PipelineRuntimeState {
                 ? explicitShaderedBlockEmission(state, blockAccess, pos)
                 : blockRenderEmissionForState(state, blockAccess, pos);
         return isBlockcrafteryEditableBlock(state)
-                ? Math.max(emission, gpomFramedMaterialEmission(state, blockAccess, pos))
+                ? Math.max(emission, containedFrameEmission(state, blockAccess, pos))
                 : emission;
     }
 
@@ -3558,22 +3597,6 @@ abstract class PipelineRuntimeState {
             return SHADERLESS_LIGHT_EMITTING_BLOOM_GEOMETRY_EMISSION;
         }
         return SHADERLESS_BLOOM_GEOMETRY_EMISSION;
-    }
-
-    public int blockRenderEmissionWithFramedInheritance(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return blockRenderEmission(state, blockAccess, pos);
-    }
-
-    public int shaderlessFramedBloomExtractionEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return 0;
-    }
-
-    public int framedBloomFallbackEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return 0;
-    }
-
-    public boolean shouldInheritFramedEmissionInBasePass(IBlockState state) {
-        return !isPipelineActive && isFramedBlockDiagnosticTarget(state);
     }
 
     public int blockRenderAlpha(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -3793,7 +3816,7 @@ abstract class PipelineRuntimeState {
                 framedDiagnosticState("effective", effectiveState, blockAccess, pos, com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer()),
                 framedDiagnosticState("inherited", inheritedState, blockAccess, pos, com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer()),
                 blockRenderEmission(state, blockAccess, pos),
-                blockRenderEmissionWithFramedInheritance(state, blockAccess, pos),
+                blockRenderEmission(state, blockAccess, pos),
                 -1,
                 blockEntityId(state, blockAccess, pos),
                 blockEntityId(inheritedState, blockAccess, pos),
@@ -4694,53 +4717,57 @@ abstract class PipelineRuntimeState {
         if (!isBlockcrafteryEditableBlock(state)) {
             return new IBlockState[0];
         }
-        GpomFramedMaterialCompat.Material material = GpomFramedMaterialCompat.material(blockAccess, pos);
-        if (!material.present() || material.primary() == null) {
+        IBlockState contained = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
+        if (contained == null) {
             return new IBlockState[0];
         }
-        if (material.secondary() == null || material.secondary() == material.primary()) {
-            return new IBlockState[] {material.primary()};
-        }
-        return new IBlockState[] {material.primary(), material.secondary()};
+        return new IBlockState[] {contained};
     }
 
-    protected int gpomFramedMaterialEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return isBlockcrafteryEditableBlock(state)
-                ? GpomFramedMaterialCompat.material(blockAccess, pos).emission()
-                : 0;
+    protected int containedFrameEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        IBlockState contained = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
+        return contained != null ? blockRenderEmissionForState(contained, blockAccess, pos) : 0;
     }
 
-    protected boolean gpomFramedMaterialHasBloom(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        if (!isBlockcrafteryEditableBlock(state)) {
-            return false;
-        }
-        GpomFramedMaterialCompat.Material material = GpomFramedMaterialCompat.material(blockAccess, pos);
-        if (!material.bloom() && material.emission() <= 0) {
-            return false;
-        }
+    protected boolean containedFrameHasBloom(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        IBlockState contained = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
+        if (contained == null) return false;
+        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
+        boolean bloom = stateHasBloomLayerGeometry(contained)
+                || (bloomLayer != null && canRenderInLayer(contained, bloomLayer))
+                || blockRenderEmissionForState(contained, blockAccess, pos) > 0;
+        if (!bloom) return false;
         int probe = blockcrafteryBloomDecisionProbeCount.incrementAndGet();
-        if (probe <= 64) {
+        if (probe <= 0) {
             MainMod.LOGGER.info("[AUSMBlockcrafteryBloomProbe] call={} thread={} pos={} state={} access={} present={} emission={} bloom={} primary={} secondary={} layer={} bloomLayer={}",
                     probe, Thread.currentThread().getName(), pos, state,
                     blockAccess != null ? blockAccess.getClass().getName() : "null",
-                    material.present(), material.emission(), material.bloom(),
-                    diagnosticStateName(material.primary()), diagnosticStateName(material.secondary()),
+                    true, blockRenderEmissionForState(contained, blockAccess, pos), bloom,
+                    diagnosticStateName(contained), "null",
                     MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer());
         }
-        return material.bloom();
+        return bloom;
     }
 
-    public boolean gpomFramedMaterialHasBloom(IBlockAccess blockAccess, BlockPos pos) {
-        return GpomFramedMaterialCompat.material(blockAccess, pos).bloom();
+    /** Shared framed Bloom decision for renderer compatibility hooks. */
+    public boolean hasContainedFrameBloom(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+        return containedFrameHasBloom(state, blockAccess, pos);
     }
 
-    public int gpomFramedMaterialEmission(IBlockAccess blockAccess, BlockPos pos) {
-        return GpomFramedMaterialCompat.material(blockAccess, pos).emission();
+    public boolean containedFrameHasBloom(IBlockAccess blockAccess, BlockPos pos) {
+        IBlockState host = MinecraftReflectionCompat.blockAccessBlockState(blockAccess, pos);
+        return containedFrameHasBloom(host, blockAccess, pos);
     }
 
-    public BlockRenderLayer gpomFramedMaterialBaseLayer(IBlockAccess blockAccess, BlockPos pos) {
-        IBlockState primary = GpomFramedMaterialCompat.material(blockAccess, pos).primary();
-        BlockRenderLayer layer = safeRenderLayer(primary);
+    public int containedFrameEmission(IBlockAccess blockAccess, BlockPos pos) {
+        IBlockState host = MinecraftReflectionCompat.blockAccessBlockState(blockAccess, pos);
+        return containedFrameEmission(host, blockAccess, pos);
+    }
+
+    public BlockRenderLayer containedFrameBaseLayer(IBlockAccess blockAccess, BlockPos pos) {
+        IBlockState host = MinecraftReflectionCompat.blockAccessBlockState(blockAccess, pos);
+        IBlockState contained = inheritedBlockcrafteryRenderState(host, blockAccess, pos);
+        BlockRenderLayer layer = safeRenderLayer(contained);
         return layer != null && !AusmBloomLayer.isBloomLayer(layer) ? layer : BlockRenderLayer.SOLID;
     }
 
@@ -4749,10 +4776,11 @@ abstract class PipelineRuntimeState {
         if (!isBlockcrafteryEditableBlock(state)) {
             return shouldForceCeleritasGeometryBloomFullbright(state, layer);
         }
-        GpomFramedMaterialCompat.Material material = GpomFramedMaterialCompat.material(blockAccess, pos);
-        if (material.present() && (material.bloom() || material.emission() > 0)) {
+        IBlockState contained = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
+        if (contained != null && containedFrameHasBloom(state, blockAccess, pos)) {
             return AusmBloomLayer.isBloomLayer(layer)
-                    || (!AusmBloomLayer.isBloomLayer(layer) && material.emission() > 0);
+                    || (!AusmBloomLayer.isBloomLayer(layer)
+                    && blockRenderEmissionForState(contained, blockAccess, pos) > 0);
         }
         return shouldForceCeleritasGeometryBloomFullbright(state, layer);
     }
@@ -6316,7 +6344,16 @@ abstract class PipelineRuntimeState {
     }
 
     public boolean shouldDisableNothiriumChunkCulling(BlockRenderLayer layer) {
-        if (!isPipelineActive || renderingShadowMap || layer == null) {
+        if (renderingShadowMap || layer == null) {
+            return false;
+        }
+        // Shaderless AUSM bloom runs with the main shader pipeline inactive, but
+        // it still consumes the same copied Blockcraftery overlay VBOs. Those
+        // custom-shape faces are not guaranteed to retain vanilla winding.
+        if (AusmBloomLayer.isBloomLayer(layer)) {
+            return true;
+        }
+        if (!isPipelineActive) {
             return false;
         }
         WorldRenderingPhase phase = getPhase();
@@ -8865,7 +8902,12 @@ abstract class PipelineRuntimeState {
         }
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        // Water is a translucent terrain pass.  Rebinding its shader program
+        // after Nothirium used to overwrite the translucent state with an
+        // opaque depth write, making coplanar water fragments race each
+        // other and the saved pre-water depth.
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(
+                pass != RenderPass.GBUFFERS_WATER && pass != RenderPass.DH_WATER);
         GL11.glColorMask(true, true, true, true);
     }
 
@@ -9245,6 +9287,8 @@ abstract class PipelineRuntimeState {
     protected abstract void resetShadowRenderCache();
 
     protected abstract int safeDimensionId(World world);
+
+    protected abstract void scheduleBloomTerrainRefresh(String reason);
 
     protected abstract void scheduleWorldTerrainRefresh(boolean fullRendererReset, boolean vanillaReload, int initialDelay);
 

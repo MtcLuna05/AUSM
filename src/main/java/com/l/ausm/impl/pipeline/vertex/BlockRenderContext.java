@@ -6,6 +6,8 @@ import net.minecraft.world.IBlockAccess;
 public final class BlockRenderContext {
     public static final int BLOOM_ONLY_MASK_EMISSION = 16;
     public static final int FRAMED_BLOOM_BOOST_MARKER = 150;
+    /** Reserved only for bounded diagnostics of the copied frame BLOOM overlay. */
+    public static final int FRAMED_BLOOM_OVERLAY_PROBE_MARKER = 151;
 
     private static final ThreadLocal<State> CURRENT = ThreadLocal.withInitial(State::new);
 
@@ -78,6 +80,14 @@ public final class BlockRenderContext {
     public static boolean hasWorldBlockContext() {
         State state = current();
         return state.blockAccess != null && state.blockPos != null;
+    }
+
+    public static void setFramedMaterialOwner(boolean framedMaterialOwner) {
+        current().framedMaterialOwner = framedMaterialOwner;
+    }
+
+    public static boolean isFramedMaterialOwner() {
+        return current().framedMaterialOwner;
     }
 
     public static int blockX() {
@@ -403,6 +413,7 @@ public final class BlockRenderContext {
         private int blockZ;
         private IBlockAccess blockAccess;
         private BlockPos blockPos;
+        private boolean framedMaterialOwner;
         private boolean agricraftCrop;
         private int packedLightmap;
         private int blockEmission;
@@ -444,6 +455,7 @@ public final class BlockRenderContext {
             blockZ = 0;
             blockAccess = null;
             blockPos = null;
+            framedMaterialOwner = false;
             agricraftCrop = false;
             packedLightmap = 0;
             blockEmission = 0;

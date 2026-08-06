@@ -150,6 +150,24 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     }
 
     @Override
+    public int ausm$appendRawVertexData(int[] vertexData) {
+        if (vertexData == null || vertexData.length == 0 || field_179011_q == null) {
+            return 0;
+        }
+        int integerStride = ExtendedVertexFormats.integerSize(field_179011_q);
+        if (integerStride <= 0 || vertexData.length % integerStride != 0) {
+            return 0;
+        }
+        int vertices = vertexData.length / integerStride;
+        int bytes = vertexData.length * Integer.BYTES;
+        func_181670_b(bytes + ExtendedVertexFormats.size(field_179011_q));
+        field_178999_b.position(func_181664_j());
+        field_178999_b.put(vertexData);
+        field_178997_d += vertices;
+        return vertices;
+    }
+
+    @Override
     public void ausm$putColorMultiplier(float redMultiplier, float greenMultiplier,
                                         float blueMultiplier, int vertexIndex) {
         func_178978_a(redMultiplier, greenMultiplier, blueMultiplier, vertexIndex);

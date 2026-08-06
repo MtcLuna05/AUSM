@@ -2169,7 +2169,6 @@ public class PipelineContext extends PipelineWorldRenderScope {
         shadowMapCoverageStableFrames = 0;
         nothiriumShadowInvalidFrames = 0;
         nothiriumShadowSuppressedFrames = 0;
-        nothiriumShadowVerticalHoldFrames = 0;
         resetShadowRenderCache();
         deleteCenterDepthSmoothTexture();
         deleteNoiseTexture();
@@ -2978,8 +2977,10 @@ public class PipelineContext extends PipelineWorldRenderScope {
         if (bloomLayer == null
                 || viewEntity == null
                 || !isNothiriumLoaded()
-                || CeleritasCompat.installed()
-                || !NothiriumShadowRenderer.isAvailable()) {
+                || !NothiriumShadowRenderer.isAvailable()
+                || shouldForceVanillaTerrainRenderer()
+                || BetterPortalsCompat.isRenderingRenderPass()
+                || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
             return -1;
         }
         if (AusmBloomLayer.consumeNothiriumRendererRecreateRequest()) {
@@ -4780,6 +4781,15 @@ public class PipelineContext extends PipelineWorldRenderScope {
 
     protected static boolean isNothiriumLoaded() {
         return Loader.isModLoaded(NOTHIRIUM_MOD_ID) || Loader.isModLoaded(NAUGHTHIRIUM_MOD_ID);
+    }
+
+    /**
+     * The framed host-copy route needs Nothirium's multi-layer region builder.
+     * Other backends compile the synthetic BLOOM layer separately and use the
+     * dispatcher cache instead.
+     */
+    public boolean hasNothiriumBloomBackend() {
+        return isNothiriumLoaded() && NothiriumShadowRenderer.isAvailable();
     }
 
     protected static int floorDouble(double value) {

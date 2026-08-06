@@ -48,6 +48,10 @@ public interface IBufferBuilderExtension {
     default void ausm$addVertexData(int[] vertexData) {
     }
 
+    default int ausm$appendRawVertexData(int[] vertexData) {
+        return 0;
+    }
+
     default void ausm$putColorMultiplier(float redMultiplier, float greenMultiplier,
                                          float blueMultiplier, int vertexIndex) {
     }

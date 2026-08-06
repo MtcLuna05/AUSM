@@ -60,7 +60,7 @@ public class BlockModelRendererMixin {
         TextureAtlasSprite sprite = quad != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadSprite(quad) : null;
         String spriteName = sprite != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite) : null;
         BlockRenderContext.setQuadSprite(spriteName);
-        PipelineContext.getInstance().applyFramedQuadMaterial(spriteName);
+        PipelineContext.getInstance().applyFramedQuadMaterial(quad, spriteName);
         return com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadVertexData(quad);
     }
 
