@@ -4,9 +4,8 @@ import com.l.ausm.impl.MainMod;
 import net.minecraftforge.fml.common.Loader;
 
 /**
- * Celeritas is optional. When present, its terrain renderer remains active for
- * vanilla-compatible terrain ownership while AUSM owns shader state,
- * framebuffers, and presentation.
+ * Celeritas is optional. When present, AUSM keeps its frame-ahead and compile
+ * optimizations, while AUSM remains the sole terrain/entity renderer.
  */
 public final class CeleritasCompat {
     private static final String MOD_ID = "celeritas";
@@ -38,19 +37,17 @@ public final class CeleritasCompat {
         boolean celeritas = installed();
         boolean nothirium = loaderReports("nothirium") || loaderReports("naughthirium");
         boolean shaderBridge = classPresent(SHADER_BRIDGE);
-        boolean adapterSurface = celeritas && CeleritasTerrainAdapter.hasVanillaLikeAdapterSurface();
         MainMod.LOGGER.info(
-                "[CeleritasCompat] detected={} celeritasRenderer={} embeddiumRenderer={} shaderBridge={} adapterSurface={} nothirium={}",
+                "[CeleritasCompat] detected={} celeritasRenderer={} embeddiumRenderer={} shaderBridge={} nothirium={}",
                 celeritas,
                 classPresent(CeleritasRenderer),
                 classPresent(EMBEDDIUMRenderer),
                 shaderBridge,
-                adapterSurface,
                 nothirium
         );
         if (celeritas) {
             MainMod.LOGGER.info(
-                    "[CeleritasCompat] renderer-bridge mode: Celeritas owns chunk setup/meshing/draw; AUSM owns shader state, framebuffers, and pass routing"
+                "[CeleritasCompat] optimization mode: Celeritas frame-ahead/compile helpers retained; AUSM owns terrain, entity, and pass rendering"
             );
         }
     }

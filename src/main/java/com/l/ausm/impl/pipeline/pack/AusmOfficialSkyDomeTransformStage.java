@@ -202,9 +202,6 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
 	                        float repairAmount = ausmOfficialSkyRepairAmount(uv, color.rgb);
 	                        color.rgb = mix(color.rgb, ausmOfficialSkyColor(uv), repairAmount);
                     }
-	                    if (ausmSkyboxRepair > 0 && ausmSimpleVoidWorld > 0 && ausmOfficialSkyPixel) {
-	                        color.rgb = ausmOfficialApplyVoidCelestials(color.rgb, uv);
-	                    }
                     gl_FragData[0] = vec4(color.rgb, 1.0);
                 }
                 """;
@@ -471,9 +468,6 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
 	                        float repairAmount = ausmOfficialSkyRepairAmount(uv, ausmOfficialFinalColor.rgb);
 	                        ausmOfficialFinalColor.rgb = mix(ausmOfficialFinalColor.rgb, ausmOfficialSkyColor(uv), repairAmount);
                     }
-	                    if (ausmSkyboxRepair > 0 && ausmSimpleVoidWorld > 0 && ausmOfficialSkyPixel) {
-	                        ausmOfficialFinalColor.rgb = ausmOfficialApplyVoidCelestials(ausmOfficialFinalColor.rgb, uv);
-	                    }
                     gl_FragData[0] = vec4(ausmOfficialFinalColor.rgb, 1.0);
                 }
                 #endif

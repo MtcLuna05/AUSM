@@ -25,25 +25,7 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         if (mixinClassName.endsWith(".NothiriumRenderChunkTaskCompileMixin")) {
-            // Celeritas owns the terrain compiler when installed. Applying the
-            // AUSM/Nothirium compile hooks alongside it duplicates framed
-            // geometry and can suppress unrelated translucent models.
-            if (optionalTargetPresent(mixinClassName, "org/taumc/celeritas/impl/render/terrain/compile/task/ChunkBuilderMeshingTask.class", true)) {
-                return false;
-            }
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskCompile.class", true);
-        }
-        if (mixinClassName.endsWith(".CeleritasChunkBuilderMeshingTaskMixin")) {
-            return optionalTargetPresent(mixinClassName, "org/taumc/celeritas/impl/render/terrain/compile/task/ChunkBuilderMeshingTask.class", true);
-        }
-        if (mixinClassName.endsWith(".CeleritasWorldRendererMixin")) {
-            return optionalTargetPresent(mixinClassName, "org/taumc/celeritas/impl/render/terrain/CeleritasWorldRenderer.class", true);
-        }
-        if (mixinClassName.endsWith(".CeleritasMultiDrawEmitterMixin")) {
-            return optionalTargetPresent(mixinClassName, "org/embeddedt/embeddium/impl/render/chunk/multidraw/DirectMultiDrawEmitter.class", true);
-        }
-        if (mixinClassName.endsWith(".CeleritasDefaultChunkRendererMixin")) {
-            return optionalTargetPresent(mixinClassName, "org/embeddedt/embeddium/impl/render/chunk/DefaultChunkRenderer.class", true);
         }
         if (mixinClassName.endsWith(".NothiriumRenderChunkTaskSortTranslucentMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskSortTranslucent.class", true);

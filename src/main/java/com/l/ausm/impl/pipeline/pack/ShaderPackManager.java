@@ -30,6 +30,7 @@ public class ShaderPackManager implements ShaderPackController {
     private static final String OFF_PACK_NAME = "OFF";
     private static final String INTERNAL_PACK_NAME = "(internal)";
     private static final int SHADER_PROPERTIES_CACHE_LIMIT = 24;
+    private static final int SHADER_TOGGLE_TIMING_PROBE_LIMIT = 0;
 
     private final Path shaderpacksDir;
     private final Path optionOverridesDir;
@@ -51,6 +52,7 @@ public class ShaderPackManager implements ShaderPackController {
     private final Set<String> betterPortalsPrewarmedCacheKeys = new HashSet<>();
     private String lastDeferredBetterPortalsCacheKey = "";
     private String compiledPackName = OFF_PACK_NAME;
+    private int shaderToggleTimingProbeLogs;
 
     public ShaderPackManager(Path minecraftRunDir) {
         this.shaderpacksDir = minecraftRunDir.resolve("shaderpacks");
@@ -581,43 +583,96 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     public void setShadersEnabled(boolean enabled) {
-        if (isOffPack(selectedPackName)) {
-            shadersEnabled = false;
-        } else if (enabled && !isPackAvailable(selectedPackName)) {
-            fallbackToOff("Selected shaderpack '{}' is no longer available; disabling shaders.", selectedPackName);
+        long startedNanos = System.nanoTime();
+        boolean wasEnabled = shadersEnabled;
+        boolean wasActive = PipelineContext.getInstance().isActive();
+        boolean wasPendingReload = pendingPipelineReload;
+        long afterConfigNanos = startedNanos;
+        long afterPackLoadNanos = startedNanos;
+        long afterPipelineNanos = startedNanos;
+        long afterCleanupNanos = startedNanos;
+        long afterVanillaNanos = startedNanos;
+        try {
+            if (isOffPack(selectedPackName)) {
+                shadersEnabled = false;
+            } else if (enabled && !isPackAvailable(selectedPackName)) {
+                fallbackToOff("Selected shaderpack '{}' is no longer available; disabling shaders.", selectedPackName);
+                return;
+            } else {
+                shadersEnabled = enabled;
+            }
+            saveShaderConfig();
+            afterConfigNanos = System.nanoTime();
+            if (shadersEnabled && (pendingPipelineReload || currentPack == null || !selectedPackName.equals(currentPack.getName()))) {
+                if (pendingPipelineReload && currentPack != null && selectedPackName.equals(currentPack.getName()) && !isInternalPack(currentPack)) {
+                    closeCurrentPack();
+                    currentPack = null;
+                    clearShaderPropertiesCache();
+                }
+                if (!ensureSelectedPackLoaded()) {
+                    return;
+                }
+                afterPackLoadNanos = System.nanoTime();
+                ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
+                if (!initializeCurrentPipeline(properties, true)) {
+                    return;
+                }
+                afterPipelineNanos = System.nanoTime();
+            }
+            if (shadersEnabled) {
+                PipelineContext.getInstance().setActive(true);
+                if (!PipelineContext.getInstance().isActive()) {
+                    markPipelineInactive();
+                }
+            } else {
+                PipelineContext.getInstance().cleanup();
+                afterCleanupNanos = System.nanoTime();
+                compiledDimensionId = Integer.MIN_VALUE;
+                clearBetterPortalsPendingState();
+                compiledPackName = OFF_PACK_NAME;
+                pendingPipelineReload = currentPack != null && !isInternalPack(currentPack);
+                rebuildInactiveVanillaRenderers();
+                afterVanillaNanos = System.nanoTime();
+                PipelineContext.getInstance().recoverShaderlessBloomAfterShaderDisable("shader-toggle-off");
+            }
+        } finally {
+            logShaderToggleTiming(enabled, wasEnabled, wasActive, wasPendingReload,
+                    startedNanos, afterConfigNanos, afterPackLoadNanos,
+                    afterPipelineNanos, afterCleanupNanos, afterVanillaNanos);
+        }
+    }
+
+    private void logShaderToggleTiming(boolean requestedEnabled, boolean wasEnabled, boolean wasActive,
+                                       boolean wasPendingReload, long startedNanos, long afterConfigNanos,
+                                       long afterPackLoadNanos, long afterPipelineNanos,
+                                       long afterCleanupNanos, long afterVanillaNanos) {
+        if (shaderToggleTimingProbeLogs >= SHADER_TOGGLE_TIMING_PROBE_LIMIT) {
             return;
-        } else {
-            shadersEnabled = enabled;
         }
-        saveShaderConfig();
-        if (shadersEnabled && (pendingPipelineReload || currentPack == null || !selectedPackName.equals(currentPack.getName()))) {
-            if (pendingPipelineReload && currentPack != null && selectedPackName.equals(currentPack.getName()) && !isInternalPack(currentPack)) {
-                closeCurrentPack();
-                currentPack = null;
-                clearShaderPropertiesCache();
-            }
-            if (!ensureSelectedPackLoaded()) {
-                return;
-            }
-            ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
-            if (!initializeCurrentPipeline(properties, true)) {
-                return;
-            }
-        }
-        if (shadersEnabled) {
-            PipelineContext.getInstance().setActive(true);
-            if (!PipelineContext.getInstance().isActive()) {
-                markPipelineInactive();
-            }
-        } else {
-            PipelineContext.getInstance().cleanup();
-            compiledDimensionId = Integer.MIN_VALUE;
-            clearBetterPortalsPendingState();
-            compiledPackName = OFF_PACK_NAME;
-            pendingPipelineReload = currentPack != null && !isInternalPack(currentPack);
-            rebuildInactiveVanillaRenderers();
-            PipelineContext.getInstance().recoverShaderlessBloomAfterShaderDisable("shader-toggle-off");
-        }
+        shaderToggleTimingProbeLogs++;
+        long now = System.nanoTime();
+        MainMod.LOGGER.info(
+                "[AUSMShaderToggleTiming] call={} requestEnabled={} previousEnabled={} previousActive={} previousPendingReload={} finalEnabled={} finalActive={} pack={} totalMs={} configMs={} packLoadMs={} pipelineInitMs={} cleanupMs={} vanillaRebuildMs={} postVanillaMs={}",
+                shaderToggleTimingProbeLogs,
+                requestedEnabled,
+                wasEnabled,
+                wasActive,
+                wasPendingReload,
+                shadersEnabled,
+                PipelineContext.getInstance().isActive(),
+                selectedPackName,
+                toggleMillis(now - startedNanos),
+                toggleMillis(afterConfigNanos - startedNanos),
+                toggleMillis(afterPackLoadNanos - afterConfigNanos),
+                toggleMillis(afterPipelineNanos - afterPackLoadNanos),
+                toggleMillis(afterCleanupNanos - afterPipelineNanos),
+                toggleMillis(afterVanillaNanos - afterCleanupNanos),
+                toggleMillis(now - afterVanillaNanos)
+        );
+    }
+
+    private static double toggleMillis(long nanos) {
+        return Math.max(0.0D, nanos / 1_000_000.0D);
     }
 
     public Map<String, String> getCurrentOptionOverrides() {

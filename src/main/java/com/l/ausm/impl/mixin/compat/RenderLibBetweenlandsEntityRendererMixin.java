@@ -139,7 +139,7 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
             )
     )
     private boolean ausm$disableBetweenlandsOcclusionCull(EntityRenderer renderer, Entity entity) {
-        if (ausm$isBetweenlandsEntity(entity)) {
+        if (ausm$isBetweenlandsEntity(entity) || ausm$isTestDummyEntity(entity)) {
             return false;
         }
         return isOcclusionCulled(entity);
@@ -264,6 +264,11 @@ public abstract class RenderLibBetweenlandsEntityRendererMixin {
     private static boolean ausm$isBetweenlandsEntity(Entity entity) {
         ResourceLocation key = com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity);
         return key != null && "thebetweenlands".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(key));
+    }
+
+    private static boolean ausm$isTestDummyEntity(Entity entity) {
+        ResourceLocation key = com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity);
+        return key != null && "testdummy".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(key));
     }
 
     private static boolean ausm$canForceBetweenlandsIntoRenderList(Entity entity) {

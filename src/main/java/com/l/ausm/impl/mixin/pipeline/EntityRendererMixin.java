@@ -701,12 +701,14 @@ public class EntityRendererMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78476_b(FI)V")
     )
     private void ausm$renderHandIfGbufferRenderingEnabled(EntityRenderer renderer, float partialTicks, int pass) {
-        PipelineContext.getInstance().logSpecialLayerProbe("before-hand-redirect");
-        if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
-            PipelineContext.getInstance().prepareVanillaHandRenderState();
+        PipelineContext context = PipelineContext.getInstance();
+        context.logHandGbufferProbe("before-hand-redirect");
+        if (!context.shouldSkipAllMainGbufferRendering()) {
+            context.prepareVanillaHandRenderState();
+            context.logHandGbufferProbe("hand-bound");
             func_78476_b(partialTicks, pass);
         }
-        PipelineContext.getInstance().logSpecialLayerProbe("after-hand-redirect");
+        context.logHandGbufferProbe("after-hand-redirect");
     }
 
     @Redirect(
@@ -800,6 +802,7 @@ public class EntityRendererMixin {
 
         context.beginHand();
         context.beginPhase(WorldRenderingPhase.HAND_SOLID);
+        context.logHandGbufferProbe("before-hand");
     }
 
     @Inject(

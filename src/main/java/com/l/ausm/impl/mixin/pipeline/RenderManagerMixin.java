@@ -7,6 +7,7 @@ import com.l.ausm.api.pipeline.pack.*;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.renderer.entity.Render;
 import net.minecraft.client.renderer.entity.RenderManager;
@@ -16,6 +17,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.lwjgl.opengl.GL11;
 
 @Mixin(RenderManager.class)
 public class RenderManagerMixin {
@@ -36,6 +38,7 @@ public class RenderManagerMixin {
         if (context.isRenderingGuiScreen()) {
             return;
         }
+        ausm$normalizeEntityFaceCulling();
         if (!context.shouldBypassWorldPassRendering()) {
             if (BetterPortalsCompat.isPortalEntity(entity)) {
                 context.prepareExternalWorldOverlayRender();
@@ -90,6 +93,7 @@ public class RenderManagerMixin {
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }
+        ausm$normalizeEntityFaceCulling();
         if (BetterPortalsCompat.isPortalEntity(entity)) {
             context.prepareExternalWorldOverlayRender();
             return;
@@ -150,4 +154,10 @@ public class RenderManagerMixin {
                 Math.round(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity) * 10.0D) / 10.0D
         );
     }
+
+    private static void ausm$normalizeEntityFaceCulling() {
+        GL11.glFrontFace(GL11.GL_CCW);
+        MinecraftReflectionCompat.glStateCullFaceBack();
+    }
+
 }

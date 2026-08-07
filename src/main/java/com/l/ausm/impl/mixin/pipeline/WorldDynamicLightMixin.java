@@ -96,6 +96,5 @@ public class WorldDynamicLightMixin {
         World world = (World) (Object) this;
         PipelineContext context = PipelineContext.getInstance();
         context.handleShaderlessBloomRenderUpdateRange(world, minX, minY, minZ, maxX, maxY, maxZ);
-        context.handleClientBlockRenderUpdateRange(world, minX, minY, minZ, maxX, maxY, maxZ);
     }
 }

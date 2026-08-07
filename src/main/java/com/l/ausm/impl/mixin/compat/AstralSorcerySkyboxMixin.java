@@ -17,6 +17,7 @@ import org.lwjgl.opengl.GL11;
 public class AstralSorcerySkyboxMixin {
     private static boolean logged;
     private static boolean ausm$loggedShaderlessSkyRepair;
+    private static int ausm$nativeSkyOcclusionProbeCount;
     private boolean ausm$sunsetPhaseActive;
 
     @Redirect(
@@ -33,14 +34,12 @@ public class AstralSorcerySkyboxMixin {
         PipelineContext context = PipelineContext.getInstance();
         context.setAstralSolarEclipseFactor(ausm$solarEclipseFactor(partialTicks));
         context.beginPhase(WorldRenderingPhase.SKY);
-        context.logShaderedSkyGeometryProbe("astral-upper-before");
         try {
             if (context.shouldSuppressAstralUpperSkyGeometry()) {
                 return;
             }
             com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
                     new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, displayList);
-            context.logShaderedSkyGeometryProbe("astral-upper-after");
         } finally {
             context.endPass();
         }
@@ -62,13 +61,18 @@ public class AstralSorcerySkyboxMixin {
             return;
         }
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
-        context.logShaderedSkyGeometryProbe("astral-lower-before");
         try {
             com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
                     new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, displayList);
-            context.logShaderedSkyGeometryProbe("astral-lower-after");
         } finally {
             context.endPass();
+        }
+    }
+
+    @Inject(method = "renderSunsetToBackground", at = @At("HEAD"), cancellable = true, remap = false)
+    private void ausm$suppressAstralSunsetFan(float[] sunsetColors, float partialTicks, CallbackInfo ci) {
+        if (PipelineContext.getInstance().shouldSuppressAstralUpperSkyGeometry()) {
+            ci.cancel();
         }
     }
 
@@ -133,6 +137,8 @@ public class AstralSorcerySkyboxMixin {
     private void ausm$beginAstralStars(World world, float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressShaderedAstralStars()) {
+            context.forensicGlTrace("astral-sky-stars-suppressed", "partialTicks=" + partialTicks);
+            ausm$logNativeSkyOcclusionProbe("stars-suppressed");
             ci.cancel();
             return;
         }
@@ -151,6 +157,8 @@ public class AstralSorcerySkyboxMixin {
     @Inject(method = "renderConstellations(Lnet/minecraft/world/World;F)V", at = @At("HEAD"), cancellable = true, remap = false)
     private static void ausm$suppressShaderedAstralConstellations(World world, float partialTicks, CallbackInfo ci) {
         if (PipelineContext.getInstance().shouldSuppressShaderedAstralConstellations()) {
+            PipelineContext.getInstance().forensicGlTrace("astral-sky-constellations-suppressed", "partialTicks=" + partialTicks);
+            ausm$logNativeSkyOcclusionProbe("constellations-suppressed");
             ci.cancel();
         }
     }
@@ -266,6 +274,16 @@ public class AstralSorcerySkyboxMixin {
             logged = true;
             MainMod.LOGGER.info("[AstralCompat] Disabled Astral Sorcery sun/moon quads because the active shaderpack disables that celestial.");
         }
+    }
+
+    /**
+     * Native Astral sky geometry is rendered after the shader-owned canvas and
+     * therefore cannot be occluded per planet/celestial in GLSL.  Keep this
+     * small proof at the cancellation boundary so a later native route is not
+     * mistaken for a planet-alpha problem.
+     */
+    private static void ausm$logNativeSkyOcclusionProbe(String route) {
+        // Probe disabled.
     }
 
     private static boolean ausm$usesCustomVoidSky(World world) {

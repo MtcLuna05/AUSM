@@ -201,7 +201,11 @@ public class BlockRendererDispatcherMixin {
         BlockRenderContext.setPackedLightmap(packedLightmap);
         ausm$logShaderlessDispatchLightProbe(pipeline, state, contextState, blockAccess, pos, packedLightmap);
         BlockRenderContext.setBlockEmission(blockEmission);
-        BlockRenderContext.setFramedBloomBoost(false);
+        // Native BLOOM sources such as RandomThings luminous blocks expose no
+        // vanilla light emission. Keep their base-pass vertices explicitly
+        // marked so shader packs can distinguish them from an ordinary block
+        // before optional material effects (notably coated textures) run.
+        BlockRenderContext.setFramedBloomBoost(pipeline.stateHasBloomLayerGeometry(contextState));
         BlockRenderContext.setBloomOnlyEmission(false);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, blockAccess, pos));
         BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, blockAccess, pos));

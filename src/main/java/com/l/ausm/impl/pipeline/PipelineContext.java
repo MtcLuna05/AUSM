@@ -211,8 +211,8 @@ public class PipelineContext extends PipelineWorldRenderScope {
     private static final Set<String> GUI_BYPASS_PROBE_KEYS = ConcurrentHashMap.newKeySet();
     private static final AtomicInteger SHADER_GUI_PROBE_LOGS = new AtomicInteger();
     private static final Set<String> SHADER_GUI_PROBE_KEYS = ConcurrentHashMap.newKeySet();
-    private static final AtomicInteger SHADERED_SKY_GEOMETRY_PROBE_LOGS = new AtomicInteger();
-    private static final Set<String> SHADERED_SKY_GEOMETRY_PROBE_KEYS = ConcurrentHashMap.newKeySet();
+    private static final AtomicInteger FLAT_FOLIAGE_HIGHLIGHT_PROBE_LOGS = new AtomicInteger();
+    private static final AtomicInteger LILY_PAD_LIGHTING_PROBE_LOGS = new AtomicInteger();
 
     public void logGuiBypassProbe(String stage) {
         if (!DEBUG_PROBES_ENABLED) {
@@ -290,44 +290,100 @@ public class PipelineContext extends PipelineWorldRenderScope {
         );
     }
 
-    public void logShaderedSkyGeometryProbe(String stage) {
-        if (!DEBUG_PROBES_ENABLED) {
-            return;
-        }
+    private void logFlatFoliageHighlightProbe(DeferredFramebuffer framebuffer) {
         Minecraft minecraft = MinecraftReflectionCompat.minecraft();
-        World world = minecraft != null ? MinecraftReflectionCompat.world(minecraft) : null;
-        if (!isPipelineActive
-                || minecraft == null
-                || world == null
-                || !isSimpleVoidWorld(world)
-                || !SHADERED_SKY_GEOMETRY_PROBE_KEYS.add(stage)) {
+        World world = minecraft != null ? renderWorld(minecraft) : null;
+        BlockPos pos = currentSelectedBlockPosition(minecraft);
+        if (minecraft == null || world == null || pos == null || framebuffer == null || !framebuffer.isUsable()) {
             return;
         }
-        int call = SHADERED_SKY_GEOMETRY_PROBE_LOGS.incrementAndGet();
-        int width = Math.max(1, MinecraftReflectionCompat.displayWidth(minecraft));
-        int height = Math.max(1, MinecraftReflectionCompat.displayHeight(minecraft));
-        int drawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        int drawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
-        int sampleBuffer = normalizedReadBuffer(drawFramebuffer, drawBuffer);
-        Framebuffer target = MinecraftReflectionCompat.minecraftFramebuffer(minecraft);
+
+        IBlockState state = MinecraftReflectionCompat.worldBlockState(world, pos);
+        int materialId = blockEntityId(state, world, pos);
+        if (materialId != 10005 && materialId != 10021) {
+            return;
+        }
+
+        int call = FLAT_FOLIAGE_HIGHLIGHT_PROBE_LOGS.incrementAndGet();
+        if (call > MAX_FLAT_FOLIAGE_HIGHLIGHT_PROBE_LOGS) {
+            return;
+        }
+
+        Attachment attachment = fallbackColorAttachment();
+        int width = Math.max(1, framebuffer.getAttachmentWidth(attachment));
+        int height = Math.max(1, framebuffer.getAttachmentHeight(attachment));
+        int x = width / 2;
+        int y = height / 2;
         MainMod.LOGGER.info(
-                "[AUSMShaderedSkyGeometryProbe] call={} stage={} pass={} phase={} world={} screen={} target={} targetColor={} targetDepth={} drawFbo={} drawBuf={} drawColor={} drawDepth={} gl={} glErrors={}",
+                "[AUSMFlatFoliageHighlightProbe] call={} pos={} id={} registry={} state={} layer={} renderType={} material={} light={} emission={} worldTime={} celestial={} rain={} source={} sourceDepth={} lightHighlight={} frame={} pass={} phase={}",
                 call,
-                stage,
+                pos,
+                materialId,
+                registryName(state),
+                state,
+                safeRenderLayer(state),
+                safeRenderType(state),
+                MinecraftReflectionCompat.stateMaterial(state),
+                safeLightValue(state, world, pos),
+                blockRenderEmission(state, world, pos),
+                MinecraftReflectionCompat.worldTime(world),
+                MinecraftReflectionCompat.worldCelestialAngle(world, currentWorldPartialTicks),
+                MinecraftReflectionCompat.worldRainStrength(world, currentWorldPartialTicks),
+                java.util.Arrays.toString(safeReadDeferredColor(framebuffer, attachment, x, y)),
+                safeReadDeferredDepth(framebuffer, x, y, width, height),
+                optionValue(shaderProperties, "LIGHT_HIGHLIGHT"),
+                pipelineFrameId,
                 activePass,
-                getPhase(),
-                skyProbeWorldSummary(),
-                MinecraftReflectionCompat.currentScreen(minecraft) != null
-                        ? MinecraftReflectionCompat.currentScreen(minecraft).getClass().getName() : "none",
-                describeFramebufferTargetDetailed(target),
-                framebufferSamples(target),
-                framebufferDepthSamples(target),
-                drawFramebuffer,
-                drawBuffer,
-                framebufferIdColorSamples(drawFramebuffer, width, height, sampleBuffer),
-                framebufferIdDepthSamples(drawFramebuffer, width, height, sampleBuffer),
-                skyProbeGlStateSummary(),
-                drainGlErrorsForProbe()
+                getPhase()
+        );
+    }
+
+    private void logLilyPadLightingProbe(DeferredFramebuffer framebuffer) {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        World world = minecraft != null ? renderWorld(minecraft) : null;
+        BlockPos pos = currentSelectedBlockPosition(minecraft);
+        if (minecraft == null || world == null || pos == null || framebuffer == null || !framebuffer.isUsable()) {
+            return;
+        }
+
+        IBlockState state = MinecraftReflectionCompat.worldBlockState(world, pos);
+        if (blockEntityId(state, world, pos) != 10489) {
+            return;
+        }
+        forensicTrace("lily-selected-lighting", "pos=" + pos + ", state=" + state
+                + ", blockLight=" + MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.BLOCK, pos)
+                + ", skyLight=" + MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.SKY, pos));
+
+        int call = LILY_PAD_LIGHTING_PROBE_LOGS.incrementAndGet();
+        if (call > MAX_LILY_PAD_LIGHTING_PROBE_LOGS) {
+            return;
+        }
+
+        Attachment attachment = fallbackColorAttachment();
+        int width = Math.max(1, framebuffer.getAttachmentWidth(attachment));
+        int height = Math.max(1, framebuffer.getAttachmentHeight(attachment));
+        int x = width / 2;
+        int y = height / 2;
+        MainMod.LOGGER.info(
+                "[AUSMLilyPadLightingProbe] call={} pos={} registry={} state={} layer={} renderType={} material={} blockLight={} skyLight={} emission={} source={} sourceDepth={} wavingLilyPad={} pixelatedShadows={} shadowQuality={} frame={} pass={} phase={}",
+                call,
+                pos,
+                registryName(state),
+                state,
+                safeRenderLayer(state),
+                safeRenderType(state),
+                MinecraftReflectionCompat.stateMaterial(state),
+                MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.BLOCK, pos),
+                MinecraftReflectionCompat.worldLightFor(world, EnumSkyBlock.SKY, pos),
+                blockRenderEmission(state, world, pos),
+                java.util.Arrays.toString(safeReadDeferredColor(framebuffer, attachment, x, y)),
+                safeReadDeferredDepth(framebuffer, x, y, width, height),
+                optionValue(shaderProperties, "WAVING_LILY_PAD"),
+                optionValue(shaderProperties, "PIXELATED_SHADOWS"),
+                optionValue(shaderProperties, "SHADOW_QUALITY"),
+                pipelineFrameId,
+                activePass,
+                getPhase()
         );
     }
 
@@ -344,6 +400,8 @@ public class PipelineContext extends PipelineWorldRenderScope {
         copyPreTranslucentDepth();
         logDeferredBoundaryProbe("before-deferred", "preDepthCopied=" + preTranslucentDepthCopiedThisFrame);
         DeferredFramebuffer preDeferredBuffer = pingPongManager.getReadBuffer();
+        logFlatFoliageHighlightProbe(preDeferredBuffer);
+        logLilyPadLightingProbe(preDeferredBuffer);
         preDeferredColorSnapshotThisFrame = false;
         if (deferredBufferHasColorContent(preDeferredBuffer, fallbackColorAttachment())
                 || deferredBufferHasSceneContent(preDeferredBuffer, fallbackColorAttachment())) {
@@ -3377,7 +3435,30 @@ public class PipelineContext extends PipelineWorldRenderScope {
                 || isRenderingBetterPortalsRenderPass()) {
             return;
         }
+        renderShaderedSkyBaseQuad();
+    }
 
+    /**
+     * Gives every shadered overworld-like dimension a continuous base sky
+     * before vanilla submits its upper dome, stars, and celestial geometry.
+     * The lower vanilla dome is deliberately not used: it carries the raw
+     * gray Minecraft sky colour and overwrites the shader-authored horizon.
+     */
+    public void renderShaderedSkyBaseBacking() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
+        if (!isPipelineActive
+                || mc == null
+                || world == null
+                || !shouldUseOwnedSkyOverrideWorld(world)
+                || isRenderingBetterPortalsNestedView()
+                || isRenderingBetterPortalsRenderPass()) {
+            return;
+        }
+        renderShaderedSkyBaseQuad();
+    }
+
+    private void renderShaderedSkyBaseQuad() {
         int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
         int previousDepthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
         boolean previousDepthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);

@@ -84,7 +84,10 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         }
         if (CELERITAS_RENDER_GLOBAL_MIXIN.equals(name)
                 || CELERITAS_RENDER_GLOBAL_MIXIN.equals(transformedName)) {
-            return relaxCeleritasRedirectRequirements(basicClass);
+            // Celeritas' RenderGlobal provider couples chunk construction to
+            // CeleritasWorldRenderer. Remove it entirely so Nothirium/AUSM
+            // own the renderer; independent Celeritas frame-ahead remains.
+            return stripCeleritasRenderOwnership(basicClass);
         }
         if (CELERITAS_MINECRAFT_MIXIN.equals(name)
                 || CELERITAS_MINECRAFT_MIXIN.equals(transformedName)) {
@@ -92,9 +95,6 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         }
         if (CELERITAS_VINTAGE.equals(name) || CELERITAS_VINTAGE.equals(transformedName)) {
             return stripCeleritasDebugOverlayHandler(basicClass);
-        }
-        if (useCeleritasRenderer() && (UNIVERSAL_TWEAKS_FRUSTUM_MIXIN.equals(name) || UNIVERSAL_TWEAKS_FRUSTUM_MIXIN.equals(transformedName))) {
-            return stripHandlers(basicClass);
         }
         // Celeritas prevents LoliASM's BufferBuilder primer interface from being
         // applied even when Nothirium remains the selected terrain renderer.
@@ -108,13 +108,6 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         }
         if (!TARGET.equals(name) && !TARGET.equals(transformedName)) {
             return basicClass;
-        }
-
-        // Celeritas owns RenderGlobal's terrain methods. Nothirium's handlers
-        // target those same methods and cannot be applied after Celeritas
-        // overwrites them, so leave this mixin as an inert marker in that mode.
-        if (useCeleritasRenderer()) {
-            return stripHandlers(basicClass);
         }
 
         ClassReader reader = new ClassReader(basicClass);
@@ -216,17 +209,16 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         return writer.toByteArray();
     }
 
-    /**
-     * Old fallback kept for reference when testing hard Celeritas isolation.
-     * Do not use for normal launches: stripping this mixin removes the provider
-     * that Celeritas uses to set up, compile, and draw terrain.
-     */
-    private static byte[] stripCeleritasRendererMixin(byte[] basicClass) {
+    private static byte[] stripCeleritasRenderOwnership(byte[] basicClass) {
         ClassReader reader = new ClassReader(basicClass);
         ClassNode classNode = new ClassNode();
         reader.accept(classNode, 0);
-        classNode.methods.removeIf(method -> !"<init>".equals(method.name));
+        boolean changed = classNode.methods.removeIf(method -> !"<init>".equals(method.name));
+        changed |= !classNode.interfaces.isEmpty();
         classNode.interfaces.clear();
+        if (!changed) {
+            return basicClass;
+        }
         ClassWriter writer = new SafeClassWriter(reader, ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
         classNode.accept(writer);
         return writer.toByteArray();
@@ -307,10 +299,6 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         boolean present = modPresent("nothirium", "naughthirium");
         nothiriumInstalled = present;
         return present;
-    }
-
-    private static boolean useCeleritasRenderer() {
-        return celeritasPresent();
     }
 
     private static boolean shouldStripNaughthiriumHooks() {

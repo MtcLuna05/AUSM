@@ -42,7 +42,7 @@ public class NetHandlerPlayClientMixin {
     @Unique
     private static final AtomicInteger ausm$tileEntityRepairProbeCount = new AtomicInteger();
     @Unique
-    private static final int AUSM_TILE_ENTITY_REPAIR_PROBE_LIMIT = 32;
+    private static final int AUSM_TILE_ENTITY_REPAIR_PROBE_LIMIT = 0;
     @Unique
     private double ausm$preTeleportX;
     @Unique

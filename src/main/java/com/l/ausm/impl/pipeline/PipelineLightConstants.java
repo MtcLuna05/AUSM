@@ -11,7 +11,7 @@ final class PipelineLightConstants {
     static final int MAX_CPU_LIGHT_BLOCK_SCAN_WIDTH = 48;
     static final int MAX_CPU_LIGHT_BLOCK_SCAN_HEIGHT = 32;
     static final int CPU_LIGHT_TILE_ENTITY_SNAPSHOT_INTERVAL_FRAMES = 20;
-    static final int MAX_COLORED_LIGHT_AUDIT_LOGS = 64;
+    static final int MAX_COLORED_LIGHT_AUDIT_LOGS = 0;
 
     static final int BIOME_NETHER_WASTES_ID = 100_000;
     static final int BIOME_CRIMSON_FOREST_ID = 100_001;

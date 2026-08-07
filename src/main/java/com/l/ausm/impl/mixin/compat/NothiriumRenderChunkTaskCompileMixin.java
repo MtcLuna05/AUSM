@@ -63,7 +63,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private static final AtomicInteger AUSM_EMISSIVE_FALLBACK_LOGS = new AtomicInteger();
 
     @Unique
-    private static final int AUSM_BLOOM_ONLY_BASE_FALLBACK_LOG_LIMIT = 16;
+    private static final int AUSM_BLOOM_ONLY_BASE_FALLBACK_LOG_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_BLOOM_ONLY_BASE_FALLBACK_LOGS = new AtomicInteger();
@@ -75,7 +75,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private static final AtomicInteger AUSM_BLOOM_BASE_ROUTE_PROBES = new AtomicInteger();
 
     @Unique
-    private static final int AUSM_BLOOM_VERTEX_PROBE_LIMIT = 24;
+    private static final int AUSM_BLOOM_VERTEX_PROBE_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_NATIVE_BLOOM_VERTEX_PROBES = new AtomicInteger();
@@ -87,19 +87,19 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
     private static final AtomicInteger AUSM_SHADERLESS_COMPILE_LIGHT_PROBES = new AtomicInteger();
 
     @Unique
-    private static final int AUSM_ENDERIO_GLASS_LAYER_PROBE_LIMIT = 16;
+    private static final int AUSM_ENDERIO_GLASS_LAYER_PROBE_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_ENDERIO_GLASS_LAYER_PROBES = new AtomicInteger();
 
     @Unique
-    private static final int AUSM_FRAMED_BLOOM_ROUTE_PROBE_LIMIT = 32;
+    private static final int AUSM_FRAMED_BLOOM_ROUTE_PROBE_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_FRAMED_BLOOM_ROUTE_PROBES = new AtomicInteger();
 
     @Unique
-    private static final int AUSM_FRAMED_BLOOM_FINAL_PROBE_LIMIT = 32;
+    private static final int AUSM_FRAMED_BLOOM_FINAL_PROBE_LIMIT = 0;
 
     @Unique
     private static final AtomicInteger AUSM_FRAMED_BLOOM_FINAL_PROBES = new AtomicInteger();
@@ -500,6 +500,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             }
         }
         PipelineContext pipeline = PipelineContext.getInstance();
+        // Nothirium bypasses BlockRendererDispatcher's context hook. Set the
+        // native BLOOM marker before the diagnostics-only fast return so every
+        // ordinary luminous block reaches Entree's coat exclusion path.
+        BlockRenderContext.setFramedBloomBoost(pipeline.stateHasBloomLayerGeometry(state));
         ausm$terrainCompileProbeLayer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
         BufferBuilder terrainProbeBuffer = ausm$terrainCompileProbeLayer != null && bufferBuilder != null
                 ? com.l.ausm.impl.util.MinecraftReflectionCompat.regionBufferForLayer(bufferBuilder, ausm$terrainCompileProbeLayer)
@@ -557,7 +561,10 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
                 ? pipeline.blockShaderlessBloomEmission(state, chunkCache, pos)
                 : pipeline.blockRenderEmission(state, chunkCache, pos);
         BlockRenderContext.setBlockEmission(blockEmission);
-        BlockRenderContext.setFramedBloomBoost(false);
+        // Nothirium builds terrain without BlockRendererDispatcher's context
+        // hook.  Preserve the native BLOOM marker here as well so the shader
+        // can reject coated-texture treatment before material resolution.
+        BlockRenderContext.setFramedBloomBoost(pipeline.stateHasBloomLayerGeometry(contextState));
         BlockRenderContext.setBloomOnlyEmission(false);
         BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, chunkCache, pos));
         BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, chunkCache, pos));

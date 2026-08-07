@@ -15,7 +15,8 @@ public class AstralSorceryConstellationRendererMixin {
                                                                   @Coerce Object position,
                                                                   @Coerce Object brightness,
                                                                   CallbackInfo ci) {
-        PipelineContext.getInstance().beginAstralConstellationPhase(constellation, WorldRenderingPhase.SKY_TEXTURED);
+        PipelineContext context = PipelineContext.getInstance();
+        context.beginAstralConstellationPhase(constellation, WorldRenderingPhase.SKY_TEXTURED);
     }
 
     @Inject(method = "renderConstellation", at = @At("RETURN"), remap = false)

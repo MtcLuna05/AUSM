@@ -199,6 +199,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -410,6 +411,8 @@ abstract class PipelineRuntimeState {
     protected final float[] currentAstralConstellationColor = new float[]{1.0f, 1.0f, 1.0f};
     protected final float[] currentAstralTierColor = new float[]{1.0f, 1.0f, 1.0f};
     protected float currentAstralSolarEclipseFactor;
+    /** True only while Astral's legacy RenderWorldLast sprites are on the entity MRT pass. */
+    protected boolean astralEffectOverlayActive;
     /** Shader-visible kind of the currently submitted modded sky detail. */
     protected int currentSkyDetailKind;
     protected float currentAlphaTestReference = 0.1f;
@@ -630,6 +633,9 @@ abstract class PipelineRuntimeState {
     protected int handItemDrawStateLogs = 0;
     protected int handGbufferProbeLogs = 0;
     protected int handPassBindLogs = 0;
+    /** Deliberately broad forensic trace for unresolved sky/hand/lily defects. */
+    protected int forensicTraceEvents = 0;
+    protected final Set<Long> lilyPadShadowProbeChunks = ConcurrentHashMap.newKeySet();
     protected int shaderlessLightStateProbeLogs = 0;
     protected int shaderlessSkyGuiWorldProbeLogs = 0;
     protected int shaderlessSkyGuiScreenProbeLogs = 0;
@@ -735,6 +741,7 @@ abstract class PipelineRuntimeState {
     protected final AtomicInteger currentProblemProbeCount = new AtomicInteger();
     protected final AtomicInteger activeLightOrIdProbeCount = new AtomicInteger();
     protected final AtomicInteger waterLikeMaterialProbeCount = new AtomicInteger();
+    protected final AtomicInteger lilyPadRouteProbeCount = new AtomicInteger();
     protected long lastShaderlessNothiriumLoadRendererReloadMillis = 0L;
     protected int lastShaderlessNothiriumLoadRendererReloadDimension = Integer.MIN_VALUE;
     protected long nextWorldPassSerial = 0L;
@@ -937,6 +944,7 @@ abstract class PipelineRuntimeState {
             World world = renderWorld(mc);
             return world != null ? (int) (com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) / 24000L) : 0;
         });
+        uniformRegistry.registerVec2("ausmBotaniaRainbowRotation", () -> botaniaRainbowRotation(mc));
         uniformRegistry.registerInt("isSpectator", () -> com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(com.l.ausm.impl.util.MinecraftReflectionCompat.player(mc)) ? 1 : 0);
         uniformRegistry.registerInt("seaLevel", () -> renderWorld(mc) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((renderWorld(mc)), new String[] {"func_181545_F", "getSeaLevel"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 63) : 63);
         uniformRegistry.registerInt("bedrockLevel", () -> 0);
@@ -956,6 +964,7 @@ abstract class PipelineRuntimeState {
         uniformRegistry.registerVec3("ausmAstralConstellationColor", () -> currentAstralConstellationColor.clone());
         uniformRegistry.registerVec3("ausmAstralTierColor", () -> currentAstralTierColor.clone());
         uniformRegistry.registerFloat("ausmAstralSolarEclipse", () -> currentAstralSolarEclipseFactor);
+        uniformRegistry.registerInt("ausmAstralEffectOverlay", () -> astralEffectOverlayActive ? 1 : 0);
         uniformRegistry.registerInt("ausmSkyDetailKind", () -> currentSkyDetailKind);
         uniformRegistry.registerVec2i("ausmSkyDetailTextureSize", PipelineGlState::boundTextureSize);
         uniformRegistry.registerVec4("ausmVoidSkyParams", () -> new float[]{1.0f, 1.0f, 1.0f, 1.0f});
@@ -1917,6 +1926,14 @@ abstract class PipelineRuntimeState {
             return 0.25f;
         }
         return world != null ? (float) ((com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L) / 24000.0) : 0.25f;
+    }
+
+    /** Matches SkyblockSkyRenderer's day-seeded java.util.Random placement. */
+    protected float[] botaniaRainbowRotation(Minecraft mc) {
+        World world = renderWorld(mc);
+        long worldTime = world != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) : 0L;
+        Random random = new Random(((worldTime + 1000L) / 24000L) * 255L);
+        return new float[]{random.nextFloat() * 360.0f, random.nextFloat() * 360.0f};
     }
 
     protected float adjustedDayTime(Minecraft mc) {
@@ -3005,6 +3022,7 @@ abstract class PipelineRuntimeState {
             mappedId = blockIds.idFor(pipelineState);
             if (mappedId != 0) {
                 logWaterLikeMaterialProbe(pipelineState, blockAccess, pos, mappedId, "mapped");
+                logLilyPadRouteProbe(pipelineState, blockAccess, pos, mappedId, "mapped");
                 return mappedId;
             }
         }
@@ -3012,6 +3030,7 @@ abstract class PipelineRuntimeState {
         int waterLikeFallbackId = waterLikeFluidFallbackId(pipelineState);
         if (waterLikeFallbackId != 0) {
             logWaterLikeMaterialProbe(pipelineState, blockAccess, pos, waterLikeFallbackId, "water-like-fallback");
+            logLilyPadRouteProbe(pipelineState, blockAccess, pos, waterLikeFallbackId, "water-like-fallback");
             return waterLikeFallbackId;
         }
 
@@ -3050,6 +3069,64 @@ abstract class PipelineRuntimeState {
                 pos,
                 blockAccess != null ? blockAccess.getClass().getName() : "null"
         );
+    }
+
+    protected void logLilyPadRouteProbe(IBlockState state, IBlockAccess blockAccess, BlockPos pos, int id, String source) {
+        if (state == null || id != 10489) {
+            return;
+        }
+
+        if (pos != null) {
+            lilyPadShadowProbeChunks.add(lilyPadShadowProbeChunkKey(
+                    MinecraftReflectionCompat.blockPosX(pos),
+                    MinecraftReflectionCompat.blockPosY(pos),
+                    MinecraftReflectionCompat.blockPosZ(pos)
+            ));
+        }
+        forensicTrace("lily-material-route", "source=" + source + ", id=" + id + ", pos=" + pos
+                + ", layer=" + safeRenderLayer(state) + ", renderType=" + safeRenderType(state));
+
+        int call = lilyPadRouteProbeCount.incrementAndGet();
+        if (call > MAX_LILY_PAD_ROUTE_PROBE_LOGS) {
+            return;
+        }
+
+        MainMod.LOGGER.info(
+                "[AUSMLilyPadRouteProbe] call={} source={} id={} registry={} state={} pos={} layer={} renderType={} material={} light={} emission={} wavingLilyPad={} active={} pass={} phase={}",
+                call,
+                source,
+                id,
+                registryName(state),
+                state,
+                pos,
+                safeRenderLayer(state),
+                safeRenderType(state),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.stateMaterial(state),
+                safeLightValue(state, blockAccess, pos),
+                blockRenderEmissionForState(state, blockAccess, pos),
+                optionValue(shaderProperties, "WAVING_LILY_PAD"),
+                isPipelineActive,
+                activePass,
+                getPhase()
+        );
+    }
+
+    public boolean isKnownLilyPadShadowProbeChunk(int chunkX, int chunkY, int chunkZ) {
+        // Nothirium exposes section origins (already in block units), whereas
+        // the material route records a BlockPos. Do not shift the section
+        // origin a second time or the exact shadow VBO probe can never match.
+        return lilyPadShadowProbeChunks.contains(lilyPadShadowProbeChunkOriginKey(chunkX, chunkY, chunkZ));
+    }
+
+    protected static long lilyPadShadowProbeChunkKey(int blockX, int blockY, int blockZ) {
+        return lilyPadShadowProbeChunkOriginKey(blockX >> 4 << 4, blockY >> 4 << 4, blockZ >> 4 << 4);
+    }
+
+    protected static long lilyPadShadowProbeChunkOriginKey(int chunkOriginX, int chunkOriginY, int chunkOriginZ) {
+        long x = (long) (chunkOriginX >> 4) & 0x3FFFFFL;
+        long y = (long) (chunkOriginY >> 4) & 0xFFFFFL;
+        long z = (long) (chunkOriginZ >> 4) & 0x3FFFFFL;
+        return x << 42 | y << 22 | z;
     }
 
     protected static int waterLikeFluidFallbackId(IBlockState state) {
@@ -5449,6 +5526,24 @@ abstract class PipelineRuntimeState {
                 && !isRenderingBetterPortalsRenderPass();
     }
 
+    /**
+     * Shadered overworld-like dimensions use a single AUSM canvas. Entree is
+     * the sole owner of the visible sky, celestials, and modded sky details.
+     */
+    public boolean shouldUseShaderOwnedSkyOverride() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
+        return shouldUseShaderOwnedSkyOverride(world);
+    }
+
+    public boolean shouldUseShaderOwnedSkyOverride(World world) {
+        return isPipelineActive
+                && world != null
+                && isOverworldShaderEnvironment(world)
+                && !isRenderingBetterPortalsNestedView()
+                && !isRenderingBetterPortalsRenderPass();
+    }
+
     public void renderCompleteOwnedVoidSkyDetails(float partialTicks, WorldClient world, Minecraft mc) {
         if (mc == null
                 || world == null
@@ -5593,7 +5688,7 @@ abstract class PipelineRuntimeState {
     }
 
     public boolean shouldSuppressVanillaUpperSkyGeometry() {
-        return shouldSuppressShaderlessSimpleVoidSkyBaseGeometry();
+        return shouldUseShaderOwnedSkyOverride() || shouldSuppressShaderlessSimpleVoidSkyBaseGeometry();
     }
 
     public boolean shouldSuppressVanillaSunGeometry() {
@@ -5605,20 +5700,22 @@ abstract class PipelineRuntimeState {
     }
 
     protected boolean shouldSuppressShaderedVoidCelestialGeometry() {
-        return shouldSuppressShaderedSimpleVoidSkyBaseGeometry();
+        return shouldUseShaderOwnedSkyOverride() || shouldSuppressShaderedSimpleVoidSkyBaseGeometry();
     }
 
     public boolean shouldSuppressVanillaStarsGeometry() {
-        return isPipelineActive && !shaderProperties.renderSettings().stars();
+        return shouldUseShaderOwnedSkyOverride()
+                || isPipelineActive && !shaderProperties.renderSettings().stars();
     }
 
     public boolean shouldSuppressVanillaLowerSkyGeometry() {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         boolean result = world != null
-                && ((isCustomVoidWorldSkyEnabled(world)
-                    || (isSimpleVoidWorld(world) && shouldUseShaderlessOwnedSky(mc)))
-                || shouldUseShaderedF1LowerSkyRepair(mc, world))
+                && (isPipelineActive && shouldUseOwnedSkyOverrideWorld(world)
+                    || isCustomVoidWorldSkyEnabled(world)
+                    || isSimpleVoidWorld(world) && shouldUseShaderlessOwnedSky(mc)
+                    || shouldUseShaderedF1LowerSkyRepair(mc, world))
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
         logSkySuppressionDecision("vanilla-lower", mc, world, result);
@@ -5650,15 +5747,15 @@ abstract class PipelineRuntimeState {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return world != null
-                && isSimpleVoidWorld(world)
-                && (shouldUseShaderlessOwnedSky(mc)
-                    || isPipelineActive && isCustomVoidWorldSkyEnabled(world))
+                && (shouldUseShaderOwnedSkyOverride(world)
+                    || shouldUseShaderlessOwnedSky(mc) && isSimpleVoidWorld(world))
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
     }
 
     public boolean shouldSuppressVanillaSunsetGeometry() {
-        return shouldUseShaderlessOwnedSky(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
+        return shouldUseShaderOwnedSkyOverride()
+                || shouldUseShaderlessOwnedSky(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
     }
 
     public boolean shouldSuppressVoidWorldCustomSkyRenderer(Object skyRenderer, WorldClient world) {
@@ -5775,17 +5872,36 @@ abstract class PipelineRuntimeState {
     }
 
     public boolean shouldSuppressShaderedAstralLowerSky() {
-        return shouldSuppressShaderedSimpleVoidSkyBaseGeometry();
+        return shouldUseShaderOwnedSkyOverride() || shouldSuppressShaderedSimpleVoidSkyBaseGeometry();
     }
 
     public boolean shouldSuppressShaderedAstralStars() {
-        return isPipelineActive
+        return shouldUseShaderOwnedSkyOverride()
+                || shouldSuppressNativeAstralVoidSkyDetail()
+                || isPipelineActive
                 && !optionBoolean(shaderProperties, ASTRAL_NATIVE_STARS_OPTION, true);
     }
 
     public boolean shouldSuppressShaderedAstralConstellations() {
-        return isPipelineActive
+        return shouldUseShaderOwnedSkyOverride()
+                || shouldSuppressNativeAstralVoidSkyDetail()
+                || isPipelineActive
                 && !optionBoolean(shaderProperties, ASTRAL_NATIVE_CONSTELLATIONS_OPTION, true);
+    }
+
+    /**
+     * Void World uses the shader-owned star field so planet compositing occurs
+     * after it. Native Astral geometry draws later and therefore cannot be
+     * selectively occluded by those planet textures.
+     */
+    protected boolean shouldSuppressNativeAstralVoidSkyDetail() {
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        World world = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
+        return isPipelineActive
+                && world != null
+                && isSimpleVoidWorld(world)
+                && !isRenderingBetterPortalsNestedView()
+                && !isRenderingBetterPortalsRenderPass();
     }
 
     public boolean shouldSuppressShaderedAstralStarsAndConstellations() {
@@ -6413,6 +6529,21 @@ abstract class PipelineRuntimeState {
 
     public boolean isPipelineActive() {
         return isPipelineActive;
+    }
+
+    /**
+     * Records an entire affected render route without changing render state.
+     * This is intentionally much broader than the former one-digit probes:
+     * the event stream is scoped to an active world frame and carries enough
+     * state to reconstruct ordering, timing, and target ownership.
+     */
+    public void forensicTrace(String route, String detail) {
+        // Probe disabled.
+    }
+
+    /** Render-thread variant including the complete mutable GL target state. */
+    public void forensicGlTrace(String route, String detail) {
+        // Probe disabled.
     }
 
     protected boolean shouldUseShaderlessBloomVertexMetadata() {
@@ -7880,6 +8011,7 @@ abstract class PipelineRuntimeState {
 
     public void beginPhase(WorldRenderingPhase phase) {
         beginPhaseIfActive(phase);
+        forensicGlTrace("phase-enter", "requested=" + phase);
     }
 
     public WorldRenderingPhase blockEntityPhaseForCurrentForgePass() {
@@ -7911,14 +8043,15 @@ abstract class PipelineRuntimeState {
      * Publishes the detail currently being submitted by a compatibility renderer.
      * Values are intentionally numeric so shaderpacks do not need string handling.
      * 1 Botania planet, 2 Botania ribbon/skybox, 3 Botania rainbow,
-     * 4 Astral stars, 5 Astral constellation, 6 Astral sun/moon.
+     * 4 Astral stars, 5 Astral constellation, 6 Astral sun/moon,
+     * 7 AUSM's Twilight Forest celestial bridge.
      */
     public void setSkyDetailAsset(String resourceName) {
         currentSkyDetailKind = skyDetailKind(resourceName);
     }
 
     public void setSkyDetailKind(int kind) {
-        currentSkyDetailKind = Math.max(0, Math.min(6, kind));
+        currentSkyDetailKind = Math.max(0, Math.min(7, kind));
     }
 
     public void clearSkyDetailAsset() {
@@ -8016,6 +8149,34 @@ abstract class PipelineRuntimeState {
         return true;
     }
 
+    /**
+     * Astral's RenderWorldLast particles use the regular fixed-function entity
+     * vertex layout. Route that layout through Entree's translucent entity MRT
+     * program instead of writing program-0 colour into only attachment 0.
+     */
+    public boolean beginAstralEffectOverlayPhase() {
+        astralEffectOverlayActive = true;
+        if (!beginPhaseIfActive(WorldRenderingPhase.ENTITIES_TRANSLUCENT)) {
+            astralEffectOverlayActive = false;
+            return false;
+        }
+        disablePipelineVertexAttributes();
+        TextureBinder.restoreDefaultTextureUnit();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        ShaderProgram program = activeProgram();
+        if (program != null) {
+            uniformRegistry.upload(program, "ausmAstralEffectOverlay");
+        }
+        forensicGlTrace("astral-overlay-shader-pass", "pass=" + activePass);
+        return activePass != null;
+    }
+
+    /** Clears the unlit Astral flag before the next normal shader bind. */
+    public void endAstralEffectOverlayPhase() {
+        astralEffectOverlayActive = false;
+        endPass();
+    }
+
     public void prepareHandItemRenderState() {
         if (!isPipelineActive || !worldFrameActive || renderingGuiScreen()) {
             return;
@@ -8031,6 +8192,31 @@ abstract class PipelineRuntimeState {
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glColorMask(true, true, true, true);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    public void logHandGbufferProbe(String stage) {
+        forensicGlTrace("hand-" + stage, "activePass=" + activePass + ", phase=" + getPhase());
+        if (!isPipelineActive || !pingPongManager.isInitialized()
+                || handGbufferProbeLogs >= MAX_HAND_GBUFFER_PROBE_LOGS) {
+            return;
+        }
+        handGbufferProbeLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMHandGbufferProbe] call={} stage={} activePass={} phase={} worldFrame={} drawFbo={} draw0={} draw1={} program={} blend={} alpha={} depth={} depthMask={}",
+                handGbufferProbeLogs,
+                stage,
+                activePass,
+                getPhase(),
+                worldFrameActive,
+                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL20.GL_DRAW_BUFFER0),
+                GL11.glGetInteger(GL20.GL_DRAW_BUFFER1),
+                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
+                GL11.glIsEnabled(GL11.GL_BLEND),
+                GL11.glIsEnabled(GL11.GL_ALPHA_TEST),
+                GL11.glIsEnabled(GL11.GL_DEPTH_TEST),
+                GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
+        );
     }
 
     public void prepareVanillaHandRenderState() {
@@ -9144,6 +9330,7 @@ abstract class PipelineRuntimeState {
             return;
         }
 
+        forensicGlTrace("phase-exit-before", "stackDepth=" + passStack.size());
         PassScope scope = passStack.pop();
         activePhase = scope.previousPhase();
         if (!scope.bound()) {
@@ -9175,6 +9362,7 @@ abstract class PipelineRuntimeState {
             activeProgramTessellated = scope.previousProgramTessellated();
             activeProgramGeometric = scope.previousProgramGeometric();
         }
+        forensicGlTrace("phase-exit-after", "restoredPass=" + activePass + ", stackDepth=" + passStack.size());
     }
 
     protected void logLayerOutputProbe(RenderPass pass, WorldRenderingPhase phase) {

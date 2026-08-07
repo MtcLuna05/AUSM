@@ -33,6 +33,7 @@ import org.lwjgl.opengl.GL30;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.util.Collection;
@@ -48,16 +49,22 @@ public final class AusmBloomRenderer {
     private static final String BLOOM_FRAGMENT_PATH = "ausm/bloom.fsh";
     private static final String BLOOM_STRENGTH_SETTING = "ausmBloomStrength";
     private static final String BLOOM_BLUR_ITERATIONS_SETTING = "ausmBloomBlurIterations";
-    private static final float BLOOM_DIRECT_DEBUG_STRENGTH = 0.0F;
+    /** Lets a small experimental pack inspect its parsed bloom RGB without
+     * screen blending it into the already-coloured world target. */
+    private static final String BLOOM_COMPOSITE_REPLACE_SETTING = "ausmBloomCompositeReplace";
     private static final float FRAMEBUFFER_BLOOM_STRENGTH = 0.525F;
     private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
     private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = false;
     private static final int BLOOM_RENDER_LOG_LIMIT = 0;
-    private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 8;
+    private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 0;
+    // These probes are intentionally short-lived.  They include a few small
+    // framebuffer reads plus two source snapshots, enough to identify whether
+    // Bloom is lost while drawing, blurring, depth-masking, or presenting
+    // without continuously penalising shadered play.
     private static final int BLOOM_PROBE_LIMIT = 0;
+    private static final int BLOOM_DEPTH_LEAK_PROBE_ATTEMPT_LIMIT = 0;
     private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_FACTOR = -1.0F;
     private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_UNITS = -4.0F;
-
     private final AusmBloomResourceIndex resourceIndex = new AusmBloomResourceIndex();
     private final IntBuffer viewportBuffer = BufferUtils.createIntBuffer(16);
     private Framebuffer bloomLayerTarget;
@@ -79,6 +86,7 @@ public final class AusmBloomRenderer {
     private float bloomStrength = DEFAULT_BLOOM_STRENGTH;
     private int blurIterations = DEFAULT_BLUR_ITERATIONS;
     private boolean shaderPackCompositeOverride;
+    private boolean shaderPackCompositeReplace;
     private boolean layerBloomPending;
     private boolean loggedLayerRenderer;
     private boolean loggedShaderlessEmissiveRenderer;
@@ -91,7 +99,12 @@ public final class AusmBloomRenderer {
     private int bloomOcclusionProbeLogs;
     private int bloomFrameProbeCalls;
     private int bloomCompositeProbeCalls;
+    private int bloomPeakProbeCalls;
     private int bloomOcclusionQuery;
+    private int bloomDepthProbeFramebuffer;
+    private int bloomDepthLeakProbeCalls;
+    private int bloomDepthLeakProbeAttempts;
+    private BloomPeakProbe pendingBloomPeakProbe;
     private int depthAttachmentProbeLogs;
     private LumenizedTicketBridge lumenizedTickets;
     private boolean globalFacadesBloomResolved;
@@ -111,6 +124,8 @@ public final class AusmBloomRenderer {
         );
         blurIterations = Math.max(0, Math.min(8,
                 PipelineShaderSettings.parseIntSetting(pack, properties, BLOOM_BLUR_ITERATIONS_SETTING, DEFAULT_BLUR_ITERATIONS)));
+        shaderPackCompositeReplace = PipelineShaderSettings.parseBooleanSetting(
+                pack, properties, BLOOM_COMPOSITE_REPLACE_SETTING, false);
 
         ShaderPackLayout layout = ShaderPackLayout.detect(pack);
         String vertexPath = layout.rootPath(BLOOM_VERTEX_PATH);
@@ -141,8 +156,8 @@ public final class AusmBloomRenderer {
 
         if (shaderPackCompositeOverride) {
             MainMod.LOGGER.info(
-                    "[AUSMBloom] Using shaderpack bloom override for '{}' (strength={}, blurIterations={}).",
-                    pack.getName(), bloomStrength, blurIterations);
+                    "[AUSMBloom] Using shaderpack bloom override for '{}' (strength={}, blurIterations={}, replaceComposite={}).",
+                    pack.getName(), bloomStrength, blurIterations, shaderPackCompositeReplace);
         }
     }
 
@@ -157,12 +172,12 @@ public final class AusmBloomRenderer {
         }
 
         layerBloomPending = false;
+        pendingBloomPeakProbe = null;
         int targetWidth = targetWidth(pipelineDepthSource, minecraftDepthSource);
         int targetHeight = targetHeight(pipelineDepthSource, minecraftDepthSource);
         if (!ensureTargets(targetWidth, targetHeight)) {
             return 0;
         }
-
         RenderState state = captureState();
         int rendered = 0;
         int passedSamples = -1;
@@ -178,7 +193,7 @@ public final class AusmBloomRenderer {
             }
             logDepthAttachmentProbe("prepared", minecraftDepthSource, sharedMinecraftDepth);
             bindLayerTargetForGeometry();
-            int query = 0;
+            int query = beginBloomOcclusionProbe();
             if (query > 0) {
                 GL15.glBeginQuery(GL15.GL_SAMPLES_PASSED, query);
             }
@@ -188,6 +203,7 @@ public final class AusmBloomRenderer {
             } finally {
                 if (query > 0) {
                     GL15.glEndQuery(GL15.GL_SAMPLES_PASSED);
+                    passedSamples = GL15.glGetQueryObjecti(query, GL15.GL_QUERY_RESULT);
                 }
             }
             if (rendered > 0) {
@@ -204,6 +220,9 @@ public final class AusmBloomRenderer {
                         com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget));
             }
             if (rendered > 0 && passedSamples != 0) {
+                // Startup invokes this path before any BLOOM VBO exists. Only
+                // spend the bounded readback budget once geometry really drew.
+                pendingBloomPeakProbe = captureBloomLayerPeakProbe();
                 layerBloomPending = true;
                 if (!loggedLayerRenderer) {
                     loggedLayerRenderer = true;
@@ -335,6 +354,10 @@ public final class AusmBloomRenderer {
             GL15.glDeleteQueries(bloomOcclusionQuery);
             bloomOcclusionQuery = 0;
         }
+        if (bloomDepthProbeFramebuffer > 0) {
+            GL30.glDeleteFramebuffers(bloomDepthProbeFramebuffer);
+            bloomDepthProbeFramebuffer = 0;
+        }
         bloomDepthTexture = 0;
         finalDepthTexture = 0;
         width = -1;
@@ -370,15 +393,34 @@ public final class AusmBloomRenderer {
         boolean composited = false;
         RenderState state = captureState ? captureState() : null;
         try {
-            if (runBlurChain(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget))) {
+            int layerTexture = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget);
+            if (shaderPackCompositeReplace) {
                 boolean useSceneDepthMask = copyDepthTexture(target, false);
-                compositeBlurredBloom(target, bloomStrength, preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
-                if (BLOOM_DIRECT_DEBUG_STRENGTH > 0.0F) {
-                    compositeTexture(target, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget), BLOOM_DIRECT_DEBUG_STRENGTH,
-                            preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
-                }
+                // Bloom Lab is a raw-layer diagnostic, not a normal visual
+                // bloom presentation. Feeding it a blur makes its non-black
+                // low-value halo replace the entire scene with near-black.
+                // Use the unblurred parsed layer so black stays discarded and
+                // the visible pixels are exactly the emitted bloom colour.
+                BloomPeakProbe layerPeak = pendingBloomPeakProbe;
+                String targetBefore = sampleFramebufferColorAtScaled(target, layerPeak, bloomLayerTarget);
+                compositeTexture(target, layerTexture, 1.0F,
+                        preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
                 composited = true;
-                logBloomCompositeProbe(target, useSceneDepthMask, composited);
+                logBloomCompositeProbe(target, useSceneDepthMask, true, layerPeak,
+                        "raw-layer", targetBefore,
+                        sampleFramebufferColorAtScaled(target, layerPeak, bloomLayerTarget));
+            } else if (runBlurChain(layerTexture, false)) {
+                boolean useSceneDepthMask = copyDepthTexture(target, false);
+                BloomPeakProbe layerPeak = pendingBloomPeakProbe;
+                String blurredAtLayerPeak = sampleFramebufferColorAtScaled(
+                        bloomDownsampleTarget, layerPeak, bloomLayerTarget);
+                String targetBefore = sampleFramebufferColorAtScaled(target, layerPeak, bloomLayerTarget);
+                logBloomDepthLeakProbe(useSceneDepthMask);
+                compositeBlurredBloom(target, bloomStrength, preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
+                composited = true;
+                logBloomCompositeProbe(target, useSceneDepthMask, composited, layerPeak,
+                        blurredAtLayerPeak, targetBefore,
+                        sampleFramebufferColorAtScaled(target, layerPeak, bloomLayerTarget));
                 if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
                     bloomCompositeLogs++;
                     MainMod.LOGGER.info("[AUSMBloomComposite] result=blurred target={} layer={}",
@@ -393,6 +435,7 @@ public final class AusmBloomRenderer {
             }
         } finally {
             layerBloomPending = false;
+            pendingBloomPeakProbe = null;
             if (state != null) {
                 state.restore();
             }
@@ -421,21 +464,283 @@ public final class AusmBloomRenderer {
         );
     }
 
-    private void logBloomCompositeProbe(Framebuffer target, boolean sceneDepthMask, boolean composited) {
+    private int beginBloomOcclusionProbe() {
+        if (bloomFrameProbeCalls >= BLOOM_PROBE_LIMIT) {
+            return 0;
+        }
+        try {
+            if (bloomOcclusionQuery <= 0) {
+                bloomOcclusionQuery = GL15.glGenQueries();
+            }
+            return bloomOcclusionQuery;
+        } catch (RuntimeException | LinkageError ignored) {
+            return 0;
+        }
+    }
+
+    private void logBloomCompositeProbe(Framebuffer target, boolean sceneDepthMask, boolean composited,
+                                        BloomPeakProbe layerPeak, String blurredAtLayerPeak,
+                                        String targetBefore, String targetAfter) {
         if (bloomCompositeProbeCalls >= BLOOM_PROBE_LIMIT) {
             return;
         }
         bloomCompositeProbeCalls++;
         MainMod.LOGGER.info(
-                "[AUSMBloomCompositeProbe] call={} composited={} sceneDepthMask={} layer={} downsample={} target={} glError={}",
+                "[AUSMBloomCompositeProbe] call={} composited={} sceneDepthMask={} layer={} layerPeak={} sourceDepth={} blurAtLayerPeak={} targetBefore={} targetAfter={} downsample={} target={} glError={}",
                 bloomCompositeProbeCalls,
                 composited,
                 sceneDepthMask,
                 sampleFramebufferColor(bloomLayerTarget),
+                layerPeak,
+                depthPairAtLayerPeak(layerPeak, sceneDepthMask),
+                blurredAtLayerPeak,
+                targetBefore,
+                targetAfter,
                 sampleFramebufferColor(bloomDownsampleTarget),
                 sampleFramebufferColor(target),
                 GL11.glGetError()
         );
+    }
+
+    /**
+     * Finds a blurred-only Bloom pixel over opaque scene geometry and records
+     * the exact predicate used by the composite shader. This is diagnostic
+     * only: it neither changes Bloom colour nor depth state.
+     */
+    private void logBloomDepthLeakProbe(boolean sceneDepthMask) {
+        if (bloomDepthLeakProbeCalls >= BLOOM_PROBE_LIMIT
+                || bloomDepthLeakProbeAttempts >= BLOOM_DEPTH_LEAK_PROBE_ATTEMPT_LIMIT) {
+            return;
+        }
+        bloomDepthLeakProbeAttempts++;
+        BloomLeakProbe probe = captureBloomLeakProbe();
+        if (probe == null) {
+            return;
+        }
+        bloomDepthLeakProbeCalls++;
+        MainMod.LOGGER.warn(
+                "[AUSMBloomDepthLeakProbe] call={} sceneMask={} shaderOverride={} replace={} {}",
+                bloomDepthLeakProbeCalls, sceneDepthMask, shaderPackCompositeOverride,
+                shaderPackCompositeReplace, probe);
+    }
+
+    private BloomLeakProbe captureBloomLeakProbe() {
+        if (bloomLayerTarget == null || bloomDownsampleTarget == null || bloomDepthTexture <= 0
+                || finalDepthTexture <= 0 || width <= 0 || height <= 0) {
+            return null;
+        }
+        int blurWidth = Math.max(1, MinecraftReflectionCompat.framebufferWidth(bloomDownsampleTarget));
+        int blurHeight = Math.max(1, MinecraftReflectionCompat.framebufferHeight(bloomDownsampleTarget));
+        ByteBuffer pixels = BufferUtils.createByteBuffer(blurWidth * blurHeight * 4);
+        int framebuffer = MinecraftReflectionCompat.framebufferObject(bloomDownsampleTarget);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebuffer);
+            GL11.glReadBuffer(framebuffer == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadPixels(0, 0, blurWidth, blurHeight, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels);
+        } catch (RuntimeException | LinkageError ignored) {
+            return null;
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL11.glReadBuffer(previousReadBuffer);
+        }
+
+        int brightest = -1;
+        int candidateX = -1;
+        int candidateY = -1;
+        int candidateRed = 0;
+        int candidateGreen = 0;
+        int candidateBlue = 0;
+        for (int index = 0; index < blurWidth * blurHeight; index++) {
+            int offset = index * 4;
+            int red = pixels.get(offset) & 0xFF;
+            int green = pixels.get(offset + 1) & 0xFF;
+            int blue = pixels.get(offset + 2) & 0xFF;
+            int brightness = red * 54 + green * 183 + blue * 19;
+            if (brightness <= brightest || brightness < 512) {
+                continue;
+            }
+            int x = Math.min(width - 1, Math.max(0, (index % blurWidth) * width / blurWidth));
+            int y = Math.min(height - 1, Math.max(0, (index / blurWidth) * height / blurHeight));
+            int[] raw = readFramebufferRgba(bloomLayerTarget, x, y);
+            if (raw == null || raw[0] + raw[1] + raw[2] > 12) {
+                continue;
+            }
+            Float sceneDepth = readDepthTexture(finalDepthTexture, x, y);
+            if (sceneDepth == null || sceneDepth >= 0.99999F) {
+                continue;
+            }
+            brightest = brightness;
+            candidateX = x;
+            candidateY = y;
+            candidateRed = red;
+            candidateGreen = green;
+            candidateBlue = blue;
+        }
+        if (candidateX < 0) {
+            // Startup and GUI frames have no Bloom payload. Do not consume
+            // the bounded probe budget until there is an actual blurred
+            // sample over opaque scene geometry to inspect.
+            return null;
+        }
+        int[] raw = readFramebufferRgba(bloomLayerTarget, candidateX, candidateY);
+        Float bloomDepth = readDepthTexture(bloomDepthTexture, candidateX, candidateY);
+        Float sceneDepth = readDepthTexture(finalDepthTexture, candidateX, candidateY);
+        RawBloomSource source = findNearbyRawBloomSource(candidateX, candidateY);
+        return new BloomLeakProbe(
+                "pixel=" + candidateX + "/" + candidateY
+                        + ",blur=" + candidateRed + "/" + candidateGreen + "/" + candidateBlue
+                        + ",raw=" + rgbaSummary(raw)
+                        + ",bloomDepth=" + depthSummary(bloomDepth)
+                        + ",sceneDepth=" + depthSummary(sceneDepth)
+                        + ",compositeDiscard=" + (bloomDepth != null && sceneDepth != null
+                        && bloomDepth > sceneDepth + 0.000001F && sceneDepth < 0.99999F)
+                        + ",source=" + source
+        );
+    }
+
+    /**
+     * A blurred-only receiving pixel has no useful depth of its own. Record
+     * the nearby raw Bloom source that fed it and compare that source depth to
+     * the receiver's scene depth; this distinguishes a shader bypass from a
+     * depth-valid foreground bloom spill.
+     */
+    private RawBloomSource findNearbyRawBloomSource(int receiverX, int receiverY) {
+        if (bloomLayerTarget == null) {
+            return RawBloomSource.NONE;
+        }
+        int radius = Math.max(24, blurIterations * 12);
+        int startX = Math.max(0, receiverX - radius);
+        int startY = Math.max(0, receiverY - radius);
+        int endX = Math.min(width - 1, receiverX + radius);
+        int endY = Math.min(height - 1, receiverY + radius);
+        int sampleWidth = endX - startX + 1;
+        int sampleHeight = endY - startY + 1;
+        ByteBuffer pixels = readFramebufferRgbaRegion(bloomLayerTarget, startX, startY, sampleWidth, sampleHeight);
+        if (pixels == null) {
+            return RawBloomSource.NONE;
+        }
+        int bestScore = 0;
+        int sourceX = -1;
+        int sourceY = -1;
+        int red = 0;
+        int green = 0;
+        int blue = 0;
+        for (int y = 0; y < sampleHeight; y++) {
+            for (int x = 0; x < sampleWidth; x++) {
+                int offset = (y * sampleWidth + x) * 4;
+                int candidateRed = pixels.get(offset) & 0xFF;
+                int candidateGreen = pixels.get(offset + 1) & 0xFF;
+                int candidateBlue = pixels.get(offset + 2) & 0xFF;
+                int brightness = candidateRed * 54 + candidateGreen * 183 + candidateBlue * 19;
+                int distance = Math.abs(startX + x - receiverX) + Math.abs(startY + y - receiverY);
+                int score = brightness * 16 - distance;
+                if (brightness <= 12 || score <= bestScore) {
+                    continue;
+                }
+                bestScore = score;
+                sourceX = startX + x;
+                sourceY = startY + y;
+                red = candidateRed;
+                green = candidateGreen;
+                blue = candidateBlue;
+            }
+        }
+        if (sourceX < 0) {
+            return RawBloomSource.NONE;
+        }
+        Float sourceBloomDepth = readDepthTexture(bloomDepthTexture, sourceX, sourceY);
+        Float receiverSceneDepth = readDepthTexture(finalDepthTexture, receiverX, receiverY);
+        return new RawBloomSource(sourceX, sourceY, red, green, blue, sourceBloomDepth, receiverSceneDepth);
+    }
+
+    private static String rgbaSummary(int[] rgba) {
+        return rgba == null ? "unavailable" : rgba[0] + "/" + rgba[1] + "/" + rgba[2] + "/" + rgba[3];
+    }
+
+    private static String depthSummary(Float depth) {
+        return depth == null ? "unavailable" : String.format(java.util.Locale.ROOT, "%.7f", depth);
+    }
+
+    private static int[] readFramebufferRgba(Framebuffer framebuffer, int x, int y) {
+        if (framebuffer == null) {
+            return null;
+        }
+        int width = Math.max(1, MinecraftReflectionCompat.framebufferWidth(framebuffer));
+        int height = Math.max(1, MinecraftReflectionCompat.framebufferHeight(framebuffer));
+        int framebufferId = MinecraftReflectionCompat.framebufferObject(framebuffer);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        ByteBuffer pixel = BufferUtils.createByteBuffer(4);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebufferId);
+            GL11.glReadBuffer(framebufferId == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadPixels(Math.max(0, Math.min(width - 1, x)), Math.max(0, Math.min(height - 1, y)),
+                    1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
+            return new int[] {pixel.get(0) & 0xFF, pixel.get(1) & 0xFF, pixel.get(2) & 0xFF, pixel.get(3) & 0xFF};
+        } catch (RuntimeException | LinkageError ignored) {
+            return null;
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL11.glReadBuffer(previousReadBuffer);
+        }
+    }
+
+    private static ByteBuffer readFramebufferRgbaRegion(Framebuffer framebuffer, int x, int y, int width, int height) {
+        if (framebuffer == null || width <= 0 || height <= 0) {
+            return null;
+        }
+        int framebufferId = MinecraftReflectionCompat.framebufferObject(framebuffer);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        ByteBuffer pixels = BufferUtils.createByteBuffer(width * height * 4);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebufferId);
+            GL11.glReadBuffer(framebufferId == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadPixels(x, y, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels);
+            return pixels;
+        } catch (RuntimeException | LinkageError ignored) {
+            return null;
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL11.glReadBuffer(previousReadBuffer);
+        }
+    }
+
+    private Float readDepthTexture(int texture, int x, int y) {
+        if (texture <= 0) {
+            return null;
+        }
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        FloatBuffer pixel = BufferUtils.createFloatBuffer(1);
+        try {
+            if (bloomDepthProbeFramebuffer <= 0) {
+                bloomDepthProbeFramebuffer = GL30.glGenFramebuffers();
+            }
+            if (bloomDepthProbeFramebuffer <= 0) {
+                return null;
+            }
+            GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, bloomDepthProbeFramebuffer);
+            GL30.glFramebufferTexture2D(GL30.GL_FRAMEBUFFER, GL30.GL_DEPTH_ATTACHMENT,
+                    GL11.GL_TEXTURE_2D, texture, 0);
+            if (GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER) != GL30.GL_FRAMEBUFFER_COMPLETE) {
+                return null;
+            }
+            GL11.glReadBuffer(GL11.GL_NONE);
+            GL11.glReadPixels(Math.max(0, Math.min(width - 1, x)), Math.max(0, Math.min(height - 1, y)),
+                    1, 1, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, pixel);
+            float depth = pixel.get(0);
+            return Float.isFinite(depth) ? depth : null;
+        } catch (RuntimeException | LinkageError ignored) {
+            return null;
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+            GL11.glReadBuffer(previousReadBuffer);
+        }
     }
 
     private static String sampleFramebufferColor(Framebuffer framebuffer) {
@@ -459,6 +764,220 @@ public final class AusmBloomRenderer {
         } finally {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
             GL11.glReadBuffer(previousReadBuffer);
+        }
+    }
+
+    private BloomPeakProbe captureBloomLayerPeakProbe() {
+        if (bloomLayerTarget == null || bloomPeakProbeCalls >= 2) {
+            return null;
+        }
+        bloomPeakProbeCalls++;
+        return sampleFramebufferPeak(bloomLayerTarget);
+    }
+
+    private String depthPairAtLayerPeak(BloomPeakProbe peak, boolean sceneDepthMask) {
+        if (!sceneDepthMask || peak == null || width <= 0 || height <= 0) {
+            return "unavailable";
+        }
+        int x = Math.max(0, Math.min(width - 1, peak.x));
+        int y = Math.max(0, Math.min(height - 1, peak.y));
+        Float bloomDepth = readDepthTexture(bloomDepthTexture, x, y);
+        Float sceneDepth = readDepthTexture(finalDepthTexture, x, y);
+        if (bloomDepth == null || sceneDepth == null) {
+            return "unavailable";
+        }
+        boolean discarded = bloomDepth > sceneDepth + 0.000001F && sceneDepth < 0.99999F;
+        return depthSummary(bloomDepth) + "/" + depthSummary(sceneDepth) + "/discard=" + discarded;
+    }
+
+    private static BloomPeakProbe sampleFramebufferPeak(Framebuffer framebuffer) {
+        if (framebuffer == null) {
+            return null;
+        }
+        int width = Math.max(1, MinecraftReflectionCompat.framebufferWidth(framebuffer));
+        int height = Math.max(1, MinecraftReflectionCompat.framebufferHeight(framebuffer));
+        int framebufferId = MinecraftReflectionCompat.framebufferObject(framebuffer);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        ByteBuffer pixels = BufferUtils.createByteBuffer(width * height * 4);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebufferId);
+            GL11.glReadBuffer(framebufferId == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels);
+            int bestIndex = -1;
+            int bestLuminance = -1;
+            int nonBlack = 0;
+            for (int index = 0; index < width * height; index++) {
+                int offset = index * 4;
+                int red = pixels.get(offset) & 0xFF;
+                int green = pixels.get(offset + 1) & 0xFF;
+                int blue = pixels.get(offset + 2) & 0xFF;
+                int luminance = red * 54 + green * 183 + blue * 19;
+                if (luminance > 0) {
+                    nonBlack++;
+                }
+                if (luminance > bestLuminance) {
+                    bestLuminance = luminance;
+                    bestIndex = index;
+                }
+            }
+            if (bestIndex < 0) {
+                return new BloomPeakProbe(framebufferId, width, height, 0, 0, 0, 0, 0, 0, 0);
+            }
+            int bestOffset = bestIndex * 4;
+            return new BloomPeakProbe(
+                    framebufferId, width, height, bestIndex % width, bestIndex / width,
+                    pixels.get(bestOffset) & 0xFF,
+                    pixels.get(bestOffset + 1) & 0xFF,
+                    pixels.get(bestOffset + 2) & 0xFF,
+                    pixels.get(bestOffset + 3) & 0xFF,
+                    nonBlack
+            );
+        } catch (RuntimeException | LinkageError ignored) {
+            return null;
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL11.glReadBuffer(previousReadBuffer);
+        }
+    }
+
+    private static String sampleFramebufferColorAtScaled(Framebuffer target, BloomPeakProbe source,
+                                                         Framebuffer sourceFramebuffer) {
+        if (target == null || source == null || sourceFramebuffer == null) {
+            return "n/a";
+        }
+        int sourceWidth = Math.max(1, MinecraftReflectionCompat.framebufferWidth(sourceFramebuffer));
+        int sourceHeight = Math.max(1, MinecraftReflectionCompat.framebufferHeight(sourceFramebuffer));
+        int targetWidth = Math.max(1, MinecraftReflectionCompat.framebufferWidth(target));
+        int targetHeight = Math.max(1, MinecraftReflectionCompat.framebufferHeight(target));
+        int x = Math.min(targetWidth - 1, Math.max(0, source.x * targetWidth / sourceWidth));
+        int y = Math.min(targetHeight - 1, Math.max(0, source.y * targetHeight / sourceHeight));
+        return sampleFramebufferColorAt(target, x, y);
+    }
+
+    private static String sampleFramebufferColorAtPixel(Framebuffer framebuffer, int x, int y) {
+        if (framebuffer == null) {
+            return "n/a";
+        }
+        int width = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(framebuffer));
+        int height = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(framebuffer));
+        int sampleX = Math.max(0, Math.min(width - 1, x));
+        int sampleY = Math.max(0, Math.min(height - 1, y));
+        int framebufferId = com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(framebuffer);
+        FloatBuffer sample = BufferUtils.createFloatBuffer(4);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebufferId);
+            GL11.glReadBuffer(framebufferId == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadPixels(sampleX, sampleY, 1, 1, GL11.GL_RGBA, GL11.GL_FLOAT, sample);
+            return framebufferId + "@" + sampleX + "/" + sampleY + "="
+                    + sample.get(0) + "," + sample.get(1) + "," + sample.get(2) + "," + sample.get(3);
+        } catch (RuntimeException | LinkageError error) {
+            return "error=" + error.getClass().getSimpleName();
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+        }
+    }
+
+    private static String sampleFramebufferColorAt(Framebuffer framebuffer, int x, int y) {
+        int framebufferId = MinecraftReflectionCompat.framebufferObject(framebuffer);
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        FloatBuffer sample = BufferUtils.createFloatBuffer(4);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebufferId);
+            GL11.glReadBuffer(framebufferId == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL11.glReadPixels(x, y, 1, 1, GL11.GL_RGBA, GL11.GL_FLOAT, sample);
+            return framebufferId + "@" + x + "/" + y + "="
+                    + sample.get(0) + "," + sample.get(1) + "," + sample.get(2) + "," + sample.get(3);
+        } catch (RuntimeException | LinkageError error) {
+            return "error=" + error.getClass().getSimpleName();
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL11.glReadBuffer(previousReadBuffer);
+        }
+    }
+
+    private static final class BloomLeakProbe {
+        private final String summary;
+
+        private BloomLeakProbe(String summary) {
+            this.summary = summary;
+        }
+
+        @Override
+        public String toString() {
+            return summary;
+        }
+    }
+
+    private static final class RawBloomSource {
+        private static final RawBloomSource NONE = new RawBloomSource(-1, -1, 0, 0, 0, null, null);
+
+        private final int x;
+        private final int y;
+        private final int red;
+        private final int green;
+        private final int blue;
+        private final Float bloomDepth;
+        private final Float receiverSceneDepth;
+
+        private RawBloomSource(int x, int y, int red, int green, int blue,
+                               Float bloomDepth, Float receiverSceneDepth) {
+            this.x = x;
+            this.y = y;
+            this.red = red;
+            this.green = green;
+            this.blue = blue;
+            this.bloomDepth = bloomDepth;
+            this.receiverSceneDepth = receiverSceneDepth;
+        }
+
+        @Override
+        public String toString() {
+            if (x < 0) {
+                return "none";
+            }
+            boolean rejected = bloomDepth != null && receiverSceneDepth != null
+                    && bloomDepth > receiverSceneDepth + 0.000001F && receiverSceneDepth < 0.99999F;
+            return x + "/" + y + ":" + red + "/" + green + "/" + blue
+                    + ",depth=" + depthSummary(bloomDepth)
+                    + ",receiverDepth=" + depthSummary(receiverSceneDepth)
+                    + ",blurReject=" + rejected;
+        }
+    }
+
+    private static final class BloomPeakProbe {
+        private final int framebuffer;
+        private final int width;
+        private final int height;
+        private final int x;
+        private final int y;
+        private final int red;
+        private final int green;
+        private final int blue;
+        private final int alpha;
+        private final int nonBlack;
+
+        private BloomPeakProbe(int framebuffer, int width, int height, int x, int y,
+                               int red, int green, int blue, int alpha, int nonBlack) {
+            this.framebuffer = framebuffer;
+            this.width = width;
+            this.height = height;
+            this.x = x;
+            this.y = y;
+            this.red = red;
+            this.green = green;
+            this.blue = blue;
+            this.alpha = alpha;
+            this.nonBlack = nonBlack;
+        }
+
+        @Override
+        public String toString() {
+            return framebuffer + "@" + width + "x" + height + ":" + x + "/" + y
+                    + "=" + red + "/" + green + "/" + blue + "/" + alpha
+                    + ",nonBlack=" + nonBlack;
         }
     }
 
@@ -487,7 +1006,7 @@ public final class AusmBloomRenderer {
         }
     }
 
-    private boolean runBlurChain(int sourceTexture) {
+    private boolean runBlurChain(int sourceTexture, boolean depthAware) {
         if (sourceTexture <= 0 || !ensureTargets(width, height)) {
             return false;
         }
@@ -498,22 +1017,44 @@ public final class AusmBloomRenderer {
         bindHalfTarget(bloomDownsampleTarget);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(copyProgram);
         bindTextureUniform(copyProgram, "source", sourceTexture, 0);
+        bindDepthAwareCopyUniforms(depthAware);
         drawFullscreenQuad();
 
         for (int i = 0; i < blurIterations; i++) {
             bindHalfTarget(bloomBlurTarget);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(blurProgram);
             bindTextureUniform(blurProgram, "source", com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), 0);
+            bindDepthAwareBlurUniforms(depthAware);
             setUniform2f(blurProgram, "direction", 1.0F / Math.max(1, halfWidth), 0.0F);
             drawFullscreenQuad();
 
             bindHalfTarget(bloomDownsampleTarget);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(blurProgram);
             bindTextureUniform(blurProgram, "source", com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomBlurTarget), 0);
+            bindDepthAwareBlurUniforms(depthAware);
             setUniform2f(blurProgram, "direction", 0.0F, 1.0F / Math.max(1, halfHeight));
             drawFullscreenQuad();
         }
         return true;
+    }
+
+    private void bindDepthAwareBlurUniforms(boolean depthAware) {
+        boolean enabled = depthAware && bloomDepthTexture > 0 && finalDepthTexture > 0;
+        if (enabled) {
+            bindTextureUniform(blurProgram, "bloomDepth", bloomDepthTexture, 1);
+            bindTextureUniform(blurProgram, "sceneDepth", finalDepthTexture, 2);
+        }
+        setUniform1i(blurProgram, "depthAware", enabled ? 1 : 0);
+    }
+
+    private void bindDepthAwareCopyUniforms(boolean depthAware) {
+        boolean enabled = depthAware && bloomDepthTexture > 0 && finalDepthTexture > 0;
+        if (enabled) {
+            bindTextureUniform(copyProgram, "bloomDepth", bloomDepthTexture, 1);
+            bindTextureUniform(copyProgram, "sceneDepth", finalDepthTexture, 2);
+        }
+        setUniform2f(copyProgram, "sourceTexel", 1.0F / Math.max(1, width), 1.0F / Math.max(1, height));
+        setUniform1i(copyProgram, "depthAware", enabled ? 1 : 0);
     }
 
     private boolean runThresholdBlurChain(int sourceTexture) {
@@ -577,12 +1118,22 @@ public final class AusmBloomRenderer {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         GL11.glEnable(GL11.GL_TEXTURE_2D);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        // Additive ONE+ONE blending clips the first channel that reaches one,
-        // turning saturated colored bloom into white. Screen-style blending
-        // keeps the hue while still accumulating over the scene.
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                GL11.GL_ONE_MINUS_DST_COLOR, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
+        if (shaderPackCompositeOverride && shaderPackCompositeReplace) {
+            // The Lab shader discards black pixels.  Its remaining pixels
+            // replace the world target so a white destination cannot hide the
+            // parsed bloom hue through screen blending.
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+        } else {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+            // Additive ONE+ONE blending clips the first channel that reaches one,
+            // turning saturated colored bloom into white.  Screen composition
+            // is source + destination * (1 - source); the previous reversed
+            // factors instead multiplied Bloom by (1 - destination), making
+            // it almost invisible over the bright framed materials it needs to
+            // preserve.
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+                    GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_COLOR, GL11.GL_ONE, GL11.GL_ONE);
+        }
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
 
@@ -610,10 +1161,9 @@ public final class AusmBloomRenderer {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        // The bloom target borrows the live world depth attachment in shaderless
-        // mode. It must test against it without modifying the scene depth. The
-        // matching source faces need a minimal bias or equal-depth rasterization
-        // intermittently rejects the bloom geometry on different drivers.
+        // Source faces share the copied terrain depth. This conservative bias
+        // prevents equal-depth flicker while depth-aware blur/compositing keeps
+        // foreground occlusion intact without CPU VBO readback.
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
@@ -659,6 +1209,7 @@ public final class AusmBloomRenderer {
                 GL11.glPopMatrix();
             }
             GL11.glMatrixMode(previousMatrixMode);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         }
     }
 
@@ -981,7 +1532,16 @@ public final class AusmBloomRenderer {
         bloomStrength = DEFAULT_BLOOM_STRENGTH;
         blurIterations = DEFAULT_BLUR_ITERATIONS;
         shaderPackCompositeOverride = false;
+        shaderPackCompositeReplace = false;
         loggedProgramFailure = false;
+        // The Bloom Lab is intentionally reloaded often.  Its bounded source,
+        // blur, and composite probes must describe the newly selected pack.
+        bloomFrameProbeCalls = 0;
+        bloomCompositeProbeCalls = 0;
+        bloomPeakProbeCalls = 0;
+        bloomDepthLeakProbeCalls = 0;
+        bloomDepthLeakProbeAttempts = 0;
+        pendingBloomPeakProbe = null;
     }
 
     private static float clamp(float value, float minimum, float maximum) {

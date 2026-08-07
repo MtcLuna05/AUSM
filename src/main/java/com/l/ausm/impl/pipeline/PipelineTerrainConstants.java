@@ -35,11 +35,19 @@ final class PipelineTerrainConstants {
     static final int MAX_SHADER_CHUNK_REFRESHES_PER_FRAME = 8;
     static final int COMPILED_PIPELINE_CACHE_LIMIT = 4;
 
-    static final int SPARSE_SHADOW_MIN_TERRAIN_DRAWS = 96;
-    static final int SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES = 4;
+    // Keep the provider set small enough to refresh at normal walking speed.
+    // Reusing a one-block-old map made the shadow visibly detach from the
+    // player, so responsiveness takes precedence over a wide cached set.
+    static final int SPARSE_SHADOW_MIN_TERRAIN_DRAWS = 40;
+    static final int SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES = 1;
     static final int SPARSE_SHADOW_STABLE_FRAMES = 2;
+    // Provider-backed shadows are expensive enough that rebuilding them on
+    // every sub-centimetre camera movement dominates shadered frame time.
+    // The shadow projection is already stabilised on a much coarser texel
+    // grid, so reuse it briefly across small movement instead.
+    static final int SHADOW_STABLE_UPDATE_INTERVAL_TICKS = 6;
+    static final double SHADOW_STABLE_UPDATE_MOVEMENT_SQ = 0.0625D;
     static final float SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION = 0.003F;
-    static final int NOTHIRIUM_SHADOW_VERTICAL_RECOVERY_HOLD_FRAMES = 8;
     static final int NOTHIRIUM_SHADOW_SUPPRESS_AFTER_INVALID_FRAMES = 1;
     static final int NOTHIRIUM_SHADOW_SUPPRESS_FRAMES = 160;
 

@@ -23,7 +23,6 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL20;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -33,7 +32,6 @@ import java.util.Deque;
  */
 @Mixin(RenderGlobal.class)
 public class RenderSkyMixin {
-    private static int ausm$lowerSkyProbeCalls;
     private static final ThreadLocal<Deque<Object>> ausm$blockedSkyRenderers = ThreadLocal.withInitial(ArrayDeque::new);
     private static final ResourceLocation ausm$moonPhasesTexture = new ResourceLocation("textures/environment/moon_phases.png");
     @Inject(method = "markBlocksForUpdate", at = @At("HEAD"))
@@ -62,9 +60,15 @@ public class RenderSkyMixin {
         ausm$forceResetTessellator();
         PipelineContext.getInstance().setAstralSolarEclipseFactor(0.0f);
         PipelineContext context = PipelineContext.getInstance();
-        context.logShaderedSkyGeometryProbe("render-head-before-phase");
         context.beginPhase(WorldRenderingPhase.SKY);
-        context.logShaderedSkyGeometryProbe("render-head-after-phase");
+        if (context.shouldUseShaderOwnedSkyOverride()) {
+            // One shader-owned canvas replaces every vanilla or mod renderer
+            // in overworld-like dimensions. Entree owns all sky detail.
+            context.renderShaderedSkyBaseBacking();
+            context.endPass();
+            ci.cancel();
+            return;
+        }
         if (context.shouldUseCompleteOwnedSkyOverride()) {
             context.renderCompleteOwnedSkyOverride(partialTicks, pass);
             context.endPass();
@@ -72,12 +76,13 @@ public class RenderSkyMixin {
             return;
         }
         context.renderOwnedSkyBackingBeforeSky(partialTicks);
+        context.renderShaderedSkyBaseBacking();
         if (!context.shouldRenderSkyDisc()) {
             context.endPass();
             ci.cancel();
             return;
         }
-        Object blockedRenderer = PipelineContext.getInstance().detachNonVanillaSkyRendererForVanillaSky();
+        Object blockedRenderer = context.detachNonVanillaSkyRendererForVanillaSky();
         if (blockedRenderer != null) {
             ausm$blockedSkyRenderers.get().push(blockedRenderer);
         }
@@ -86,7 +91,6 @@ public class RenderSkyMixin {
     @Inject(method = "renderSky(FI)V", at = @At("RETURN"))
     private void onRenderSkyReturn(float partialTicks, int pass, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        context.logShaderedSkyGeometryProbe("render-return-entry");
         Deque<Object> blockedRenderers = ausm$blockedSkyRenderers.get();
         if (!blockedRenderers.isEmpty()) {
             context.restoreNonVanillaSkyRenderer(blockedRenderers.pop());
@@ -94,7 +98,6 @@ public class RenderSkyMixin {
         context.renderShaderlessOwnedSkyDetailsAfterCelestials(partialTicks);
         context.sealShaderlessSkyFramebufferAlpha();
         context.logHiddenSkyFramebufferProbe("post-sky");
-        context.logShaderedSkyGeometryProbe("render-return-before-end");
         context.endPass();
     }
 
@@ -125,13 +128,10 @@ public class RenderSkyMixin {
             return;
         }
         context.endPass();
-        context.logShaderedSkyGeometryProbe("custom-before-prepare");
         context.prepareExternalWorldOverlayRender();
         context.beginPhase(WorldRenderingPhase.CUSTOM_SKY);
-        context.logShaderedSkyGeometryProbe("custom-after-phase");
         try {
             if (!context.shouldSuppressVoidWorldCustomSkyRenderer(skyRenderer, world)) {
-                context.logShaderedSkyGeometryProbe("custom-before-renderer");
                 MinecraftReflectionCompat.invoke(
                         skyRenderer,
                         new String[] {"render"},
@@ -139,7 +139,6 @@ public class RenderSkyMixin {
                         partialTicks,
                         world,
                         minecraft);
-                context.logShaderedSkyGeometryProbe("custom-after-renderer");
             }
             context.renderShaderlessBotaniaVoidDetailsIfNeeded(partialTicks, world, minecraft);
         } finally {
@@ -295,12 +294,9 @@ public class RenderSkyMixin {
     private void ausm$drawOrSuppressVanillaUpperSkyVbo(VertexBuffer vertexBuffer, int mode) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaUpperSkyGeometry()) {
-            context.logShaderedSkyGeometryProbe("upper-vbo-suppressed");
             return;
         }
-        context.logShaderedSkyGeometryProbe("upper-vbo-before");
         MinecraftReflectionCompat.vertexBufferDrawArrays(vertexBuffer, mode);
-        context.logShaderedSkyGeometryProbe("upper-vbo-after");
     }
 
     @Redirect(
@@ -315,12 +311,9 @@ public class RenderSkyMixin {
     private void ausm$drawOrSuppressVanillaUpperSkyList(int list) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaUpperSkyGeometry()) {
-            context.logShaderedSkyGeometryProbe("upper-list-suppressed");
             return;
         }
-        context.logShaderedSkyGeometryProbe("upper-list-before");
         com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
-        context.logShaderedSkyGeometryProbe("upper-list-after");
     }
 
     @Inject(
@@ -379,16 +372,13 @@ public class RenderSkyMixin {
     private void ausm$drawShaderedLowerSkyVbo(VertexBuffer vertexBuffer, int mode) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
-            ausm$probeLowerSky("vbo-suppressed");
             return;
         }
-        ausm$probeLowerSky("vbo-before");
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
             MinecraftReflectionCompat.vertexBufferDrawArrays(vertexBuffer, mode);
         } finally {
             context.endPass();
-            ausm$probeLowerSky("vbo-after");
         }
     }
 
@@ -404,16 +394,13 @@ public class RenderSkyMixin {
     private void ausm$drawShaderedLowerSkyList(int list) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
-            ausm$probeLowerSky("list-suppressed");
             return;
         }
-        ausm$probeLowerSky("list-before");
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
             com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
         } finally {
             context.endPass();
-            ausm$probeLowerSky("list-after");
         }
     }
 
@@ -429,16 +416,13 @@ public class RenderSkyMixin {
     private void ausm$drawShaderedLowerSkyListAfterHorizon(int list) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
-            ausm$probeLowerSky("horizon-list-suppressed");
             return;
         }
-        ausm$probeLowerSky("horizon-list-before");
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
             com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
         } finally {
             context.endPass();
-            ausm$probeLowerSky("horizon-list-after");
         }
     }
 
@@ -454,22 +438,15 @@ public class RenderSkyMixin {
     private void ausm$drawShaderedLowerSkyBox(Tessellator tessellator) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
-            ausm$probeLowerSky("box-suppressed");
             ausm$forceResetTessellator(tessellator);
             return;
         }
-        ausm$probeLowerSky("box-before");
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
             com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
         } finally {
             context.endPass();
-            ausm$probeLowerSky("box-after");
         }
-    }
-
-    private static void ausm$probeLowerSky(String stage) {
-        PipelineContext.getInstance().logShaderedSkyGeometryProbe("lower-" + stage);
     }
 
     @Inject(

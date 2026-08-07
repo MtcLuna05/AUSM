@@ -31,7 +31,6 @@ public class BotaniaSkyblockSkyRendererMixin {
     private static int ausm$normalStateProbeCalls;
     private static int ausm$hiddenStateProbeCalls;
     private boolean ausm$shaderedVoidPhase;
-    private boolean ausm$skipBotaniaDetails;
     private String ausm$assetTexture = "unbound";
 
     @Inject(method = "render", at = @At("HEAD"), remap = false)
@@ -42,42 +41,15 @@ public class BotaniaSkyblockSkyRendererMixin {
         // boundary before Botania's base geometry is suppressed.
         PipelineContext context = PipelineContext.getInstance();
         ausm$assetTexture = "unbound";
-        ausm$skipBotaniaDetails = true;
         context.clearSkyDetailAsset();
         context.renderShaderlessBotaniaSkyBacking(
                 partialTicks, world, minecraft);
-        ausm$shaderedVoidPhase = context.isActive()
-                && world != null
-                && context.isCustomVoidWorldSkyEnabled(world);
+        ausm$shaderedVoidPhase = context.shouldUseShaderOwnedSkyOverride(world);
+        context.forensicGlTrace("botania-sky-entry", "shaderOwned=" + ausm$shaderedVoidPhase + ", partialTicks=" + partialTicks);
         if (ausm$shaderedVoidPhase) {
             context.beginPhase(WorldRenderingPhase.SKY);
-            context.renderShaderedOwnedVoidSkyBase(world, minecraft);
+            context.renderShaderedSkyBaseBacking();
         }
-    }
-
-    @Inject(
-            method = "render",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179098_w()V",
-                    ordinal = 0,
-                    shift = At.Shift.AFTER
-            ),
-            require = 0,
-            remap = false
-    )
-    private void ausm$beginTexturedSkyDetails(float partialTicks, WorldClient world, Minecraft minecraft,
-                                               CallbackInfo ci) {
-        if (!ausm$shaderedVoidPhase) {
-            return;
-        }
-        PipelineContext context = PipelineContext.getInstance();
-        // Keep Botania's authored planet, ribbon, and rainbow textures in the
-        // clean textured-sky pass. The shader uses ausmSkyDetailKind to accept
-        // only these three detail classes and rejects unrelated sky quads.
-        ausm$skipBotaniaDetails = false;
-        context.endPass();
-        context.beginPhase(WorldRenderingPhase.CUSTOM_SKY);
     }
 
     @Inject(method = "render", at = @At("RETURN"), remap = false)
@@ -87,7 +59,7 @@ public class BotaniaSkyblockSkyRendererMixin {
             context.endPass();
             ausm$shaderedVoidPhase = false;
         }
-        ausm$skipBotaniaDetails = false;
+        context.forensicGlTrace("botania-sky-exit", "partialTicks=" + partialTicks);
         context.clearSkyDetailAsset();
     }
 
@@ -170,14 +142,6 @@ public class BotaniaSkyblockSkyRendererMixin {
         ausm$assetTexture = MinecraftReflectionCompat.resourceString(location);
         PipelineContext context = PipelineContext.getInstance();
         context.setSkyDetailAsset(ausm$assetTexture);
-        if (ausm$shaderedVoidPhase && ausm$skipBotaniaDetails && ausm$isBotaniaDetailTexture()) {
-            // Some Botania builds do not expose the enableTexture2D call used by
-            // the earlier phase hook. Switch at the authoritative texture bind
-            // so authored skybox/rainbow textures reach gbuffers_skytextured.
-            ausm$skipBotaniaDetails = false;
-            context.endPass();
-            context.beginPhase(WorldRenderingPhase.CUSTOM_SKY);
-        }
         MinecraftReflectionCompat.bindTexture(textureManager, location);
     }
 
@@ -240,26 +204,15 @@ public class BotaniaSkyblockSkyRendererMixin {
     private void ausm$drawAndProbeSkyAsset(Tessellator tessellator) {
         PipelineContext.getInstance().uploadSkyDetailUniforms();
         boolean suppressBase = "unbound".equals(ausm$assetTexture) && ausm$shouldSuppressBase();
-        boolean suppressOwnedDetail = ausm$shaderedVoidPhase
-                && ausm$skipBotaniaDetails
-                && !ausm$isBotaniaDetailTexture();
-        boolean suppressDuplicateCelestial = ausm$shaderedVoidPhase
-                && ("minecraft:textures/environment/sun.png".equals(ausm$assetTexture)
-                || "minecraft:textures/environment/moon_phases.png".equals(ausm$assetTexture));
-        if (suppressBase || suppressOwnedDetail || suppressDuplicateCelestial) {
+        // Entree's AUSM-owned sky shader supplies the planets, ribbons, and
+        // rainbow. Suppress Botania's textured detail quads as a whole so the
+        // shader route is the sole detail owner.
+        if (suppressBase || ausm$shaderedVoidPhase) {
             MinecraftReflectionCompat.forceResetBufferDrawingState(
                     MinecraftReflectionCompat.tessellatorBuffer(tessellator));
         } else {
             MinecraftReflectionCompat.tessellatorDraw(tessellator);
         }
-    }
-
-    private boolean ausm$isBotaniaDetailTexture() {
-        String texture = ausm$assetTexture != null ? ausm$assetTexture.toLowerCase(java.util.Locale.ROOT) : "";
-        // Custom Void owns planets procedurally. Keep only Botania's authored
-        // ribbon/skybox and rainbow textures in the textured detail phase.
-        return texture.contains("botania:")
-                && (texture.contains("skybox") || texture.contains("rainbow"));
     }
 
     private static boolean ausm$shouldSuppressBase() {
@@ -272,53 +225,6 @@ public class BotaniaSkyblockSkyRendererMixin {
     }
 
     private static void ausm$probeF1State(String stage, Minecraft minecraft) {
-        boolean hideGui = minecraft != null
-                && MinecraftReflectionCompat.hideGui(MinecraftReflectionCompat.gameSettings(minecraft));
-        if (!hideGui) {
-            return;
-        }
-        int probe = ++ausm$hiddenStateProbeCalls;
-        // F1 corruption is intermittent, so retain a bounded sparse sample after
-        // the startup calls rather than only logging the first rendered frame.
-        if (probe > 960 || probe > 8 && probe % 120 != 0) {
-            return;
-        }
-        int previousRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        float[] center = new float[] {Float.NaN, Float.NaN, Float.NaN, Float.NaN};
-        float depthValue = Float.NaN;
-        try {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING));
-            FloatBuffer color = BufferUtils.createFloatBuffer(4);
-            GL11.glReadPixels(Math.max(0, MinecraftReflectionCompat.displayWidth(minecraft) / 2),
-                    Math.max(0, MinecraftReflectionCompat.displayHeight(minecraft) / 2), 1, 1,
-                    GL11.GL_RGBA, GL11.GL_FLOAT, color);
-            for (int i = 0; i < 4; i++) {
-                center[i] = color.get(i);
-            }
-            FloatBuffer depth = BufferUtils.createFloatBuffer(1);
-            GL11.glReadPixels(Math.max(0, MinecraftReflectionCompat.displayWidth(minecraft) / 2),
-                    Math.max(0, MinecraftReflectionCompat.displayHeight(minecraft) / 2), 1, 1,
-                    GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, depth);
-            depthValue = depth.get(0);
-        } catch (RuntimeException | LinkageError ignored) {
-            // Probe-only; some drivers do not expose depth reads for the active target.
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousRead);
-        }
-        MainMod.LOGGER.info("[AUSMBotaniaSkyProbe] stage={} call={} hideGui={} screen={} paused={} program={} depth={} depthMask={} blend={} texture={} matrix={} drawFbo={} center={}/{}/{}/{} centerDepth={}",
-                stage,
-                probe,
-                hideGui,
-                minecraft != null && MinecraftReflectionCompat.currentScreen(minecraft) != null
-                        ? MinecraftReflectionCompat.currentScreen(minecraft).getClass().getName() : "none",
-                minecraft != null && MinecraftReflectionCompat.isGamePaused(minecraft),
-                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
-                GL11.glIsEnabled(GL11.GL_DEPTH_TEST),
-                GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK),
-                GL11.glIsEnabled(GL11.GL_BLEND),
-                GL11.glIsEnabled(GL11.GL_TEXTURE_2D),
-                GL11.glGetInteger(GL11.GL_MATRIX_MODE),
-                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
-                center[0], center[1], center[2], center[3], depthValue);
+        // Probe disabled.
     }
 }

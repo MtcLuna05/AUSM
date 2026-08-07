@@ -123,11 +123,16 @@ public final class ShaderBlockIdMap {
 
     private static void addPackCompatibilityAliases(Map<Block, Integer> blockIds) {
         Block portal = registryBlock(new ResourceLocation("minecraft", "portal"));
-        if (portal == null || blockIds.containsKey(portal) || !blockIds.containsValue(10090)) {
-            return;
+        if (portal != null && !blockIds.containsKey(portal) && blockIds.containsValue(10090)) {
+            blockIds.put(portal, 10090);
         }
+        addLilyPadCompatibilityAliases(blockIds);
+    }
 
-        blockIds.put(portal, 10090);
+    private static void addLilyPadCompatibilityAliases(Map<Block, Integer> blockIds) {
+        if (blockIds.containsValue(10489)) {
+            addBlockAlias(blockIds, "xreliquary", "fertile_lilypad", 10489);
+        }
     }
 
     private static void addLegacyColorStateRules(Map<Block, Integer> blockIds, List<StateRule> stateRules) {

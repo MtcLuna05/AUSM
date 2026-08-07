@@ -9,6 +9,7 @@ final class PipelineProbeLimits {
     static final int MAX_GUI_ENTITY_STATE_PROBE_LOGS = 0;
     static final int MAX_GUI_ITEM_MODEL_PROBE_LOGS = 0;
     static final int MAX_WATER_ROUTING_PROBE_LOGS = 0;
+    static final int MAX_WATER_DUPLICATE_PROBE_LOGS = 0;
     static final int MAX_WATER_ATTACHMENT_DELTA_PROBE_LOGS = 0;
     static final int MAX_EXTERNAL_OVERLAY_LOGS = 0;
     static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 0;
@@ -30,6 +31,9 @@ final class PipelineProbeLimits {
     static final int MAX_PRESENTATION_BOUNDARY_LOGS = 0;
     static final int MAX_FULLSCREEN_SAMPLER_PROBE_LOGS = 0;
     static final int MAX_FLUID_MATERIAL_PROBE_LOGS = 0;
+    static final int MAX_LILY_PAD_ROUTE_PROBE_LOGS = 0;
+    static final int MAX_FLAT_FOLIAGE_HIGHLIGHT_PROBE_LOGS = 0;
+    static final int MAX_LILY_PAD_LIGHTING_PROBE_LOGS = 0;
     static final int MAX_TERRAIN_GRID_PROBE_LOGS = 0;
     static final int TERRAIN_GRID_PROBE_COLUMNS = 5;
     static final int TERRAIN_GRID_PROBE_ROWS = 5;
@@ -43,12 +47,16 @@ final class PipelineProbeLimits {
     static final int MAX_BLOCKCRAFTERY_DIAGNOSTIC_LOGS = 0;
     static final int MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS = 0;
     static final int MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS = 0;
+    static final int MAX_BLOCKCRAFTERY_ROUTE_PROBE_LOGS = 0;
+    static final int MAX_FRAMED_QUAD_MATERIAL_PROBE_LOGS = 0;
+    static final int MAX_FRAMED_BLOOM_QUAD_GATE_PROBE_LOGS = 0;
     static final int MAX_CURRENT_PROBLEM_PROBE_LOGS = 0;
     static final int MAX_ACTIVE_LIGHT_OR_ID_PROBE_LOGS = 0;
     static final int MAX_INACTIVE_SKY_PIPELINE_PROBE_LOGS = 0;
     static final int MAX_ACTIVE_SKY_PIPELINE_PROBE_LOGS = 0;
     static final int MAX_HAND_ITEM_DRAW_STATE_LOGS = 0;
     static final int MAX_HAND_GBUFFER_PROBE_LOGS = 0;
+    static final int MAX_FORENSIC_TRACE_EVENTS = 0;
     static final int MAX_HAND_PASS_BIND_LOGS = 0;
     static final int MAX_SPECIAL_LAYER_PROBE_LOGS = 0;
     static final int MAX_PIPELINE_PASS_PROBE_LOGS = 0;
@@ -105,6 +113,10 @@ final class PipelineProbeLimits {
     static final int MAX_SOFT_VANILLA_LAYER_TIMING_LOGS = 0;
     static final int MAX_SOFT_VANILLA_SPECIAL_BLOCK_PROBE_LOGS = 0;
     static final int MAX_SOFT_VANILLA_FRAME_TIMING_LOGS = 0;
+    // CPU-only timing around a rendered shadow map. This never reads back the
+    // GPU and is intentionally capped so it can diagnose movement hitches
+    // without becoming the hitch itself.
+    static final int MAX_SHADOW_FRAME_TIMING_PROBE_LOGS = 0;
 
     private PipelineProbeLimits() {
     }

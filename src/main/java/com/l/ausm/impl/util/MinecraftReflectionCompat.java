@@ -95,6 +95,8 @@ import net.minecraft.world.chunk.BlockStateContainer;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 import net.minecraftforge.client.IRenderHandler;
+import net.minecraftforge.client.model.pipeline.IVertexConsumer;
+import net.minecraftforge.fluids.FluidStack;
 import net.minecraft.block.properties.IProperty;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL11;
@@ -221,6 +223,9 @@ public final class MinecraftReflectionCompat {
     );
     private static final MethodHandle BAKED_QUAD_VERTEX_DATA_HANDLE = methodHandle(
             BakedQuad.class, new String[] {"func_178209_a", "getVertexData"}, NO_PARAMETERS
+    );
+    private static final MethodHandle BAKED_QUAD_PIPE_HANDLE = methodHandle(
+            BakedQuad.class, new String[] {"pipe"}, new Class<?>[] {IVertexConsumer.class}
     );
     private static final MethodHandle BLOCK_COLOR_MULTIPLIER_HANDLE = methodHandle(
             BlockColors.class,
@@ -462,27 +467,31 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int blockPosX(BlockPos pos) {
-        int fieldValue = blockPosFieldInt(BLOCK_POS_X_FIELD, pos, Integer.MIN_VALUE);
-        if (fieldValue != Integer.MIN_VALUE) {
-            return fieldValue;
+        // MutableBlockPos stores the live coordinates in subclass state while
+        // BlockPos's immutable backing fields remain at its construction
+        // value (usually 0/0/0). Invoke the virtual SRG/MCP accessor first so
+        // the subclass override is honoured; fields remain a safe fallback.
+        int accessorValue = invokeInt(BLOCK_POS_X_HANDLE, pos, Integer.MIN_VALUE);
+        if (accessorValue != Integer.MIN_VALUE) {
+            return accessorValue;
         }
-        return invokeInt(BLOCK_POS_X_HANDLE, pos, 0);
+        return blockPosFieldInt(BLOCK_POS_X_FIELD, pos, 0);
     }
 
     public static int blockPosY(BlockPos pos) {
-        int fieldValue = blockPosFieldInt(BLOCK_POS_Y_FIELD, pos, Integer.MIN_VALUE);
-        if (fieldValue != Integer.MIN_VALUE) {
-            return fieldValue;
+        int accessorValue = invokeInt(BLOCK_POS_Y_HANDLE, pos, Integer.MIN_VALUE);
+        if (accessorValue != Integer.MIN_VALUE) {
+            return accessorValue;
         }
-        return invokeInt(BLOCK_POS_Y_HANDLE, pos, 0);
+        return blockPosFieldInt(BLOCK_POS_Y_FIELD, pos, 0);
     }
 
     public static int blockPosZ(BlockPos pos) {
-        int fieldValue = blockPosFieldInt(BLOCK_POS_Z_FIELD, pos, Integer.MIN_VALUE);
-        if (fieldValue != Integer.MIN_VALUE) {
-            return fieldValue;
+        int accessorValue = invokeInt(BLOCK_POS_Z_HANDLE, pos, Integer.MIN_VALUE);
+        if (accessorValue != Integer.MIN_VALUE) {
+            return accessorValue;
         }
-        return invokeInt(BLOCK_POS_Z_HANDLE, pos, 0);
+        return blockPosFieldInt(BLOCK_POS_Z_FIELD, pos, 0);
     }
 
     public static BlockPos blockPosToImmutable(BlockPos pos) {
@@ -2233,23 +2242,7 @@ public final class MinecraftReflectionCompat {
     private static void logAstralLiquidRendererProbe(String stage, IBlockState state, BufferBuilder buffer,
                                                      Object fluidRenderer, int rendererVertices, int bufferVertices,
                                                      boolean rendered, Throwable failure) {
-        if (state == null || !state.toString().toLowerCase(java.util.Locale.ROOT).contains("liquidstarlight")) {
-            return;
-        }
-        int call = BlockRendererDispatcherHooks.LIQUID_RENDERER_PROBE_COUNT.incrementAndGet();
-        if (call > 96) {
-            return;
-        }
-        com.l.ausm.impl.MainMod.LOGGER.info(
-                "[AUSMAstralLiquidRendererProbe] call={} stage={} renderer={} rendered={} rendererVertices={} bufferVertices={} bufferFormat={} rendererError={}",
-                call,
-                stage,
-                fluidRenderer != null ? fluidRenderer.getClass().getName() : "null",
-                rendered,
-                rendererVertices,
-                bufferVertices,
-                buffer != null ? bufferVertexFormat(buffer) : null,
-                failure != null ? failure.getClass().getName() + ":" + failure.getMessage() : "none");
+        // Probe disabled.
     }
 
     public static boolean hasField(Object target, String... names) {
@@ -2307,8 +2300,20 @@ public final class MinecraftReflectionCompat {
             return false;
         }
         String path = resourcePathLower(name);
-        String className = blockFromState(state).getClass().getName().toLowerCase(java.util.Locale.ROOT);
-        return path.contains("fluid") || path.contains("liquid") || className.contains("fluid");
+        // This is only a last-resort compatibility path.  Registry/class-name
+        // substring matching turns ordinary machines such as
+        // fluid_dictionary_converter into water; real Forge fluids already
+        // report a liquid material or LIQUID render type above.
+        return "fluid".equals(path)
+                || "fluids".equals(path)
+                || "liquid".equals(path)
+                || "liquids".equals(path)
+                || "fluid_block".equals(path)
+                || "fluidblock".equals(path)
+                || "block_fluid".equals(path)
+                || "blockfluid".equals(path)
+                || "liquid_block".equals(path)
+                || "liquidblock".equals(path);
     }
 
     public static IBakedModel blockModel(BlockRendererDispatcher dispatcher, IBlockState state) {
@@ -2331,6 +2336,20 @@ public final class MinecraftReflectionCompat {
     public static ResourceLocation blocksTexture() {
         return field(TextureMap.class, ResourceLocation.class, new ResourceLocation("textures/atlas/blocks.png"),
                 "field_110575_b", "LOCATION_BLOCKS_TEXTURE");
+    }
+
+    public static TextureMap textureMapBlocks(Minecraft minecraft) {
+        return call(minecraft, TextureMap.class, null,
+                new String[] {"func_147117_R", "getTextureMapBlocks"}, NO_PARAMETERS);
+    }
+
+    public static TextureAtlasSprite atlasSprite(TextureMap textureMap, String name) {
+        if (textureMap == null || name == null || name.isBlank()) {
+            return null;
+        }
+        return call(textureMap, TextureAtlasSprite.class, null,
+                new String[] {"func_110572_b", "getAtlasSprite"},
+                new Class<?>[] {String.class}, name);
     }
 
     @SuppressWarnings("unchecked")
@@ -2364,6 +2383,30 @@ public final class MinecraftReflectionCompat {
         }
         value = getField(quad, "field_178215_a", "vertexData");
         return value instanceof int[] ? (int[]) value : null;
+    }
+
+    public static boolean bakedQuadPipe(BakedQuad quad, IVertexConsumer consumer) {
+        if (quad == null || consumer == null) {
+            return false;
+        }
+        if (BAKED_QUAD_PIPE_HANDLE != null) {
+            try {
+                BAKED_QUAD_PIPE_HANDLE.invoke(quad, consumer);
+                return true;
+            } catch (Throwable ignored) {
+                return false;
+            }
+        }
+        Method method = findMethod(quad.getClass(), "pipe", new Class<?>[] {IVertexConsumer.class});
+        if (method == null) {
+            return false;
+        }
+        try {
+            method.invoke(quad, consumer);
+            return true;
+        } catch (ReflectiveOperationException | IllegalArgumentException ignored) {
+            return false;
+        }
     }
 
     public static int bakedQuadTintIndex(BakedQuad quad) {
@@ -2697,6 +2740,56 @@ public final class MinecraftReflectionCompat {
     public static <T> T field(Object target, Class<T> type, T fallback, String... names) {
         Object value = getField(target, names);
         return type.isInstance(value) ? type.cast(value) : fallback;
+    }
+
+    public static <T> T firstInstanceFieldOfType(Object target, Class<T> type) {
+        if (target == null || type == null) {
+            return null;
+        }
+        for (Class<?> current = target.getClass(); current != null; current = current.getSuperclass()) {
+            for (Field field : current.getDeclaredFields()) {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers())
+                        || !type.isAssignableFrom(field.getType())) {
+                    continue;
+                }
+                try {
+                    field.setAccessible(true);
+                    Object value = field.get(target);
+                    if (type.isInstance(value)) {
+                        return type.cast(value);
+                    }
+                } catch (ReflectiveOperationException | SecurityException ignored) {
+                }
+            }
+        }
+        return null;
+    }
+
+    public static OpenBlocksTankFluidInfo openBlocksTankFluidInfo(TileEntity tileEntity) {
+        if (tileEntity == null
+                || !"openblocks.common.tileentity.TileEntityTank".equals(tileEntity.getClass().getName())) {
+            return OpenBlocksTankFluidInfo.EMPTY;
+        }
+        Object renderData = invoke(tileEntity, new String[] {"getRenderFluidData"}, NO_PARAMETERS);
+        Object stack = invoke(renderData, new String[] {"getFluid"}, NO_PARAMETERS);
+        if (!(stack instanceof FluidStack)) {
+            return new OpenBlocksTankFluidInfo(false, -1, -1, "none");
+        }
+        Object fluid = invoke(stack, new String[] {"getFluid"}, NO_PARAMETERS);
+        int color = callInt(fluid, new String[] {"getColor"},
+                new Class<?>[] {FluidStack.class}, -1, stack);
+        if (color < 0) {
+            color = callInt(fluid, new String[] {"getColor"}, NO_PARAMETERS, -1);
+        }
+        String name = call(fluid, String.class,
+                fluid != null ? fluid.getClass().getName() : "unknown",
+                new String[] {"getName"}, NO_PARAMETERS);
+        return new OpenBlocksTankFluidInfo(true, fieldInt(stack, -1, "amount"), color, name);
+    }
+
+    public record OpenBlocksTankFluidInfo(boolean present, int amount, int color, String name) {
+        private static final OpenBlocksTankFluidInfo EMPTY =
+                new OpenBlocksTankFluidInfo(false, -1, -1, "not-openblocks-tank");
     }
 
     public static Object worldProviderSkyRenderer(WorldProvider provider) {

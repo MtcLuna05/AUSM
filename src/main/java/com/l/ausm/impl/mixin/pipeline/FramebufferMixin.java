@@ -66,19 +66,23 @@ public class FramebufferMixin {
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
+        Framebuffer framebuffer = (Framebuffer) (Object) this;
+        if (framebuffer != com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)) {
+            return;
+        }
         PipelineContext context = PipelineContext.getInstance();
         if (!context.isActive()) {
             return;
         }
 
         context.logFramebufferPresentationBoundary("framebufferExt-before-prepare",
-                (Framebuffer) (Object) this,
+                framebuffer,
                 width,
                 height,
                 true);
         context.prepareFramebufferPresentation();
         context.logFramebufferPresentationBoundary("framebufferExt-after-prepare-before-bind-texture",
-                (Framebuffer) (Object) this,
+                framebuffer,
                 width,
                 height,
                 true);
