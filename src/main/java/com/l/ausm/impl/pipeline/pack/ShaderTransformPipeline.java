@@ -17,10 +17,15 @@ public final class ShaderTransformPipeline {
             new VoidNoiseDisableTransformStage(),
             new FinalDitherNeutralizeTransformStage(),
             new AusmOfficialSkyDomeTransformStage(),
+            new OwnedSkyStabilityTransformStage(),
             new LegacySamplerAliasTransformStage(),
             new GbuffersBuiltinTransformStage(),
+            new ItemGlintCoverageTransformStage(),
             new BloomOnlyMaskDiscardTransformStage(),
             new NothiriumChunkOffsetTransformStage(),
+            new LeafPileCompatibilityTransformStage(),
+            new ThinQuadFaceSeparationTransformStage(),
+            new NetherPortalMaterialCompatibilityTransformStage(),
             new ModdedFluidCompatibilityTransformStage(),
             new FadeVariableTransformStage(),
             new EntityAdvancedMaterialFallbackTransformStage(),
@@ -33,6 +38,7 @@ public final class ShaderTransformPipeline {
             new GuardedBlocklightColorTableTransformStage(),
             new CompatibilityTextureFunctionTransformStage(),
             new PlayerRayTracerQuadTexCoordTransformStage(),
+            new PixelatedLineCompatibilityTransformStage(),
             new MidTexCoordAliasTransformStage()
     );
 

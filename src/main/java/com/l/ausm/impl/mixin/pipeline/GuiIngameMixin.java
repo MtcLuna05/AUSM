@@ -23,40 +23,18 @@ public class GuiIngameMixin {
             return;
         }
         PipelineContext context = PipelineContext.getInstance();
-        context.logGuiBypassProbe("hud-head-before-bypass");
+        context.beginGuiItemRenderScope();
         context.prepareBypassedGuiScreenDrawState();
-        context.logGuiBypassProbe("hud-head-after-bypass");
     }
 
     @Inject(method = "renderGameOverlay(F)V", at = @At("RETURN"))
     private void ausm$afterGameOverlay(float partialTicks, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        context.endGuiItemRenderScope();
         if (ausm$isHudHidden()) {
             return;
         }
-        PipelineContext.getInstance().logGuiBypassProbe("hud-return");
         ShaderCompileNotifications.renderOverlay(new ScaledResolution(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
-    }
-
-    @Inject(
-            method = "renderGameOverlay(F)V",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/gui/GuiIngame;renderHotbar(Lnet/minecraft/client/gui/ScaledResolution;F)V"
-            )
-    )
-    private void ausm$beforeHotbar(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().logGuiBypassProbe("hud-before-hotbar");
-    }
-
-    @Inject(
-            method = "renderGameOverlay(F)V",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/gui/GuiSubtitleOverlay;renderSubtitles(Lnet/minecraft/client/gui/ScaledResolution;)V"
-            )
-    )
-    private void ausm$beforeSubtitles(float partialTicks, CallbackInfo ci) {
-        PipelineContext.getInstance().logGuiBypassProbe("hud-before-subtitles");
     }
 
     @Inject(method = "renderVignette(FLnet/minecraft/client/gui/ScaledResolution;)V", at = @At("HEAD"), cancellable = true)

@@ -152,16 +152,25 @@ public class ShaderPackManager implements ShaderPackController {
         }
 
         selectedPackName = properties.getProperty("selectedPack", OFF_PACK_NAME);
-        shadersEnabled = false;
+        boolean savedEnabled = Boolean.parseBoolean(properties.getProperty("enabled", "false").trim());
+        boolean packAvailable = !isOffPack(selectedPackName) && isPackAvailable(selectedPackName);
+        shadersEnabled = !automaticShaderDisablingEnabled() && savedEnabled && packAvailable;
         currentPack = NoneShaderPack.INSTANCE;
         currentOptionOverrides = isOffPack(selectedPackName) ? Map.of() : loadOptionOverrides(selectedPackName);
-        pendingPipelineReload = !isOffPack(selectedPackName) && isPackAvailable(selectedPackName);
+        pendingPipelineReload = packAvailable;
         compiledDimensionId = Integer.MIN_VALUE;
         pendingBetterPortalsDimensionCompileId = Integer.MIN_VALUE;
         pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
         betterPortalsPrewarmedCacheKeys.clear();
         compiledPackName = OFF_PACK_NAME;
         PipelineContext.getInstance().setActive(false);
+        MainMod.LOGGER.info(
+                "Loaded shader state: selected='{}' savedEnabled={} automaticShaderDisabling={} restoreOnWorldLoad={}",
+                selectedPackName,
+                savedEnabled,
+                automaticShaderDisablingEnabled(),
+                shadersEnabled
+        );
     }
 
     private ShaderPack openPack(String packName) {
@@ -551,6 +560,23 @@ public class ShaderPackManager implements ShaderPackController {
             return;
         }
 
+        if (!automaticShaderDisablingEnabled()) {
+            clearBetterPortalsPendingState();
+            if (!shadersEnabled) {
+                PipelineContext.getInstance().setActive(false);
+                return;
+            }
+            if (!ensureSelectedPackLoaded()) {
+                return;
+            }
+            ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides, dimensionId);
+            if (initializeCurrentPipeline(properties, true, dimensionId, true)) {
+                MainMod.LOGGER.info("Restored shaderpack '{}' for world dimension {} because automatic shader disabling is off.",
+                        selectedPackName, dimensionId);
+            }
+            return;
+        }
+
         if (shadersEnabled || PipelineContext.getInstance().isActive()) {
             MainMod.LOGGER.info("Forcing shaders inactive on world load; selected shaderpack remains '{}'", selectedPackName);
         }
@@ -562,6 +588,11 @@ public class ShaderPackManager implements ShaderPackController {
         clearShaderPropertiesCache();
         PipelineContext.getInstance().cleanup();
         rebuildInactiveVanillaRenderers();
+    }
+
+    private boolean automaticShaderDisablingEnabled() {
+        return MainMod.getClientSettingsConfig() == null
+                || MainMod.getClientSettingsConfig().automaticShaderDisablingEnabled();
     }
 
     public void compilePipelineForDimensionSwitch(int dimensionId) {

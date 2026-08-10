@@ -35,21 +35,4 @@ public class GuiInventoryMixin {
                                                          CallbackInfo ci) {
         PipelineContext.getInstance().finishGuiEntityPreviewRenderState();
     }
-
-    @Inject(
-            method = "func_147046_a(IIIFFLnet/minecraft/entity/EntityLivingBase;)V",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/entity/RenderManager;func_188391_a(Lnet/minecraft/entity/Entity;DDDFFZ)V",
-                    shift = At.Shift.BEFORE
-            ),
-            remap = false,
-            require = 1
-    )
-    private static void ausm$probeInventoryEntityDraw(int posX, int posY, int scale,
-                                                       float mouseX, float mouseY,
-                                                       EntityLivingBase entity,
-                                                       CallbackInfo ci) {
-        PipelineContext.getInstance().probeGuiEntityState("before-render-manager");
-    }
 }

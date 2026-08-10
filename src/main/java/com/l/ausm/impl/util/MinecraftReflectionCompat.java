@@ -110,6 +110,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.util.ArrayList;
@@ -130,6 +131,8 @@ public final class MinecraftReflectionCompat {
     private static final Set<MethodKey> MISSING_METHODS = ConcurrentHashMap.newKeySet();
     private static final ThreadLocal<MethodLookupCache> THREAD_METHOD_LOOKUP_CACHE =
             ThreadLocal.withInitial(MethodLookupCache::new);
+    private static final ThreadLocal<FieldLookupCache> THREAD_FIELD_LOOKUP_CACHE =
+            ThreadLocal.withInitial(FieldLookupCache::new);
     private static final ThreadLocal<BufferBuilder> THREAD_FLUID_STAGING_BUFFER =
             ThreadLocal.withInitial(() -> new BufferBuilder(512));
     private static final ConcurrentMap<FieldKey, Field> FIELD_CACHE = new ConcurrentHashMap<>();
@@ -146,8 +149,23 @@ public final class MinecraftReflectionCompat {
     private static final ConcurrentMap<ResourceLocation, String> RESOURCE_PATH_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<ResourceLocation, String> RESOURCE_STRING_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentMap<ResourceLocation, String> RESOURCE_PATH_LOWER_CACHE = new ConcurrentHashMap<>();
+    private static final ClassValue<String> LOWER_CLASS_NAME_CACHE = new ClassValue<String>() {
+        @Override
+        protected String computeValue(Class<?> type) {
+            return type.getName().toLowerCase(Locale.ROOT);
+        }
+    };
     private static final int HOT_IDENTITY_CACHE_LIMIT = 4096;
     private static final ThreadLocal<IdentityHashMap<IBlockState, String>> THREAD_STATE_STRING_CACHE =
+            ThreadLocal.withInitial(IdentityHashMap::new);
+    /** Material and render type are immutable properties of an IBlockState.
+     * Keep their high-frequency terrain answers local to the compiling/render
+     * thread so a cached state never crosses threads or needs a global lock. */
+    private static final ThreadLocal<IdentityHashMap<IBlockState, Material>> THREAD_STATE_MATERIAL_CACHE =
+            ThreadLocal.withInitial(IdentityHashMap::new);
+    private static final ThreadLocal<IdentityHashMap<IBlockState, EnumBlockRenderType>> THREAD_STATE_RENDER_TYPE_CACHE =
+            ThreadLocal.withInitial(IdentityHashMap::new);
+    private static final ThreadLocal<IdentityHashMap<IBlockState, Block>> THREAD_STATE_BLOCK_CACHE =
             ThreadLocal.withInitial(IdentityHashMap::new);
     public static final Class<?>[] NO_PARAMETERS = new Class<?>[0];
     private static final String[] PROVIDER_DIMENSION_NAMES = {"getDimension"};
@@ -191,24 +209,43 @@ public final class MinecraftReflectionCompat {
             new String[] {"getRenderLayer"},
             NO_PARAMETERS
     );
-    private static final MethodHandle BLOCK_FROM_STATE_HANDLE = methodHandle(
-            IBlockState.class,
-            new String[] {"func_177230_c", "getBlock"},
-            NO_PARAMETERS
+    private static final MethodHandle FORGE_RENDER_PASS_HANDLE = exactMethodHandle(
+            net.minecraftforge.client.MinecraftForgeClient.class,
+            new String[] {"getRenderPass"},
+            NO_PARAMETERS,
+            MethodType.methodType(int.class)
+    );
+    private static final MethodHandle BLOCK_FROM_STATE_HANDLE = exactMethodHandle(
+            IBlockState.class, new String[] {"func_177230_c", "getBlock"}, NO_PARAMETERS,
+            MethodType.methodType(Block.class, IBlockState.class)
     );
     private static final MethodHandle STATE_ACTUAL_STATE_HANDLE = methodHandle(
             IBlockState.class,
             new String[] {"func_185899_b", "getActualState"},
             new Class<?>[] {IBlockAccess.class, BlockPos.class}
     );
-    private static final MethodHandle STATE_MATERIAL_HANDLE = methodHandle(
-            IBlockState.class, new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS
+    private static final MethodHandle STATE_MATERIAL_HANDLE = exactMethodHandle(
+            IBlockState.class, new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS,
+            MethodType.methodType(Material.class, IBlockState.class)
     );
-    private static final MethodHandle MATERIAL_IS_LIQUID_HANDLE = methodHandle(
-            Material.class, new String[] {"func_76224_d", "isLiquid"}, NO_PARAMETERS
+    private static final MethodHandle MATERIAL_IS_LIQUID_HANDLE = exactMethodHandle(
+            Material.class, new String[] {"func_76224_d", "isLiquid"}, NO_PARAMETERS,
+            MethodType.methodType(boolean.class, Material.class)
     );
-    private static final MethodHandle STATE_RENDER_TYPE_HANDLE = methodHandle(
-            IBlockState.class, new String[] {"func_185911_a", "getRenderType"}, NO_PARAMETERS
+    private static final MethodHandle STATE_RENDER_TYPE_HANDLE = exactMethodHandle(
+            IBlockState.class,
+            // getRenderType is func_185901_i in 1.12. func_185911_a is a
+            // three-argument side-rendering method; using it made the hot
+            // handle miss on SRG runtimes and forced reflective fallback.
+            new String[] {"func_185901_i", "getRenderType"},
+            NO_PARAMETERS,
+            MethodType.methodType(EnumBlockRenderType.class, IBlockState.class)
+    );
+    private static final Material MATERIAL_FIRE = field(
+            Material.class, Material.class, null, "field_151581_o", "FIRE"
+    );
+    private static final Material MATERIAL_WATER = field(
+            Material.class, Material.class, null, "field_151586_h", "WATER"
     );
     private static final MethodHandle STATE_LIGHT_VALUE_HANDLE = methodHandle(
             IBlockState.class, new String[] {"func_185906_d", "getLightValue"}, NO_PARAMETERS
@@ -224,8 +261,9 @@ public final class MinecraftReflectionCompat {
     private static final MethodHandle BAKED_QUAD_VERTEX_DATA_HANDLE = methodHandle(
             BakedQuad.class, new String[] {"func_178209_a", "getVertexData"}, NO_PARAMETERS
     );
-    private static final MethodHandle BAKED_QUAD_PIPE_HANDLE = methodHandle(
-            BakedQuad.class, new String[] {"pipe"}, new Class<?>[] {IVertexConsumer.class}
+    private static final MethodHandle BAKED_QUAD_PIPE_HANDLE = exactMethodHandle(
+            BakedQuad.class, new String[] {"pipe"}, new Class<?>[] {IVertexConsumer.class},
+            MethodType.methodType(void.class, BakedQuad.class, IVertexConsumer.class)
     );
     private static final MethodHandle BLOCK_COLOR_MULTIPLIER_HANDLE = methodHandle(
             BlockColors.class,
@@ -241,11 +279,63 @@ public final class MinecraftReflectionCompat {
     private static final MethodHandle BLOCK_POS_Z_HANDLE = methodHandle(
             BlockPos.class, new String[] {"func_177952_p", "getZ"}, NO_PARAMETERS
     );
+    private static final MethodHandle TILE_ENTITY_POS_HANDLE = exactMethodHandle(
+            TileEntity.class, TILE_ENTITY_POS_NAMES, NO_PARAMETERS,
+            MethodType.methodType(BlockPos.class, TileEntity.class)
+    );
+    private static final MethodHandle TILE_ENTITY_INVALID_HANDLE = exactMethodHandle(
+            TileEntity.class, TILE_ENTITY_INVALID_NAMES, NO_PARAMETERS,
+            MethodType.methodType(boolean.class, TileEntity.class)
+    );
     private static final Field BLOCK_POS_X_FIELD = firstField(BlockPos.class, "field_177962_a", "x");
     private static final Field BLOCK_POS_Y_FIELD = firstField(BlockPos.class, "field_177960_b", "y");
     private static final Field BLOCK_POS_Z_FIELD = firstField(BlockPos.class, "field_177961_c", "z");
     private static final MethodHandle WORLD_CAN_SEE_SKY_HANDLE = methodHandle(
             World.class, new String[] {"func_175678_i", "canSeeSky"}, new Class<?>[] {BlockPos.class}
+    );
+    private static final MethodHandle WORLD_IS_BLOCK_LOADED_HANDLE = methodHandle(
+            World.class, new String[] {"func_175667_e", "isBlockLoaded"}, new Class<?>[] {BlockPos.class}
+    );
+    private static final MethodHandle WORLD_IS_BLOCK_LOADED_ALLOW_EMPTY_HANDLE = methodHandle(
+            World.class, new String[] {"func_175668_a", "isBlockLoaded"},
+            new Class<?>[] {BlockPos.class, boolean.class}
+    );
+    private static final MethodHandle BLOCK_META_FROM_STATE_HANDLE = methodHandle(
+            Block.class, new String[] {"func_176201_c", "getMetaFromState"},
+            new Class<?>[] {IBlockState.class}
+    );
+    private static final MethodHandle BLOCK_RENDER_LAYER_HANDLE = methodHandle(
+            Block.class, BLOCK_RENDER_LAYER_NAMES, NO_PARAMETERS
+    );
+    private static final MethodHandle RENDER_BLOCK_HANDLE = methodHandle(
+            BlockRendererDispatcher.class, new String[] {"func_175018_a", "renderBlock"},
+            new Class<?>[] {IBlockState.class, BlockPos.class, IBlockAccess.class, BufferBuilder.class}
+    );
+    private static final MethodHandle REGION_BUFFER_FOR_LAYER_HANDLE = methodHandle(
+            RegionRenderCacheBuilder.class, new String[] {"func_179038_a", "getWorldRendererByLayer"},
+            new Class<?>[] {BlockRenderLayer.class}
+    );
+    private static final MethodHandle REGION_BUFFER_FOR_LAYER_ID_HANDLE = methodHandle(
+            RegionRenderCacheBuilder.class, new String[] {"func_179039_a", "getWorldRendererByLayerId"},
+            new Class<?>[] {int.class}
+    );
+    private static final MethodHandle BLOCK_ACCESS_TILE_ENTITY_HANDLE = exactMethodHandle(
+            IBlockAccess.class,
+            new String[] {"func_175625_s", "getTileEntity"},
+            new Class<?>[] {BlockPos.class},
+            MethodType.methodType(TileEntity.class, IBlockAccess.class, BlockPos.class)
+    );
+    private static final MethodHandle CLIENT_ACTIVE_TEXTURE_HANDLE = exactMethodHandle(
+            OpenGlHelper.class,
+            new String[] {"func_77472_b", "setClientActiveTexture"},
+            new Class<?>[] {int.class},
+            MethodType.methodType(void.class, int.class)
+    );
+    private static final int DEFAULT_TEX_UNIT = staticIntField(
+            OpenGlHelper.class, GL13.GL_TEXTURE0, "field_77478_a", "defaultTexUnit"
+    );
+    private static final int LIGHTMAP_TEX_UNIT = staticIntField(
+            OpenGlHelper.class, GL13.GL_TEXTURE1, "field_77476_b", "lightmapTexUnit"
     );
     private static final MethodHandle BLOCK_POS_UP_HANDLE = methodHandle(
             BlockPos.class, new String[] {"func_177984_a", "up"}, NO_PARAMETERS
@@ -342,16 +432,26 @@ public final class MinecraftReflectionCompat {
         if (world == null || pos == null) {
             return false;
         }
-        return callBoolean(world, new String[] {"func_175667_e", "isBlockLoaded"},
-                new Class<?>[] {BlockPos.class}, false, pos);
+        if (WORLD_IS_BLOCK_LOADED_HANDLE != null) {
+            try {
+                return (boolean) WORLD_IS_BLOCK_LOADED_HANDLE.invoke(world, pos);
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
     }
 
     public static boolean worldIsBlockLoaded(World world, BlockPos pos, boolean allowEmpty) {
         if (world == null || pos == null) {
             return false;
         }
-        return callBoolean(world, new String[] {"func_175668_a", "isBlockLoaded"},
-                new Class<?>[] {BlockPos.class, boolean.class}, false, pos, allowEmpty);
+        if (WORLD_IS_BLOCK_LOADED_ALLOW_EMPTY_HANDLE != null) {
+            try {
+                return (boolean) WORLD_IS_BLOCK_LOADED_ALLOW_EMPTY_HANDLE.invoke(world, pos, allowEmpty);
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
     }
 
     public static boolean worldCanSeeSky(World world, BlockPos pos) {
@@ -427,6 +527,16 @@ public final class MinecraftReflectionCompat {
     }
 
     public static TileEntity blockAccessTileEntity(IBlockAccess access, BlockPos pos) {
+        if (access == null || pos == null) {
+            return null;
+        }
+        if (BLOCK_ACCESS_TILE_ENTITY_HANDLE != null) {
+            try {
+                return (TileEntity) BLOCK_ACCESS_TILE_ENTITY_HANDLE.invokeExact(access, pos);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("blockAccessTileEntity", failure);
+            }
+        }
         return call(access, TileEntity.class, null, new String[] {"func_175625_s", "getTileEntity"},
                 new Class<?>[] {BlockPos.class}, pos);
     }
@@ -866,36 +976,90 @@ public final class MinecraftReflectionCompat {
         if (block == null || state == null) {
             return 0;
         }
-        return callInt(block, new String[] {"func_176201_c", "getMetaFromState"},
-                new Class<?>[] {IBlockState.class}, 0, state);
+        if (BLOCK_META_FROM_STATE_HANDLE != null) {
+            try {
+                return (int) BLOCK_META_FROM_STATE_HANDLE.invoke(block, state);
+            } catch (Throwable ignored) {
+            }
+        }
+        return 0;
     }
 
     public static Material stateMaterial(IBlockState state) {
-        Object direct = invokeReference(STATE_MATERIAL_HANDLE, state);
-        if (direct instanceof Material) {
-            return (Material) direct;
+        if (state == null) {
+            return null;
         }
-        return call(state, Material.class, null,
-                new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS);
+        IdentityHashMap<IBlockState, Material> cache = THREAD_STATE_MATERIAL_CACHE.get();
+        Material cached = cache.get(state);
+        if (cached != null) {
+            return cached;
+        }
+        Material material = null;
+        if (STATE_MATERIAL_HANDLE != null) {
+            try {
+                material = (Material) STATE_MATERIAL_HANDLE.invokeExact(state);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("stateMaterial", failure);
+            }
+        }
+        if (material == null) {
+            material = call(state, Material.class, null,
+                    new String[] {"func_185904_a", "getMaterial"}, NO_PARAMETERS);
+        }
+        if (material != null) {
+            cacheStateValue(cache);
+            cache.put(state, material);
+        }
+        return material;
     }
 
     public static boolean stateMaterialIsFire(IBlockState state) {
-        return stateMaterial(state) == field(Material.class, Material.class, null,
-                "field_151581_o", "FIRE");
+        return stateMaterial(state) == MATERIAL_FIRE;
     }
 
     public static boolean stateMaterialIsWater(IBlockState state) {
-        return stateMaterial(state) == field(Material.class, Material.class, null,
-                "field_151586_h", "WATER");
+        return stateMaterial(state) == MATERIAL_WATER;
     }
 
     public static EnumBlockRenderType stateRenderType(IBlockState state) {
-        Object direct = invokeReference(STATE_RENDER_TYPE_HANDLE, state);
-        if (direct instanceof EnumBlockRenderType) {
-            return (EnumBlockRenderType) direct;
+        if (state == null) {
+            return null;
         }
-        return call(state, EnumBlockRenderType.class, null,
-                new String[] {"func_185911_a", "getRenderType"}, NO_PARAMETERS);
+        IdentityHashMap<IBlockState, EnumBlockRenderType> cache = THREAD_STATE_RENDER_TYPE_CACHE.get();
+        EnumBlockRenderType cached = cache.get(state);
+        if (cached != null) {
+            return cached;
+        }
+        if (STATE_RENDER_TYPE_HANDLE != null) {
+            try {
+                EnumBlockRenderType renderType = (EnumBlockRenderType) STATE_RENDER_TYPE_HANDLE.invokeExact(state);
+                if (renderType != null) {
+                    cacheStateValue(cache);
+                    cache.put(state, renderType);
+                }
+                return renderType;
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("stateRenderType", failure);
+                // The handle was resolved and adapted at startup. An exception
+                // here came from the target state itself (for example a
+                // transient wrapper with no delegate); invoking the same method
+                // reflectively only throws and allocates a second time.
+                return null;
+            }
+        }
+        EnumBlockRenderType renderType = call(state, EnumBlockRenderType.class, null,
+                new String[] {"func_185901_i", "getRenderType"}, NO_PARAMETERS);
+        if (renderType != null) {
+            cacheStateValue(cache);
+            cache.put(state, renderType);
+        }
+        return renderType;
+    }
+
+    private static <T> void cacheStateValue(IdentityHashMap<IBlockState, T> cache) {
+        if (cache.size() >= HOT_IDENTITY_CACHE_LIMIT) {
+            cache.clear();
+        }
     }
 
     public static int stateRenderTypeOrdinal(IBlockState state) {
@@ -949,6 +1113,14 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int forgeRenderPass() {
+        if (FORGE_RENDER_PASS_HANDLE != null) {
+            try {
+                return (int) FORGE_RENDER_PASS_HANDLE.invokeExact();
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("forgeRenderPass", failure);
+                return 0;
+            }
+        }
         return intValue(invokeStatic(net.minecraftforge.client.MinecraftForgeClient.class,
                 new String[] {"getRenderPass"}, NO_PARAMETERS), 0);
     }
@@ -1059,21 +1231,37 @@ public final class MinecraftReflectionCompat {
         if (state == null) {
             return null;
         }
-        Block block = null;
+        IdentityHashMap<IBlockState, Block> cache = THREAD_STATE_BLOCK_CACHE.get();
+        Block cached = cache.get(state);
+        if (cached != null) {
+            return cached;
+        }
         if (BLOCK_FROM_STATE_HANDLE != null) {
             try {
-                block = (Block) BLOCK_FROM_STATE_HANDLE.invoke(state);
-            } catch (Throwable ignored) {
+                Block block = (Block) BLOCK_FROM_STATE_HANDLE.invokeExact(state);
+                if (block != null) {
+                    cacheStateValue(cache);
+                    cache.put(state, block);
+                }
+                return block;
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("blockFromState", failure);
+                return null;
             }
         }
-        if (block == null) {
-            block = call(state, Block.class, null, new String[] {"func_177230_c", "getBlock"}, NO_PARAMETERS);
+        Block block = call(state, Block.class, null, new String[] {"func_177230_c", "getBlock"}, NO_PARAMETERS);
+        if (block != null) {
+            cacheStateValue(cache);
+            cache.put(state, block);
         }
         return block;
     }
 
     public static void clearHotThreadCaches() {
         THREAD_STATE_STRING_CACHE.get().clear();
+        THREAD_STATE_MATERIAL_CACHE.get().clear();
+        THREAD_STATE_RENDER_TYPE_CACHE.get().clear();
+        THREAD_STATE_BLOCK_CACHE.get().clear();
     }
 
     public static String stateString(IBlockState state) {
@@ -1091,6 +1279,10 @@ public final class MinecraftReflectionCompat {
         }
         hotCache.put(state, value);
         return value;
+    }
+
+    public static String lowerClassName(Object value) {
+        return value != null ? LOWER_CLASS_NAME_CACHE.get(value.getClass()) : "";
     }
 
     public static IBlockState actualState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -1112,7 +1304,14 @@ public final class MinecraftReflectionCompat {
     }
 
     public static BlockRenderLayer blockRenderLayer(Block block) {
-        return call(block, BlockRenderLayer.class, null, BLOCK_RENDER_LAYER_NAMES, NO_PARAMETERS);
+        if (block == null || BLOCK_RENDER_LAYER_HANDLE == null) {
+            return null;
+        }
+        try {
+            return (BlockRenderLayer) BLOCK_RENDER_LAYER_HANDLE.invoke(block);
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     public static boolean blockCanRenderInLayer(Block block, IBlockState state, BlockRenderLayer layer) {
@@ -1122,7 +1321,7 @@ public final class MinecraftReflectionCompat {
         MethodHandle handle = blockLayerMethodHandle(block.getClass());
         if (handle != null) {
             try {
-                return (boolean) handle.invoke(block, state, layer);
+                return (boolean) handle.invokeExact(block, state, layer);
             } catch (Throwable failure) {
                 int probe = BLOCK_LAYER_FAILURE_PROBES.incrementAndGet();
                 if (probe <= 8) {
@@ -1148,7 +1347,8 @@ public final class MinecraftReflectionCompat {
         if (method != null) {
             try {
                 method.setAccessible(true);
-                MethodHandle handle = MethodHandles.lookup().unreflect(method);
+                MethodHandle handle = MethodHandles.lookup().unreflect(method).asType(
+                        MethodType.methodType(boolean.class, Block.class, IBlockState.class, BlockRenderLayer.class));
                 MethodHandle existing = BLOCK_LAYER_METHOD_HANDLES.putIfAbsent(owner, handle);
                 return existing != null ? existing : handle;
             } catch (IllegalAccessException | RuntimeException ignored) {
@@ -1993,13 +2193,11 @@ public final class MinecraftReflectionCompat {
     }
 
     public static int defaultTexUnit() {
-        Object value = getStaticField(OpenGlHelper.class, "field_77478_a", "defaultTexUnit");
-        return intValue(value, GL13.GL_TEXTURE0);
+        return DEFAULT_TEX_UNIT;
     }
 
     public static int lightmapTexUnit() {
-        Object value = getStaticField(OpenGlHelper.class, "field_77476_b", "lightmapTexUnit");
-        return intValue(value, GL13.GL_TEXTURE1);
+        return LIGHTMAP_TEX_UNIT;
     }
 
     public static void setActiveTexture(int textureUnit) {
@@ -2159,7 +2357,29 @@ public final class MinecraftReflectionCompat {
     }
 
     public static void setClientActiveTexture(int textureUnit) {
+        if (CLIENT_ACTIVE_TEXTURE_HANDLE != null) {
+            try {
+                CLIENT_ACTIVE_TEXTURE_HANDLE.invokeExact(textureUnit);
+                return;
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("setClientActiveTexture", failure);
+            }
+        }
         invoke(OpenGlHelper.class, new String[] {"func_77472_b", "setClientActiveTexture"}, new Class<?>[] {int.class}, textureUnit);
+    }
+
+    /** Emits resolution data once during client setup, never from a render or
+     * chunk-compiler loop. Invocation failures are separately reported by the
+     * bounded fallback probe below. */
+    public static void logPerformanceRouteProbe() {
+        com.l.ausm.impl.MainMod.LOGGER.info(
+                "[AUSMPerformanceRouteProbe] renderTypeHandle={} blockHandle={} tileEntityHandle={} clientTextureHandle={} forgeRenderPassHandle={}",
+                STATE_RENDER_TYPE_HANDLE != null,
+                BLOCK_FROM_STATE_HANDLE != null,
+                BLOCK_ACCESS_TILE_ENTITY_HANDLE != null,
+                CLIENT_ACTIVE_TEXTURE_HANDLE != null,
+                FORGE_RENDER_PASS_HANDLE != null
+        );
     }
 
     public static BlockRendererDispatcher blockRendererDispatcher(Minecraft minecraft) {
@@ -2261,11 +2481,12 @@ public final class MinecraftReflectionCompat {
         if (state == null) {
             return false;
         }
-        Object material = invokeReference(STATE_MATERIAL_HANDLE, state);
+        Material material = stateMaterial(state);
         if (material != null && MATERIAL_IS_LIQUID_HANDLE != null) {
             try {
-                return (boolean) MATERIAL_IS_LIQUID_HANDLE.invoke(material);
-            } catch (Throwable ignored) {
+                return (boolean) MATERIAL_IS_LIQUID_HANDLE.invokeExact(material);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("materialIsLiquid", failure);
                 return false;
             }
         }
@@ -2391,7 +2612,7 @@ public final class MinecraftReflectionCompat {
         }
         if (BAKED_QUAD_PIPE_HANDLE != null) {
             try {
-                BAKED_QUAD_PIPE_HANDLE.invoke(quad, consumer);
+                BAKED_QUAD_PIPE_HANDLE.invokeExact(quad, consumer);
                 return true;
             } catch (Throwable ignored) {
                 return false;
@@ -2499,10 +2720,15 @@ public final class MinecraftReflectionCompat {
 
     public static boolean renderBlock(BlockRendererDispatcher dispatcher, IBlockState state, BlockPos pos,
                                       IBlockAccess blockAccess, BufferBuilder buffer) {
-        Object value = invoke(dispatcher, new String[] {"func_175018_a", "renderBlock"},
-                new Class<?>[] {IBlockState.class, BlockPos.class, IBlockAccess.class, BufferBuilder.class},
-                state, pos, blockAccess, buffer);
-        return value instanceof Boolean && (Boolean) value;
+        if (dispatcher == null || state == null || pos == null || blockAccess == null || buffer == null
+                || RENDER_BLOCK_HANDLE == null) {
+            return false;
+        }
+        try {
+            return (boolean) RENDER_BLOCK_HANDLE.invoke(dispatcher, state, pos, blockAccess, buffer);
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     public static BlockPos renderChunkPosition(Object renderChunk) {
@@ -2516,11 +2742,29 @@ public final class MinecraftReflectionCompat {
     }
 
     public static BlockPos tileEntityPos(TileEntity tileEntity) {
+        if (tileEntity == null) {
+            return null;
+        }
+        if (TILE_ENTITY_POS_HANDLE != null) {
+            try {
+                return (BlockPos) TILE_ENTITY_POS_HANDLE.invokeExact(tileEntity);
+            } catch (Throwable ignored) {
+            }
+        }
         Object value = invoke(tileEntity, TILE_ENTITY_POS_NAMES, NO_PARAMETERS);
         return value instanceof BlockPos ? (BlockPos) value : null;
     }
 
     public static boolean tileEntityInvalid(TileEntity tileEntity) {
+        if (tileEntity == null) {
+            return false;
+        }
+        if (TILE_ENTITY_INVALID_HANDLE != null) {
+            try {
+                return (boolean) TILE_ENTITY_INVALID_HANDLE.invokeExact(tileEntity);
+            } catch (Throwable ignored) {
+            }
+        }
         return callBoolean(tileEntity, TILE_ENTITY_INVALID_NAMES, NO_PARAMETERS, false);
     }
 
@@ -2528,15 +2772,17 @@ public final class MinecraftReflectionCompat {
         if (builder == null || layer == null) {
             return null;
         }
-        Object value = invoke(builder, new String[] {"func_179038_a", "getWorldRendererByLayer"},
-                new Class<?>[] {BlockRenderLayer.class}, layer);
-        if (value instanceof BufferBuilder) {
-            return (BufferBuilder) value;
+        if (REGION_BUFFER_FOR_LAYER_HANDLE != null) {
+            try {
+                return (BufferBuilder) REGION_BUFFER_FOR_LAYER_HANDLE.invoke(builder, layer);
+            } catch (Throwable ignored) {
+            }
         }
-        value = invoke(builder, new String[] {"func_179039_a", "getWorldRendererByLayerId"},
-                new Class<?>[] {int.class}, layer.ordinal());
-        if (value instanceof BufferBuilder) {
-            return (BufferBuilder) value;
+        if (REGION_BUFFER_FOR_LAYER_ID_HANDLE != null) {
+            try {
+                return (BufferBuilder) REGION_BUFFER_FOR_LAYER_ID_HANDLE.invoke(builder, layer.ordinal());
+            } catch (Throwable ignored) {
+            }
         }
         Object worldRenderers = getField(builder, "field_179040_a", "worldRenderers");
         if (worldRenderers instanceof BufferBuilder[] buffers
@@ -2886,63 +3132,19 @@ public final class MinecraftReflectionCompat {
             localCache.store(owner, name, parameters, null);
             return null;
         }
-        try {
-            Method publicMethod = owner.getMethod(name, parameters);
-            publicMethod.setAccessible(true);
-            Method existing = METHOD_CACHE.putIfAbsent(key, publicMethod);
-            Method resolved = existing != null ? existing : publicMethod;
-            localCache.store(owner, name, parameters, resolved);
-            return resolved;
-        } catch (ReflectiveOperationException | SecurityException ignored) {
-        }
-        Method declared = findExactDeclaredMethod(owner, name, parameterTypes, new HashSet<>());
-        if (declared != null) {
-            declared.setAccessible(true);
-            Method existing = METHOD_CACHE.putIfAbsent(key, declared);
-            Method resolved = existing != null ? existing : declared;
+        Method found = LinkageSafeMethodLookup.find(owner, name, parameters);
+        if (found != null) {
+            try {
+                found.setAccessible(true);
+            } catch (SecurityException ignored) {
+            }
+            Method existing = METHOD_CACHE.putIfAbsent(key, found);
+            Method resolved = existing != null ? existing : found;
             localCache.store(owner, name, parameters, resolved);
             return resolved;
         }
         MISSING_METHODS.add(key);
         localCache.store(owner, name, parameters, null);
-        return null;
-    }
-
-    private static Method findExactDeclaredMethod(Class<?> owner, String name, Class<?>[] parameterTypes, Set<Class<?>> visited) {
-        if (owner == null) {
-            return null;
-        }
-        Class<?>[] parameters = parameterTypes != null ? parameterTypes : NO_PARAMETERS;
-        for (Class<?> current = owner; current != null; current = current.getSuperclass()) {
-            if (!visited.add(current)) {
-                continue;
-            }
-            try {
-                return current.getDeclaredMethod(name, parameters);
-            } catch (NoSuchMethodException | SecurityException ignored) {
-            }
-            Method interfaceMethod = findExactInterfaceMethod(current, name, parameters, visited);
-            if (interfaceMethod != null) {
-                return interfaceMethod;
-            }
-        }
-        return null;
-    }
-
-    private static Method findExactInterfaceMethod(Class<?> owner, String name, Class<?>[] parameterTypes, Set<Class<?>> visited) {
-        for (Class<?> interfaceClass : owner.getInterfaces()) {
-            if (!visited.add(interfaceClass)) {
-                continue;
-            }
-            try {
-                return interfaceClass.getDeclaredMethod(name, parameterTypes);
-            } catch (NoSuchMethodException | SecurityException ignored) {
-            }
-            Method nested = findExactInterfaceMethod(interfaceClass, name, parameterTypes, visited);
-            if (nested != null) {
-                return nested;
-            }
-        }
         return null;
     }
 
@@ -2954,11 +3156,15 @@ public final class MinecraftReflectionCompat {
             if (!visited.add(current)) {
                 continue;
             }
-            for (Method method : current.getDeclaredMethods()) {
-                Class<?>[] parameters = method.getParameterTypes();
-                if (method.getName().equals(name) && parameters.length == 1 && parameters[0].isAssignableFrom(propertyClass)) {
-                    return method;
+            try {
+                for (Method method : current.getDeclaredMethods()) {
+                    Class<?>[] parameters = method.getParameterTypes();
+                    if (method.getName().equals(name) && parameters.length == 1
+                            && parameters[0].isAssignableFrom(propertyClass)) {
+                        return method;
+                    }
                 }
+            } catch (SecurityException | LinkageError ignored) {
             }
             Method interfaceMethod = findCompatibleInterfaceMethod(current, name, propertyClass, visited);
             if (interfaceMethod != null) {
@@ -2973,11 +3179,15 @@ public final class MinecraftReflectionCompat {
             if (!visited.add(interfaceClass)) {
                 continue;
             }
-            for (Method method : interfaceClass.getDeclaredMethods()) {
-                Class<?>[] parameters = method.getParameterTypes();
-                if (method.getName().equals(name) && parameters.length == 1 && parameters[0].isAssignableFrom(propertyClass)) {
-                    return method;
+            try {
+                for (Method method : interfaceClass.getDeclaredMethods()) {
+                    Class<?>[] parameters = method.getParameterTypes();
+                    if (method.getName().equals(name) && parameters.length == 1
+                            && parameters[0].isAssignableFrom(propertyClass)) {
+                        return method;
+                    }
                 }
+            } catch (SecurityException | LinkageError ignored) {
             }
             Method nested = findCompatibleInterfaceMethod(interfaceClass, name, propertyClass, visited);
             if (nested != null) {
@@ -3002,6 +3212,29 @@ public final class MinecraftReflectionCompat {
             }
         }
         return null;
+    }
+
+    private static MethodHandle exactMethodHandle(Class<?> owner, String[] names, Class<?>[] parameterTypes,
+                                                  MethodType exactType) {
+        MethodHandle handle = methodHandle(owner, names, parameterTypes);
+        if (handle == null) {
+            return null;
+        }
+        try {
+            return handle.asType(exactType);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static final Set<String> FAILED_HOT_PATH_HANDLES = ConcurrentHashMap.newKeySet();
+
+    private static void logHotPathHandleFailure(String route, Throwable failure) {
+        if (FAILED_HOT_PATH_HANDLES.add(route)) {
+            com.l.ausm.impl.MainMod.LOGGER.warn(
+                    "[AUSMPerformanceRouteProbe] route={} exact-handle invocation failed; using compatibility fallback: {}",
+                    route, failure.toString());
+        }
     }
 
     private static MethodHandle staticMethodHandle(Class<?> owner, String[] names, Class<?>[] parameterTypes) {
@@ -3111,20 +3344,45 @@ public final class MinecraftReflectionCompat {
         return null;
     }
 
+    private static int staticIntField(Class<?> owner, int fallback, String... names) {
+        for (String name : names) {
+            Field field = findField(owner, name);
+            if (field != null) {
+                try {
+                    return field.getInt(null);
+                } catch (ReflectiveOperationException | IllegalArgumentException ignored) {
+                }
+            }
+        }
+        return fallback;
+    }
+
     public static Field findField(Class<?> owner, String name) {
+        if (owner == null || name == null) {
+            return null;
+        }
+        FieldLookupCache localCache = THREAD_FIELD_LOOKUP_CACHE.get();
+        Field local = localCache.lookup(owner, name);
+        if (localCache.hit) {
+            return local;
+        }
         FieldKey key = new FieldKey(owner, name);
         Field cached = FIELD_CACHE.get(key);
         if (cached != null) {
+            localCache.store(owner, name, cached);
             return cached;
         }
         if (MISSING_FIELDS.contains(key)) {
+            localCache.store(owner, name, null);
             return null;
         }
         try {
             Field publicField = owner.getField(name);
             publicField.setAccessible(true);
             Field existing = FIELD_CACHE.putIfAbsent(key, publicField);
-            return existing != null ? existing : publicField;
+            Field resolved = existing != null ? existing : publicField;
+            localCache.store(owner, name, resolved);
+            return resolved;
         } catch (NoSuchFieldException | SecurityException ignored) {
         }
         for (Class<?> current = owner; current != null; current = current.getSuperclass()) {
@@ -3132,11 +3390,14 @@ public final class MinecraftReflectionCompat {
                 Field field = current.getDeclaredField(name);
                 field.setAccessible(true);
                 Field existing = FIELD_CACHE.putIfAbsent(key, field);
-                return existing != null ? existing : field;
+                Field resolved = existing != null ? existing : field;
+                localCache.store(owner, name, resolved);
+                return resolved;
             } catch (NoSuchFieldException | SecurityException ignored) {
             }
         }
         MISSING_FIELDS.add(key);
+        localCache.store(owner, name, null);
         return null;
     }
 
@@ -3232,6 +3493,49 @@ public final class MinecraftReflectionCompat {
             this.name = name;
             this.parameterTypes = parameterTypes;
             this.method = method;
+        }
+    }
+
+    private static final class FieldLookupCache {
+        private static final int SIZE = 64;
+        private final FieldLookupEntry[] entries = new FieldLookupEntry[SIZE];
+        private boolean hit;
+
+        private FieldLookupCache() {
+            for (int i = 0; i < entries.length; i++) {
+                entries[i] = new FieldLookupEntry();
+            }
+        }
+
+        private Field lookup(Class<?> owner, String name) {
+            FieldLookupEntry entry = entries[index(owner, name)];
+            hit = entry.matches(owner, name);
+            return hit ? entry.field : null;
+        }
+
+        private void store(Class<?> owner, String name, Field field) {
+            entries[index(owner, name)].set(owner, name, field);
+        }
+
+        private static int index(Class<?> owner, String name) {
+            int hash = 31 * System.identityHashCode(owner) + name.hashCode();
+            return hash & (SIZE - 1);
+        }
+    }
+
+    private static final class FieldLookupEntry {
+        private Class<?> owner;
+        private String name;
+        private Field field;
+
+        private boolean matches(Class<?> owner, String name) {
+            return this.owner == owner && (this.name == name || this.name != null && this.name.equals(name));
+        }
+
+        private void set(Class<?> owner, String name, Field field) {
+            this.owner = owner;
+            this.name = name;
+            this.field = field;
         }
     }
 

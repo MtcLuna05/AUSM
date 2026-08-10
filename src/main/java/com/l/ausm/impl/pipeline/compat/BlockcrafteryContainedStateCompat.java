@@ -17,6 +17,7 @@ import net.minecraft.world.IBlockAccess;
 public final class BlockcrafteryContainedStateCompat {
     private static final String BLOCKCRAFTERY = "blockcraftery";
     private static final String EDITABLE_TILE = "epicsquid.blockcraftery.tile.TileEditableBlock";
+    private static final String GPOM_DOUBLE_SLOPE_DATA = "gpom$doubleSlopeData";
     private static final String ENDERIO_GLASS_CLASS_PREFIX = "crazypants.enderio.base.material.glass.";
 
     private BlockcrafteryContainedStateCompat() {
@@ -78,6 +79,15 @@ public final class BlockcrafteryContainedStateCompat {
 
     private static IBlockState stateFromTile(TileEntity tile, IBlockState hostState) {
         if (tile == null || !EDITABLE_TILE.equals(tile.getClass().getName())) {
+            return null;
+        }
+        // GPOM doubled slopes already emit two independently textured host
+        // halves through Blockcraftery's Forge model. AUSM's ordinary framed
+        // replacement owns only the tile's single native `state`; applying it
+        // here would project the primary material over both generated halves.
+        // Keep the optional integration field-only and fail closed when GPOM
+        // is absent or the slope is not doubled.
+        if (MinecraftReflectionCompat.field(tile, Object.class, null, GPOM_DOUBLE_SLOPE_DATA) != null) {
             return null;
         }
         IBlockState contained = MinecraftReflectionCompat.field(tile, IBlockState.class, null, "state");

@@ -121,6 +121,7 @@ import net.minecraft.client.renderer.texture.TextureMap;
 import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
 import net.minecraft.client.renderer.vertex.VertexBuffer;
+import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.client.resources.IResource;
 import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.entity.Entity;
@@ -154,7 +155,6 @@ import net.minecraftforge.client.IRenderHandler;
 import net.minecraftforge.client.MinecraftForgeClient;
 import net.minecraftforge.common.property.IExtendedBlockState;
 import net.minecraftforge.common.property.IUnlistedProperty;
-import net.minecraftforge.fml.common.Loader;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
@@ -167,7 +167,6 @@ import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL43;
 import org.lwjgl.opengl.ARBDrawBuffersBlend;
 import org.lwjgl.opengl.ARBTessellationShader;
-import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GLContext;
 
 import java.io.File;
@@ -207,8 +206,10 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
 abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
-    private final FloatBuffer shadowRotationBuffer = BufferUtils.createFloatBuffer(16);
+    private static final AtomicInteger EXTERNAL_FACADE_TERRAIN_PROBE_LOGS = new AtomicInteger();
+    private static final Set<String> EXTERNAL_FACADE_TERRAIN_PROBE_KEYS = ConcurrentHashMap.newKeySet();
     private int shadowOriginProbeLogs;
+    private String shadowOriginProbeKey = "";
 
     public void beginFrame() {
         if (!isPipelineActive) {
@@ -545,7 +546,14 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
 
     public void prepareVanillaParticleRenderingState() {
         restoreVanillaWorldPassState(false, true);
-}
+        // ParticleManager reuses the global Tessellator. Never allow terrain
+        // compilation/replay metadata to reach BufferBuilder's particle
+        // position/UV/color/lightmap format on the client render thread.
+        BlockRenderContext.clear();
+        FixedFunctionGlState.resetClientArrayState(false);
+        FixedFunctionGlState.resetVanillaTextureMatrices();
+        GL11.glMatrixMode(GL11.GL_MODELVIEW);
+    }
 
     protected void startVanillaParticleRecovery() {
         vanillaParticleRecoveryFrames = Math.max(vanillaParticleRecoveryFrames, PARTICLE_DIMENSION_RECOVERY_FRAMES);
@@ -561,6 +569,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         bindBlockAtlas();
+        TextureBinder.disableShaderOnlyFixedFunctionTextureUnits();
         TextureBinder.restoreDefaultTextureUnit();
         com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
     }
@@ -2429,16 +2438,6 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         GL11.glMatrixMode(GL11.GL_MODELVIEW);
         GL11.glPushMatrix();
 
-        long shadowStartNanos = System.nanoTime();
-        long shadowPreparedNanos = shadowStartNanos;
-        long solidEndNanos = shadowStartNanos;
-        long cutoutMippedEndNanos = shadowStartNanos;
-        long cutoutEndNanos = shadowStartNanos;
-        long translucentEndNanos = shadowStartNanos;
-        int shadowSolidCount = -1;
-        int shadowCutoutMippedCount = -1;
-        int shadowCutoutCount = -1;
-        int shadowTranslucentCount = -1;
         try {
             // Mark the shadow scope before setupTerrain. The transformed
             // Nothirium handler consults this state to leave light-space setup
@@ -2494,6 +2493,10 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
                         interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks),
                         shadowRenderCullDistance()
                 );
+                if (shadowMapUsable && shouldKeepPreviousShadowMapForSparseCandidate(
+                        viewEntity, partialTicks)) {
+                    return;
+                }
             }
 
             shadowFramebuffer.bindForRendering();
@@ -2501,8 +2504,6 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             configureShadowTerrainRenderState();
             TextureBinder.restoreDefaultTextureUnit();
             com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc), com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
-            shadowPreparedNanos = System.nanoTime();
-
             int solidCount = -1;
             int cutoutMippedCount = -1;
             int cutoutCount = -1;
@@ -2510,14 +2511,8 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             int blockEntityCount = -1;
             if (renderShadowTerrain) {
                 solidCount = renderShadowTerrainLayer(mc, WorldRenderingPhase.TERRAIN_SOLID, BlockRenderLayer.SOLID, partialTicks, viewEntity);
-                shadowSolidCount = solidCount;
-                solidEndNanos = System.nanoTime();
                 cutoutMippedCount = renderShadowTerrainLayer(mc, WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED, BlockRenderLayer.CUTOUT_MIPPED, partialTicks, viewEntity);
-                shadowCutoutMippedCount = cutoutMippedCount;
-                cutoutMippedEndNanos = System.nanoTime();
                 cutoutCount = renderShadowTerrainLayer(mc, WorldRenderingPhase.TERRAIN_CUTOUT, BlockRenderLayer.CUTOUT, partialTicks, viewEntity);
-                shadowCutoutCount = cutoutCount;
-                cutoutEndNanos = System.nanoTime();
             }
             if (shaderProperties.renderSettings().shadowEntities()
                     || shaderProperties.renderSettings().shadowPlayer()) {
@@ -2537,9 +2532,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             shadowFramebuffer.copyDepthToSnapshot();
             if (renderShadowTerrain && shaderProperties.renderSettings().shadowTranslucent()) {
                 translucentCount = renderShadowTerrainLayer(mc, WorldRenderingPhase.TERRAIN_TRANSLUCENT, BlockRenderLayer.TRANSLUCENT, partialTicks, viewEntity);
-                shadowTranslucentCount = translucentCount;
             }
-            translucentEndNanos = System.nanoTime();
             injectMappedTileEntityVoxels(mc);
             applyShaderImageTextureBarrier();
             shadowFramebuffer.generateShadowColorMipmaps();
@@ -2553,18 +2546,6 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             }
         } finally {
             nothiriumShadowRenderer.endShadowSelection();
-            logShadowFrameTiming(
-                    shadowStartNanos,
-                    shadowPreparedNanos,
-                    solidEndNanos,
-                    cutoutMippedEndNanos,
-                    cutoutEndNanos,
-                    translucentEndNanos,
-                    shadowSolidCount,
-                    shadowCutoutMippedCount,
-                    shadowCutoutCount,
-                    shadowTranslucentCount
-            );
             com.l.ausm.impl.util.MinecraftReflectionCompat.setRenderChunksMany(mc, previousRenderChunksMany);
             renderingShadowMap = false;
             activePass = null;
@@ -2598,51 +2579,14 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         }
     }
 
-    /**
-     * Shadow map rendering is repeated as soon as the camera moves. Measure
-     * the CPU-side work only; querying GPU time here would force a pipeline
-     * stall and invalidate the result we are trying to diagnose.
-     */
-    protected void logShadowFrameTiming(long startNanos, long preparedNanos,
-                                        long solidEndNanos, long cutoutMippedEndNanos,
-                                        long cutoutEndNanos, long translucentEndNanos,
-                                        int solidCount, int cutoutMippedCount,
-                                        int cutoutCount, int translucentCount) {
-        if (shadowFrameTimingProbeLogs >= MAX_SHADOW_FRAME_TIMING_PROBE_LOGS) {
-            return;
-        }
-        long now = System.nanoTime();
-        double totalMillis = nanosToMillis(now - startNanos);
-        // Log warmup samples and then only a frame that is relevant to a
-        // sub-20 FPS report. This is CPU-only and bounded.
-        if (shadowFrameTimingProbeLogs >= 8 && totalMillis < 25.0D) {
-            return;
-        }
-        shadowFrameTimingProbeLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMShadowFrameTiming] call={} frame={} frameTime={} totalMs={} prepareMs={} solidMs={} cutoutMippedMs={} cutoutMs={} tailMs={} counts={}/{}/{}/{} usable={} populated={} sparse={} stationaryIntervalTicks={}",
-                shadowFrameTimingProbeLogs,
-                pipelineFrameId,
-                formatMillis(currentFrameTime * 1000.0D),
-                formatMillis(totalMillis),
-                formatMillis(nanosToMillis(preparedNanos - startNanos)),
-                formatMillis(nanosToMillis(solidEndNanos - preparedNanos)),
-                formatMillis(nanosToMillis(cutoutMippedEndNanos - solidEndNanos)),
-                formatMillis(nanosToMillis(cutoutEndNanos - cutoutMippedEndNanos)),
-                formatMillis(nanosToMillis(now - cutoutEndNanos)),
-                solidCount,
-                cutoutMippedCount,
-                cutoutCount,
-                translucentCount,
-                shadowMapUsable,
-                shadowMapPopulated,
-                shadowMapSparseForSampling,
-                SHADOW_STABLE_UPDATE_INTERVAL_TICKS
-        );
-    }
-
     protected boolean shouldSkipStationaryShadowMap(World world, Entity viewEntity, float partialTicks) {
         if (!shadowMapUsable || !shadowMapPopulated || shaderProperties == null) {
+            return false;
+        }
+        // Smooth nearby shadows at the presentation rate while there is frame
+        // time headroom. Detailed casters are distance-LOD'd below, so this
+        // does not multiply the old full-distance workload by refresh rate.
+        if (currentFrameTime <= SHADOW_REALTIME_MAX_FRAME_SECONDS) {
             return false;
         }
         int dimensionId = safeDimensionId(world);
@@ -2668,7 +2612,14 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         // projection itself is texel-snapped, so tolerate quarter-block
         // motion before rebuilding instead of treating head bob and tiny
         // mouse movement as a full radial redraw request.
-        return dx * dx + dy * dy + dz * dz < SHADOW_STABLE_UPDATE_MOVEMENT_SQ;
+        boolean reuse = dx * dx + dy * dy + dz * dz < SHADOW_STABLE_UPDATE_MOVEMENT_SQ;
+        if (reuse) {
+            // The cached depth map was rendered in a coordinate system relative
+            // to the previous camera. Rebase its matrix so current player-space
+            // positions still address the same world-space shadow texels.
+            MatrixState.rebaseShadowModelView(dx, dy, dz);
+        }
+        return reuse;
     }
 
     protected void rememberShadowMapRender(World world, Entity viewEntity, float partialTicks) {
@@ -2740,15 +2691,16 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             }
 
             int projectRedCount = ProjectRedIlluminationCompat.collectVoxelIds(tileEntity, projectRedVoxelIds);
-            auditProjectRedLight(tileEntity, projectRedVoxelIds, projectRedCount, "scan");
             if (projectRedCount > 0) {
+                // The loaded-tile scan is cursor-limited, while Entree clears its
+                // voxel image before every shadow update. Persist a discovered
+                // ProjectRed light so it is re-injected on every following frame
+                // instead of appearing only when the scan cursor revisits it.
+                putSyntheticLightCandidate(pos, true);
                 projectRedMatches++;
                 for (int i = 0; i < projectRedCount && injected < MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME; i++) {
                     if (injectVoxelAt(pos, projectRedVoxelIds[i], dimensions, cameraFloorX, cameraFloorY, cameraFloorZ, writtenVoxels)) {
                         injected++;
-                        auditProjectRedLight(tileEntity, projectRedVoxelIds, projectRedCount, "injected:" + projectRedVoxelIds[i]);
-                    } else {
-                        auditProjectRedLight(tileEntity, projectRedVoxelIds, projectRedCount, "write_failed:" + projectRedVoxelIds[i]);
                     }
                 }
                 continue;
@@ -2813,7 +2765,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
 
     protected int injectVoxelizedLightBlockVoxels(World world, int[] dimensions, int cameraFloorX, int cameraFloorY, int cameraFloorZ,
                                                 Set<Long> writtenVoxels, int remainingBudget) {
-        if (remainingBudget <= 0 || !shaderProperties.renderSettings().voxelizeLightBlocks()) {
+        if (remainingBudget <= 0) {
             return 0;
         }
         if (world == null || dimensions == null || dimensions.length < 3) {
@@ -2835,7 +2787,11 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             if (cpuLightBlockScanCursor >= scanVolume) {
                 cpuLightBlockScanCursor = 0;
             }
-            int cursor = cpuLightBlockScanCursor++;
+            int logicalCursor = cpuLightBlockScanCursor++;
+            int centerCursor = scanWidth / 2
+                    + (scanHeight / 2) * scanWidth
+                    + (scanDepth / 2) * scanWidth * scanHeight;
+            int cursor = (logicalCursor + centerCursor) % scanVolume;
             int localX = cursor % scanWidth;
             int localY = (cursor / scanWidth) % scanHeight;
             int localZ = cursor / (scanWidth * scanHeight);
@@ -2858,9 +2814,14 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             if (lightInfo.voxelId <= 0 || lightInfo.emission <= 0) {
                 continue;
             }
+            // Shader packs such as Complementary Entree intentionally set
+            // voxelizeLightBlocks=false while performing their own shadow-vertex
+            // image writes. Those writes are unreliable on some 1.12/Nothirium
+            // paths, so retain every emitter found by this bounded fallback and
+            // re-inject it after the voxel image is cleared on following frames.
+            putSyntheticLightCandidate(pos, true);
             if (injectVoxelAt(pos, lightInfo.voxelId, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ, writtenVoxels)) {
                 injected++;
-                auditSyntheticLight("voxelize_light_blocks", pos, lightInfo, "injected");
             }
         }
 
@@ -2905,9 +2866,6 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
                 for (int i = 0; i < projectRedCount && injected < remainingBudget; i++) {
                     if (injectVoxelAt(pos, projectRedVoxelIds[i], dimensions, cameraFloorX, cameraFloorY, cameraFloorZ, writtenVoxels)) {
                         injected++;
-                        auditProjectRedLight(tileEntity, projectRedVoxelIds, projectRedCount, "candidate_injected:" + projectRedVoxelIds[i]);
-                    } else {
-                        auditProjectRedLight(tileEntity, projectRedVoxelIds, projectRedCount, "candidate_write_failed:" + projectRedVoxelIds[i]);
                     }
                 }
                 continue;
@@ -2917,15 +2875,11 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             SyntheticLightInfo lightInfo = syntheticLightInfo(state, world, pos);
             if (lightInfo.voxelId <= 0 || lightInfo.emission <= 0) {
                 syntheticLightCandidates.remove(entry.getKey(), pos);
-                auditSyntheticLight("cpu_inject", pos, lightInfo, "drop:" + lightInfo.reason);
                 continue;
             }
 
             if (injectVoxelAt(pos, lightInfo.voxelId, dimensions, cameraFloorX, cameraFloorY, cameraFloorZ, writtenVoxels)) {
                 injected++;
-                auditSyntheticLight("cpu_inject", pos, lightInfo, "injected");
-            } else {
-                auditSyntheticLight("cpu_inject", pos, lightInfo, "write_failed");
             }
         }
         return injected;
@@ -2974,6 +2928,63 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
     }
 
     protected static int localActVoxelId(int materialId) {
+        int standardVoxelId = switch (materialId) {
+            case 10056 -> 14; // Lava cauldron
+            case 10068 -> 13; // Lava
+            case 10072 -> 5;  // Fire
+            case 10076 -> 27; // Soul fire
+            case 10216 -> 62; // Crimson stem / hyphae
+            case 10224 -> 63; // Warped stem / hyphae
+            case 10332 -> 36; // Amethyst
+            case 10396 -> 11; // Jack o'lantern
+            case 10404 -> 6;  // Sea pickle
+            case 10412 -> 10; // Glowstone
+            case 10448 -> 18; // Sea lantern
+            case 10452 -> 37; // Magma block
+            case 10476 -> 26; // Crying obsidian
+            case 10496 -> 2;  // Torch
+            case 10500 -> 3;  // End rod
+            case 10508, 10512 -> 39; // Chorus flower
+            case 10516 -> 21; // Lit furnace
+            case 10528 -> 28; // Soul torch
+            case 10544 -> 34; // Glow lichen
+            case 10548 -> 33; // Enchanting table
+            case 10556 -> 58; // Active end portal frame
+            case 10560 -> 12; // Lantern
+            case 10564 -> 29; // Soul lantern
+            case 10572 -> 38; // Dragon egg
+            case 10576 -> 22; // Lit smoker
+            case 10580 -> 23; // Lit blast furnace
+            case 10592 -> 17; // Lit respawn anchor
+            case 10596 -> 66; // Lit redstone wire
+            case 10604 -> 35; // Redstone torch
+            case 10616, 10624 -> 31; // Lit redstone ore
+            case 10632 -> 20; // Glow-berry cave vines
+            case 10640 -> 16; // Lit redstone lamp
+            case 10644 -> 67; // Lit repeater / comparator
+            case 10648 -> 19; // Shroomlight
+            case 10652 -> 15; // Campfire
+            case 10656 -> 30; // Soul campfire
+            case 10680 -> 7;  // Ochre froglight
+            case 10684 -> 8;  // Verdant froglight
+            case 10688 -> 9;  // Pearlescent froglight
+            case 10704 -> 57; // Active sculk sensor
+            case 10788 -> 36; // Active calibrated sculk sensor
+            case 10852 -> 55; // Bright lit copper bulb
+            case 10856 -> 56; // Dim lit copper bulb
+            case 10868 -> 54; // Active trial spawner / vault
+            case 10876 -> 69; // Active ominous trial spawner / vault
+            case 10948 -> 82; // Active creaking heart
+            case 10972 -> 83; // Firefly bush
+            case 10976, 10980 -> 81; // Open eyeblossom
+            case 10984, 10986, 10988 -> 84; // Copper torch / lantern
+            case 30020 -> 25; // Nether portal
+            case 32016 -> 4;  // Beacon
+            default -> 0;
+        };
+        if (standardVoxelId > 0) {
+            return standardVoxelId;
+        }
         if (materialId == 12003 || materialId == 12283) {
             return 3;
         }
@@ -3104,7 +3115,10 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             // the supporting block or a second crossed quad.
             float polygonOffsetFactor = shadowPolygonOffsetFactor;
             float polygonOffsetUnits = shadowPolygonOffsetUnits;
-            if (layer == BlockRenderLayer.CUTOUT || layer == BlockRenderLayer.CUTOUT_MIPPED) {
+            boolean pixelatedShadows = optionBoolean(shaderProperties, "PIXELATED_SHADOWS", false);
+            if ((layer == BlockRenderLayer.SOLID && pixelatedShadows)
+                    || layer == BlockRenderLayer.CUTOUT
+                    || layer == BlockRenderLayer.CUTOUT_MIPPED) {
                 polygonOffsetFactor = Math.max(polygonOffsetFactor, 2.0F);
                 polygonOffsetUnits = Math.max(polygonOffsetUnits, 8.0F);
             }
@@ -3151,7 +3165,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
                     cameraX,
                     cameraY,
                     cameraZ,
-                    shadowRenderCullDistance(),
+                    shadowLayerCullDistance(layer),
                     nothiriumFallbackBlockEntityId(layer),
                     nothiriumFallbackRenderType(layer),
                     false
@@ -3192,12 +3206,86 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         return 0;
     }
 
+    protected double shadowLayerCullDistance(BlockRenderLayer layer) {
+        double fullDistance = shadowRenderCullDistance();
+        if (layer == BlockRenderLayer.TRANSLUCENT) {
+            return Math.min(fullDistance, SHADOW_REALTIME_TRANSLUCENT_DISTANCE);
+        }
+        if (layer == BlockRenderLayer.CUTOUT || layer == BlockRenderLayer.CUTOUT_MIPPED) {
+            return Math.min(fullDistance, SHADOW_REALTIME_CUTOUT_DISTANCE);
+        }
+        return fullDistance;
+    }
+
+    protected boolean shouldKeepPreviousShadowMapForSparseCandidate(Entity viewEntity, float partialTicks) {
+        if (viewEntity == null) {
+            return false;
+        }
+        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
+        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
+        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
+        int remaining = SPARSE_SHADOW_MIN_TERRAIN_DRAWS;
+        int ready = nothiriumShadowRenderer.countRenderableShadowLayer(
+                BlockRenderLayer.SOLID, cameraX, cameraY, cameraZ,
+                shadowLayerCullDistance(BlockRenderLayer.SOLID), remaining);
+        if (ready < 0) {
+            return false;
+        }
+        remaining -= ready;
+        if (remaining > 0) {
+            int count = nothiriumShadowRenderer.countRenderableShadowLayer(
+                    BlockRenderLayer.CUTOUT_MIPPED, cameraX, cameraY, cameraZ,
+                    shadowLayerCullDistance(BlockRenderLayer.CUTOUT_MIPPED), remaining);
+            if (count < 0) {
+                return false;
+            }
+            ready += count;
+            remaining -= count;
+        }
+        if (remaining > 0) {
+            int count = nothiriumShadowRenderer.countRenderableShadowLayer(
+                    BlockRenderLayer.CUTOUT, cameraX, cameraY, cameraZ,
+                    shadowLayerCullDistance(BlockRenderLayer.CUTOUT), remaining);
+            if (count < 0) {
+                return false;
+            }
+            ready += count;
+            remaining -= count;
+        }
+        if (remaining > 0 && shaderProperties.renderSettings().shadowTranslucent()) {
+            int count = nothiriumShadowRenderer.countRenderableShadowLayer(
+                    BlockRenderLayer.TRANSLUCENT, cameraX, cameraY, cameraZ,
+                    shadowLayerCullDistance(BlockRenderLayer.TRANSLUCENT), remaining);
+            if (count < 0) {
+                return false;
+            }
+            ready += count;
+        }
+        if (ready >= SPARSE_SHADOW_MIN_TERRAIN_DRAWS) {
+            return false;
+        }
+        if (shadowMapCoverageRegressionLogs < 8) {
+            shadowMapCoverageRegressionLogs++;
+            MainMod.LOGGER.info(
+                    "[ShadowHealth] Keeping previous shadow map; sparse candidate rejected before clear. terrainDraws={} minTerrainDraws={} frame={}",
+                    ready,
+                    SPARSE_SHADOW_MIN_TERRAIN_DRAWS,
+                    pipelineFrameId
+            );
+        }
+        return true;
+    }
+
     protected void updateShadowMapUsability(int solidCount, int cutoutMippedCount, int cutoutCount, int translucentCount, int blockEntityCount) {
         if (shadowFramebuffer == null) {
             shadowMapPopulated = false;
             shadowMapUsable = false;
             shadowMapSparseForSampling = false;
             shadowMapCoverageStableFrames = 0;
+            shadowMapCoverageRegressionLogs = 0;
             return;
         }
         boolean terrainPopulated = solidCount > 0
@@ -3205,15 +3293,37 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
                 || cutoutCount > 0
                 || translucentCount > 0;
         boolean drawPopulated = terrainPopulated || blockEntityCount > 0;
+        int terrainDrawCount = positiveShadowCount(solidCount)
+                + positiveShadowCount(cutoutMippedCount)
+                + positiveShadowCount(cutoutCount)
+                + positiveShadowCount(translucentCount);
+        boolean useNothiriumShadowBridge = shouldUseNothiriumShadowBridge();
         // glReadPixels synchronizes the render thread with the GPU. Validate
-        // the map while it is warming up, then trust successful draw submission
-        // until the pipeline or world resets shadowMapUsable.
+        // the map while it is warming up. Once accepted, keep the inexpensive
+        // CPU submission check on every replacement frame: Nothirium can
+        // temporarily withdraw nearly every VBO while publishing compiled
+        // sections, and sampling that sparse replacement looks like z-fighting.
         if (shadowMapUsable) {
             shadowMapPopulated = drawPopulated;
-            shadowMapSparseForSampling = false;
-            if (!drawPopulated) {
+            boolean currentCoverageReady = !useNothiriumShadowBridge
+                    || terrainDrawCount >= SPARSE_SHADOW_MIN_TERRAIN_DRAWS;
+            shadowMapSparseForSampling = !currentCoverageReady;
+            if (!drawPopulated || !currentCoverageReady) {
                 shadowMapUsable = false;
                 shadowMapCoverageStableFrames = 0;
+                if (shadowMapCoverageRegressionLogs < 8) {
+                    shadowMapCoverageRegressionLogs++;
+                    MainMod.LOGGER.info(
+                            "[ShadowHealth] Rejecting sparse replacement shadow map; binding neutral textures. terrainDraws={} minTerrainDraws={} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
+                            terrainDrawCount,
+                            SPARSE_SHADOW_MIN_TERRAIN_DRAWS,
+                            solidCount,
+                            cutoutMippedCount,
+                            cutoutCount,
+                            translucentCount,
+                            blockEntityCount
+                    );
+                }
             }
             return;
         }
@@ -3221,15 +3331,10 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         boolean populated = terrainPopulated
                 || (!shouldUseNothiriumShadowBridge() && stats.nonClear() > 0);
         shadowMapPopulated = populated || drawPopulated;
-        int terrainDrawCount = positiveShadowCount(solidCount)
-                + positiveShadowCount(cutoutMippedCount)
-                + positiveShadowCount(cutoutCount)
-                + positiveShadowCount(translucentCount);
         World renderWorld = renderWorld(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
         int dimensionId = safeDimensionId(renderWorld);
         float verticalDelta = cameraVerticalDelta();
         boolean upwardMotion = verticalDelta > SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION;
-        boolean useNothiriumShadowBridge = shouldUseNothiriumShadowBridge();
         boolean nothiriumTerrainCoverageReady = !useNothiriumShadowBridge
                 || (terrainDrawCount >= SPARSE_SHADOW_MIN_TERRAIN_DRAWS
                 && stats.nonClear() >= SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES);
@@ -3325,7 +3430,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
                 && shadowMapSuppressedLogs < 4) {
             shadowMapSuppressedLogs++;
             MainMod.LOGGER.info(
-                    "[ShadowHealth] Sparse Nothirium shadow map observed; keeping real shadow textures bound. reason={} dim={} nonClear={}/{} minNonClear={} terrainDraws={} minTerrainDraws={} stableFrames={}/{} verticalDelta={} upwardThreshold={} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
+                    "[ShadowHealth] Sparse Nothirium shadow map observed; binding neutral shadow textures. reason={} dim={} nonClear={}/{} minNonClear={} terrainDraws={} minTerrainDraws={} stableFrames={}/{} verticalDelta={} upwardThreshold={} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
                     nothiriumTerrainCoverageReady ? "warming-up" : (unstableSparseShadow ? "sparse-terrain-upward-camera-motion" : "sparse-terrain"),
                     dimensionId,
                     stats.nonClear(),
@@ -3347,7 +3452,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         if (drawPopulated && !shadowMapUsable && shadowMapInvalidLogs < 4) {
             shadowMapInvalidLogs++;
             MainMod.LOGGER.info(
-                    "[ShadowHealth] Shadow map draw produced clear/sparse depth; keeping real shadow textures bound. nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
+                    "[ShadowHealth] Shadow map draw produced clear/sparse depth; binding neutral shadow textures. nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
                     stats.nonClear(),
                     stats.total(),
                     solidCount,
@@ -3373,7 +3478,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
         double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
         double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        double maxDistance = shadowRenderCullDistance();
+        double maxDistance = shadowLayerCullDistance(layer);
         double maxDistanceSquared = maxDistance * maxDistance;
 
         com.l.ausm.impl.util.MinecraftReflectionCompat.initializeChunkRenderContainer(
@@ -3402,16 +3507,17 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
     }
 
     protected double shadowRenderCullDistance() {
-        if (!shouldCullShadowTerrain()) {
-            return -1.0D;
-        }
+        // `shadow.culling` controls OptiFine/Iris visibility heuristics.  It
+        // must not disable the hard geometric extent of the shader shadow
+        // projection: the Nothirium provider contains every render-distance
+        // section, and feeding it -1 here makes it inspect all of them even
+        // though sections beyond shadowDistance cannot affect the map.
         if (shaderProperties.renderSettings().shadowCullingReversed()) {
             return Math.max(32.0D, Math.max(shadowMapDistance, voxelDistance));
         }
-        if (shadowDistanceRenderMul < 0.0f) {
-            return -1.0D;
-        }
-        return Math.max(32.0D, shadowMapDistance * shadowDistanceRenderMul + 32.0D);
+        double renderMultiplier = shadowDistanceRenderMul >= 0.0f ? shadowDistanceRenderMul : 1.0D;
+        // One chunk of slack retains sections straddling the projection edge.
+        return Math.max(32.0D, shadowMapDistance * renderMultiplier + 32.0D);
     }
 
     protected int nextShadowFrameCount() {
@@ -3460,37 +3566,49 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             GL11.glRotatef(sunPathRotation, 1.0F, 0.0F, 0.0F);
         }
 
-        shadowRotationBuffer.clear();
-        GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, shadowRotationBuffer);
-        double lightX = shadowRotationBuffer.get(0) * x
-                + shadowRotationBuffer.get(4) * y
-                + shadowRotationBuffer.get(8) * z;
-        double lightY = shadowRotationBuffer.get(1) * x
-                + shadowRotationBuffer.get(5) * y
-                + shadowRotationBuffer.get(9) * z;
         double shadowTexelSize = Math.max(0.001D,
                 shadowMapDistance * 2.0D / Math.max(1, shadowResolution()));
-        double requestedInterval = Math.max(shadowTexelSize, shadowIntervalSize);
-        double interval = Math.max(shadowTexelSize,
-                Math.rint(requestedInterval / shadowTexelSize) * shadowTexelSize);
-        double residualLightX = centeredRemainder(lightX, interval);
-        double residualLightY = centeredRemainder(lightY, interval);
-        double snapX = shadowRotationBuffer.get(0) * residualLightX
-                + shadowRotationBuffer.get(1) * residualLightY;
-        double snapY = shadowRotationBuffer.get(4) * residualLightX
-                + shadowRotationBuffer.get(5) * residualLightY;
-        double snapZ = shadowRotationBuffer.get(8) * residualLightX
-                + shadowRotationBuffer.get(9) * residualLightY;
-        GL11.glTranslatef((float) snapX, (float) snapY, (float) snapZ);
-        if (shadowOriginProbeLogs < 8) {
+        double requestedInterval = shadowIntervalSize;
+        double interval = Math.abs(requestedInterval);
+        double snapX = 0.0D;
+        double snapY = 0.0D;
+        double snapZ = 0.0D;
+        if (Double.isFinite(interval) && interval > 0.0D) {
+            // Match Iris/OptiFine semantics: shadowIntervalSize is a world-axis
+            // grid. Applying a light-space remainder makes the grid rotate with
+            // the sun and produces visible camera-coupled jumps.
+            double halfInterval = interval * 0.5D;
+            snapX = x % interval - halfInterval;
+            snapY = y % interval - halfInterval;
+            snapZ = z % interval - halfInterval;
+            GL11.glTranslatef((float) snapX, (float) snapY, (float) snapZ);
+        }
+        String pixelatedShadows = optionValue(shaderProperties, "PIXELATED_SHADOWS");
+        String pixelatedBlocklight = optionValue(shaderProperties, "PIXELATED_BLOCKLIGHT");
+        String pixelatedAo = optionValue(shaderProperties, "PIXELATED_AO");
+        String pixelatedMode = optionValue(shaderProperties, "PIXELATED_SHADOWS_MODE");
+        String probeKey = activePackName + '|' + pixelatedShadows + '|' + pixelatedBlocklight + '|' + pixelatedAo + '|' + pixelatedMode;
+        if (!probeKey.equals(shadowOriginProbeKey)) {
+            shadowOriginProbeKey = probeKey;
+            shadowOriginProbeLogs = 0;
+        }
+        boolean pixelatedLighting = optionBoolean(shaderProperties, "PIXELATED_SHADOWS", false)
+                || optionBoolean(shaderProperties, "PIXELATED_BLOCKLIGHT", false)
+                || optionBoolean(shaderProperties, "PIXELATED_AO", false);
+        if (pixelatedLighting && shadowOriginProbeLogs < 8) {
             shadowOriginProbeLogs++;
             MainMod.LOGGER.info(
-                    "[AUSMShadowOriginProbe] call={} camera={}/{}/{} lightXY={}/{} texel={} interval={} residualLight={}/{} worldTranslation={}/{}/{} resolution={} distance={}",
+                    "[AUSMShadowOriginProbe] call={} pack={} pixelatedShadows={} shadowMode={} pixelatedBlocklight={} pixelatedAo={} "
+                            + "camera={}/{}/{} texel={} requestedInterval={} interval={} "
+                            + "worldGridTranslation={}/{}/{} resolution={} distance={}",
                     shadowOriginProbeLogs,
+                    activePackName,
+                    pixelatedShadows,
+                    pixelatedMode,
+                    pixelatedBlocklight,
+                    pixelatedAo,
                     x, y, z,
-                    lightX, lightY,
-                    shadowTexelSize, interval,
-                    residualLightX, residualLightY,
+                    shadowTexelSize, requestedInterval, interval,
                     snapX, snapY, snapZ,
                     shadowResolution(), shadowMapDistance);
         }
@@ -3622,6 +3740,8 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
         double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
         double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
+        double entityDistance = Math.min(shadowRenderCullDistance(), SHADOW_REALTIME_ENTITY_DISTANCE);
+        double entityDistanceSquared = entityDistance * entityDistance;
 
         com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerCacheActiveRenderInfo(renderManager, world, com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc), viewEntity, com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.entity.Entity.class, null, "field_147125_j", "pointedEntity"), com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc), partialTicks);
         com.l.ausm.impl.util.MinecraftReflectionCompat.renderManagerSetRenderPosition(renderManager, cameraX, cameraY, cameraZ);
@@ -3638,7 +3758,8 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             return;
         }
         for (Entity entity : loadedEntities) {
-            if (!shouldRenderEntityInShadowMap(mc, world, renderManager, entity, viewEntity, shadowCamera, cameraX, cameraY, cameraZ)) {
+            if (!shouldRenderEntityInShadowMap(mc, world, renderManager, entity, viewEntity, shadowCamera,
+                    cameraX, cameraY, cameraZ, entityDistanceSquared)) {
                 continue;
             }
 
@@ -3668,7 +3789,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), partialTicks);
         double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), partialTicks);
         double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity), com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        double maxDistance = shadowRenderCullDistance();
+        double maxDistance = Math.min(shadowRenderCullDistance(), SHADOW_REALTIME_BLOCK_ENTITY_DISTANCE);
         double maxDistanceSquared = maxDistance * maxDistance;
         List<TileEntity> tileEntities = cpuLightTileEntitySnapshot(world);
         refreshShadowBlockEntityBoundsCache(world, tileEntities);
@@ -3775,7 +3896,8 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
     }
 
     protected boolean shouldRenderEntityInShadowMap(Minecraft mc, World world, RenderManager renderManager, Entity entity, Entity viewEntity,
-                                                  ICamera shadowCamera, double cameraX, double cameraY, double cameraZ) {
+                                                  ICamera shadowCamera, double cameraX, double cameraY, double cameraZ,
+                                                  double maxDistanceSquared) {
         if (mc == null || world == null || renderManager == null || entity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityIsDead(entity) || !com.l.ausm.impl.util.MinecraftReflectionCompat.shouldRenderInPass(entity, 0)) {
             return false;
         }
@@ -3804,6 +3926,12 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
                 com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity)))) {
             return false;
         }
+        double dx = com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity) - cameraX;
+        double dy = entityY - cameraY;
+        double dz = com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity) - cameraZ;
+        if (maxDistanceSquared >= 0.0D && dx * dx + dy * dy + dz * dz > maxDistanceSquared) {
+            return false;
+        }
         return com.l.ausm.impl.util.MinecraftReflectionCompat.entityIsInRangeToRender3d(entity, cameraX, cameraY, cameraZ);
     }
 
@@ -3829,20 +3957,6 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
             return 2;
         }
         return 0;
-    }
-
-    protected static double centeredRemainder(double value, double interval) {
-        if (!Double.isFinite(value) || !Double.isFinite(interval) || interval <= 0.0D) {
-            return 0.0D;
-        }
-        double remainder = value % interval;
-        if (remainder > interval * 0.5D) {
-            remainder -= interval;
-        }
-        if (remainder < -interval * 0.5D) {
-            remainder += interval;
-        }
-        return remainder;
     }
 
     public void bindWorldFramebuffer() {
@@ -4403,6 +4517,94 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+    }
+
+    /**
+     * Lets GlobalFacades join the active translucent terrain pass without
+     * replacing AUSM's shader or framebuffer ownership. A null return tells
+     * the caller to use its ordinary fixed-function overlay format instead.
+     */
+    public VertexFormat externalFacadeTerrainVertexFormat() {
+        int program = -1;
+        try {
+            program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        } catch (RuntimeException | LinkageError ignored) {
+        }
+
+        boolean available = isPipelineActive
+                && worldFrameActive
+                && !renderingShadowMap
+                && activePass == RenderPass.GBUFFERS_WATER
+                && getPhase() == WorldRenderingPhase.TERRAIN_TRANSLUCENT
+                && ExtendedVertexFormats.PIPELINE_BLOCK != null
+                && program > 0;
+        String probeKey = available
+                + ":" + isPipelineActive
+                + ":" + worldFrameActive
+                + ":" + renderingShadowMap
+                + ":" + activePass
+                + ":" + getPhase()
+                + ":" + program;
+        if (EXTERNAL_FACADE_TERRAIN_PROBE_KEYS.add(probeKey)) {
+            int call = EXTERNAL_FACADE_TERRAIN_PROBE_LOGS.incrementAndGet();
+            if (call <= 16) {
+                MainMod.LOGGER.info(
+                        "[AUSMGlobalFacadesTerrainProbe] call={} available={} active={} worldFrame={} shadow={} pass={} phase={} program={} format={}",
+                        call,
+                        available,
+                        isPipelineActive,
+                        worldFrameActive,
+                        renderingShadowMap,
+                        activePass,
+                        getPhase(),
+                        program,
+                        ExtendedVertexFormats.PIPELINE_BLOCK
+                );
+            }
+        }
+        return available ? ExtendedVertexFormats.PIPELINE_BLOCK : null;
+    }
+
+    /** Supplies the per-block material payload used by the pipeline format. */
+    public void beginExternalFacadeBlock(IBlockState state, IBlockAccess blockAccess,
+                                         BlockPos pos, BlockRenderLayer layer) {
+        if (externalFacadeTerrainVertexFormat() == null
+                || state == null
+                || blockAccess == null
+                || pos == null) {
+            return;
+        }
+
+        IBlockState actualState = actualBlockRenderState(state, blockAccess, pos);
+        IBlockState contextState = effectiveBlockRenderState(state, actualState, blockAccess, pos);
+        if (contextState == null) {
+            contextState = state;
+        }
+        int emission = blockRenderEmission(state, blockAccess, pos);
+        int packedLightmap = MinecraftReflectionCompat.blockAccessCombinedLight(blockAccess, pos, emission);
+        BlockRenderContext.configureBlock(
+                blockEntityIdForActualState(contextState, blockAccess, pos),
+                (short) MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState),
+                blockMetadataForActualState(contextState),
+                MinecraftReflectionCompat.blockPosX(pos),
+                MinecraftReflectionCompat.blockPosY(pos),
+                MinecraftReflectionCompat.blockPosZ(pos),
+                blockAccess,
+                pos,
+                false,
+                false,
+                packedLightmap,
+                emission,
+                stateHasBloomLayerGeometry(contextState),
+                blockRenderAlpha(state, blockAccess, pos),
+                customLiquidTintColor(state, blockAccess, pos),
+                shouldUseCrystalOnlyEmission(actualState),
+                shouldSeparateBlockAo(contextState)
+        );
+    }
+
+    public void finishExternalFacadeBlock() {
+        BlockRenderContext.clear();
     }
 
     protected void restoreVanillaWorldTextureBindings() {
@@ -6208,7 +6410,7 @@ abstract class PipelineWorldRenderScope extends PipelineRuntimeState {
     public abstract boolean shouldForceVanillaTerrainRenderer();
 
     protected static boolean isNothiriumLoaded() {
-        return Loader.isModLoaded(NOTHIRIUM_MOD_ID) || Loader.isModLoaded(NAUGHTHIRIUM_MOD_ID);
+        return PipelineCompatConstants.isNothiriumLoadedCached();
     }
 
     protected static double nanosToMillis(long nanos) {

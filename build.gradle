@@ -207,6 +207,8 @@ dependencies {
     }
     if (propertyBool('enable_junit_testing')) {
         testImplementation 'org.junit.jupiter:junit-jupiter:6.0.3'
+        testImplementation 'org.ow2.asm:asm-tree:9.9'
+        testImplementation 'net.minecraft:launchwrapper:1.12'
         testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     }
 }

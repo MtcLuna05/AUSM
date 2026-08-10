@@ -33,6 +33,7 @@ public final class MatrixState {
     private static final float[] PREVIOUS_PROJECTION = IDENTITY.clone();
     private static final float[] MODEL_VIEW_PROJECTION = IDENTITY.clone();
     private static final float[] SHADOW_MODEL_VIEW = IDENTITY.clone();
+    private static final float[] SHADOW_MODEL_VIEW_AT_RENDER = IDENTITY.clone();
     private static final float[] SHADOW_MODEL_VIEW_INVERSE = IDENTITY.clone();
     private static final float[] SHADOW_PROJECTION = IDENTITY.clone();
     private static final float[] SHADOW_PROJECTION_INVERSE = IDENTITY.clone();
@@ -61,9 +62,35 @@ public final class MatrixState {
 
     public static void captureShadowMatrices() {
         readGlMatrix(GL11.GL_MODELVIEW_MATRIX, SHADOW_MODEL_VIEW);
+        copy(SHADOW_MODEL_VIEW, SHADOW_MODEL_VIEW_AT_RENDER);
         readGlMatrix(GL11.GL_PROJECTION_MATRIX, SHADOW_PROJECTION);
         invert(SHADOW_MODEL_VIEW, SHADOW_MODEL_VIEW_INVERSE);
         invert(SHADOW_PROJECTION, SHADOW_PROJECTION_INVERSE);
+    }
+
+    /**
+     * Keeps a reused shadow map fixed in world space while the main camera
+     * moves. Shadow shader inputs are relative to the current camera, whereas
+     * the cached map was rendered relative to the camera at capture time.
+     */
+    public static void rebaseShadowModelView(double cameraDeltaX, double cameraDeltaY, double cameraDeltaZ) {
+        copy(SHADOW_MODEL_VIEW_AT_RENDER, SHADOW_MODEL_VIEW);
+        float dx = (float) cameraDeltaX;
+        float dy = (float) cameraDeltaY;
+        float dz = (float) cameraDeltaZ;
+        SHADOW_MODEL_VIEW[12] += SHADOW_MODEL_VIEW_AT_RENDER[0] * dx
+                + SHADOW_MODEL_VIEW_AT_RENDER[4] * dy
+                + SHADOW_MODEL_VIEW_AT_RENDER[8] * dz;
+        SHADOW_MODEL_VIEW[13] += SHADOW_MODEL_VIEW_AT_RENDER[1] * dx
+                + SHADOW_MODEL_VIEW_AT_RENDER[5] * dy
+                + SHADOW_MODEL_VIEW_AT_RENDER[9] * dz;
+        SHADOW_MODEL_VIEW[14] += SHADOW_MODEL_VIEW_AT_RENDER[2] * dx
+                + SHADOW_MODEL_VIEW_AT_RENDER[6] * dy
+                + SHADOW_MODEL_VIEW_AT_RENDER[10] * dz;
+        SHADOW_MODEL_VIEW[15] += SHADOW_MODEL_VIEW_AT_RENDER[3] * dx
+                + SHADOW_MODEL_VIEW_AT_RENDER[7] * dy
+                + SHADOW_MODEL_VIEW_AT_RENDER[11] * dz;
+        invert(SHADOW_MODEL_VIEW, SHADOW_MODEL_VIEW_INVERSE);
     }
 
     public static FloatBuffer modelView() {

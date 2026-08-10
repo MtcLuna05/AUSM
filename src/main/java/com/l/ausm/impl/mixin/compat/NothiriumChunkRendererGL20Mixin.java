@@ -4,6 +4,7 @@ import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.NothiriumFogCompat;
 import com.l.ausm.impl.pipeline.compat.NothiriumPipelineCompat;
 import meldexun.nothirium.api.renderer.chunk.ChunkRenderPass;
+import meldexun.nothirium.api.renderer.IVBOPart;
 import meldexun.renderlib.util.GLShader;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -18,6 +19,26 @@ public class NothiriumChunkRendererGL20Mixin {
     @ModifyConstant(method = "setupAttributePointers", constant = @Constant(intValue = 28), remap = false)
     private int ausm$usePipelineStride(int original) {
         return NothiriumPipelineCompat.pipelineBlockStride(original);
+    }
+
+    @Redirect(
+            method = "draw",
+            at = @At(value = "INVOKE", target = "Lmeldexun/nothirium/api/renderer/IVBOPart;getFirst()I"),
+            require = 0,
+            remap = false
+    )
+    private int ausm$drawFirstOrZero(IVBOPart part) {
+        return part == null ? 0 : part.getFirst();
+    }
+
+    @Redirect(
+            method = "draw",
+            at = @At(value = "INVOKE", target = "Lmeldexun/nothirium/api/renderer/IVBOPart;getCount()I"),
+            require = 0,
+            remap = false
+    )
+    private int ausm$drawCountOrZero(IVBOPart part) {
+        return part == null ? 0 : part.getCount();
     }
 
     @Inject(method = "renderChunks", at = @At("HEAD"), require = 0, remap = false)

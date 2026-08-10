@@ -45,7 +45,6 @@ public class WorldVertexBufferUploaderMixin {
     )
     private void ausm$enablePipelineAttributes(BufferBuilder bufferBuilder, CallbackInfo ci) {
         VertexFormat format = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder);
-        PipelineContext.getInstance().probeGuiItemBufferDraw(bufferBuilder, format);
         if (ExtendedVertexFormats.isPipelineEntity(format)) {
             ausm$enablePipelineEntityAttributes(bufferBuilder, format);
             return;

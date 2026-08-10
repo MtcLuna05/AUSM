@@ -47,7 +47,9 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
                 "com.l.ausm.impl.core.BetweenlandsMessageSyncChunkStorageTransformer",
                 "com.l.ausm.impl.core.ClientPacketNullPlayerTransformer",
                 "com.l.ausm.impl.core.ParticleCullingThreadTransformer",
-                "com.l.ausm.impl.core.StorageDrawersRendererTransformer"
+                "com.l.ausm.impl.core.StorageDrawersRendererTransformer",
+                "com.l.ausm.impl.core.DraconicRenderedEmissionTransformer",
+                "com.l.ausm.impl.core.ZenUtilsCleanMixTransformer"
         };
     }
 

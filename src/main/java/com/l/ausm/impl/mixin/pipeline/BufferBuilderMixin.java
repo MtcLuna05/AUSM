@@ -353,39 +353,8 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     private void ausm$logVertexExpandProbe(String stage, int sourceSize, int sourceStride, int targetStride,
                                            int vertexBase, int vertexTotal, int vertexEnd,
                                            boolean compatibilityEmissiveBoost) {
-        PipelineContext pipeline = PipelineContext.getInstance();
-        int call = TerrainRenderProbeState.nextVertexExpandProbe(ausm$hasUsefulVertexProbeContext(pipeline));
-        if (call < 0) {
-            return;
-        }
-        com.l.ausm.impl.MainMod.LOGGER.info(
-                "[AUSMVertexExpand] call={} stage={} thread={} sourceSize={} sourceStride={} targetStride={} vertexBase={} vertexTotal={} vertexEnd={} format={} mode={} layer={} blockId={} renderType={} metadata={} emission={} vanillaEmission={} bloomMask={} packedLight=0x{} pos={}/{}/{} pipelineActive={} forceVanilla={} compatBoost={}",
-                call,
-                stage,
-                Thread.currentThread().getName(),
-                sourceSize,
-                sourceStride,
-                targetStride,
-                vertexBase,
-                vertexTotal,
-                vertexEnd,
-                field_179011_q,
-                field_179006_k,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer(),
-                BlockRenderContext.blockEntityId(),
-                BlockRenderContext.renderType(),
-                BlockRenderContext.metadata(),
-                BlockRenderContext.blockEmission(),
-                BlockRenderContext.vanillaLightmapEmission(),
-                BlockRenderContext.bloomMaskFallback(),
-                Integer.toHexString(BlockRenderContext.packedLightmap()),
-                BlockRenderContext.blockX(),
-                BlockRenderContext.blockY(),
-                BlockRenderContext.blockZ(),
-                pipeline.isPipelineActive(),
-                pipeline.shouldForceVanillaTerrainRenderer(),
-                compatibilityEmissiveBoost
-        );
+        // Probe permanently disabled. Keeping the call site lets HotSpot
+        // eliminate it from Nothirium's worker-thread vertex path.
     }
 
     @Unique

@@ -1,6 +1,5 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraftforge.client.model.pipeline.VertexLighterFlat;
@@ -11,7 +10,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Blockcraftery uses Forge's light pipeline for its generated host shape.
@@ -22,10 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Mixin(value = VertexLighterFlat.class, remap = false)
 public abstract class VertexLighterFlatMixin {
-    private static final int PROBE_LIMIT = 0;
     private static final float FULL_BRIGHT_LIGHTMAP = 15.0F * 0x20 / 0xFFFF;
-    private static final AtomicInteger PROBES = new AtomicInteger();
-    private static final AtomicInteger EMISSION_PROBES = new AtomicInteger();
 
     /**
      * Blockcraftery's host state has no light value, so Forge otherwise
@@ -59,12 +54,6 @@ public abstract class VertexLighterFlatMixin {
 
         lightmap[vertex][0] = FULL_BRIGHT_LIGHTMAP;
         lightmap[vertex][1] = FULL_BRIGHT_LIGHTMAP;
-        int call = EMISSION_PROBES.incrementAndGet();
-        if (call <= PROBE_LIMIT) {
-            MainMod.LOGGER.info(
-                    "[AUSMGpomFramedEmissionProbe] call={} fullBright=true lightmap={}/{} emission={}",
-                    call, lightmap[vertex][0], lightmap[vertex][1], BlockRenderContext.blockEmission());
-        }
     }
 
     @Redirect(
@@ -82,12 +71,6 @@ public abstract class VertexLighterFlatMixin {
             return normalDiffuse;
         }
 
-        int call = PROBES.incrementAndGet();
-        if (call <= PROBE_LIMIT) {
-            MainMod.LOGGER.info(
-                    "[AUSMGpomFramedLightingProbe] call={} unshaded=true normal={}/{}/{} suppressedDiffuse={}",
-                    call, x, y, z, normalDiffuse);
-        }
         return 1.0F;
     }
 

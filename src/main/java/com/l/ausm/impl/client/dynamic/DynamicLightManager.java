@@ -3,8 +3,6 @@ package com.l.ausm.impl.client.dynamic;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.Reference;
 import com.l.ausm.impl.pipeline.PipelineContext;
-import com.l.ausm.impl.pipeline.compat.ProjectRedHaloRenderer;
-import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
@@ -25,7 +23,6 @@ import net.minecraftforge.fml.relauncher.Side;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @Mod.EventBusSubscriber(value = Side.CLIENT, modid = Reference.MODID)
 public final class DynamicLightManager {
@@ -37,7 +34,6 @@ public final class DynamicLightManager {
     private static World previousWorld;
     private static int ticks;
     private static int lastLoggedSourceCount = -1;
-    private static final AtomicInteger lightApplicationProbeLogs = new AtomicInteger();
     private DynamicLightManager() {
     }
 
@@ -46,7 +42,6 @@ public final class DynamicLightManager {
         if (event.phase != TickEvent.Phase.END) {
             return;
         }
-        ProjectRedHaloRenderer.auditHeldItems(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft());
         if (++ticks % UPDATE_INTERVAL_TICKS != 0) {
             return;
         }
@@ -113,16 +108,7 @@ public final class DynamicLightManager {
         if (dynamicLight <= blockLight) {
             return packedLight;
         }
-        int adjusted = (packedLight & 0xFFFF0000) | (dynamicLight << 4);
-        if (lightApplicationProbeLogs.getAndIncrement() < 16) {
-            MainMod.LOGGER.info("[DynamicLights] applied pos={} packed=0x{} dynamic={} result=0x{} context={}",
-                    pos,
-                    Integer.toHexString(packedLight),
-                    dynamicLight,
-                    Integer.toHexString(adjusted),
-                    BlockRenderContext.hasWorldBlockContext());
-        }
-        return adjusted;
+        return (packedLight & 0xFFFF0000) | (dynamicLight << 4);
     }
 
     public static void refreshAfterConfigChange() {

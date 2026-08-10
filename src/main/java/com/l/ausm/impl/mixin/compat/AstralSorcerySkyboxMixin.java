@@ -249,14 +249,6 @@ public class AstralSorcerySkyboxMixin {
     private void ausm$beginAstralSunset(float[] colors, float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         ausm$sunsetPhaseActive = false;
-        if (context.shouldSuppressShaderlessOwnedSkyBaseGeometry()) {
-            if (!ausm$loggedShaderlessSkyRepair) {
-                ausm$loggedShaderlessSkyRepair = true;
-                MainMod.LOGGER.info("[AUSMVoidSkyProbe] Suppressed shaderless Astral sunset fan and normalized additive star state.");
-            }
-            ci.cancel();
-            return;
-        }
         context.beginPhase(WorldRenderingPhase.SUNSET);
         ausm$sunsetPhaseActive = true;
     }

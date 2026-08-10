@@ -7,8 +7,6 @@ import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.ResourceLocation;
-import net.minecraft.client.Minecraft;
-import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.Item;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
@@ -20,8 +18,6 @@ import java.lang.reflect.Method;
 
 public final class ProjectRedHaloRenderer {
     private static final int HALO_ALPHA = 112;
-    private static final boolean ITEM_AUDIT_LOGGING = Boolean.getBoolean("ausm.projectred.audit");
-
     private static final int[] HALO_TEXTURE_UNITS = {
             com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit(),
             com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit(),
@@ -40,11 +36,7 @@ public final class ProjectRedHaloRenderer {
     private static int savedBlendDst;
     private static double activeScale = 1.0D;
     private static int stateDepth;
-    private static int solidItemLogCount;
-    private static int skippedItemLogCount;
-    private static int itemAuditLogCount;
-    private static String lastHeldAuditMain = "";
-    private static String lastHeldAuditOffhand = "";
+    private static boolean originalRendererFailureLogged;
 
     private ProjectRedHaloRenderer() {
     }
@@ -140,107 +132,8 @@ public final class ProjectRedHaloRenderer {
 
         int metadata = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack);
         int color = Math.floorMod(metadata, 16);
-        if (solidItemLogCount++ < 12) {
-            com.l.ausm.impl.MainMod.LOGGER.info("[ProjectRedHalo] Replaced item render with solid geometry: item={} meta={} color={}",
-                    name, metadata, color);
-        }
         renderImmediateLampItem(color);
         return true;
-    }
-
-    public static void auditHeldItems(Minecraft minecraft) {
-        if (!ITEM_AUDIT_LOGGING) {
-            return;
-        }
-        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft) == null) {
-            return;
-        }
-
-        EntityPlayer player = com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft);
-        lastHeldAuditMain = auditHeldItem(com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemMainhand(player), "held_main", lastHeldAuditMain);
-        lastHeldAuditOffhand = auditHeldItem(com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemOffhand(player), "held_offhand", lastHeldAuditOffhand);
-    }
-
-    public static void auditRenderItem(ItemStack stack, String source, Object detail) {
-        if (!ITEM_AUDIT_LOGGING) {
-            return;
-        }
-        if (!hasItem(stack)) {
-            return;
-        }
-
-        ResourceLocation name = itemName(stack);
-        String itemClass = itemClassName(stack);
-        boolean candidate = isAuditCandidate(name, itemClass);
-        if (!candidate && itemAuditLogCount >= 4) {
-            return;
-        }
-
-        logItemAudit(source, stack, name, itemClass, detail, isProjectRedIlluminationItem(stack, name));
-    }
-
-    private static String auditHeldItem(ItemStack stack, String source, String previousKey) {
-        String key = itemAuditKey(stack);
-        if (key.equals(previousKey)) {
-            return previousKey;
-        }
-
-        if (!hasItem(stack)) {
-            if (!previousKey.isEmpty() && itemAuditLogCount++ < 32) {
-                com.l.ausm.impl.MainMod.LOGGER.info("[ProjectRedHaloAudit] source={} item=empty", source);
-            }
-            return key;
-        }
-
-        ResourceLocation name = itemName(stack);
-        String itemClass = itemClassName(stack);
-        logItemAudit(source, stack, name, itemClass, "held-change", isProjectRedIlluminationItem(stack, name));
-        return key;
-    }
-
-    private static void logItemAudit(String source, ItemStack stack, ResourceLocation name,
-                                     String itemClass, Object detail, boolean matched) {
-        if (!ITEM_AUDIT_LOGGING) {
-            return;
-        }
-        if (itemAuditLogCount++ >= 32) {
-            return;
-        }
-
-        com.l.ausm.impl.MainMod.LOGGER.info(
-                "[ProjectRedHaloAudit] source={} item={} meta={} count={} class={} display='{}' matched={} detail={}",
-                source,
-                name,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((stack), new String[] {"func_190916_E", "getCount"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0),
-                itemClass,
-                safeDisplayName(stack),
-                matched,
-                detail
-        );
-    }
-
-    private static boolean isAuditCandidate(ResourceLocation name, String itemClass) {
-        if (name != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null && com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).contains("projectred")) {
-            return true;
-        }
-        return itemClass != null && itemClass.toLowerCase(java.util.Locale.ROOT).contains("projectred");
-    }
-
-    private static String itemAuditKey(ItemStack stack) {
-        if (!hasItem(stack)) {
-            return "";
-        }
-        ResourceLocation name = itemName(stack);
-        return String.valueOf(name) + ':' + com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack) + ':' + com.l.ausm.impl.util.MinecraftReflectionCompat.callInt((stack), new String[] {"func_190916_E", "getCount"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, 0);
-    }
-
-    private static String safeDisplayName(ItemStack stack) {
-        try {
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.call((stack), String.class, "", new String[] {"func_82833_r", "getDisplayName"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
-        } catch (RuntimeException e) {
-            return "<error>";
-        }
     }
 
     public static void renderOriginalCclItem(Object renderer, ItemStack stack, Object model) {
@@ -255,7 +148,8 @@ public final class ProjectRedHaloRenderer {
             );
             method.invoke(renderer, stack, model);
         } catch (ReflectiveOperationException | RuntimeException e) {
-            if (skippedItemLogCount++ < 8) {
+            if (!originalRendererFailureLogged) {
+                originalRendererFailureLogged = true;
                 com.l.ausm.impl.MainMod.LOGGER.warn("[ProjectRedHalo] Failed to call original CodeChicken item renderer for {}", itemName(stack), e);
             }
         }
@@ -264,11 +158,6 @@ public final class ProjectRedHaloRenderer {
     public static void renderSolidProjectRedRendererItem(ItemStack stack, String source) {
         int metadata = !com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack) ? com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack) : 0;
         int color = Math.floorMod(metadata, 16);
-        if (solidItemLogCount++ < 24) {
-            ResourceLocation name = itemName(stack);
-            com.l.ausm.impl.MainMod.LOGGER.info("[ProjectRedHalo] Replaced {} item render with solid geometry: item={} meta={} color={}",
-                    source, name, metadata, color);
-        }
         renderImmediateLampItem(color);
     }
 
@@ -283,10 +172,6 @@ public final class ProjectRedHaloRenderer {
             return true;
         }
 
-        if (name != null && "projectred-illumination".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)) && skippedItemLogCount++ < 12) {
-            com.l.ausm.impl.MainMod.LOGGER.info("[ProjectRedHalo] Saw unhandled ProjectRed illumination item: item={} meta={} class={}",
-                    name, com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack), itemClass);
-        }
         return false;
     }
 

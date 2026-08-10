@@ -1,7 +1,6 @@
 package com.l.ausm.impl.client.gui;
 
 import com.l.ausm.impl.MainMod;
-import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.pack.ShaderOption;
 import com.l.ausm.api.pipeline.pack.ShaderOptions;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
@@ -1315,7 +1314,6 @@ public class GuiShaderOptions extends MappingSafeGuiScreen {
 
     @Override
     protected void ausm$drawScreen(int mouseX, int mouseY, float partialTicks) {
-        PipelineContext.getInstance().logGuiBypassProbe("shader-options-draw-entry");
         lastMouseX = mouseX;
         lastMouseY = mouseY;
         hoveredCommentTitle = List.of();
@@ -1353,7 +1351,6 @@ public class GuiShaderOptions extends MappingSafeGuiScreen {
         drawShaderTooltip(mouseX, mouseY);
         drawBottomCommentPanel();
         drawEscapeHintTooltip(mouseX, mouseY);
-        PipelineContext.getInstance().logGuiBypassProbe("shader-options-draw-return");
     }
 
     private void drawSidebarScrollbar() {

@@ -3,7 +3,6 @@ package com.l.ausm.impl.pipeline.shader;
 import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
-import com.l.ausm.impl.MainMod;
 
 import net.minecraft.client.renderer.OpenGlHelper;
 import org.lwjgl.BufferUtils;
@@ -17,7 +16,7 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -25,8 +24,6 @@ import java.util.function.Supplier;
  */
 public class UniformRegistry {
     private static final int MAX_PROGRAM_UNIFORM_CACHE_ENTRIES = 128;
-    private static final boolean SKY_UNIFORM_PROBES_ENABLED = false;
-    private static final AtomicInteger SKY_UNIFORM_PROBE_COUNT = new AtomicInteger();
 
     private final Map<String, UniformBinding<?>> bindings = new HashMap<>();
     private final Map<ShaderProgram, List<ResolvedUniformBinding>> activeBindingsByProgram = new IdentityHashMap<>();
@@ -156,68 +153,9 @@ public class UniformRegistry {
      */
     public void uploadAll(ShaderProgram program) {
         List<ResolvedUniformBinding> activeBindings = activeBindingsFor(program);
-        probeSkyRepairUniforms(program, activeBindings);
         for (ResolvedUniformBinding binding : activeBindings) {
             binding.upload();
         }
-    }
-
-    private void probeSkyRepairUniforms(ShaderProgram program, List<ResolvedUniformBinding> activeBindings) {
-        if (!SKY_UNIFORM_PROBES_ENABLED || program == null) {
-            return;
-        }
-        int skyboxLocation = program.getUniformLocation("ausmSkyboxRepair");
-        int uiLocation = program.getUniformLocation("ausmUiSkyRepair");
-        int skylightLocation = program.getUniformLocation("hasSkylight");
-        int hideGuiLocation = program.getUniformLocation("hideGUI");
-        int guiScreenLocation = program.getUniformLocation("ausmGuiScreen");
-        int simpleVoidLocation = program.getUniformLocation("ausmSimpleVoidWorld");
-        boolean skyProgram = skyboxLocation != -1
-                || uiLocation != -1
-                || skylightLocation != -1
-                || hideGuiLocation != -1
-                || guiScreenLocation != -1
-                || simpleVoidLocation != -1;
-        int index = SKY_UNIFORM_PROBE_COUNT.getAndIncrement();
-        if (!skyProgram && index >= 24) {
-            return;
-        }
-        if (index >= 96 || (index >= 24 && (index & 15) != 0)) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMSkyUniformProbe] program={} id={} active={} ausmSkyboxRepair={} ausmUiSkyRepair={} hasSkylight={} hideGUI={} ausmGuiScreen={} simpleVoid={} locations={}/{}/{}/{}/{}/{}",
-                program.getName(),
-                program.getId(),
-                activeBindings.size(),
-                valueForProbe("ausmSkyboxRepair"),
-                valueForProbe("ausmUiSkyRepair"),
-                valueForProbe("hasSkylight"),
-                valueForProbe("hideGUI"),
-                valueForProbe("ausmGuiScreen"),
-                valueForProbe("ausmSimpleVoidWorld"),
-                skyboxLocation,
-                uiLocation,
-                skylightLocation,
-                hideGuiLocation,
-                guiScreenLocation,
-                simpleVoidLocation
-        );
-    }
-
-    private Object valueForProbe(String name) {
-        UniformBinding<?> binding = bindings.get(name);
-        if (binding == null) {
-            return "missing";
-        }
-        Object value = binding.value();
-        if (value instanceof float[] floats) {
-            return Arrays.toString(floats);
-        }
-        if (value instanceof int[] ints) {
-            return Arrays.toString(ints);
-        }
-        return value;
     }
 
     private List<ResolvedUniformBinding> activeBindingsFor(ShaderProgram program) {
@@ -261,8 +199,21 @@ public class UniformRegistry {
     }
 
     public Map<String, float[]> scalarValuesInto(Map<String, float[]> values) {
+        return scalarValuesInto(values, bindings.keySet());
+    }
+
+    /**
+     * Evaluates only the builtins consumed by the caller. Custom shader
+     * expressions run at every pass bind, so evaluating the complete registry
+     * here needlessly repeated expensive compatibility lookups.
+     */
+    public Map<String, float[]> scalarValuesInto(Map<String, float[]> values, Set<String> names) {
         values.clear();
-        for (UniformBinding<?> binding : bindings.values()) {
+        for (String name : names) {
+            UniformBinding<?> binding = bindings.get(name);
+            if (binding == null) {
+                continue;
+            }
             Object value = binding.value();
             if (value instanceof Number number) {
                 putScalarValue(values, binding.name, number.floatValue());

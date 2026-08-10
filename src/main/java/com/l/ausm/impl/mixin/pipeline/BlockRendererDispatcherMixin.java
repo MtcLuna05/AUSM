@@ -186,31 +186,32 @@ public class BlockRendererDispatcherMixin {
             int blockEmission = pipeline.shouldUseShaderlessBloomEmission()
                 ? pipeline.blockShaderlessBloomEmission(state, blockAccess, pos)
                 : pipeline.blockRenderEmission(state, blockAccess, pos);
-        BlockRenderContext.setBlockEntityId(blockEntityId);
-        BlockRenderContext.setRenderType((short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState));
-        BlockRenderContext.setMetadata(pipeline.blockMetadataForActualState(contextState));
-        BlockRenderContext.setLocalBlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos));
-        BlockRenderContext.setWorldBlockContext(blockAccess, pos);
-        // The frame supplies only the baked host geometry.  Its contained
-        // block remains the sole visual/metadata source, so do not apply
-        // GPOM quad provenance to this replacement route.
-        BlockRenderContext.setFramedMaterialOwner(blockcrafteryHost
-                && !pipeline.shouldReplaceFilledBlockcrafteryFrame(state, blockAccess, pos));
-        BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
         int packedLightmap = ausm$packedLightmap(contextState, blockAccess, pos);
-        BlockRenderContext.setPackedLightmap(packedLightmap);
         ausm$logShaderlessDispatchLightProbe(pipeline, state, contextState, blockAccess, pos, packedLightmap);
-        BlockRenderContext.setBlockEmission(blockEmission);
         // Native BLOOM sources such as RandomThings luminous blocks expose no
         // vanilla light emission. Keep their base-pass vertices explicitly
         // marked so shader packs can distinguish them from an ordinary block
         // before optional material effects (notably coated textures) run.
-        BlockRenderContext.setFramedBloomBoost(pipeline.stateHasBloomLayerGeometry(contextState));
-        BlockRenderContext.setBloomOnlyEmission(false);
-        BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, blockAccess, pos));
-        BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, blockAccess, pos));
-        BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(actualState));
-        BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState));
+        BlockRenderContext.configureBlock(
+                blockEntityId,
+                (short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState),
+                pipeline.blockMetadataForActualState(contextState),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos),
+                blockAccess,
+                pos,
+                // The frame supplies only the baked host geometry. Its contained
+                // block remains the sole visual/metadata source.
+                blockcrafteryHost && !pipeline.shouldReplaceFilledBlockcrafteryFrame(state, blockAccess, pos),
+                ausm$isAgricraftCropState(contextState),
+                packedLightmap,
+                blockEmission,
+                pipeline.stateHasBloomLayerGeometry(contextState),
+                pipeline.blockRenderAlpha(state, blockAccess, pos),
+                pipeline.customLiquidTintColor(state, blockAccess, pos),
+                pipeline.shouldUseCrystalOnlyEmission(actualState),
+                pipeline.shouldSeparateBlockAo(contextState));
         if (pipeline.shouldProbeSoftVanillaSpecialBlock(state, contextState, blockAccess, pos)) {
             BlockRendererDispatcherHooks.SOFT_VANILLA_SPECIAL_START_VERTEX.set(startVertex);
             pipeline.logSoftVanillaSpecialBlockProbe("dispatcher-head", state, blockAccess, pos, startVertex, startVertex, null,

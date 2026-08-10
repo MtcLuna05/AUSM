@@ -519,25 +519,18 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
             return;
         }
         if (pipeline.shouldForceVanillaTerrainRenderer()) {
-            BlockRenderContext.setBlockEntityId(0);
-            BlockRenderContext.setRenderType((short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(state));
-            BlockRenderContext.setMetadata(0);
-            BlockRenderContext.setLocalBlockPos(
+            BlockRenderContext.configureBlock(
+                    0,
+                    (short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(state),
+                    0,
                     com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos),
                     com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos),
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos)
-            );
-            BlockRenderContext.setWorldBlockContext(chunkCache, pos);
-            BlockRenderContext.setFramedMaterialOwner(pipeline.isBlockcrafteryEditableState(state)
-                    && !pipeline.shouldReplaceFilledBlockcrafteryFrame(state, chunkCache, pos));
-            BlockRenderContext.setAgricraftCrop(false);
-            BlockRenderContext.setPackedLightmap(0);
-            BlockRenderContext.setBlockEmission(0);
-            BlockRenderContext.setBloomOnlyEmission(false);
-            BlockRenderContext.setBlockAlpha(-1);
-            BlockRenderContext.setCustomLiquidTint(-1);
-            BlockRenderContext.setCrystalOnlyEmission(false);
-            BlockRenderContext.setSeparateAoEligible(false);
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos),
+                    chunkCache,
+                    pos,
+                    pipeline.isBlockcrafteryEditableState(state)
+                            && !pipeline.shouldReplaceFilledBlockcrafteryFrame(state, chunkCache, pos),
+                    false, 0, 0, false, -1, -1, false, false);
             return;
         }
         IBlockState actualState = pipeline.actualBlockRenderState(state, chunkCache, pos);
@@ -547,29 +540,32 @@ public abstract class NothiriumRenderChunkTaskCompileMixin {
         }
 
         int blockEntityId = pipeline.blockEntityIdForActualState(actualState, chunkCache, pos);
-        BlockRenderContext.setBlockEntityId(blockEntityId);
-        BlockRenderContext.setRenderType((short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState));
-        BlockRenderContext.setMetadata(pipeline.blockMetadataForActualState(actualState));
-        BlockRenderContext.setLocalBlockPos(com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos), com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos));
-        BlockRenderContext.setWorldBlockContext(chunkCache, pos);
-        BlockRenderContext.setFramedMaterialOwner(pipeline.isBlockcrafteryEditableState(state)
-                && !pipeline.shouldReplaceFilledBlockcrafteryFrame(state, chunkCache, pos));
-        BlockRenderContext.setAgricraftCrop(ausm$isAgricraftCropState(contextState));
         int packedLightmap = ausm$packedLightmap(contextState, chunkCache, pos);
-        BlockRenderContext.setPackedLightmap(packedLightmap);
         int blockEmission = pipeline.shouldUseShaderlessBloomEmission()
                 ? pipeline.blockShaderlessBloomEmission(state, chunkCache, pos)
                 : pipeline.blockRenderEmission(state, chunkCache, pos);
-        BlockRenderContext.setBlockEmission(blockEmission);
         // Nothirium builds terrain without BlockRendererDispatcher's context
         // hook.  Preserve the native BLOOM marker here as well so the shader
         // can reject coated-texture treatment before material resolution.
-        BlockRenderContext.setFramedBloomBoost(pipeline.stateHasBloomLayerGeometry(contextState));
-        BlockRenderContext.setBloomOnlyEmission(false);
-        BlockRenderContext.setBlockAlpha(pipeline.blockRenderAlpha(state, chunkCache, pos));
-        BlockRenderContext.setCustomLiquidTint(pipeline.customLiquidTintColor(state, chunkCache, pos));
-        BlockRenderContext.setCrystalOnlyEmission(pipeline.shouldUseCrystalOnlyEmission(actualState));
-        BlockRenderContext.setSeparateAoEligible(pipeline.shouldSeparateBlockAo(contextState));
+        BlockRenderContext.configureBlock(
+                blockEntityId,
+                (short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState),
+                pipeline.blockMetadataForActualState(actualState),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos),
+                chunkCache,
+                pos,
+                pipeline.isBlockcrafteryEditableState(state)
+                        && !pipeline.shouldReplaceFilledBlockcrafteryFrame(state, chunkCache, pos),
+                ausm$isAgricraftCropState(contextState),
+                packedLightmap,
+                blockEmission,
+                pipeline.stateHasBloomLayerGeometry(contextState),
+                pipeline.blockRenderAlpha(state, chunkCache, pos),
+                pipeline.customLiquidTintColor(state, chunkCache, pos),
+                pipeline.shouldUseCrystalOnlyEmission(actualState),
+                pipeline.shouldSeparateBlockAo(contextState));
         if (pipeline.currentProblemProbesEnabled()) {
             pipeline.setBlockRenderDebugContext(state, chunkCache, pos);
         }

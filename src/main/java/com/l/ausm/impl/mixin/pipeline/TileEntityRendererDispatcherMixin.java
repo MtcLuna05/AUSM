@@ -5,6 +5,7 @@ import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.compat.EfficientEntitiesChestCompat;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
@@ -39,6 +40,7 @@ public class TileEntityRendererDispatcherMixin {
 
     @Inject(method = "render(Lnet/minecraft/tileentity/TileEntity;DDDFIF)V", at = @At("HEAD"))
     private void onRenderTileEntityHead(TileEntity tileEntity, double x, double y, double z, float partialTicks, int destroyStage, float alpha, CallbackInfo ci) {
+        EfficientEntitiesChestCompat.beginTileEntity(tileEntity);
         PipelineContext context = PipelineContext.getInstance();
         WorldRenderingPhase phase = context.getPhase();
         boolean shouldBind = phase != WorldRenderingPhase.BLOCK_ENTITIES
@@ -51,9 +53,13 @@ public class TileEntityRendererDispatcherMixin {
 
     @Inject(method = "render(Lnet/minecraft/tileentity/TileEntity;DDDFIF)V", at = @At("RETURN"))
     private void onRenderTileEntityReturn(TileEntity tileEntity, double x, double y, double z, float partialTicks, int destroyStage, float alpha, CallbackInfo ci) {
-        Deque<Boolean> stack = AUSM$tileEntityPhaseStack.get();
-        if (!stack.isEmpty() && stack.pop()) {
-            PipelineContext.getInstance().endPass();
+        try {
+            Deque<Boolean> stack = AUSM$tileEntityPhaseStack.get();
+            if (!stack.isEmpty() && stack.pop()) {
+                PipelineContext.getInstance().endPass();
+            }
+        } finally {
+            EfficientEntitiesChestCompat.endTileEntity();
         }
     }
 

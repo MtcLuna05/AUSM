@@ -1,7 +1,6 @@
 package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
-import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
@@ -33,22 +32,14 @@ public class BotaniaSkyblockSkyRendererMixin {
     private boolean ausm$shaderedVoidPhase;
     private String ausm$assetTexture = "unbound";
 
-    @Inject(method = "render", at = @At("HEAD"), remap = false)
+    @Inject(method = "render", at = @At("HEAD"), cancellable = true, remap = false)
     private void ausm$probeF1Entry(float partialTicks, WorldClient world, Minecraft minecraft, CallbackInfo ci) {
-        // This renderer is also reached through Astral's delegated
-        // compatibility branch, which can bypass RenderGlobal's owned-sky
-        // entry point. Establish the authoritative backing at the renderer
-        // boundary before Botania's base geometry is suppressed.
         PipelineContext context = PipelineContext.getInstance();
         ausm$assetTexture = "unbound";
         context.clearSkyDetailAsset();
-        context.renderShaderlessBotaniaSkyBacking(
-                partialTicks, world, minecraft);
-        ausm$shaderedVoidPhase = context.shouldUseShaderOwnedSkyOverride(world);
-        context.forensicGlTrace("botania-sky-entry", "shaderOwned=" + ausm$shaderedVoidPhase + ", partialTicks=" + partialTicks);
-        if (ausm$shaderedVoidPhase) {
-            context.beginPhase(WorldRenderingPhase.SKY);
-            context.renderShaderedSkyBaseBacking();
+        ausm$shaderedVoidPhase = false;
+        if (context.isActive()) {
+            ci.cancel();
         }
     }
 
@@ -204,9 +195,6 @@ public class BotaniaSkyblockSkyRendererMixin {
     private void ausm$drawAndProbeSkyAsset(Tessellator tessellator) {
         PipelineContext.getInstance().uploadSkyDetailUniforms();
         boolean suppressBase = "unbound".equals(ausm$assetTexture) && ausm$shouldSuppressBase();
-        // Entree's AUSM-owned sky shader supplies the planets, ribbons, and
-        // rainbow. Suppress Botania's textured detail quads as a whole so the
-        // shader route is the sole detail owner.
         if (suppressBase || ausm$shaderedVoidPhase) {
             MinecraftReflectionCompat.forceResetBufferDrawingState(
                     MinecraftReflectionCompat.tessellatorBuffer(tessellator));

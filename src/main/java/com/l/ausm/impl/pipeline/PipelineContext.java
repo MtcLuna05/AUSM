@@ -153,7 +153,6 @@ import net.minecraftforge.client.IRenderHandler;
 import net.minecraftforge.client.MinecraftForgeClient;
 import net.minecraftforge.common.property.IExtendedBlockState;
 import net.minecraftforge.common.property.IUnlistedProperty;
-import net.minecraftforge.fml.common.Loader;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
@@ -207,88 +206,8 @@ import java.util.jar.JarFile;
 import java.util.stream.Stream;
 public class PipelineContext extends PipelineWorldRenderScope {
     private static boolean disableShaderlessPreGuiHooks = true;
-    private static final AtomicInteger GUI_BYPASS_PROBE_LOGS = new AtomicInteger();
-    private static final Set<String> GUI_BYPASS_PROBE_KEYS = ConcurrentHashMap.newKeySet();
-    private static final AtomicInteger SHADER_GUI_PROBE_LOGS = new AtomicInteger();
-    private static final Set<String> SHADER_GUI_PROBE_KEYS = ConcurrentHashMap.newKeySet();
     private static final AtomicInteger FLAT_FOLIAGE_HIGHLIGHT_PROBE_LOGS = new AtomicInteger();
     private static final AtomicInteger LILY_PAD_LIGHTING_PROBE_LOGS = new AtomicInteger();
-
-    public void logGuiBypassProbe(String stage) {
-        if (!DEBUG_PROBES_ENABLED) {
-            return;
-        }
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        Object screen = minecraft != null
-                ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft)
-                : null;
-        String screenName = screen != null ? screen.getClass().getName() : "null";
-        if (!GUI_BYPASS_PROBE_KEYS.add(stage + "|" + screenName)) {
-            return;
-        }
-        int call = GUI_BYPASS_PROBE_LOGS.incrementAndGet();
-        if (call > 48) {
-            return;
-        }
-        Framebuffer framebuffer = minecraft != null
-                ? com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(minecraft)
-                : null;
-        int sampleWidth = minecraft == null ? 1 : Math.max(1,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(minecraft));
-        int sampleHeight = minecraft == null ? 1 : Math.max(1,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(minecraft));
-        MainMod.LOGGER.info(
-                "[AUSMGuiBypass] call={} stage={} active={} worldFrame={} guiDepth={} screen={} framebuffer={} targetColor={} targetDepth={} backColor={} drawFbo={} readFbo={} program={} state={}",
-                call,
-                stage,
-                isPipelineActive,
-                worldFrameActive,
-                guiRenderDepth,
-                screenName,
-                describeFramebufferTarget(framebuffer),
-                framebufferSamples(framebuffer),
-                framebufferDepthSamples(framebuffer),
-                framebufferIdColorSamples(0, sampleWidth, sampleHeight, GL11.GL_BACK),
-                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
-                GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
-                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
-                glStateSummary()
-        );
-    }
-
-    public void logShaderGuiProbe(String stage) {
-        if (!DEBUG_PROBES_ENABLED) {
-            return;
-        }
-        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
-        Object screen = minecraft != null ? MinecraftReflectionCompat.currentScreen(minecraft) : null;
-        if (screen == null
-                || !screen.getClass().getName().startsWith("com.l.ausm.impl.client.gui.GuiShader")
-                || !SHADER_GUI_PROBE_KEYS.add(stage)) {
-            return;
-        }
-        int call = SHADER_GUI_PROBE_LOGS.incrementAndGet();
-        Framebuffer target = MinecraftReflectionCompat.minecraftFramebuffer(minecraft);
-        MainMod.LOGGER.info(
-                "[AUSMShaderGuiProbe] call={} stage={} active={} worldFrame={} guiDepth={} renderingGui={} screen={} target={} targetColor={} targetDepth={} drawFbo={} readFbo={} drawBuf={} readBuf={} gl={} glErrors={}",
-                call,
-                stage,
-                isPipelineActive,
-                worldFrameActive,
-                guiRenderDepth,
-                renderingGui,
-                screen.getClass().getName(),
-                describeFramebufferTargetDetailed(target),
-                framebufferSamples(target),
-                framebufferDepthSamples(target),
-                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
-                GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
-                GL11.glGetInteger(GL11.GL_DRAW_BUFFER),
-                GL11.glGetInteger(GL11.GL_READ_BUFFER),
-                glStateSummary(),
-                drainGlErrorsForProbe()
-        );
-    }
 
     private void logFlatFoliageHighlightProbe(DeferredFramebuffer framebuffer) {
         Minecraft minecraft = MinecraftReflectionCompat.minecraft();
@@ -403,8 +322,9 @@ public class PipelineContext extends PipelineWorldRenderScope {
         logFlatFoliageHighlightProbe(preDeferredBuffer);
         logLilyPadLightingProbe(preDeferredBuffer);
         preDeferredColorSnapshotThisFrame = false;
-        if (deferredBufferHasColorContent(preDeferredBuffer, fallbackColorAttachment())
-                || deferredBufferHasSceneContent(preDeferredBuffer, fallbackColorAttachment())) {
+        if (ENABLE_SAFE_TERRAIN_FALLBACKS
+                && (deferredBufferHasColorContent(preDeferredBuffer, fallbackColorAttachment())
+                || deferredBufferHasSceneContent(preDeferredBuffer, fallbackColorAttachment()))) {
             preDeferredColorSnapshotThisFrame = pingPongManager.snapshotReadAttachmentToRecoveryColor(fallbackColorAttachment());
         }
         runFullscreenPasses(ProgramArrayId.DEFERRED);
@@ -1033,7 +953,8 @@ public class PipelineContext extends PipelineWorldRenderScope {
     }
 
     protected boolean shouldPresentColorBeforeFinal(DeferredFramebuffer framebuffer, Attachment colorAttachment) {
-        if (framebuffer == null
+        if (!ENABLE_SAFE_TERRAIN_FALLBACKS
+                || framebuffer == null
                 || colorAttachment == null
                 || !deferredBufferHasColorContent(framebuffer, colorAttachment)
                 || !isComplementaryFinalColorSourceSensitivePack()) {
@@ -1046,7 +967,8 @@ public class PipelineContext extends PipelineWorldRenderScope {
     protected boolean shouldPresentPreFinalDirectlyForNothirium(DeferredFramebuffer framebuffer,
                                                               Attachment colorAttachment,
                                                               Minecraft mc) {
-        if (framebuffer == null
+        if (!ENABLE_SAFE_TERRAIN_FALLBACKS
+                || framebuffer == null
                 || colorAttachment == null
                 || !framebuffer.isUsable()
                 || !isPipelineActive
@@ -1179,7 +1101,8 @@ public class PipelineContext extends PipelineWorldRenderScope {
     protected boolean restorePreDeferredColorIfDeferredBlackened(DeferredFramebuffer framebuffer,
                                                                Attachment attachment,
                                                                String reason) {
-        if (!preDeferredColorSnapshotThisFrame
+        if (!ENABLE_SAFE_TERRAIN_FALLBACKS
+                || !preDeferredColorSnapshotThisFrame
                 || framebuffer == null
                 || attachment == null
                 || !framebuffer.hasRecoveryColorSnapshot()
@@ -2225,6 +2148,7 @@ public class PipelineContext extends PipelineWorldRenderScope {
         shadowMapUsable = false;
         shadowMapSparseForSampling = false;
         shadowMapCoverageStableFrames = 0;
+        shadowMapCoverageRegressionLogs = 0;
         nothiriumShadowInvalidFrames = 0;
         nothiriumShadowSuppressedFrames = 0;
         resetShadowRenderCache();
@@ -2263,7 +2187,6 @@ public class PipelineContext extends PipelineWorldRenderScope {
         finalComputePrograms = List.of();
         setupComputePending = false;
         syntheticLightCandidates.clear();
-        resetColoredLightAudit();
         packDirectives = emptyShaderProperties().packDirectives();
         isPipelineActive = false;
         activePackName = "(internal)";
@@ -3074,6 +2997,55 @@ public class PipelineContext extends PipelineWorldRenderScope {
         }
     }
 
+    /**
+     * Replays Nothirium's already-uploaded translucent mesh into AUSM's
+     * bloom-transmission target. The caller owns the framebuffer, shader and
+     * blend/depth state; Nothirium only supplies vertex data and chunk offsets.
+     */
+    public int renderAusmOwnedNothiriumTranslucentGeometry(double partialTicks, Entity viewEntity) {
+        if (viewEntity == null
+                || !isNothiriumLoaded()
+                || !NothiriumShadowRenderer.isAvailable()
+                || shouldForceVanillaTerrainRenderer()
+                || BetterPortalsCompat.isRenderingRenderPass()
+                || BetterPortalsCompat.isMainViewSwapRecoveryActive()) {
+            return -1;
+        }
+
+        double cameraX = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity), (float) partialTicks);
+        double cameraY = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity), (float) partialTicks);
+        double cameraZ = interpolate(com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity), (float) partialTicks);
+        nothiriumShadowRenderer.drainUploads();
+
+        WorldRenderingPhase previousPhase = activePhase;
+        boolean previousShaderlessWorldPassActive = shaderlessWorldPassActive;
+        bloomTranslucentAttenuationPass = true;
+        shaderlessWorldPassActive = true;
+        activePhase = WorldRenderingPhase.TERRAIN_TRANSLUCENT;
+        try {
+            BlockRenderLayer layer = BlockRenderLayer.TRANSLUCENT;
+            return positiveCount(nothiriumShadowRenderer.renderVisibleLayerAllowingVanillaStride(
+                    layer,
+                    cameraX,
+                    cameraY,
+                    cameraZ,
+                    nothiriumFallbackBlockEntityId(layer),
+                    nothiriumFallbackRenderType(layer)
+            ));
+        } finally {
+            activePhase = previousPhase;
+            shaderlessWorldPassActive = previousShaderlessWorldPassActive;
+            bloomTranslucentAttenuationPass = false;
+        }
+    }
+
+    public boolean isBloomTranslucentAttenuationPass() {
+        return bloomTranslucentAttenuationPass;
+    }
+
     protected void requestDeferredNativeBloom(double partialTicks, int pass) {
         if (bloomLayerRenderedThisWorldPass
                 || !AusmBloomLayer.shouldUseNativeHook()
@@ -3284,6 +3256,23 @@ public class PipelineContext extends PipelineWorldRenderScope {
         shaderlessBloomRenderedThisWorldFrame = true;
         sealShaderlessWorldFramebufferAlpha("post-bloom-before-gui");
         restoreShaderlessBloomExitState(mc);
+    }
+
+    public void snapshotShaderlessWorldFramebufferForGui() {
+        if (isPipelineActive
+                || externalWorldFramebufferTarget != null
+                || isRenderingBetterPortalsNestedView()
+                || isRenderingBetterPortalsRenderPass()) {
+            return;
+        }
+        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Framebuffer target = mc != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc)
+                : null;
+        if (target == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
+            return;
+        }
+        snapshotPresentationTargetForDirectPresentation(target, "shaderless-world-before-ui");
     }
 
     protected boolean shouldRenderShaderlessCustomSkyBacking(Minecraft mc) {
@@ -4229,100 +4218,26 @@ public class PipelineContext extends PipelineWorldRenderScope {
         sealShaderlessWorldFramebufferAlpha("post-sky");
     }
 
-    public void logHiddenSkyFramebufferProbe(String stage) {
-        if (!DEBUG_PROBES_ENABLED) {
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        Object screen = mc == null ? null : com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc);
-        boolean hideGui = mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc) != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(
-                com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc));
-        boolean paused = mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc);
-        if (mc == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
-                || (!hideGui && !paused && screen == null)) {
-            return;
-        }
-        int probeCall;
-        String probeKind;
-        if (hideGui) {
-            if (hiddenF1SkyFramebufferProbeLogs >= 96) {
-                return;
-            }
-            probeCall = ++hiddenF1SkyFramebufferProbeLogs;
-            probeKind = "f1";
-        } else {
-            if (hiddenSkyFramebufferProbeLogs >= 64) {
-                return;
-            }
-            probeCall = ++hiddenSkyFramebufferProbeLogs;
-            probeKind = "gui";
-        }
-        Framebuffer target = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
-        if (target == null) {
-            return;
-        }
-        int previousRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
-        int width = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferWidth(target));
-        int height = Math.max(1, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferHeight(target));
-        FloatBuffer top = BufferUtils.createFloatBuffer(4);
-        FloatBuffer center = BufferUtils.createFloatBuffer(4);
-        FloatBuffer windowTop = BufferUtils.createFloatBuffer(4);
-        try {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
-            GL11.glReadPixels(width / 2, Math.max(0, (height * 3) / 4), 1, 1, GL11.GL_RGBA, GL11.GL_FLOAT, top);
-            GL11.glReadPixels(width / 2, height / 2, 1, 1, GL11.GL_RGBA, GL11.GL_FLOAT, center);
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, 0);
-            GL11.glReadBuffer(GL11.GL_BACK);
-            GL11.glReadPixels(Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc) / 2),
-                    Math.max(0, (com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc) * 3) / 4),
-                    1, 1, GL11.GL_RGBA, GL11.GL_FLOAT, windowTop);
-            World world = com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc);
-            float partialTicks = com.l.ausm.impl.util.MinecraftReflectionCompat.renderPartialTicks(mc);
-            float celestial = world == null ? -1.0F : com.l.ausm.impl.util.MinecraftReflectionCompat.worldCelestialAngle(world, partialTicks);
-            float rain = world == null ? -1.0F : com.l.ausm.impl.util.MinecraftReflectionCompat.worldRainStrength(world, partialTicks);
-            MainMod.LOGGER.info("[AUSMHiddenSkyProbe] kind={} call={} stage={} screen={} hideGui={} paused={} time={} celestial={} rain={} top={}/{}/{}/{} center={}/{}/{}/{} windowTop={}/{}/{}/{} blend={} alpha={} fbo={}",
-                    probeKind,
-                    probeCall,
-                    stage,
-                    screen == null ? "none" : screen.getClass().getName(),
-                    hideGui,
-                    paused,
-                    world == null ? -1L : com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world),
-                    celestial,
-                    rain,
-                    top.get(0), top.get(1), top.get(2), top.get(3),
-                    center.get(0), center.get(1), center.get(2), center.get(3),
-                    windowTop.get(0), windowTop.get(1), windowTop.get(2), windowTop.get(3),
-                    GL11.glIsEnabled(GL11.GL_BLEND),
-                    GL11.glIsEnabled(GL11.GL_ALPHA_TEST),
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(target));
-        } catch (RuntimeException | LinkageError ignored) {
-        } finally {
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousRead);
-            GL11.glReadBuffer(previousReadBuffer);
-        }
-    }
-
     protected void restoreShaderlessBloomExitState(Minecraft mc) {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
+        TextureBinder.disableShaderOnlyFixedFunctionTextureUnits();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
         disablePipelineVertexAttributes();
         unbindShaderImages();
         unbindShaderStorageBuffers();
         resetIndexedBlendState();
+        FixedFunctionGlState.resetClientArrayState(false);
         GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
         GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+        GL11.glMatrixMode(GL11.GL_MODELVIEW);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
@@ -4861,7 +4776,7 @@ public class PipelineContext extends PipelineWorldRenderScope {
     }
 
     protected static boolean isNothiriumLoaded() {
-        return Loader.isModLoaded(NOTHIRIUM_MOD_ID) || Loader.isModLoaded(NAUGHTHIRIUM_MOD_ID);
+        return PipelineCompatConstants.isNothiriumLoadedCached();
     }
 
     /**
@@ -5168,13 +5083,19 @@ public class PipelineContext extends PipelineWorldRenderScope {
 
     /**
      * Vanilla GuiScreen backgrounds and widgets are drawn over the already-presented
-     * world.  Retaining the world depth buffer here rejects those flat screen quads.
+     * world.  The HUD is submitted first and its 3-D item models leave nearer depth
+     * behind than a container's flat background.  Start the screen in a fresh GUI
+     * depth domain so those old hotbar fragments cannot reject the later container,
+     * while preserving the hotbar colour underneath for screens that do not cover it.
+     * Keep depth testing and writes enabled after the clear: vanilla and modded GUI
+     * renderers use their zLevel values to order overlapping controls and item layers.
      */
     private void prepareVanillaGuiScreenOverlayState() {
+        GL11.glDepthMask(true);
+        GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glDepthMask(false);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
     }
 
     private void prepareDirectGuiScreenRenderingState(boolean flushPipelineWorld) {
@@ -5377,7 +5298,6 @@ public class PipelineContext extends PipelineWorldRenderScope {
             directPresentationValid = true;
             directPresentationFrame = pipelineFrameId;
             directPresentationReason = reason;
-            logDirectPresentationSnapshot(reason, target);
         } catch (RuntimeException | LinkageError e) {
             directPresentationValid = false;
         } finally {
@@ -5486,7 +5406,6 @@ public class PipelineContext extends PipelineWorldRenderScope {
             );
             com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(target, false);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, targetWidth, targetHeight);
-            logDirectPresentationTextureRefresh(target, targetWidth, targetHeight, allowStaleForGui);
             return true;
         } catch (RuntimeException | LinkageError e) {
             return false;
@@ -5501,53 +5420,6 @@ public class PipelineContext extends PipelineWorldRenderScope {
                 GL11.glDisable(GL11.GL_SCISSOR_TEST);
             }
         }
-    }
-
-    protected void logDirectPresentationSnapshot(String reason, Framebuffer target) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null
-                || com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null
-                || (!shouldDirectPresentFramebuffer()
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null)) {
-            return;
-        }
-        if (directPresentationSnapshotLogs++ >= MAX_DIRECT_PRESENTATION_SNAPSHOT_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMDirectPresentationSnapshot] reason={} target={} targetColor={} snapshotFbo={} texture={} size={}x{} frame={} gl={}",
-                reason,
-                describeFramebufferTargetDetailed(target),
-                framebufferSamples(target),
-                directPresentationFbo,
-                directPresentationTexture,
-                directPresentationWidth,
-                directPresentationHeight,
-                directPresentationFrame,
-                glStateSummary()
-        );
-    }
-
-    protected void logDirectPresentationTextureRefresh(Framebuffer target, int targetWidth, int targetHeight, boolean gui) {
-        if (directPresentationTextureRefreshLogs++ >= MAX_DIRECT_PRESENTATION_TEXTURE_REFRESH_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMDirectPresentationTextureRefresh] reason={} gui={} target={} targetColor={} snapshotFbo={} texture={} snapshotSize={}x{} targetSize={}x{} snapshotFrame={} currentFrame={} gl={}",
-                directPresentationReason,
-                gui,
-                describeFramebufferTargetDetailed(target),
-                framebufferSamples(target),
-                directPresentationFbo,
-                directPresentationTexture,
-                directPresentationWidth,
-                directPresentationHeight,
-                targetWidth,
-                targetHeight,
-                directPresentationFrame,
-                pipelineFrameId,
-                glStateSummary()
-        );
     }
 
     protected void logGuiRecoveredBackground(boolean refreshed, Framebuffer target) {
@@ -6331,6 +6203,7 @@ public class PipelineContext extends PipelineWorldRenderScope {
         boolean activeStateChanged = wasPipelineActive != isPipelineActive;
         boolean shaderDisable = wasPipelineActive && !isPipelineActive;
         if (isPipelineActive) {
+            TextureBinder.markShaderOnlyFixedFunctionTextureUnitsDirty();
             zeroOpaqueTerrainFrames = 0;
             sparseOpaqueTerrainFrames = 0;
             zeroOpaqueTerrainRecoveryRequested = false;
@@ -6468,7 +6341,6 @@ public class PipelineContext extends PipelineWorldRenderScope {
         if (shaderImages.active()) {
             clearColoredLightImages();
         }
-        resetColoredLightAudit();
 
         int chunkCount = forceChunkLightingRefresh(world, minX, maxX, minZ, maxZ);
         int blockChecks = forceBlockLightingRefresh(world, minX, minY, minZ, maxX, maxY, maxZ);
@@ -6702,17 +6574,27 @@ public class PipelineContext extends PipelineWorldRenderScope {
             return;
         }
 
-        for (int i = 0; i < MAX_SHADER_CHUNK_REFRESHES_PER_FRAME; i++) {
-            ShaderChunkRefresh refresh;
-            synchronized (pendingShaderChunkRefreshes) {
-                if (pendingShaderChunkRefreshes.isEmpty()) {
-                    return;
+        boolean refreshNothirium = !NothiriumBypass.shouldBypass();
+        if (refreshNothirium) {
+            nothiriumShadowRenderer.beginQueuedChunkRefreshBatch();
+        }
+        try {
+            for (int i = 0; i < MAX_SHADER_CHUNK_REFRESHES_PER_FRAME; i++) {
+                ShaderChunkRefresh refresh;
+                synchronized (pendingShaderChunkRefreshes) {
+                    if (pendingShaderChunkRefreshes.isEmpty()) {
+                        return;
+                    }
+                    refresh = pendingShaderChunkRefreshes.iterator().next();
+                    pendingShaderChunkRefreshes.remove(refresh);
                 }
-                refresh = pendingShaderChunkRefreshes.iterator().next();
-                pendingShaderChunkRefreshes.remove(refresh);
-            }
 
-            refreshShaderChunk(mc, refresh);
+                refreshShaderChunk(mc, refresh);
+            }
+        } finally {
+            if (refreshNothirium) {
+                nothiriumShadowRenderer.endQueuedChunkRefreshBatch();
+            }
         }
     }
 
@@ -6746,19 +6628,35 @@ public class PipelineContext extends PipelineWorldRenderScope {
         if (advanceDelays) {
             ageStaleClientChunkRenderRefreshes(targetWorld);
         }
-        for (int i = 0; i < MAX_CLIENT_CHUNK_RENDER_REFRESHES_PER_FRAME; i++) {
-            ClientChunkRenderRefresh refresh = pollDueClientChunkRenderRefresh(targetWorld, advanceDelays);
-            if (refresh == null) {
-                return;
-            }
-
-            boolean retryNeeded = refreshClientChunkRender(mc, refresh, targetWorld);
-            refresh.attemptsRemaining--;
-            if (retryNeeded && refresh.attemptsRemaining > 0 && refresh.world == targetWorld) {
-                refresh.delayFrames = CLIENT_CHUNK_RENDER_REFRESH_REPEAT_DELAY_FRAMES;
-                synchronized (pendingClientChunkRenderRefreshes) {
-                    addPendingClientChunkRenderRefreshLocked(refresh);
+        // A normal client refresh can process eight columns in one frame. The
+        // Nothirium shadow bridge used to linearly scan its complete provider
+        // array for every one of those columns, while the equivalent shader
+        // refresh path already coalesces that lookup. Build one short-lived
+        // column index for this batch instead; renderer chunks may be moved
+        // between batches, hence it must not be retained across frames.
+        boolean refreshNothirium = !NothiriumBypass.shouldBypass();
+        if (refreshNothirium) {
+            nothiriumShadowRenderer.beginQueuedChunkRefreshBatch();
+        }
+        try {
+            for (int i = 0; i < MAX_CLIENT_CHUNK_RENDER_REFRESHES_PER_FRAME; i++) {
+                ClientChunkRenderRefresh refresh = pollDueClientChunkRenderRefresh(targetWorld, advanceDelays);
+                if (refresh == null) {
+                    return;
                 }
+
+                boolean retryNeeded = refreshClientChunkRender(mc, refresh, targetWorld);
+                refresh.attemptsRemaining--;
+                if (retryNeeded && refresh.attemptsRemaining > 0 && refresh.world == targetWorld) {
+                    refresh.delayFrames = CLIENT_CHUNK_RENDER_REFRESH_REPEAT_DELAY_FRAMES;
+                    synchronized (pendingClientChunkRenderRefreshes) {
+                        addPendingClientChunkRenderRefreshLocked(refresh);
+                    }
+                }
+            }
+        } finally {
+            if (refreshNothirium) {
+                nothiriumShadowRenderer.endQueuedChunkRefreshBatch();
             }
         }
     }
@@ -7589,6 +7487,7 @@ public class PipelineContext extends PipelineWorldRenderScope {
         preHandDepthCopiedThisFrame = false;
         renderingShadowMap = false;
         renderingGui = false;
+        guiItemRenderDepth = 0;
         guiTargetContentFrame = Long.MIN_VALUE;
         currentWorldPassSerial = Long.MIN_VALUE;
         worldPassSerialStack.clear();

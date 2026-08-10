@@ -4,7 +4,7 @@
   "package": "com.l.ausm.impl.mixin",
   "plugin": "com.l.ausm.impl.MainMixinConfigPlugin",
   "refmap": "ausm.refmap.json",
-  "compatibilityLevel": "JAVA_8",
+  "compatibilityLevel": "JAVA_21",
   "mixins": [
     "compat.ActuallyAdditionsAssetUtilMixin",
     "compat.AppliedEnergisticsCableBusBakedModelMixin",
@@ -43,6 +43,7 @@
     "compat.NothiriumMinecraftChunkRendererMixin",
     "compat.NothiriumRenderChunkTaskCompileMixin",
     "compat.NothiriumRenderChunkTaskSortTranslucentMixin",
+    "compat.NothiriumShadowChunkAccessMixin",
     "compat.RenderLibBetweenlandsEntityRendererMixin",
     "compat.RenderLibTileEntityRendererMixin",
     "compat.ThaumcraftFixClientEventHandlerMixin",
@@ -54,7 +55,6 @@
     "pipeline.GuiIngameMixin",
     "pipeline.GuiInventoryMixin",
     "pipeline.GuiScreenMixin",
-    "pipeline.ForgeHooksClientGuiProbeMixin",
     "pipeline.ItemRendererMixin",
     "pipeline.LayerArmorBaseMixin",
     "pipeline.LayerSpiderEyesMixin",
@@ -62,7 +62,6 @@
     "pipeline.NetHandlerPlayClientMixin",
     "pipeline.RenderItemMixin",
     "pipeline.RenderLightningBoltMixin",
-    "pipeline.RenderLivingBaseMixin",
     "pipeline.RenderMixin",
     "pipeline.RenderManagerAccessor",
     "pipeline.RenderManagerMixin",
@@ -86,6 +85,9 @@
     "pipeline.WorldVertexBufferUploaderMixin"
   ],
   "client": [
+    "compat.EfficientEntitiesModelRendererCompatMixin",
+    "compat.EntityCullingQueryLatencyMixin",
+    "compat.EuphoriaPatcherEntreeMixin",
     "compat.NothiriumSectionRenderCacheDynamicLightMixin",
     "pipeline.ChunkCacheDynamicLightMixin",
     "pipeline.WorldDynamicLightMixin"

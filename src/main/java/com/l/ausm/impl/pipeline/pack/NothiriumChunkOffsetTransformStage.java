@@ -28,13 +28,18 @@ public final class NothiriumChunkOffsetTransformStage implements ShaderTransform
             RenderPass.GBUFFERS_DAMAGEDBLOCK,
             RenderPass.GBUFFERS_BLOCK,
             RenderPass.GBUFFERS_BLOCK_TRANSLUCENT,
-            RenderPass.GBUFFERS_WATER
+            RenderPass.GBUFFERS_WATER,
+            RenderPass.SHADOW,
+            RenderPass.SHADOW_SOLID,
+            RenderPass.SHADOW_CUTOUT,
+            RenderPass.SHADOW_WATER
     );
 
     @Override
     public String apply(String source, ShaderTransformParameters parameters) {
         if (parameters.pass() == null
-                || parameters.pass().stage() != ProgramStage.GBUFFERS
+                || (parameters.pass().stage() != ProgramStage.GBUFFERS
+                && parameters.pass().stage() != ProgramStage.SHADOW)
                 || !isTerrainOffsetPass(parameters.pass())
                 || !parameters.vertexShader()
                 || source.contains("ausm_ChunkVertex")) {

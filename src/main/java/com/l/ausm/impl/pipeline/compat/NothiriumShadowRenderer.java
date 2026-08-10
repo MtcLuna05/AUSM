@@ -6,6 +6,7 @@ import com.l.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.texture.TextureMap;
@@ -31,9 +32,11 @@ import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -57,6 +60,7 @@ public final class NothiriumShadowRenderer {
     private static final boolean USE_CHUNK_OFFSET_UNIFORM = true;
 
     private static final String NOTHIRIUM_MOD_ID = "nothirium";
+    private static final String[] WORLD_HEIGHT_METHODS = {"func_72800_K", "getHeight"};
     private static final int VANILLA_BLOCK_STRIDE = 28;
     private static final int POSITION_OFFSET = 0;
     private static final int COLOR_OFFSET = 12;
@@ -69,12 +73,20 @@ public final class NothiriumShadowRenderer {
     private static final int MAX_MAIN_TERRAIN_SOLID_COMPILES_PER_FRAME = 3;
     private static final int MAX_MAIN_TERRAIN_CUTOUT_COMPILES_PER_FRAME = 1;
     private static final int MAX_MAIN_TERRAIN_TRANSLUCENT_COMPILES_PER_FRAME = 1;
+    /** Shadow selection can contain every loaded section (7k+ in large
+     * worlds). Scan a bounded rotating window per layer instead of doing the
+     * full provider walk every frame; all sections remain eligible. */
+    private static final int MAX_MAIN_TERRAIN_COMPILE_SCAN_PER_LAYER = 192;
     /** A Nothirium dispatcher update drains its entire render-thread queue.
      * Keep each frame's VBO work bounded instead of converting a completed
      * worker burst into a multi-millisecond render-thread hitch. */
     private static final int MAX_UPLOAD_TASKS_PER_DRAIN = 2;
     private static final int MAX_PENDING_SHADOW_COMPILES = 64;
     private static final int MAX_CHUNK_REFRESH_COMPILES = 16;
+    /** A queued shader refresh can contain eight columns. Limit its direct
+     * Nothirium submissions as one batch so it cannot flood every worker at
+     * once; marked sections remain eligible for the normal dirty-chunk path. */
+    private static final int MAX_QUEUED_CHUNK_REFRESH_COMPILES_PER_BATCH = 32;
     private static final int MAX_CHUNK_REFRESH_AUDIT_LOGS = 0;
     private static final int MAX_VISIBLE_TRANSLUCENT_DIAG_LOGS = 0;
     private static final int MAX_VISIBLE_TERRAIN_FAILURE_LOGS = 0;
@@ -83,13 +95,11 @@ public final class NothiriumShadowRenderer {
     private static final int MAX_LILY_SHADOW_VERTEX_SCAN_CALLS = 0;
     private static final int MAX_LILY_SHADOW_VERTEX_PROBE_LOGS = 0;
     private static final int LILY_SHADOW_VERTEX_SCAN_BYTES = 32 * 1024;
-    private static final int MAX_PROVIDER_DRAW_AUDIT_LOGS = 0;
     private static final int MAX_EMPTY_LIST_AUDIT_LOGS = 0;
     private static final int MAX_SHADERED_MAIN_LIST_PROBE_LOGS = 0;
     private static final int MAX_SHADERED_PROVIDER_STATE_PROBE_LOGS = 0;
     private static final int MAX_SHADERED_COMPILE_GATE_PROBE_LOGS = 0;
     private static final int MAX_SHADERED_COMPILE_CANDIDATE_PROBE_LOGS = 0;
-    private static final int MAX_SHADOW_SELECTION_AUDIT_LOGS = 0;
     /* Several world/Bloom paths request upload draining in one render frame.
        Nothirium's dispatcher update is expensive enough to pace explicitly. */
     private static final long MIN_UPLOAD_DRAIN_INTERVAL_NANOS = 2_000_000L;
@@ -104,10 +114,7 @@ public final class NothiriumShadowRenderer {
     private boolean warned;
     private boolean emptyAuditLogged;
     private boolean providerAuditLogged;
-    private boolean providerSuccessAuditLogged;
-    private boolean fallbackAuditLogged;
     private boolean uploadNonEmptyLogged;
-    private int providerZeroAuditAttempts;
     private int uploadAuditAttempts;
     private int compileAuditAttempts;
     private int mainCompileAuditAttempts;
@@ -130,11 +137,46 @@ public final class NothiriumShadowRenderer {
     private final FloatBuffer visibleTerrainProjectionProbe = BufferUtils.createFloatBuffer(16);
     private final FloatBuffer visibleTerrainUniformProbe = BufferUtils.createFloatBuffer(16);
     private final Map<Object, Long> mainTerrainCompileAttempts = new IdentityHashMap<>();
+    private final Map<BlockRenderLayer, Integer> mainTerrainCompileScanCursors = new EnumMap<>(BlockRenderLayer.class);
     private final Map<Integer, Integer> chunkOffsetUniformLocations = new HashMap<>();
+    private final Map<Long, List<Object>> queuedChunkRefreshColumns = new HashMap<>();
     private final FloatBuffer shadowSelectionModelView = BufferUtils.createFloatBuffer(16);
     private final FloatBuffer shadowSelectionProjection = BufferUtils.createFloatBuffer(16);
+    private final float[] shadowSelectionModelViewValues = new float[16];
+    private final float[] shadowSelectionProjectionValues = new float[16];
+    /** Reused only within one shadow pass. This removes one candidate object
+     * for every selected section and the two matrix-array allocations from the
+     * render thread's per-frame selection path. */
+    private Object[] shadowSelectionChunks = new Object[0];
+    private double[] shadowSelectionDistances = new double[0];
+    private int shadowSelectionScratchCount;
+    /**
+     * The provider grid and the sun matrix change much more slowly than the
+     * shadow pass itself. Keep the last conservative selection separately from
+     * the per-pass scratch arrays so a small camera movement can reuse it.
+     */
+    private static final double SHADOW_SELECTION_REUSE_DISTANCE_SQUARED = 0.25D;
+    private Object[] cachedShadowSelectionChunks = new Object[0];
+    private int cachedShadowSelectionCount;
+    private Reflection cachedShadowSelectionReflection;
+    private Object cachedShadowSelectionProvider;
+    private Object[] cachedShadowSelectionSourceChunks;
+    private double cachedShadowSelectionCameraX;
+    private double cachedShadowSelectionCameraY;
+    private double cachedShadowSelectionCameraZ;
+    private int cachedShadowSelectionCameraChunkX = Integer.MIN_VALUE;
+    private int cachedShadowSelectionCameraChunkY = Integer.MIN_VALUE;
+    private int cachedShadowSelectionCameraChunkZ = Integer.MIN_VALUE;
+    private double cachedShadowSelectionMaxDistance;
+    private final Map<Object, ChunkOrigin> shadowChunkOrigins = new IdentityHashMap<>();
     private ShadowSelection shadowSelection;
-    private int shadowSelectionAuditAttempts;
+    private boolean shadowSelectionActive;
+    private boolean queuedChunkRefreshBatchActive;
+    private Object queuedChunkRefreshProvider;
+    private Object[] queuedChunkRefreshSourceChunks;
+    private int queuedChunkRefreshCompileCount;
+    private Object mainTerrainCompileScanProvider;
+    private Object[] mainTerrainCompileScanSourceChunks;
     private static int visibleTranslucentStateLogs;
 
     public static boolean isAvailable() {
@@ -144,7 +186,15 @@ public final class NothiriumShadowRenderer {
     public void resetPipelineProgramState() {
         chunkOffsetUniformLocations.clear();
         mainTerrainCompileAttempts.clear();
+        mainTerrainCompileScanCursors.clear();
+        mainTerrainCompileScanProvider = null;
+        mainTerrainCompileScanSourceChunks = null;
         shadowSelection = null;
+        shadowSelectionActive = false;
+        clearShadowSelectionScratch();
+        clearCachedShadowSelection();
+        shadowChunkOrigins.clear();
+        endQueuedChunkRefreshBatch();
     }
 
     /**
@@ -156,6 +206,9 @@ public final class NothiriumShadowRenderer {
      */
     public void beginShadowSelection(double cameraX, double cameraY, double cameraZ, double maxDistance) {
         shadowSelection = null;
+        shadowSelectionActive = false;
+        clearShadowSelectionScratch();
+        shadowChunkOrigins.clear();
         Reflection reflection = reflection();
         if (disabled || reflection == null) {
             return;
@@ -170,29 +223,45 @@ public final class NothiriumShadowRenderer {
             if (!(chunksObject instanceof Object[] chunks) || chunks.length == 0) {
                 return;
             }
+            resetMainTerrainCompileScanCursors(provider, chunks);
+            shadowSelectionActive = true;
+            long vboGeneration = NothiriumVisibleTerrainCache.vboGeneration();
+            if (canReuseShadowSelection(reflection, provider, chunks,
+                    cameraX, cameraY, cameraZ, maxDistance)) {
+                shadowSelection = new ShadowSelection(reflection, provider, chunks,
+                        new ShadowSelectionChunkList(cachedShadowSelectionChunks, cachedShadowSelectionCount),
+                        cameraX, cameraY, cameraZ, maxDistance);
+                return;
+            }
 
             shadowSelectionModelView.clear();
             shadowSelectionProjection.clear();
             GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, shadowSelectionModelView);
             GL11.glGetFloat(GL11.GL_PROJECTION_MATRIX, shadowSelectionProjection);
-            float[] modelView = new float[16];
-            float[] projection = new float[16];
-            shadowSelectionModelView.get(modelView);
-            shadowSelectionProjection.get(projection);
+            shadowSelectionModelView.get(shadowSelectionModelViewValues);
+            shadowSelectionProjection.get(shadowSelectionProjectionValues);
+            ensureShadowSelectionScratchCapacity(chunks.length);
 
             double maxDistanceSquared = maxDistance >= 0.0D ? maxDistance * maxDistance : -1.0D;
-            List<ProviderCandidate> selected = new ArrayList<>();
+            int selectedCount = 0;
             int nonNull = 0;
+            int heightCulled = 0;
             int distanceCulled = 0;
             int frustumCulled = 0;
+            int worldHeight = shadowWorldHeight();
             for (Object chunk : chunks) {
                 if (chunk == null) {
                     continue;
                 }
                 nonNull++;
-                int chunkX = reflection.getX(chunk);
-                int chunkY = reflection.getY(chunk);
-                int chunkZ = reflection.getZ(chunk);
+                ChunkOrigin origin = chunkOrigin(reflection, chunk);
+                int chunkX = origin.x;
+                int chunkY = origin.y;
+                int chunkZ = origin.z;
+                if (chunkY < 0 || chunkY >= worldHeight) {
+                    heightCulled++;
+                    continue;
+                }
                 double dx = chunkX + 8.0D - cameraX;
                 double dy = chunkY + 8.0D - cameraY;
                 double dz = chunkZ + 8.0D - cameraZ;
@@ -201,43 +270,243 @@ public final class NothiriumShadowRenderer {
                     distanceCulled++;
                     continue;
                 }
-                if (!intersectsShadowFrustum(modelView, projection, chunkX - cameraX, chunkY - cameraY, chunkZ - cameraZ)) {
+                if (!intersectsShadowFrustum(shadowSelectionModelViewValues, shadowSelectionProjectionValues,
+                        chunkX - cameraX, chunkY - cameraY, chunkZ - cameraZ)) {
                     frustumCulled++;
                     continue;
                 }
-                selected.add(new ProviderCandidate(chunk, distanceSquared));
+                shadowSelectionChunks[selectedCount] = chunk;
+                shadowSelectionDistances[selectedCount] = distanceSquared;
+                selectedCount++;
             }
-            selected.sort(Comparator.comparingDouble(candidate -> candidate.distanceSquared));
-            List<Object> ordered = new ArrayList<>(selected.size());
-            for (ProviderCandidate candidate : selected) {
-                ordered.add(candidate.chunk);
-            }
+            sortShadowSelectionCandidates(0, selectedCount - 1);
+            cacheShadowSelection(reflection, provider, chunks, cameraX, cameraY, cameraZ,
+                    maxDistance, selectedCount);
+            clearShadowSelectionScratch();
+            List<Object> ordered = new ShadowSelectionChunkList(cachedShadowSelectionChunks, selectedCount);
             shadowSelection = new ShadowSelection(reflection, provider, chunks, ordered,
                     cameraX, cameraY, cameraZ, maxDistance);
-            if (shadowSelectionAuditAttempts < MAX_SHADOW_SELECTION_AUDIT_LOGS) {
-                shadowSelectionAuditAttempts++;
-                MainMod.LOGGER.info(
-                        "[AUSMNothiriumShadowSelection] call={} provider={} nonNull={} selected={} distanceCulled={} frustumCulled={} distance={} camera={}/{}/{}",
-                        shadowSelectionAuditAttempts,
-                        chunks.length,
-                        nonNull,
-                        ordered.size(),
-                        distanceCulled,
-                        frustumCulled,
-                        maxDistance,
-                        cameraX,
-                        cameraY,
-                        cameraZ
-                );
-            }
         } catch (ReflectiveOperationException | RuntimeException exception) {
             shadowSelection = null;
+            shadowSelectionActive = false;
+            clearShadowSelectionScratch();
+            shadowChunkOrigins.clear();
             warnOnce(exception);
         }
     }
 
     public void endShadowSelection() {
         shadowSelection = null;
+        shadowSelectionActive = false;
+        clearShadowSelectionScratch();
+        shadowChunkOrigins.clear();
+    }
+
+    /**
+     * Cheap pre-clear coverage gate for a replacement shadow map. The selected
+     * list is nearest-first, so healthy frames normally stop after a few dozen
+     * VBO checks; a sparse publication frame is rejected without destroying
+     * the last complete shadow textures.
+     */
+    public int countRenderableShadowLayer(BlockRenderLayer layer,
+                                          double cameraX, double cameraY, double cameraZ,
+                                          double maxDistance, int limit) {
+        if (limit <= 0) {
+            return 0;
+        }
+        Reflection reflection = reflection();
+        ShadowSelection selection = shadowSelection;
+        if (disabled || reflection == null || selection == null
+                || selection.cameraX != cameraX
+                || selection.cameraY != cameraY
+                || selection.cameraZ != cameraZ
+                || maxDistance > selection.maxDistance) {
+            return -1;
+        }
+        Object pass = reflection.passFor(layer);
+        if (pass == null) {
+            return 0;
+        }
+
+        double maxDistanceSquared = maxDistance >= 0.0D ? maxDistance * maxDistance : -1.0D;
+        int ready = 0;
+        try {
+            for (Object chunk : selection.chunks) {
+                if (chunk == null) {
+                    continue;
+                }
+                if (maxDistanceSquared >= 0.0D && maxDistance < selection.maxDistance) {
+                    ChunkOrigin origin = chunkOrigin(reflection, chunk);
+                    double dx = origin.x + 8.0D - cameraX;
+                    double dy = origin.y + 8.0D - cameraY;
+                    double dz = origin.z + 8.0D - cameraZ;
+                    if (dx * dx + dy * dy + dz * dz > maxDistanceSquared) {
+                        continue;
+                    }
+                }
+                Object part = reflection.getVboPart(chunk, pass);
+                if (part == null || !reflection.isValid(part)) {
+                    continue;
+                }
+                int count = reflection.getCount(part);
+                int vbo = reflection.getVbo(part);
+                if (count <= 0 || vbo <= 0 || vertexStride(reflection.getSize(part), count) <= 0) {
+                    continue;
+                }
+                ready++;
+                if (ready >= limit) {
+                    break;
+                }
+            }
+            return ready;
+        } catch (ReflectiveOperationException | RuntimeException exception) {
+            warnOnce(exception);
+            return -1;
+        }
+    }
+
+    private boolean canReuseShadowSelection(Reflection reflection, Object provider, Object[] chunks,
+                                            double cameraX, double cameraY, double cameraZ,
+                                            double maxDistance) {
+        if (cachedShadowSelectionReflection != reflection
+                || cachedShadowSelectionProvider != provider
+                || cachedShadowSelectionSourceChunks != chunks
+                || cachedShadowSelectionMaxDistance != maxDistance
+                || cachedShadowSelectionCameraChunkX != cameraChunkCoordinate(cameraX)
+                || cachedShadowSelectionCameraChunkY != cameraChunkCoordinate(cameraY)
+                || cachedShadowSelectionCameraChunkZ != cameraChunkCoordinate(cameraZ)) {
+            return false;
+        }
+        double dx = cameraX - cachedShadowSelectionCameraX;
+        double dy = cameraY - cachedShadowSelectionCameraY;
+        double dz = cameraZ - cachedShadowSelectionCameraZ;
+        return dx * dx + dy * dy + dz * dz <= SHADOW_SELECTION_REUSE_DISTANCE_SQUARED;
+    }
+
+    private void cacheShadowSelection(Reflection reflection, Object provider, Object[] chunks,
+                                      double cameraX, double cameraY, double cameraZ,
+                                      double maxDistance, int selectedCount) {
+        if (cachedShadowSelectionChunks.length < selectedCount) {
+            cachedShadowSelectionChunks = new Object[selectedCount];
+        }
+        System.arraycopy(shadowSelectionChunks, 0, cachedShadowSelectionChunks, 0, selectedCount);
+        for (int index = selectedCount; index < cachedShadowSelectionCount; index++) {
+            cachedShadowSelectionChunks[index] = null;
+        }
+        cachedShadowSelectionCount = selectedCount;
+        cachedShadowSelectionReflection = reflection;
+        cachedShadowSelectionProvider = provider;
+        cachedShadowSelectionSourceChunks = chunks;
+        cachedShadowSelectionCameraX = cameraX;
+        cachedShadowSelectionCameraY = cameraY;
+        cachedShadowSelectionCameraZ = cameraZ;
+        cachedShadowSelectionCameraChunkX = cameraChunkCoordinate(cameraX);
+        cachedShadowSelectionCameraChunkY = cameraChunkCoordinate(cameraY);
+        cachedShadowSelectionCameraChunkZ = cameraChunkCoordinate(cameraZ);
+        cachedShadowSelectionMaxDistance = maxDistance;
+    }
+
+    private void clearCachedShadowSelection() {
+        for (int index = 0; index < cachedShadowSelectionCount; index++) {
+            cachedShadowSelectionChunks[index] = null;
+        }
+        cachedShadowSelectionCount = 0;
+        cachedShadowSelectionReflection = null;
+        cachedShadowSelectionProvider = null;
+        cachedShadowSelectionSourceChunks = null;
+        cachedShadowSelectionCameraChunkX = Integer.MIN_VALUE;
+        cachedShadowSelectionCameraChunkY = Integer.MIN_VALUE;
+        cachedShadowSelectionCameraChunkZ = Integer.MIN_VALUE;
+    }
+
+    private static int cameraChunkCoordinate(double coordinate) {
+        return (int) Math.floor(coordinate / 16.0D);
+    }
+
+    private static int shadowWorldHeight() {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        WorldClient world = minecraft != null ? MinecraftReflectionCompat.world(minecraft) : null;
+        if (world == null) {
+            return 256;
+        }
+        return Math.max(16, MinecraftReflectionCompat.callInt(
+                world,
+                WORLD_HEIGHT_METHODS,
+                MinecraftReflectionCompat.NO_PARAMETERS,
+                256));
+    }
+
+    private void ensureShadowSelectionScratchCapacity(int capacity) {
+        if (shadowSelectionChunks.length >= capacity) {
+            return;
+        }
+        shadowSelectionChunks = new Object[capacity];
+        shadowSelectionDistances = new double[capacity];
+    }
+
+    private void clearShadowSelectionScratch() {
+        for (int index = 0; index < shadowSelectionScratchCount; index++) {
+            shadowSelectionChunks[index] = null;
+        }
+        shadowSelectionScratchCount = 0;
+    }
+
+    /** Sort parallel, allocation-free chunk/distance arrays nearest-first. */
+    private void sortShadowSelectionCandidates(int low, int high) {
+        while (low < high) {
+            int left = low;
+            int right = high;
+            double pivot = shadowSelectionDistances[(low + high) >>> 1];
+            while (left <= right) {
+                while (shadowSelectionDistances[left] < pivot) {
+                    left++;
+                }
+                while (shadowSelectionDistances[right] > pivot) {
+                    right--;
+                }
+                if (left <= right) {
+                    double distance = shadowSelectionDistances[left];
+                    shadowSelectionDistances[left] = shadowSelectionDistances[right];
+                    shadowSelectionDistances[right] = distance;
+                    Object chunk = shadowSelectionChunks[left];
+                    shadowSelectionChunks[left] = shadowSelectionChunks[right];
+                    shadowSelectionChunks[right] = chunk;
+                    left++;
+                    right--;
+                }
+            }
+            // Recurse into the smaller partition so even strongly ordered
+            // distance sets keep stack depth logarithmic.
+            if (right - low < high - left) {
+                if (low < right) {
+                    sortShadowSelectionCandidates(low, right);
+                }
+                low = left;
+            } else {
+                if (left < high) {
+                    sortShadowSelectionCandidates(left, high);
+                }
+                high = right;
+            }
+        }
+    }
+
+    /** Coalesces one render-thread refresh batch into a single provider scan.
+     * Render chunks can move between batches, so the index is never retained. */
+    public void beginQueuedChunkRefreshBatch() {
+        queuedChunkRefreshBatchActive = true;
+        queuedChunkRefreshCompileCount = 0;
+        queuedChunkRefreshProvider = null;
+        queuedChunkRefreshSourceChunks = null;
+        queuedChunkRefreshColumns.clear();
+    }
+
+    public void endQueuedChunkRefreshBatch() {
+        queuedChunkRefreshBatchActive = false;
+        queuedChunkRefreshCompileCount = 0;
+        queuedChunkRefreshProvider = null;
+        queuedChunkRefreshSourceChunks = null;
+        queuedChunkRefreshColumns.clear();
     }
 
     public void drainUploads() {
@@ -294,6 +563,10 @@ public final class NothiriumShadowRenderer {
                 return false;
             }
 
+            Iterable<?> refreshChunks = queuedChunkRefreshBatchActive
+                    ? queuedChunkRefreshColumn(reflection, provider, chunks, chunkX, chunkZ)
+                    : Arrays.asList(chunks);
+
             Object renderer = reflection.getRenderer.invoke(null);
             Object dispatcher = reflection.getTaskDispatcher.invoke(null);
             int total = 0;
@@ -308,7 +581,7 @@ public final class NothiriumShadowRenderer {
             int noDispatcher = 0;
             int scheduled = 0;
             int deferred = 0;
-            for (Object chunk : chunks) {
+            for (Object chunk : refreshChunks) {
                 total++;
                 if (chunk == null) {
                     nullChunks++;
@@ -327,12 +600,12 @@ public final class NothiriumShadowRenderer {
                 }
                 if (futureIsRunning(reflection.lastCompileTaskResult(chunk))) {
                     running++;
+                    // Releasing buffers cancels this task. Its existing VBO
+                    // remains the only valid terrain until that task uploads,
+                    // so never invalidate it merely because another refresh
+                    // request arrived in the same movement burst.
+                    continue;
                 }
-
-                reflection.releaseBuffers.invoke(chunk);
-                released++;
-                reflection.markDirty.invoke(chunk);
-                marked++;
 
                 if (renderer == null || dispatcher == null) {
                     noDispatcher++;
@@ -343,13 +616,25 @@ public final class NothiriumShadowRenderer {
                     continue;
                 }
                 canCompile++;
-                if (scheduled >= MAX_CHUNK_REFRESH_COMPILES) {
+                if (scheduled >= MAX_CHUNK_REFRESH_COMPILES
+                        || (queuedChunkRefreshBatchActive
+                        && queuedChunkRefreshCompileCount >= MAX_QUEUED_CHUNK_REFRESH_COMPILES_PER_BATCH)) {
                     deferred++;
                     continue;
                 }
 
+                // Nothirium's compileAsync keeps the previous VBO valid until
+                // the accepted task publishes its replacement. Do the mutable
+                // transition only after all admission checks; P39 previously
+                // released every matching VBO before the shared batch budget,
+                // leaving deferred movement columns invisible.
+                reflection.markDirty.invoke(chunk);
+                marked++;
                 reflection.compileAsync.invoke(chunk, renderer, dispatcher);
                 scheduled++;
+                if (queuedChunkRefreshBatchActive) {
+                    queuedChunkRefreshCompileCount++;
+                }
             }
 
             if (scheduled > 0 && dispatcher != null) {
@@ -363,6 +648,42 @@ public final class NothiriumShadowRenderer {
             warnOnce(e);
             return false;
         }
+    }
+
+    private List<Object> queuedChunkRefreshColumn(Reflection reflection, Object provider, Object[] chunks,
+                                                   int chunkX, int chunkZ) throws ReflectiveOperationException {
+        if (queuedChunkRefreshProvider != provider || queuedChunkRefreshSourceChunks != chunks) {
+            queuedChunkRefreshColumns.clear();
+            queuedChunkRefreshProvider = provider;
+            queuedChunkRefreshSourceChunks = chunks;
+            for (Object chunk : chunks) {
+                if (chunk == null) {
+                    continue;
+                }
+                long key = chunkColumnKey(reflection.getX(chunk) >> 4, reflection.getZ(chunk) >> 4);
+                List<Object> column = queuedChunkRefreshColumns.get(key);
+                if (column == null) {
+                    column = new ArrayList<>();
+                    queuedChunkRefreshColumns.put(key, column);
+                }
+                column.add(chunk);
+            }
+        }
+        List<Object> column = queuedChunkRefreshColumns.get(chunkColumnKey(chunkX, chunkZ));
+        return column != null ? column : java.util.Collections.emptyList();
+    }
+
+    private static long chunkColumnKey(int chunkX, int chunkZ) {
+        // Long.hashCode uses upper ^ lower bits. A plain packed X/Z key thus
+        // collapses every diagonal (x ^ z) into the same HashMap bucket and
+        // turns a moving refresh batch into tree lookups. Mix the packed key
+        // before boxing it; this remains a one-to-one key transformation.
+        long key = ((long) chunkX << 32) ^ (chunkZ & 0xFFFFFFFFL);
+        key ^= key >>> 33;
+        key *= 0xff51afd7ed558ccdL;
+        key ^= key >>> 33;
+        key *= 0xc4ceb9fe1a85ec53L;
+        return key ^ (key >>> 33);
     }
 
     public int renderLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ, double maxDistance) {
@@ -467,7 +788,6 @@ public final class NothiriumShadowRenderer {
 
             DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, candidates, cameraX, cameraY, cameraZ,
                     maxDistance, false, fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
-            auditDrawStats("provider-nearest", layer, stats);
             return stats.drawn;
         } catch (ReflectiveOperationException | RuntimeException e) {
             disabled = true;
@@ -800,7 +1120,6 @@ public final class NothiriumShadowRenderer {
                         DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, candidates, cameraX, cameraY, cameraZ,
                                 maxDistance, false, fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
                         if (audit) {
-                            auditDrawStats("provider", layer, stats);
                         }
                         if (stats.drawn > 0) {
                             return stats.drawn;
@@ -836,7 +1155,6 @@ public final class NothiriumShadowRenderer {
             DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, false,
                     fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
             if (audit) {
-                auditDrawStats("fallback", layer, stats);
             }
             return stats.drawn;
         } catch (ReflectiveOperationException | RuntimeException e) {
@@ -880,7 +1198,6 @@ public final class NothiriumShadowRenderer {
             }
             DrawStats stats = drawChunksWithLayerState(layer, reflection, pass, candidates, cameraX, cameraY, cameraZ,
                     maxDistance, false, fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);
-            auditDrawStats("provider-supplement", layer, stats);
             if (stats.unsupportedStride > 0) {
                 refreshUnsupportedPipelineChunks(reflection, stats.unsupportedPipelineChunks);
             }
@@ -902,9 +1219,10 @@ public final class NothiriumShadowRenderer {
                 continue;
             }
 
-            int chunkX = reflection.getX(chunk);
-            int chunkY = reflection.getY(chunk);
-            int chunkZ = reflection.getZ(chunk);
+            ChunkOrigin origin = chunkOrigin(reflection, chunk);
+            int chunkX = origin.x;
+            int chunkY = origin.y;
+            int chunkZ = origin.z;
             double dx = chunkX + 8.0D - cameraX;
             double dy = chunkY + 8.0D - cameraY;
             double dz = chunkZ + 8.0D - cameraZ;
@@ -931,10 +1249,63 @@ public final class NothiriumShadowRenderer {
                 || selection.cameraX != cameraX
                 || selection.cameraY != cameraY
                 || selection.cameraZ != cameraZ
-                || selection.maxDistance != maxDistance) {
+                || maxDistance > selection.maxDistance) {
             return null;
         }
         return selection.chunks;
+    }
+
+    private void resetMainTerrainCompileScanCursors(Object provider, Object[] chunks) {
+        if (mainTerrainCompileScanProvider == provider && mainTerrainCompileScanSourceChunks == chunks) {
+            return;
+        }
+        mainTerrainCompileScanCursors.clear();
+        mainTerrainCompileScanProvider = provider;
+        mainTerrainCompileScanSourceChunks = chunks;
+    }
+
+    private Iterable<?> boundedMainTerrainCompileScan(BlockRenderLayer layer, Iterable<?> chunks) {
+        ShadowSelection selection = shadowSelection;
+        if (!shadowSelectionActive || selection == null || chunks != selection.chunks) {
+            return chunks;
+        }
+        List<Object> source = selection.chunks;
+        int size = source.size();
+        if (size <= MAX_MAIN_TERRAIN_COMPILE_SCAN_PER_LAYER) {
+            return source;
+        }
+
+        int count = Math.min(MAX_MAIN_TERRAIN_COMPILE_SCAN_PER_LAYER, size);
+        int start = mainTerrainCompileScanCursors.getOrDefault(layer, 0);
+        if (start < 0 || start >= size) {
+            start = 0;
+        }
+        List<Object> window = new ArrayList<>(count);
+        for (int offset = 0; offset < count; offset++) {
+            window.add(source.get((start + offset) % size));
+        }
+        mainTerrainCompileScanCursors.put(layer, (start + count) % size);
+        return window;
+    }
+
+    /** Chunk renderers are repositioned between shadow passes, but their
+     * origins are stable throughout one pass. Reuse them across the three
+     * terrain layers and compile admission without changing selection or draw
+     * coverage. */
+    private ChunkOrigin chunkOrigin(Reflection reflection, Object chunk) throws ReflectiveOperationException {
+        if (chunk instanceof NothiriumShadowChunkAccess access) {
+            return new ChunkOrigin(access.ausm$blockX(), access.ausm$blockY(), access.ausm$blockZ());
+        }
+        if (!shadowSelectionActive) {
+            return new ChunkOrigin(reflection.getX(chunk), reflection.getY(chunk), reflection.getZ(chunk));
+        }
+        ChunkOrigin origin = shadowChunkOrigins.get(chunk);
+        if (origin != null) {
+            return origin;
+        }
+        origin = new ChunkOrigin(reflection.getX(chunk), reflection.getY(chunk), reflection.getZ(chunk));
+        shadowChunkOrigins.put(chunk, origin);
+        return origin;
     }
 
     /** Conservative homogeneous clip-space AABB test. The extra block margin
@@ -983,9 +1354,10 @@ public final class NothiriumShadowRenderer {
                 continue;
             }
 
-            int chunkX = reflection.getX(chunk);
-            int chunkY = reflection.getY(chunk);
-            int chunkZ = reflection.getZ(chunk);
+            ChunkOrigin origin = chunkOrigin(reflection, chunk);
+            int chunkX = origin.x;
+            int chunkY = origin.y;
+            int chunkZ = origin.z;
             double dx = chunkX + 8.0D - cameraX;
             double dy = chunkY + 8.0D - cameraY;
             double dz = chunkZ + 8.0D - cameraZ;
@@ -1023,9 +1395,10 @@ public final class NothiriumShadowRenderer {
                 continue;
             }
 
-            int chunkX = reflection.getX(chunk);
-            int chunkY = reflection.getY(chunk);
-            int chunkZ = reflection.getZ(chunk);
+            ChunkOrigin origin = chunkOrigin(reflection, chunk);
+            int chunkX = origin.x;
+            int chunkY = origin.y;
+            int chunkZ = origin.z;
             double dx = chunkX + 8.0D - cameraX;
             double dy = chunkY + 8.0D - cameraY;
             double dz = chunkZ + 8.0D - cameraZ;
@@ -1047,8 +1420,8 @@ public final class NothiriumShadowRenderer {
 
     private boolean providerChunkHasRenderablePart(Reflection reflection, Object pass, Object chunk, boolean requirePipelineStride)
             throws ReflectiveOperationException {
-        Object part = reflection.getVboPart.invoke(chunk, pass);
-        if (part == null || !(Boolean) reflection.isValid.invoke(part)) {
+        Object part = reflection.getVboPart(chunk, pass);
+        if (part == null || !reflection.isValid(part)) {
             return false;
         }
         int count = reflection.getCount(part);
@@ -1079,9 +1452,10 @@ public final class NothiriumShadowRenderer {
                 continue;
             }
 
-            int chunkX = reflection.getX(chunk);
-            int chunkY = reflection.getY(chunk);
-            int chunkZ = reflection.getZ(chunk);
+            ChunkOrigin origin = chunkOrigin(reflection, chunk);
+            int chunkX = origin.x;
+            int chunkY = origin.y;
+            int chunkZ = origin.z;
             stats.captureFirstChunk(chunkX, chunkY, chunkZ);
             if (maxDistanceSquared >= 0.0D) {
                 double dx = chunkX + 8.0D - cameraX;
@@ -1139,16 +1513,17 @@ public final class NothiriumShadowRenderer {
         pruneMainTerrainCompileAttempts(now);
         double maxDistanceSquared = maxDistance >= 0.0D ? maxDistance * maxDistance : -1.0D;
         List<CompileCandidate> candidates = new ArrayList<>();
-        for (Object chunk : chunks) {
+        for (Object chunk : boundedMainTerrainCompileScan(layer, chunks)) {
             stats.total++;
             if (chunk == null) {
                 stats.nullChunks++;
                 continue;
             }
 
-            int chunkX = reflection.getX(chunk);
-            int chunkY = reflection.getY(chunk);
-            int chunkZ = reflection.getZ(chunk);
+            ChunkOrigin origin = chunkOrigin(reflection, chunk);
+            int chunkX = origin.x;
+            int chunkY = origin.y;
+            int chunkZ = origin.z;
             stats.captureFirstChunk(chunkX, chunkY, chunkZ);
             if (maxDistanceSquared >= 0.0D) {
                 double dx = chunkX + 8.0D - cameraX;
@@ -1161,18 +1536,22 @@ public final class NothiriumShadowRenderer {
             }
             stats.withinDistance++;
 
-            Object part = reflection.getVboPart.invoke(chunk, pass);
+            Object part = reflection.getVboPart(chunk, pass);
             boolean missingPart = part == null;
             boolean invalidPart = false;
             boolean emptyPart = false;
             if (part != null) {
-                invalidPart = !((Boolean) reflection.isValid.invoke(part));
+                invalidPart = !reflection.isValid(part);
                 if (!invalidPart) {
                     emptyPart = reflection.getCount(part) <= 0
                             || reflection.getVbo(part) <= 0;
                 }
             }
-            if (!missingPart && !invalidPart && !emptyPart) {
+            // A clean section with no VBO for this pass is an intentionally
+            // empty layer, not work Nothirium needs rebuilt. Re-submitting it
+            // once for each shadow layer was the movement-time compile storm.
+            boolean dirty = reflection.isChunkDirty(chunk);
+            if ((!dirty && !invalidPart) || (!missingPart && !invalidPart && !emptyPart)) {
                 stats.clean++;
                 continue;
             }
@@ -1207,16 +1586,17 @@ public final class NothiriumShadowRenderer {
             if (stats.scheduled >= budget) {
                 break;
             }
-            if (candidate.invalidPart) {
-                reflection.releaseBuffers.invoke(candidate.chunk);
-            }
-            reflection.markDirty.invoke(candidate.chunk);
             if (!Boolean.TRUE.equals(reflection.canCompile(candidate.chunk))) {
                 stats.cannotCompile++;
                 continue;
             }
             stats.canCompile++;
 
+            // Preserve the last usable VBO until the admitted task replaces
+            // it. An invalid layer will be replaced by compileAsync; clearing
+            // a valid layer first only turns a throttled refresh into missing
+            // terrain.
+            reflection.markDirty.invoke(candidate.chunk);
             reflection.compileAsync.invoke(candidate.chunk, renderer, dispatcher);
             mainTerrainCompileAttempts.put(candidate.chunk, now);
             stats.scheduled++;
@@ -1251,10 +1631,10 @@ public final class NothiriumShadowRenderer {
                     }
                 }
             }
-            Object part = reflection.getVboPart.invoke(chunk, pass);
+            Object part = reflection.getVboPart(chunk, pass);
             String partState = part == null
                     ? "missing"
-                    : "valid=" + reflection.isValid.invoke(part)
+                    : "valid=" + reflection.isValid(part)
                     + ",count=" + reflection.getCount(part)
                     + ",vbo=" + reflection.getVbo(part);
             Object future = reflection.lastCompileTaskResult(chunk);
@@ -1312,6 +1692,18 @@ public final class NothiriumShadowRenderer {
         }
     }
 
+    private static final class ChunkOrigin {
+        private final int x;
+        private final int y;
+        private final int z;
+
+        private ChunkOrigin(int x, int y, int z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+    }
+
     private static final class ProviderCandidate {
         private final Object chunk;
         private final double distanceSquared;
@@ -1319,6 +1711,32 @@ public final class NothiriumShadowRenderer {
         private ProviderCandidate(Object chunk, double distanceSquared) {
             this.chunk = chunk;
             this.distanceSquared = distanceSquared;
+        }
+    }
+
+    /** Read-only view over the cached selection. It is replaced only after a
+     * provider/grid change or a larger camera move. VBO uploads do not alter
+     * section positions, and each draw resolves the current VBO part. */
+    private static final class ShadowSelectionChunkList extends AbstractList<Object> {
+        private final Object[] chunks;
+        private final int size;
+
+        private ShadowSelectionChunkList(Object[] chunks, int size) {
+            this.chunks = chunks;
+            this.size = size;
+        }
+
+        @Override
+        public Object get(int index) {
+            if (index < 0 || index >= size) {
+                throw new IndexOutOfBoundsException("index=" + index + ", size=" + size);
+            }
+            return chunks[index];
+        }
+
+        @Override
+        public int size() {
+            return size;
         }
     }
 
@@ -1366,9 +1784,11 @@ public final class NothiriumShadowRenderer {
                                                double cameraX, double cameraY, double cameraZ, double maxDistance, boolean collectState,
                                                int fallbackBlockEntityId, short fallbackRenderType, boolean requirePipelineStride)
             throws ReflectiveOperationException {
-        LayerGlState layerState = LayerGlState.prepare(layer);
+        boolean externalTranslucentState = layer == BlockRenderLayer.TRANSLUCENT
+                && PipelineContext.getInstance().isBloomTranslucentAttenuationPass();
+        LayerGlState layerState = externalTranslucentState ? null : LayerGlState.prepare(layer);
         try {
-            if (layer == BlockRenderLayer.TRANSLUCENT) {
+            if (layer == BlockRenderLayer.TRANSLUCENT && !externalTranslucentState) {
                 PipelineContext.getInstance().restoreActiveGbufferRenderState();
             }
             return drawChunks(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, collectState,
@@ -1389,11 +1809,30 @@ public final class NothiriumShadowRenderer {
         int previousVboSize = 0;
         int previousStride = -1;
         double maxDistanceSquared = maxDistance >= 0.0D ? maxDistance * maxDistance : -1.0D;
+        ShadowSelection activeSelection = shadowSelection;
+        // beginShadowSelection has already applied this exact distance test to
+        // its list. Avoid repeating three double-vector calculations for each
+        // chunk across the solid and two cutout layers.
+        boolean selectionAlreadyDistanceCulled = shadowSelectionActive
+                && activeSelection != null
+                && chunks == activeSelection.chunks
+                && maxDistance == activeSelection.maxDistance;
         PipelineContext context = PipelineContext.getInstance();
         boolean disableCullForMainTerrain = context.shouldDisableNothiriumChunkCulling(layer);
         int shaderlessBloomDimension = context.shaderlessBloomExtractionDimensionId();
         boolean previousCull = false;
         int previousMatrixMode = -1;
+        // A shadow terrain layer keeps one program bound for its complete
+        // chunk loop. Querying it and resolving the same uniform for every
+        // section was visible client-thread overhead in movement captures.
+        int activeProgram = USE_CHUNK_OFFSET_UNIFORM
+                ? GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
+                : 0;
+        int activeChunkOffsetUniform = activeProgram > 0
+                ? chunkOffsetUniformLocation(activeProgram)
+                : -1;
+        boolean useChunkOffsetUniform = activeChunkOffsetUniform >= 0;
+        int activeDrawMode = context.drawModeForActiveProgram(GL11.GL_QUADS);
 
         try {
             if (GLContext.getCapabilities().OpenGL30) {
@@ -1410,14 +1849,15 @@ public final class NothiriumShadowRenderer {
                     continue;
                 }
 
-                int chunkX = reflection.getX(chunk);
-                int chunkY = reflection.getY(chunk);
-                int chunkZ = reflection.getZ(chunk);
+                ChunkOrigin origin = chunkOrigin(reflection, chunk);
+                int chunkX = origin.x;
+                int chunkY = origin.y;
+                int chunkZ = origin.z;
                 stats.captureFirstChunk(chunkX, chunkY, chunkZ);
                 if (collectState) {
                     stats.captureState(reflection, chunk, chunkX, chunkY, chunkZ);
                 }
-                if (maxDistanceSquared >= 0.0D) {
+                if (!selectionAlreadyDistanceCulled && maxDistanceSquared >= 0.0D) {
                     double dx = chunkX + 8.0D - cameraX;
                     double dy = chunkY + 8.0D - cameraY;
                     double dz = chunkZ + 8.0D - cameraZ;
@@ -1432,13 +1872,13 @@ public final class NothiriumShadowRenderer {
                     continue;
                 }
 
-                Object part = reflection.getVboPart.invoke(chunk, pass);
+                Object part = reflection.getVboPart(chunk, pass);
                 if (part == null) {
                     stats.missingPart++;
                     continue;
                 }
                 stats.partPresent++;
-                if (!(Boolean) reflection.isValid.invoke(part)) {
+                if (!reflection.isValid(part)) {
                     stats.invalidPart++;
                     continue;
                 }
@@ -1492,22 +1932,15 @@ public final class NothiriumShadowRenderer {
                 context.applyChunkFade(chunkX, chunkY, chunkZ);
                 context.prepareShaderlessOptimizedBloomDraw();
                 probeLilyShadowMaterial(context, layer, chunkX, chunkY, chunkZ, offset, size, stride, pipelineStride);
-                int program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
-                int chunkOffsetUniform = -1;
-                boolean useChunkOffsetUniform = false;
-                if (USE_CHUNK_OFFSET_UNIFORM && program > 0) {
-                    chunkOffsetUniform = chunkOffsetUniformLocation(program);
-                    useChunkOffsetUniform = chunkOffsetUniform >= 0;
-                }
                 if (useChunkOffsetUniform) {
-                    GL20.glUniform3f(chunkOffsetUniform,
+                    GL20.glUniform3f(activeChunkOffsetUniform,
                             (float) (chunkX - cameraX),
                             (float) (chunkY - cameraY),
                             (float) (chunkZ - cameraZ));
                     DrawProbe drawProbe = captureVisibleTerrainDrawProbe(layer, chunkX, chunkY, chunkZ, cameraX, cameraY, cameraZ,
                             vbo, first, count, offset, size, stride, previousVboSize, pipelineStride);
                     int query = beginProbeQuery(drawProbe);
-                    GL11.glDrawArrays(context.drawModeForActiveProgram(GL11.GL_QUADS), first, count);
+                    GL11.glDrawArrays(activeDrawMode, first, count);
                     finishVisibleTerrainDrawProbe(drawProbe, query);
                 } else {
                     if (previousMatrixMode < 0) {
@@ -1520,7 +1953,7 @@ public final class NothiriumShadowRenderer {
                         DrawProbe drawProbe = captureVisibleTerrainDrawProbe(layer, chunkX, chunkY, chunkZ, cameraX, cameraY, cameraZ,
                                 vbo, first, count, offset, size, stride, previousVboSize, pipelineStride);
                         int query = beginProbeQuery(drawProbe);
-                        GL11.glDrawArrays(context.drawModeForActiveProgram(GL11.GL_QUADS), first, count);
+                        GL11.glDrawArrays(activeDrawMode, first, count);
                         finishVisibleTerrainDrawProbe(drawProbe, query);
                     } finally {
                         GL11.glPopMatrix();
@@ -1529,6 +1962,12 @@ public final class NothiriumShadowRenderer {
                 stats.drawn++;
             }
         } finally {
+            // Shadow programs can be reused immediately for entities and
+            // block entities. Never let the final terrain section's offset
+            // leak into those draws.
+            if (useChunkOffsetUniform) {
+                GL20.glUniform3f(activeChunkOffsetUniform, 0.0F, 0.0F, 0.0F);
+            }
             if (previousMatrixMode >= 0) {
                 GL11.glMatrixMode(previousMatrixMode);
             }
@@ -1589,12 +2028,15 @@ public final class NothiriumShadowRenderer {
                 continue;
             }
 
-            reflection.releaseBuffers.invoke(chunk);
-            reflection.markDirty.invoke(chunk);
-            if (Boolean.TRUE.equals(reflection.canCompile(chunk))) {
-                reflection.compileAsync.invoke(chunk, renderer, dispatcher);
-                scheduled++;
+            if (!Boolean.TRUE.equals(reflection.canCompile(chunk))) {
+                continue;
             }
+
+            // This is a forced stride repair, but still must retain a valid
+            // old VBO until the replacement task has been accepted.
+            reflection.markDirty.invoke(chunk);
+            reflection.compileAsync.invoke(chunk, renderer, dispatcher);
+            scheduled++;
         }
 
         if (scheduled > 0) {
@@ -2416,56 +2858,6 @@ public final class NothiriumShadowRenderer {
         );
     }
 
-    private void auditDrawStats(String source, BlockRenderLayer layer, DrawStats stats) {
-        if (MAX_PROVIDER_DRAW_AUDIT_LOGS <= 0) {
-            return;
-        }
-        if (source.equals("provider")) {
-            if (stats.drawn > 0) {
-                if (providerSuccessAuditLogged) {
-                    return;
-                }
-                providerSuccessAuditLogged = true;
-            } else {
-                if (providerZeroAuditAttempts >= 8) {
-                    return;
-                }
-                providerZeroAuditAttempts++;
-            }
-        } else {
-            if (fallbackAuditLogged) {
-                return;
-            }
-            fallbackAuditLogged = true;
-        }
-
-        MainMod.LOGGER.info(
-                "[NothiriumShadowBridge] source={} layer={} attempt={} total={} null={} within={} distCull={} missingPart={} part={} invalidPart={} valid={} emptyCount={} count={} badVbo={} vbo={} badStride={} unsupportedStride={} rangeSkip={} drawn={} firstChunk={} firstPart={} state={}",
-                source,
-                layer,
-                source.equals("provider") ? providerZeroAuditAttempts : -1,
-                stats.total,
-                stats.nullChunks,
-                stats.withinDistance,
-                stats.distanceCulled,
-                stats.missingPart,
-                stats.partPresent,
-                stats.invalidPart,
-                stats.validPart,
-                stats.emptyCount,
-                stats.positiveCount,
-                stats.badVbo,
-                stats.positiveVbo,
-                stats.badStride,
-                stats.unsupportedStride,
-                stats.invalidRange,
-                stats.drawn,
-                stats.firstChunk,
-                stats.firstPart,
-                stats.stateSummary()
-        );
-    }
-
     private void warnOnce(Exception e) {
         if (warned) {
             return;
@@ -2743,13 +3135,13 @@ public final class NothiriumShadowRenderer {
         private final Method renderedChunks;
         private final Method renderedSections;
         private final Method renderedSectionsAll;
-        private final Method getVboPart;
+        private final MethodHandle getVboPart;
         private final MethodHandle getVbo;
         private final MethodHandle getFirst;
         private final MethodHandle getCount;
         private final MethodHandle getOffset;
         private final MethodHandle getSize;
-        private final Method isValid;
+        private final MethodHandle isValid;
         private final Method isDirty;
         private final Method isEmpty;
         private final Method markDirty;
@@ -2779,8 +3171,8 @@ public final class NothiriumShadowRenderer {
 
         private Reflection(Method getRenderer, Method getProvider, Method getTaskDispatcher, Method dispatcherUpdate,
                            Method enumMapGet, Method renderedChunks, Method renderedSections,
-                           Method renderedSectionsAll, Method getVboPart, MethodHandle getVbo, MethodHandle getFirst,
-                           MethodHandle getCount, MethodHandle getOffset, MethodHandle getSize, Method isValid, Method isDirty,
+                           Method renderedSectionsAll, MethodHandle getVboPart, MethodHandle getVbo, MethodHandle getFirst,
+                           MethodHandle getCount, MethodHandle getOffset, MethodHandle getSize, MethodHandle isValid, Method isDirty,
                            Method isEmpty, Method markDirty, Method releaseBuffers, Method canCompile,
                            Method compileAsync, Method worldUtilIsChunkLoaded, MethodHandle getX, MethodHandle getY, MethodHandle getZ,
                            MethodHandle getSectionX, MethodHandle getSectionY, MethodHandle getSectionZ, Field chunks,
@@ -2831,14 +3223,46 @@ public final class NothiriumShadowRenderer {
         }
 
         private int getX(Object chunk) throws ReflectiveOperationException {
+            if (chunk instanceof NothiriumShadowChunkAccess access) {
+                return access.ausm$blockX();
+            }
             return invokeInt(getX, chunk);
         }
 
+        private Object getVboPart(Object chunk, Object pass) throws ReflectiveOperationException {
+            if (chunk instanceof NothiriumShadowChunkAccess access) {
+                return access.ausm$vboPart(pass);
+            }
+            try {
+                return (Object) getVboPart.invokeExact(chunk, pass);
+            } catch (RuntimeException | Error exception) {
+                throw exception;
+            } catch (Throwable throwable) {
+                throw new ReflectiveOperationException(throwable);
+            }
+        }
+
+        private boolean isValid(Object part) throws ReflectiveOperationException {
+            try {
+                return (boolean) isValid.invokeExact(part);
+            } catch (RuntimeException | Error exception) {
+                throw exception;
+            } catch (Throwable throwable) {
+                throw new ReflectiveOperationException(throwable);
+            }
+        }
+
         private int getY(Object chunk) throws ReflectiveOperationException {
+            if (chunk instanceof NothiriumShadowChunkAccess access) {
+                return access.ausm$blockY();
+            }
             return invokeInt(getY, chunk);
         }
 
         private int getZ(Object chunk) throws ReflectiveOperationException {
+            if (chunk instanceof NothiriumShadowChunkAccess access) {
+                return access.ausm$blockZ();
+            }
             return invokeInt(getZ, chunk);
         }
 
@@ -2876,6 +3300,18 @@ public final class NothiriumShadowRenderer {
             return MethodHandles.publicLookup()
                     .unreflect(method)
                     .asType(MethodType.methodType(int.class, Object.class));
+        }
+
+        private static MethodHandle objectMethod(Method method) throws IllegalAccessException {
+            return MethodHandles.publicLookup()
+                    .unreflect(method)
+                    .asType(MethodType.methodType(Object.class, Object.class, Object.class));
+        }
+
+        private static MethodHandle booleanGetter(Method method) throws IllegalAccessException {
+            return MethodHandles.publicLookup()
+                    .unreflect(method)
+                    .asType(MethodType.methodType(boolean.class, Object.class));
         }
 
         private static Reflection load() {
@@ -2951,13 +3387,13 @@ public final class NothiriumShadowRenderer {
                         renderedChunks,
                         renderedSections,
                         renderedSectionsAll,
-                        getVboPart,
+                        objectMethod(getVboPart),
                         intGetter(getVbo),
                         intGetter(getFirst),
                         intGetter(getCount),
                         intGetter(getOffset),
                         intGetter(getSize),
-                        isValid,
+                        booleanGetter(isValid),
                         isDirty,
                         isEmpty,
                         markDirty,
@@ -2991,6 +3427,9 @@ public final class NothiriumShadowRenderer {
         }
 
         private boolean isChunkDirty(Object chunk) throws ReflectiveOperationException {
+            if (chunk instanceof NothiriumShadowChunkAccess access) {
+                return access.ausm$isDirty();
+            }
             return (Boolean) isDirty.invoke(chunk);
         }
 
@@ -3019,6 +3458,9 @@ public final class NothiriumShadowRenderer {
         }
 
         private Object lastCompileTaskResult(Object chunk) throws IllegalAccessException {
+            if (chunk instanceof NothiriumShadowChunkAccess access) {
+                return access.ausm$lastCompileTaskResult();
+            }
             return lastCompileTaskResult.get(chunk);
         }
 

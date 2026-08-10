@@ -71,14 +71,18 @@ public class EntityRendererMixin {
     private void onAfterWorldBeforeUi(float partialTicks, long nanoTime, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         context.captureShaderlessWorldFramebufferForUi();
+        // Some shaderless world renderers leave their own FBO bound. Move that
+        // completed color/depth image into Minecraft's framebuffer before bloom
+        // and GuiScreen rendering start, otherwise the GUI can expose stale or
+        // clear target contents as a flat black layer over the terrain.
+        context.syncShaderlessWorldFramebufferBeforeGui();
+        // The HUD and the following GuiScreen still draw into Minecraft's
+        // framebuffer. Preserve the completed world pixels themselves, not
+        // merely the FBO id, so a modded HUD/background clear cannot turn the
+        // inventory backdrop into a flat white or black plane.
         context.renderShaderlessBloomBeforeGui();
+        context.snapshotShaderlessWorldFramebufferForGui();
         context.prepareShaderlessUiRenderingBoundary();
-        context.logHiddenSkyFramebufferProbe("post-world-before-ui");
-    }
-
-    @Inject(method = "func_181560_a(FJ)V", at = @At("RETURN"))
-    private void ausm$probeHiddenSkyAtPresentation(float partialTicks, long nanoTime, CallbackInfo ci) {
-        PipelineContext.getInstance().logHiddenSkyFramebufferProbe("frame-return");
     }
 
     @Inject(
@@ -109,10 +113,9 @@ public class EntityRendererMixin {
 
     private void ausm$beginGuiScreenRendering() {
         PipelineContext context = PipelineContext.getInstance();
-        context.logGuiBypassProbe("screen-before-routing");
         if (ausm$shouldUseVanillaGuiScreen()) {
             context.prepareBypassedGuiScreenRendering();
-            context.logGuiBypassProbe("screen-after-vanilla-bypass");
+            context.beginGuiItemRenderScope();
             return;
         }
         if (!context.isActive()) {
@@ -150,6 +153,7 @@ public class EntityRendererMixin {
 
     private void ausm$finishGuiScreenRendering() {
         PipelineContext context = PipelineContext.getInstance();
+        context.endGuiItemRenderScope();
         if (ausm$shouldUseVanillaGuiScreen()) {
             return;
         }
@@ -774,6 +778,11 @@ public class EntityRendererMixin {
             return;
         }
 
+        // GlobalFacades must submit while AUSM still owns the water/terrain
+        // shader and framebuffer. Its old AFTER injection ran only once this
+        // pass had been closed, forcing a fixed-function fallback that could
+        // be overwritten by later presentation work.
+        com.l.ausm.impl.pipeline.compat.GlobalFacadesTerrainBridge.render(partialTicks);
         context.endPass();
         context.restoreTerrainCulling();
         context.restoreWaterRenderState();

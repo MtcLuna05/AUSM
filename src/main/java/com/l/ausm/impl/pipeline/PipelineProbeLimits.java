@@ -24,8 +24,6 @@ final class PipelineProbeLimits {
     static final int MAX_DIRECT_COLOR_PRESENT_LOGS = 0;
     static final int MAX_DIRECT_WINDOW_PRESENT_LOGS = 0;
     static final int MAX_DIRECT_RECOVERED_WINDOW_REFRESH_LOGS = 0;
-    static final int MAX_DIRECT_PRESENTATION_TEXTURE_REFRESH_LOGS = 0;
-    static final int MAX_DIRECT_PRESENTATION_SNAPSHOT_LOGS = 0;
     static final int MAX_GUI_RECOVERED_BACKGROUND_LOGS = 0;
     static final int MAX_PRE_FINAL_DIRECT_PRESENT_LOGS = 0;
     static final int MAX_PRESENTATION_BOUNDARY_LOGS = 0;
@@ -48,7 +46,6 @@ final class PipelineProbeLimits {
     static final int MAX_ARCHITECTURECRAFT_DIAGNOSTIC_LOGS = 0;
     static final int MAX_FRAMED_PRIORITY_DIAGNOSTIC_LOGS = 0;
     static final int MAX_BLOCKCRAFTERY_ROUTE_PROBE_LOGS = 0;
-    static final int MAX_FRAMED_QUAD_MATERIAL_PROBE_LOGS = 0;
     static final int MAX_FRAMED_BLOOM_QUAD_GATE_PROBE_LOGS = 0;
     static final int MAX_CURRENT_PROBLEM_PROBE_LOGS = 0;
     static final int MAX_ACTIVE_LIGHT_OR_ID_PROBE_LOGS = 0;
@@ -113,11 +110,6 @@ final class PipelineProbeLimits {
     static final int MAX_SOFT_VANILLA_LAYER_TIMING_LOGS = 0;
     static final int MAX_SOFT_VANILLA_SPECIAL_BLOCK_PROBE_LOGS = 0;
     static final int MAX_SOFT_VANILLA_FRAME_TIMING_LOGS = 0;
-    // CPU-only timing around a rendered shadow map. This never reads back the
-    // GPU and is intentionally capped so it can diagnose movement hitches
-    // without becoming the hitch itself.
-    static final int MAX_SHADOW_FRAME_TIMING_PROBE_LOGS = 0;
-
     private PipelineProbeLimits() {
     }
 }

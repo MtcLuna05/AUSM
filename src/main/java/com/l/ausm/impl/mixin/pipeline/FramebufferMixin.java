@@ -23,24 +23,12 @@ public class FramebufferMixin {
     private void ausm$repairClientArrayStateBeforeFramebufferRender(int width, int height, boolean disableBlend, CallbackInfo ci) {
         ausm$repairClientArrayState();
         PipelineContext.getInstance().prepareShaderlessHiddenGuiFramebufferPresentation();
-        PipelineContext.getInstance().logHiddenSkyFramebufferProbe("framebuffer-before-render");
     }
 
     @Inject(method = "func_178038_a(IIZ)V", at = @At("HEAD"), remap = false, require = 0)
     private void ausm$repairClientArrayStateBeforeFramebufferRenderSrg(int width, int height, boolean disableBlend, CallbackInfo ci) {
         ausm$repairClientArrayState();
         PipelineContext.getInstance().prepareShaderlessHiddenGuiFramebufferPresentation();
-        PipelineContext.getInstance().logHiddenSkyFramebufferProbe("framebuffer-before-render-srg");
-    }
-
-    @Inject(method = "framebufferRenderExt(IIZ)V", at = @At("RETURN"), require = 0)
-    private void ausm$probeFramebufferRenderReturn(int width, int height, boolean disableBlend, CallbackInfo ci) {
-        PipelineContext.getInstance().logHiddenSkyFramebufferProbe("framebuffer-after-render");
-    }
-
-    @Inject(method = "func_178038_a(IIZ)V", at = @At("RETURN"), remap = false, require = 0)
-    private void ausm$probeFramebufferRenderReturnSrg(int width, int height, boolean disableBlend, CallbackInfo ci) {
-        PipelineContext.getInstance().logHiddenSkyFramebufferProbe("framebuffer-after-render-srg");
     }
 
     @Inject(method = "framebufferRenderExt(IIZ)V", at = @At("HEAD"), cancellable = true, require = 0)

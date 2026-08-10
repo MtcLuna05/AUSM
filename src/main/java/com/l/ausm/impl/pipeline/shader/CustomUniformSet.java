@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Small Iris-style custom uniform container.
@@ -29,11 +31,19 @@ import java.util.Set;
 public final class CustomUniformSet {
     private static final float[] EMPTY_VALUES = new float[0];
     private static final FloatBuffer MATRIX_BUFFER = BufferUtils.createFloatBuffer(16);
+    private static final Pattern EXPRESSION_IDENTIFIER = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*");
+    private static final Set<String> EXPRESSION_FUNCTIONS = Set.of(
+            "if", "ifb", "and", "or", "not", "min", "max", "clamp", "in", "between", "equals", "smooth",
+            "fmod", "mod", "abs", "sqrt", "floor", "ceil", "round", "fract", "frac", "sign", "pow", "exp",
+            "log", "asin", "acos", "atan", "atan2", "sin", "cos", "tan", "torad", "todeg", "smoothstep",
+            "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4", "bvec2", "bvec3", "bvec4", "mat2", "mat3", "mat4"
+    );
 
     private final Map<String, String> expressions;
     private final List<RawUniform> rawUniforms;
     private final Map<String, String> variables;
     private final Map<String, CompiledExpression> compiledVariables;
+    private final Set<String> builtinDependencies;
     private final Map<Integer, SmoothState> smoothStates = new HashMap<>();
     private final Map<String, float[]> resolvedScratch = new HashMap<>();
     private final Map<String, CompiledExpression> unresolvedScratch = new LinkedHashMap<>();
@@ -50,6 +60,7 @@ public final class CustomUniformSet {
         this.rawUniforms = rawUniforms;
         this.variables = variables;
         this.compiledVariables = compiledVariables;
+        this.builtinDependencies = collectBuiltinDependencies(expressions, variables);
     }
 
     public static CustomUniformSet empty() {
@@ -70,6 +81,11 @@ public final class CustomUniformSet {
 
     public boolean isEmpty() {
         return expressions.isEmpty();
+    }
+
+    /** Builtins needed to evaluate this pack's declared custom expressions. */
+    public Set<String> builtinDependencies() {
+        return builtinDependencies;
     }
 
     public static CustomUniformSet parse(Map<String, String> expressions) {
@@ -207,6 +223,41 @@ public final class CustomUniformSet {
                 progressed = true;
             }
         } while (progressed && !unresolved.isEmpty());
+    }
+
+    private static Set<String> collectBuiltinDependencies(Map<String, String> expressions, Map<String, String> variables) {
+        if (expressions.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> dependencies = new HashSet<>();
+        for (String expression : expressions.values()) {
+            if (expression == null || expression.isEmpty()) {
+                continue;
+            }
+            String lowerExpression = expression.toLowerCase(Locale.ROOT);
+            if (lowerExpression.contains("smooth(")) {
+                // smooth() has implicit frame inputs in EvalContext.
+                dependencies.add("frameCounter");
+                dependencies.add("frameTime");
+            }
+            Matcher matcher = EXPRESSION_IDENTIFIER.matcher(expression);
+            while (matcher.find()) {
+                String identifier = matcher.group();
+                int component = identifier.indexOf('.');
+                String root = component >= 0 ? identifier.substring(0, component) : identifier;
+                String normalized = root.toLowerCase(Locale.ROOT);
+                if (variables.containsKey(root)
+                        || EXPRESSION_FUNCTIONS.contains(normalized)
+                        || "true".equals(normalized)
+                        || "false".equals(normalized)
+                        || "pi".equals(normalized)
+                        || "e".equals(normalized)) {
+                    continue;
+                }
+                dependencies.add(root);
+            }
+        }
+        return Set.copyOf(dependencies);
     }
 
     private static void putResolvedValue(Map<String, float[]> resolved, String name, float[] values,

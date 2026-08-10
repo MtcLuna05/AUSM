@@ -11,11 +11,13 @@ import java.util.Properties;
 
 public final class ClientSettingsConfig {
     private static final String PORTAL_SHADERS_KEY = "portalShaders";
+    private static final String AUTOMATIC_SHADER_DISABLING_KEY = "automaticShaderDisabling";
     private static final String SHADERLESS_BLOOM_INTENSITY_KEY = "shaderlessBloomIntensity";
     private static final float DEFAULT_SHADERLESS_BLOOM_INTENSITY = 0.85F;
 
     private final Path configFile;
     private volatile boolean portalShaders = true;
+    private volatile boolean automaticShaderDisabling = true;
     private volatile float shaderlessBloomIntensity = DEFAULT_SHADERLESS_BLOOM_INTENSITY;
 
     public ClientSettingsConfig(Path minecraftRunDir) {
@@ -35,9 +37,13 @@ public final class ClientSettingsConfig {
         }
 
         boolean shouldWriteMissingDefaults = !properties.containsKey(PORTAL_SHADERS_KEY)
+                || !properties.containsKey(AUTOMATIC_SHADER_DISABLING_KEY)
                 || !properties.containsKey(SHADERLESS_BLOOM_INTENSITY_KEY);
 
         portalShaders = Boolean.parseBoolean(properties.getProperty(PORTAL_SHADERS_KEY, "true").trim());
+        automaticShaderDisabling = Boolean.parseBoolean(
+                properties.getProperty(AUTOMATIC_SHADER_DISABLING_KEY, "true").trim()
+        );
         shaderlessBloomIntensity = parseFloat(
                 properties,
                 SHADERLESS_BLOOM_INTENSITY_KEY,
@@ -46,8 +52,9 @@ public final class ClientSettingsConfig {
                 3.0F
         );
         MainMod.LOGGER.info(
-                "[ClientSettings] Loaded config: portalShaders={} shaderlessBloomIntensity={}",
+                "[ClientSettings] Loaded config: portalShaders={} automaticShaderDisabling={} shaderlessBloomIntensity={}",
                 portalShaders,
+                automaticShaderDisabling,
                 shaderlessBloomIntensity
         );
         if (shouldWriteMissingDefaults) {
@@ -64,6 +71,18 @@ public final class ClientSettingsConfig {
             return;
         }
         portalShaders = enabled;
+        save();
+    }
+
+    public boolean automaticShaderDisablingEnabled() {
+        return automaticShaderDisabling;
+    }
+
+    public void setAutomaticShaderDisablingEnabled(boolean enabled) {
+        if (automaticShaderDisabling == enabled) {
+            return;
+        }
+        automaticShaderDisabling = enabled;
         save();
     }
 
@@ -87,6 +106,7 @@ public final class ClientSettingsConfig {
     private void save() {
         Properties properties = new Properties();
         properties.setProperty(PORTAL_SHADERS_KEY, Boolean.toString(portalShaders));
+        properties.setProperty(AUTOMATIC_SHADER_DISABLING_KEY, Boolean.toString(automaticShaderDisabling));
         properties.setProperty(SHADERLESS_BLOOM_INTENSITY_KEY, Float.toString(shaderlessBloomIntensity));
 
         try {
@@ -106,6 +126,8 @@ public final class ClientSettingsConfig {
                     # AUSM client settings.
                     # If false, Better Portals child views render with the vanilla/shaderless renderer.
                     portalShaders=true
+                    # If false, a shaderpack that was enabled on shutdown is restored on the next world load.
+                    automaticShaderDisabling=true
                     # Shaderless emissive bloom multiplier.
                     shaderlessBloomIntensity=0.85
                     """;

@@ -47,6 +47,8 @@ public class TextureBinder {
     public static final int COLORTEX9_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 2;
     public static final int COLORTEX16_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 3;
     public static final int CENTER_DEPTH_SMOOTH_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 4;
+    /** Spare gbuffers unit used only while masking item glint against the block/item atlas. */
+    public static final int ITEM_GLINT_BASE_ATLAS_TEXTURE_UNIT = ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT - 4;
     public static final int SPECULAR_TEXTURE_UNIT = ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT - 3;
     private static int fallbackBlackTexture = -1;
     private static int fallbackWhiteTexture = -1;
@@ -59,6 +61,7 @@ public class TextureBinder {
     private static int shadowDepthSampler = -1;
     private static int shadowDepthHardwareSampler = -1;
     private static int maxCombinedTextureUnits = -1;
+    private static boolean shaderOnlyFixedFunctionTextureUnitsDirty = true;
     private static final int MAX_SHADOW_BINDING_PROBE_LOGS = 0;
     private static int shadowBindingProbeCount;
 
@@ -392,6 +395,64 @@ public class TextureBinder {
     public static void restoreDefaultTextureUnit() {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
+    }
+
+    /**
+     * GLSL sampler units are independent while a program is active, but every
+     * enabled GL_TEXTURE_2D unit becomes a legacy combine stage under program
+     * zero. Disable shader-only units at shaderless boundaries so stale bloom,
+     * depth, or composite bindings cannot be projected through particle and
+     * terrain texture coordinates. Unit zero and Minecraft's lightmap unit are
+     * deliberately retained.
+     */
+    public static void disableShaderOnlyFixedFunctionTextureUnits() {
+        if (!shaderOnlyFixedFunctionTextureUnitsDirty) {
+            restoreDefaultTextureUnit();
+            return;
+        }
+        int defaultUnit = com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit();
+        int lightmapUnit = com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit();
+        // AUSM's local bloom composite uses units 0..6. Limiting the cleanup
+        // to the first eight also stays within Minecraft 1.12's fixed-size
+        // GlStateManager texture cache on drivers advertising hundreds of
+        // combined shader sampler units.
+        int unitCount = Math.min(maxCombinedTextureUnits(), 8);
+        StringBuilder enabledBefore = new StringBuilder();
+        StringBuilder enabledAfter = new StringBuilder();
+        for (int unit = 0; unit < unitCount; unit++) {
+            int textureUnit = GL13.GL_TEXTURE0 + unit;
+            if (textureUnit == defaultUnit || textureUnit == lightmapUnit) {
+                continue;
+            }
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(textureUnit);
+            if (GL11.glIsEnabled(GL11.GL_TEXTURE_2D)) {
+                appendTextureUnit(enabledBefore, unit);
+            }
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
+            if (GL11.glIsEnabled(GL11.GL_TEXTURE_2D)) {
+                appendTextureUnit(enabledAfter, unit);
+            }
+        }
+        shaderOnlyFixedFunctionTextureUnitsDirty = false;
+        restoreDefaultTextureUnit();
+        MainMod.LOGGER.info(
+                "[AUSMShaderlessTextureUnitRepair] checked=2..{} enabledBefore={} enabledAfter={} active={} clientActive={}",
+                unitCount - 1,
+                enabledBefore.length() == 0 ? "none" : enabledBefore,
+                enabledAfter.length() == 0 ? "none" : enabledAfter,
+                GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE),
+                GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE));
+    }
+
+    public static void markShaderOnlyFixedFunctionTextureUnitsDirty() {
+        shaderOnlyFixedFunctionTextureUnitsDirty = true;
+    }
+
+    private static void appendTextureUnit(StringBuilder destination, int unit) {
+        if (destination.length() > 0) {
+            destination.append(',');
+        }
+        destination.append(unit);
     }
 
     private static int fallbackBlackTexture() {

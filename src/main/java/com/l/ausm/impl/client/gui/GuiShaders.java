@@ -110,7 +110,6 @@ public class GuiShaders extends MappingSafeGuiScreen {
         updateSettingsButton();
         updatePreviewVisibility();
         ensureFocusedControl();
-        PipelineContext.getInstance().logShaderGuiProbe("init-return");
     }
 
     @Override
@@ -258,33 +257,24 @@ public class GuiShaders extends MappingSafeGuiScreen {
 
     @Override
     protected void ausm$drawScreen(int mouseX, int mouseY, float partialTicks) {
-        PipelineContext context = PipelineContext.getInstance();
-        context.logShaderGuiProbe("draw-entry");
         lastMouseX = mouseX;
         lastMouseY = mouseY;
         if (previewHidden) {
             super.ausm$drawScreen(mouseX, mouseY, partialTicks);
             drawFocusedButtonOutline();
-            context.logShaderGuiProbe("draw-preview-return");
             return;
         }
 
         drawRect(0, 0, this.width, this.height, 0x330B1016);
-        context.logShaderGuiProbe("after-background");
         drawPanels();
-        context.logShaderGuiProbe("after-panels");
         this.shaderList.drawScreen(mouseX, mouseY, partialTicks, focusedControl == -1);
-        context.logShaderGuiProbe("after-pack-list");
         drawHeader();
         drawPackDetails();
         drawNotification();
-        context.logShaderGuiProbe("after-details");
 
         super.ausm$drawScreen(mouseX, mouseY, partialTicks);
-        context.logShaderGuiProbe("after-super");
         drawFocusedButtonOutline();
         drawEscapeHintTooltip(mouseX, mouseY);
-        context.logShaderGuiProbe("draw-return");
     }
 
     @Override

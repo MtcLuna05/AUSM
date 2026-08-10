@@ -190,14 +190,14 @@ final class PipelineCustomTextures {
     }
 
     void bind(RenderPass pass, ShaderProgram program) {
-        bind(customTextures.get(pass), program);
+        bind(customTextures.get(pass), program, pass == RenderPass.GBUFFERS_SKYBASIC);
     }
 
     void bind(ProgramArrayId arrayId, int index, ShaderProgram program) {
-        bind(customArrayTextures.get(new ShaderProgramArrayKey(arrayId, index)), program);
+        bind(customArrayTextures.get(new ShaderProgramArrayKey(arrayId, index)), program, false);
     }
 
-    private void bind(List<LoadedCustomTexture> textures, ShaderProgram program) {
+    private void bind(List<LoadedCustomTexture> textures, ShaderProgram program, boolean ownedSkyPass) {
         if (textures == null || textures.isEmpty()) {
             return;
         }

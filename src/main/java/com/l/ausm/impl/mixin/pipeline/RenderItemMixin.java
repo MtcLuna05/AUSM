@@ -4,12 +4,9 @@ import com.l.ausm.api.pipeline.fbo.*;
 import com.l.ausm.api.pipeline.shader.*;
 import com.l.ausm.api.pipeline.pack.*;
 
-import com.l.ausm.impl.pipeline.compat.ProjectRedHaloRenderer;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.client.renderer.RenderItem;
 import net.minecraft.client.renderer.block.model.IBakedModel;
-import net.minecraft.client.renderer.block.model.ItemCameraTransforms;
-import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.item.ItemStack;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -43,34 +40,11 @@ public class RenderItemMixin {
     @Unique
     private static final ThreadLocal<Deque<Boolean>> AUSM$glintPhaseStack = ThreadLocal.withInitial(ArrayDeque::new);
 
-    @Inject(
-            method = "renderItem(Lnet/minecraft/item/ItemStack;Lnet/minecraft/entity/EntityLivingBase;Lnet/minecraft/client/renderer/block/model/ItemCameraTransforms$TransformType;Z)V",
-            at = @At("HEAD")
-    )
-    private void ausm$auditProjectRedHeldItem(ItemStack stack, EntityLivingBase entity,
-                                              ItemCameraTransforms.TransformType transformType,
-                                              boolean leftHanded, CallbackInfo ci) {
-        ProjectRedHaloRenderer.auditRenderItem(stack, "renderItem_entity", transformType);
-    }
-
-    @Inject(
-            method = "renderItemModel(Lnet/minecraft/item/ItemStack;Lnet/minecraft/client/renderer/block/model/IBakedModel;Lnet/minecraft/client/renderer/block/model/ItemCameraTransforms$TransformType;Z)V",
-            at = @At("HEAD")
-    )
-    private void ausm$auditProjectRedItemModel(ItemStack stack, IBakedModel model,
-                                               ItemCameraTransforms.TransformType transformType,
-                                               boolean leftHanded, CallbackInfo ci) {
-        ProjectRedHaloRenderer.auditRenderItem(stack, "renderItemModel", transformType);
-    }
-
     @Inject(method = "renderItem(Lnet/minecraft/item/ItemStack;Lnet/minecraft/client/renderer/block/model/IBakedModel;)V", at = @At("HEAD"))
     private void ausm$onRenderItemHead(ItemStack stack, IBakedModel model, CallbackInfo ci) {
-        ProjectRedHaloRenderer.auditRenderItem(stack, "renderItem_model", model != null ? model.getClass().getName() : null);
         PipelineContext context = PipelineContext.getInstance();
-        if (context.isRenderingGuiScreen()) {
-            context.probeGuiModelState("item-head");
+        if (context.isRenderingGuiItemContext()) {
             AUSM$guiItemStateStack.get().push(context.beginGuiItemStateScope());
-            context.beginGuiItemModelProbe(stack, model);
             AUSM$renderedItemStack.get().push(false);
             AUSM$itemPhaseStack.get().push(false);
             return;
@@ -97,10 +71,6 @@ public class RenderItemMixin {
         if (!guiState.isEmpty() && guiState.pop()) {
             context.endGuiItemStateScope();
         }
-        if (context.isRenderingGuiScreen()) {
-            context.probeGuiModelState("item-return");
-            context.endGuiItemModelProbe();
-        }
     }
 
     @Inject(
@@ -112,8 +82,7 @@ public class RenderItemMixin {
     )
     private void ausm$beforeBuiltInItemRenderer(ItemStack stack, IBakedModel model, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        if (context.isRenderingGuiScreen()) {
-            context.probeGuiModelState("before-built-in-item-renderer");
+        if (context.isRenderingGuiItemContext()) {
             AUSM$guiBuiltInStateStack.get().push(context.beginGuiBuiltInItemStateScope());
         } else {
             context.prepareHandItemDrawState("built_in_item_renderer");
@@ -144,12 +113,10 @@ public class RenderItemMixin {
     )
     private void ausm$beforeForgeLitItemDraw(IBakedModel model, int color, ItemStack stack, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        if (!context.isRenderingGuiScreen()) {
+        if (!context.isRenderingGuiItemContext()) {
             context.prepareHandItemDrawState("forge_lit_item");
         } else {
             AUSM$guiForgeLitStateStack.get().push(context.beginGuiItemStateScope());
-            context.beginGuiItemModelProbe(stack, model);
-            context.probeGuiItemModel("forge-lit-item", stack, model);
         }
     }
 
@@ -163,10 +130,9 @@ public class RenderItemMixin {
     )
     private void ausm$afterForgeLitItemDraw(IBakedModel model, int color, ItemStack stack, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        if (!context.isRenderingGuiScreen()) {
+        if (!context.isRenderingGuiItemContext()) {
             return;
         }
-        context.endGuiItemModelProbe();
         Deque<Boolean> state = AUSM$guiForgeLitStateStack.get();
         if (!state.isEmpty() && state.pop()) {
             context.endGuiItemStateScope();
@@ -182,7 +148,7 @@ public class RenderItemMixin {
     )
     private void ausm$beforeStandardItemDraw(IBakedModel model, int color, ItemStack stack, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        if (!context.isRenderingGuiScreen()) {
+        if (!context.isRenderingGuiItemContext()) {
             context.prepareHandItemDrawState("standard_item");
         }
     }
@@ -190,7 +156,7 @@ public class RenderItemMixin {
     @Inject(method = "renderEffect(Lnet/minecraft/client/renderer/block/model/IBakedModel;)V", at = @At("HEAD"))
     private void onRenderEffectHead(IBakedModel model, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        if (context.isRenderingGuiScreen()) {
+        if (context.isRenderingGuiItemContext()) {
             AUSM$glintPhaseStack.get().push(false);
             return;
         }
@@ -201,7 +167,7 @@ public class RenderItemMixin {
     private void onRenderEffectReturn(IBakedModel model, CallbackInfo ci) {
         Deque<Boolean> stackState = AUSM$glintPhaseStack.get();
         if (!stackState.isEmpty() && stackState.pop()) {
-            PipelineContext.getInstance().endPass();
+            PipelineContext.getInstance().endItemGlintPhase();
         }
     }
 }

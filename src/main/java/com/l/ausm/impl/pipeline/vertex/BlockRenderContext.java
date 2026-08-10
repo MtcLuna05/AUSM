@@ -18,6 +18,38 @@ public final class BlockRenderContext {
         current().blockEntityId = blockEntityId;
     }
 
+    /** Sets the complete per-block terrain context with one ThreadLocal lookup. */
+    public static void configureBlock(int blockEntityId, short renderType, int metadata,
+                                      int x, int y, int z, IBlockAccess blockAccess, BlockPos blockPos,
+                                      boolean framedMaterialOwner, boolean agricraftCrop, int packedLightmap,
+                                      int blockEmission, boolean framedBloomBoost, int blockAlpha,
+                                      int customLiquidTint, boolean crystalOnlyEmission,
+                                      boolean separateAoEligible) {
+        State state = current();
+        state.blockEntityId = blockEntityId;
+        state.renderType = renderType;
+        state.metadata = (short) (metadata & 0xFFFF);
+        state.blockX = x;
+        state.blockY = y;
+        state.blockZ = z;
+        state.localX = x & 15;
+        state.localY = y & 15;
+        state.localZ = z & 15;
+        state.blockAccess = blockAccess;
+        state.blockPos = blockPos;
+        state.framedMaterialOwner = framedMaterialOwner;
+        state.agricraftCrop = agricraftCrop;
+        state.packedLightmap = packedLightmap;
+        state.blockEmission = clamp(blockEmission, 0, 15);
+        state.framedBloomBoost = framedBloomBoost;
+        state.bloomOnlyEmission = false;
+        state.blockAlpha = blockAlpha >= 0 ? clamp(blockAlpha, 0, 255) : -1;
+        state.customLiquidTint = customLiquidTint;
+        state.crystalOnlyEmission = crystalOnlyEmission;
+        state.hasQuadEmissionOverride = false;
+        state.separateAoEligible = separateAoEligible;
+    }
+
     public static int blockEntityId() {
         State state = current();
         return state.hasQuadBlockEntityIdOverride ? state.quadBlockEntityIdOverride : state.blockEntityId;

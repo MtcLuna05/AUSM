@@ -1,5 +1,6 @@
 package com.l.ausm.impl.mixin.pipeline;
 
+import com.l.ausm.impl.client.dynamic.DynamicLightManager;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.Entity;
@@ -8,12 +9,14 @@ import net.minecraft.util.SoundCategory;
 import net.minecraft.util.SoundEvent;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IWorldEventListener;
+import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.World;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.List;
 
@@ -87,6 +90,39 @@ public class WorldDynamicLightMixin {
         PipelineContext context = PipelineContext.getInstance();
         World world = (World) (Object) this;
         context.handleShaderlessBloomBlockUpdate(world, pos, oldState, newState, flags);
+    }
+
+    /**
+     * Chunk render caches already receive dynamic light while terrain is baked. Live
+     * renderers (entities, block entities, and particles) query the client World
+     * directly instead, so mirror the same adjustment on that rendering path.
+     */
+    @Inject(method = "getLightFor", at = @At("RETURN"), cancellable = true)
+    private void ausm$applyShaderlessDynamicWorldBlockLight(EnumSkyBlock type, BlockPos pos,
+                                                              CallbackInfoReturnable<Integer> cir) {
+        if (type != EnumSkyBlock.BLOCK || !DynamicLightManager.shouldApplyToBlockRenderLightQuery(pos)) {
+            return;
+        }
+
+        int before = cir.getReturnValueI();
+        int dynamicLight = DynamicLightManager.lightAt(pos);
+        if (dynamicLight > before) {
+            cir.setReturnValue(dynamicLight);
+        }
+    }
+
+    @Inject(method = "getCombinedLight", at = @At("RETURN"), cancellable = true)
+    private void ausm$applyShaderlessDynamicWorldCombinedLight(BlockPos pos, int lightValue,
+                                                                 CallbackInfoReturnable<Integer> cir) {
+        if (!DynamicLightManager.shouldApplyToBlockRenderLightQuery(pos)) {
+            return;
+        }
+
+        int before = cir.getReturnValueI();
+        int adjusted = DynamicLightManager.applyPackedLight(pos, before);
+        if (adjusted != before) {
+            cir.setReturnValue(adjusted);
+        }
     }
 
     @Inject(method = "markBlockRangeForRenderUpdate(IIIIII)V", at = @At("HEAD"), require = 0)

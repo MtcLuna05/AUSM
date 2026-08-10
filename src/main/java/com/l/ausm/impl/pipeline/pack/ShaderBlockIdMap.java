@@ -26,6 +26,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class ShaderBlockIdMap {
+    /** Dedicated non-waving material for BOP's coplanar ground leaf cards. */
+    static final int BOP_LEAF_PILE_MATERIAL_ID = 12284;
+
     private static final ColorAlias[] MINECRAFT_DYE_COLORS = {
             new ColorAlias("white", 10900),
             new ColorAlias("orange", 10904),
@@ -77,7 +80,7 @@ public final class ShaderBlockIdMap {
         if (!hasBlockProperties) {
             addLegacyDefaults(blockIds);
         } else {
-            addPackCompatibilityAliases(blockIds);
+            addPackCompatibilityAliases(blockIds, stateRules);
             addLegacyColorStateRules(blockIds, stateRules);
             addModdedColoredLightCompatibility(blockIds, stateRules);
         }
@@ -121,18 +124,61 @@ public final class ShaderBlockIdMap {
         }
     }
 
-    private static void addPackCompatibilityAliases(Map<Block, Integer> blockIds) {
+    private static void addPackCompatibilityAliases(Map<Block, Integer> blockIds, List<StateRule> stateRules) {
         Block portal = registryBlock(new ResourceLocation("minecraft", "portal"));
         if (portal != null && !blockIds.containsKey(portal) && blockIds.containsValue(10090)) {
             blockIds.put(portal, 10090);
         }
-        addLilyPadCompatibilityAliases(blockIds);
+        addLilyPadCompatibilityAliases(blockIds, stateRules);
+        addLeafCompatibilityAliases(blockIds);
+        addFoliageCompatibilityAliases(blockIds);
     }
 
-    private static void addLilyPadCompatibilityAliases(Map<Block, Integer> blockIds) {
+    private static void addLilyPadCompatibilityAliases(Map<Block, Integer> blockIds, List<StateRule> stateRules) {
         if (blockIds.containsValue(10489)) {
             addBlockAlias(blockIds, "xreliquary", "fertile_lilypad", 10489);
+            // A leaf pile is a horizontal alpha card, but it is not a lily pad:
+            // material 10489 runs a signed water-bob animation which makes the
+            // card's lighting/shadow footprint sweep across the ground. Keep a
+            // distinct material so the shader compatibility stage can retain
+            // thin-card lighting and caster suppression without water motion.
+            addStateAlias(stateRules, "biomesoplenty", "plant_0", "variant", "leafpile",
+                    BOP_LEAF_PILE_MATERIAL_ID);
+            addStateAlias(stateRules, "biomesoplenty", "plant_0", "variant", "deadleafpile",
+                    BOP_LEAF_PILE_MATERIAL_ID);
         }
+    }
+
+    /**
+     * Complementary's modern block table does not name Biomes O' Plenty's
+     * paged 1.12 leaf blocks. Material zero gives those quads ordinary solid
+     * receiver bias, which makes dense/overlaid leaf faces shadow each other
+     * as dark coplanar cards. Reuse the pack's native leaf material.
+     *
+     * BOP leaf piles are states of plant_0 rather than their own block. They
+     * are mapped above to AUSM's dedicated non-waving thin-card material.
+     */
+    private static void addLeafCompatibilityAliases(Map<Block, Integer> blockIds) {
+        if (!blockIds.containsValue(10009)) {
+            return;
+        }
+        for (int page = 0; page <= 6; page++) {
+            addBlockAlias(blockIds, "biomesoplenty", "leaves_" + page, 10009);
+        }
+    }
+
+    /**
+     * Complementary classifies its own crops as 10005, but modded crop blocks
+     * are absent from a stock pack's block.properties.  Rendering them as
+     * material zero gives crossed AgriCraft/Natura cards generic terrain
+     * lighting and shadows rather than the pack's foliage treatment.
+     */
+    private static void addFoliageCompatibilityAliases(Map<Block, Integer> blockIds) {
+        if (!blockIds.containsValue(10005)) {
+            return;
+        }
+        addBlockAlias(blockIds, "agricraft", "crop", 10005);
+        addBlockAlias(blockIds, "natura", "cotton_crop", 10005);
     }
 
     private static void addLegacyColorStateRules(Map<Block, Integer> blockIds, List<StateRule> stateRules) {

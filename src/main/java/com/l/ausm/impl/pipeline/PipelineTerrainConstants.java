@@ -45,8 +45,20 @@ final class PipelineTerrainConstants {
     // every sub-centimetre camera movement dominates shadered frame time.
     // The shadow projection is already stabilised on a much coarser texel
     // grid, so reuse it briefly across small movement instead.
-    static final int SHADOW_STABLE_UPDATE_INTERVAL_TICKS = 6;
+    // Reuse only within the same game tick. Longer reuse makes the sun-space
+    // rotation advance in visible steps even when camera-delta rebasing keeps
+    // the cached map spatially aligned.
+    static final int SHADOW_STABLE_UPDATE_INTERVAL_TICKS = 1;
     static final double SHADOW_STABLE_UPDATE_MOVEMENT_SQ = 0.0625D;
+    // At interactive frame rates, refresh nearby detailed casters every
+    // rendered frame instead of quantizing them to Minecraft's 20 Hz tick.
+    // If the client is already below 30 FPS, retain the one-tick reuse gate so
+    // shadow work cannot deepen an existing frame-time spiral.
+    static final float SHADOW_REALTIME_MAX_FRAME_SECONDS = 1.0F / 30.0F;
+    static final double SHADOW_REALTIME_CUTOUT_DISTANCE = 96.0D;
+    static final double SHADOW_REALTIME_TRANSLUCENT_DISTANCE = 64.0D;
+    static final double SHADOW_REALTIME_ENTITY_DISTANCE = 96.0D;
+    static final double SHADOW_REALTIME_BLOCK_ENTITY_DISTANCE = 64.0D;
     static final float SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION = 0.003F;
     static final int NOTHIRIUM_SHADOW_SUPPRESS_AFTER_INVALID_FRAMES = 1;
     static final int NOTHIRIUM_SHADOW_SUPPRESS_FRAMES = 160;

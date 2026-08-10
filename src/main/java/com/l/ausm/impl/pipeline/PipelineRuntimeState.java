@@ -265,8 +265,6 @@ abstract class PipelineRuntimeState {
     protected ShaderImageSet shaderImages = ShaderImageSet.empty();
     protected ShaderStorageBufferSet shaderStorageBuffers = ShaderStorageBufferSet.empty();
     protected final ConcurrentMap<Long, BlockPos> syntheticLightCandidates = new ConcurrentHashMap<>();
-    protected final Set<String> coloredLightAuditKeys = ConcurrentHashMap.newKeySet();
-    protected final AtomicInteger coloredLightAuditCount = new AtomicInteger();
     protected final Map<ProgramArrayId, List<ComputeProgram>> computeProgramArrays = new EnumMap<>(ProgramArrayId.class);
     protected List<ComputeProgram> shadowComputePrograms = List.of();
     protected List<ComputeProgram> finalComputePrograms = List.of();
@@ -317,6 +315,7 @@ abstract class PipelineRuntimeState {
 
     protected final Deque<PassScope> passStack = new ArrayDeque<>();
     protected final Deque<Integer> renderedItemIdStack = new ArrayDeque<>();
+    protected final Deque<Integer> dynamicBlockEntityIdStack = new ArrayDeque<>();
     protected final Deque<Boolean> worldPassBypassStack = new ArrayDeque<>();
     protected final Deque<Long> worldPassSerialStack = new ArrayDeque<>();
     protected final Deque<Long> nothiriumPipelineTranslucentFrameStack = new ArrayDeque<>();
@@ -330,6 +329,8 @@ abstract class PipelineRuntimeState {
     protected WorldRenderingPhase overridePhase = null;
     protected volatile boolean isPipelineActive = false;
     protected boolean shaderlessWorldPassActive = false;
+    /** True only while native bloom replays translucent chunk meshes into its transmission mask. */
+    protected boolean bloomTranslucentAttenuationPass = false;
     protected int vanillaParticleRecoveryFrames = 0;
     protected String activePackName = "(internal)";
     protected float centerDepth = 1.0f;
@@ -380,8 +381,6 @@ abstract class PipelineRuntimeState {
     protected int distantHorizonsPassColorProbeLogs = 0;
     protected int pausedPostRenderGlErrorLogs = 0;
     protected int directRecoveredWindowRefreshLogs = 0;
-    protected int directPresentationTextureRefreshLogs = 0;
-    protected int directPresentationSnapshotLogs = 0;
     protected int guiRecoveredBackgroundLogs = 0;
     protected int preFinalDirectPresentLogs = 0;
     protected boolean preDeferredColorSnapshotThisFrame = false;
@@ -401,10 +400,12 @@ abstract class PipelineRuntimeState {
     protected final ByteBuffer distantHorizonsReadbackPixel = BufferUtils.createByteBuffer(4);
     protected final ByteBuffer terrainProbeColorPixel = BufferUtils.createByteBuffer(4);
     protected final FloatBuffer terrainProbeDepthPixel = BufferUtils.createFloatBuffer(1);
-    protected final FloatBuffer guiModelMatrixProbe = BufferUtils.createFloatBuffer(16);
     protected final ByteBuffer terrainProbeBooleanBuffer = BufferUtils.createByteBuffer(16);
     protected int currentEntityId = 0;
     protected int currentRenderedItemId = -1;
+    /** Per-draw material marker for animated TESR geometry that is not a physical block model. */
+    protected int dynamicBlockEntityId = -1;
+    protected int itemGlintMaskDepth = 0;
     protected String currentRenderedItemDebugName = "";
     protected ResourceLocation currentEntityKey = null;
     protected float[] currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
@@ -570,11 +571,14 @@ abstract class PipelineRuntimeState {
     protected Framebuffer externalWorldFramebufferTarget = null;
     protected boolean renderingShadowMap = false;
     protected boolean renderingGui = false;
+    /** HUD and bypassed vanilla GuiScreen item draws that must never enter world/hand passes. */
+    protected int guiItemRenderDepth = 0;
     protected long guiTargetContentFrame = Long.MIN_VALUE;
     protected boolean shadowMapPopulated = false;
     protected boolean shadowMapUsable = false;
     protected boolean shadowMapSparseForSampling = false;
     protected int shadowMapCoverageStableFrames = 0;
+    protected int shadowMapCoverageRegressionLogs = 0;
     protected int invalidShadowTerrainFrames = 0;
     protected int invalidShadowTerrainSuppressedFrames = 0;
     protected int invalidShadowTerrainSuppressionLogs = 0;
@@ -611,13 +615,9 @@ abstract class PipelineRuntimeState {
     protected int shadowHealthLogAttempts = 0;
     protected int shadowMapInvalidLogs = 0;
     protected int shadowMapSuppressedLogs = 0;
-    protected int shadowFrameTimingProbeLogs = 0;
     protected int guiRenderDepth = 0;
     protected int guiEntityPreviewStateDepth = 0;
     protected int guiModelStateProbeLogs = 0;
-    protected int guiEntityStateProbeLogs = 0;
-    protected int guiItemModelProbeLogs = 0;
-    protected final Deque<String> guiItemProbeNames = new ArrayDeque<>();
     protected int waterRoutingProbeLogs = 0;
     protected int waterDuplicateProbeLogs = 0;
     protected int waterAttachmentDeltaProbeLogs = 0;
@@ -681,8 +681,6 @@ abstract class PipelineRuntimeState {
     protected int voidWorldSkyRendererChainLogs = 0;
     protected int voidWorldSkyRendererChainGuiLogs = 0;
     protected int voidWorldSkyRendererChainPauseLogs = 0;
-    protected int hiddenSkyFramebufferProbeLogs = 0;
-    protected int hiddenF1SkyFramebufferProbeLogs = 0;
     protected int shaderlessWorldFramebufferForUi = 0;
     protected int shaderlessWorldFramebufferWidth = 0;
     protected int shaderlessWorldFramebufferHeight = 0;
@@ -730,7 +728,6 @@ abstract class PipelineRuntimeState {
     protected final AtomicInteger blockcrafteryBloomDecisionProbeCount = new AtomicInteger();
     protected final AtomicInteger blockcrafteryRouteProbeCount = new AtomicInteger();
     protected final Set<String> framedQuadMaterialProbeKeys = ConcurrentHashMap.newKeySet();
-    protected final AtomicInteger framedQuadMaterialProbeCount = new AtomicInteger();
     protected final AtomicInteger framedBloomQuadGateProbeCount = new AtomicInteger();
     protected final AtomicInteger architectureCraftDiagnosticCount = new AtomicInteger();
     protected final AtomicInteger framedPriorityDiagnosticCount = new AtomicInteger();
@@ -1014,7 +1011,7 @@ abstract class PipelineRuntimeState {
         uniformRegistry.registerFloat("maxPlayerArmor", () -> 50.0f);
         uniformRegistry.registerFloat("pi", () -> (float) Math.PI);
         uniformRegistry.registerInt("anisotropicFiltering", ShaderSamplerState::anisotropicFilteringUniform);
-        uniformRegistry.registerInt("blockEntityId", () -> -1);
+        uniformRegistry.registerInt("blockEntityId", () -> dynamicBlockEntityId);
         uniformRegistry.registerInt("currentRenderedItemId", () -> currentRenderedItemId);
 
         // --- 2. Matrix Uniforms ---
@@ -1085,6 +1082,8 @@ abstract class PipelineRuntimeState {
         uniformRegistry.registerFloat("iris_ModelScale", () -> 1.0f);
         uniformRegistry.registerFloat("iris_TextureScale", () -> 1.0f);
         uniformRegistry.registerFloat("iris_GlintAlpha", () -> 1.0f);
+        uniformRegistry.registerInt("ausmItemGlintBaseAtlas", () -> TextureBinder.ITEM_GLINT_BASE_ATLAS_TEXTURE_UNIT);
+        uniformRegistry.registerInt("ausmItemGlintMask", () -> itemGlintMaskDepth > 0 ? 1 : 0);
         uniformRegistry.registerVec3("u_ModelScale", () -> new float[]{1.0f, 1.0f, 1.0f});
         uniformRegistry.registerVec2("u_TextureScale", () -> new float[]{1.0f, 1.0f});
         uniformRegistry.registerVec3("u_RegionOffset", () -> new float[]{0.0f, 0.0f, 0.0f});
@@ -2201,18 +2200,15 @@ abstract class PipelineRuntimeState {
             );
             ShaderCompileNotifications.finishReload(pack.getName());
             syntheticLightCandidates.clear();
-            resetColoredLightAudit();
             // Startup can build a provisional Nothirium mesh before this pack's
             // block-id rules are installed. Preserve a fresh probe window for
             // the real rebuild below, which is the data the shader consumes.
             resetFramedMaterialProbes();
-            // The initial Nothirium rebuild may complete some loaded sections
-            // while the internal pack is still active.  Force the normal,
-            // delayed Bloom terrain refresh after the real pack is live so
-            // every visible GPOM frame is recompiled with a valid BLOOM buffer.
-            scheduleBloomTerrainRefresh("shader-pack-initialized");
             if (wasPipelineActive) {
-                NothiriumBypass.markAllChanged();
+                // A single full refresh below invalidates and rebuilds both the
+                // shader terrain metadata and native BLOOM geometry. Dirtying
+                // Nothirium here as well starts an avoidable first compilation
+                // that is discarded by the scheduled renderer rebuild.
                 scheduleWorldTerrainRefresh(true, true, 0);
                 ShaderLoadingScreen.step("Refreshing terrain metadata");
             } else {
@@ -2474,6 +2470,8 @@ abstract class PipelineRuntimeState {
         activePhase = WorldRenderingPhase.NONE;
         overridePhase = null;
         passStack.clear();
+        dynamicBlockEntityIdStack.clear();
+        dynamicBlockEntityId = -1;
         worldPassBypassStack.clear();
         worldPassSerialStack.clear();
         nothiriumPipelineTranslucentFrameStack.clear();
@@ -2504,6 +2502,7 @@ abstract class PipelineRuntimeState {
         shadowMapUsable = false;
         shadowMapSparseForSampling = false;
         shadowMapCoverageStableFrames = 0;
+        shadowMapCoverageRegressionLogs = 0;
         invalidShadowTerrainFrames = 0;
         invalidShadowTerrainSuppressedFrames = 0;
         nothiriumShadowInvalidFrames = 0;
@@ -3040,7 +3039,6 @@ abstract class PipelineRuntimeState {
 
     protected void resetFramedMaterialProbes() {
         blockcrafteryRouteProbeCount.set(0);
-        framedQuadMaterialProbeCount.set(0);
         framedBloomQuadGateProbeCount.set(0);
         framedQuadMaterialProbeKeys.clear();
     }
@@ -3321,21 +3319,15 @@ abstract class PipelineRuntimeState {
             return null;
         }
 
-        IBlockState[] inheritedStates = inheritedRenderStates(state, blockAccess, pos);
-        for (IBlockState inheritedState : inheritedStates) {
-            if (isBloomOrEmissiveInheritedState(inheritedState, blockAccess, pos)) {
-                return inheritedState;
-            }
-        }
-        if (inheritedStates.length > 0) {
-            return inheritedStates[0];
+        IBlockState inheritedState = inheritedRenderState(state, blockAccess, pos);
+        if (inheritedState != null) {
+            return inheritedState;
         }
         return actualLightState(state, blockAccess, pos);
     }
 
     public IBlockState firstInheritedRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        IBlockState[] inheritedStates = inheritedRenderStates(state, blockAccess, pos);
-        return inheritedStates.length > 0 ? inheritedStates[0] : null;
+        return inheritedRenderState(state, blockAccess, pos);
     }
 
     public IBlockState inheritedBloomGeometryRenderState(IBlockState state, IBlockState inheritedState) {
@@ -3416,10 +3408,30 @@ abstract class PipelineRuntimeState {
     }
 
     public boolean applyFramedQuadMaterial(BakedQuad quad, String spriteName) {
-        if (BlockRenderContext.isFramedMaterialOwner()) {
-            BlockRenderContext.clearQuadOverrides();
-            BlockRenderContext.setQuadFramedBloomBoost(false);
+        if (!BlockRenderContext.isFramedMaterialOwner()) {
+            return false;
         }
+        BlockRenderContext.clearQuadOverrides();
+        BlockRenderContext.setQuadFramedBloomBoost(false);
+
+        com.l.ausm.impl.pipeline.compat.GpomFramedQuadMetadata.Metadata metadata =
+                com.l.ausm.impl.pipeline.compat.GpomFramedQuadMetadata.get(quad);
+        if (metadata == null) {
+            return false;
+        }
+
+        IBlockState material = metadata.materialState();
+        IBlockAccess blockAccess = BlockRenderContext.blockAccess();
+        BlockPos pos = BlockRenderContext.blockPos();
+        int emission = Math.max(metadata.emission(), blockRenderEmissionForState(material, blockAccess, pos));
+        BlockRenderContext.setQuadBlockMetadata(
+                blockEntityIdForActualState(material, blockAccess, pos),
+                (short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(material),
+                blockMetadataForActualState(material),
+                emission
+        );
+        BlockRenderContext.setQuadFramedBloomBoost(metadata.bloom() || emission > 0);
+
         return true;
     }
 
@@ -4790,15 +4802,11 @@ abstract class PipelineRuntimeState {
         return 0;
     }
 
-    protected IBlockState[] inheritedRenderStates(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+    protected IBlockState inheritedRenderState(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
         if (!isBlockcrafteryEditableBlock(state)) {
-            return new IBlockState[0];
+            return null;
         }
-        IBlockState contained = inheritedBlockcrafteryRenderState(state, blockAccess, pos);
-        if (contained == null) {
-            return new IBlockState[0];
-        }
-        return new IBlockState[] {contained};
+        return inheritedBlockcrafteryRenderState(state, blockAccess, pos);
     }
 
     protected int containedFrameEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
@@ -4879,25 +4887,17 @@ abstract class PipelineRuntimeState {
             return false;
         }
         String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
-        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).toLowerCase(java.util.Locale.ROOT) : "";
-        String blockClass = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state).getClass().getName().toLowerCase(java.util.Locale.ROOT);
+        String namespaceValue = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name);
+        String namespace = namespaceValue != null ? namespaceValue.toLowerCase(java.util.Locale.ROOT) : "";
+        String blockClass = com.l.ausm.impl.util.MinecraftReflectionCompat.lowerClassName(
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state));
         return namespace.contains("lumenized")
                 || path.contains("lumenized")
                 || blockClass.contains("lumenized");
     }
 
     protected boolean isLumenizedBloomState(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null) {
-            return false;
-        }
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePathLower(name);
-        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name).toLowerCase(java.util.Locale.ROOT) : "";
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
-        String blockClass = block != null
-                ? block.getClass().getName().toLowerCase(java.util.Locale.ROOT)
-                : "";
-        return namespace.contains("lumenized") || path.contains("lumenized") || blockClass.contains("lumenized");
+        return isExplicitBloomState(state);
     }
 
     protected int nextFramedDiagnosticCount(IBlockState state, boolean priority) {
@@ -4952,20 +4952,12 @@ abstract class PipelineRuntimeState {
 
     protected String framedDiagnosticInheritedStates(IBlockState state, IBlockAccess blockAccess, BlockPos pos,
                                                    BlockRenderLayer currentLayer, BlockRenderLayer bloomLayer) {
-        IBlockState[] inheritedStates = inheritedRenderStates(state, blockAccess, pos);
-        if (inheritedStates.length == 0) {
+        IBlockState inheritedState = inheritedRenderState(state, blockAccess, pos);
+        if (inheritedState == null) {
             return "[]";
         }
-
-        StringBuilder builder = new StringBuilder("[");
-        for (int i = 0; i < inheritedStates.length; i++) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(framedDiagnosticState("inherited" + i, inheritedStates[i], blockAccess, pos,
-                    currentLayer, bloomLayer));
-        }
-        return builder.append(']').toString();
+        return '[' + framedDiagnosticState("inherited0", inheritedState, blockAccess, pos,
+                currentLayer, bloomLayer) + ']';
     }
 
     protected String framedDiagnosticState(String label, IBlockState state, IBlockAccess blockAccess, BlockPos pos,
@@ -5066,11 +5058,9 @@ abstract class PipelineRuntimeState {
             if (recordProjectRedSyntheticLightCandidate(blockAccess, pos, "block_render_te")) {
                 return;
             }
-            auditSyntheticLight("block_render", pos, lightInfo, "skip:" + lightInfo.reason);
             return;
         }
         putSyntheticLightCandidate(pos, false);
-        auditSyntheticLight("block_render", pos, lightInfo, "recorded");
     }
 
     public void refreshSyntheticLightCandidate(BlockPos pos) {
@@ -5096,9 +5086,6 @@ abstract class PipelineRuntimeState {
         SyntheticLightInfo lightInfo = syntheticLightInfo(state, world, pos);
         if (lightInfo.voxelId > 0 && lightInfo.emission > 0) {
             putSyntheticLightCandidate(pos, true);
-            auditSyntheticLight("world_update", pos, lightInfo, "recorded");
-        } else {
-            auditSyntheticLight("world_update", pos, lightInfo, "skip:" + lightInfo.reason);
         }
         if (shouldProbeColoredLightTileEntity(state, lightInfo)) {
             auditProjectRedTileEntity(world, pos, "world_update_te");
@@ -5165,7 +5152,14 @@ abstract class PipelineRuntimeState {
             return new SyntheticLightInfo(state, actualState, shaderBlockId, 0, emission, "no_colored_voxel_mapping");
         }
         if (emission <= 0) {
-            return new SyntheticLightInfo(state, actualState, shaderBlockId, voxelId, emission, "not_emissive");
+            // A positive ACT voxel mapping is itself an explicit declaration
+            // that this material is a colored emitter. Several 1.12 mod blocks
+            // (Aether portals and texture-driven luminous blocks in particular)
+            // report zero through vanilla getLightValue even though the shader
+            // material computes emission from its texture. Emission is only an
+            // eligibility gate here; intensity/color remain shader-owned.
+            emission = 1;
+            return new SyntheticLightInfo(state, actualState, shaderBlockId, voxelId, emission, "ok:mapped_emission_fallback");
         }
         return new SyntheticLightInfo(state, actualState, shaderBlockId, voxelId, emission, "ok");
     }
@@ -5200,40 +5194,6 @@ abstract class PipelineRuntimeState {
         }
     }
 
-    protected void auditSyntheticLight(String source, BlockPos pos, SyntheticLightInfo lightInfo, String result) {
-        if (MAX_COLORED_LIGHT_AUDIT_LOGS <= 0) {
-            return;
-        }
-        if (lightInfo == null || !shouldAuditSyntheticLight(lightInfo)) {
-            return;
-        }
-        String key = source + "|" + result + "|" + pos + "|" + stateName(lightInfo.originalState)
-                + "|" + stateName(lightInfo.actualState) + "|" + lightInfo.shaderBlockId
-                + "|" + lightInfo.voxelId + "|" + lightInfo.emission;
-        if (!coloredLightAuditKeys.add(key)) {
-            return;
-        }
-        int count = coloredLightAuditCount.incrementAndGet();
-        if (count > MAX_COLORED_LIGHT_AUDIT_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[ColoredLightAudit] source={} pos={} state={} actual={} shaderBlockId={} voxel={} emission={} result={} candidates={}",
-                source,
-                formatBlockPos(pos),
-                stateName(lightInfo.originalState),
-                stateName(lightInfo.actualState),
-                lightInfo.shaderBlockId,
-                lightInfo.voxelId,
-                lightInfo.emission,
-                result,
-                syntheticLightCandidates.size()
-        );
-        if (count == MAX_COLORED_LIGHT_AUDIT_LOGS) {
-            MainMod.LOGGER.info("[ColoredLightAudit] Reached log cap {}; suppressing further colored-light audit lines.", MAX_COLORED_LIGHT_AUDIT_LOGS);
-        }
-    }
-
     protected void logDecoratedLightEmission(IBlockState originalState, IBlockState decoratedState,
                                            IBlockAccess blockAccess, BlockPos pos, int emission) {
         if (MAX_DECORATED_LIGHT_AUDIT_LOGS <= 0) {
@@ -5263,40 +5223,6 @@ abstract class PipelineRuntimeState {
         );
     }
 
-    protected void auditProjectRedLight(TileEntity tileEntity, int[] voxelIds, int count, String result) {
-        String diagnosis = ProjectRedIlluminationCompat.diagnose(tileEntity);
-        if (diagnosis == null) {
-            return;
-        }
-        auditProjectRedDiagnosis(tileEntity, voxelIds, count, result, diagnosis);
-    }
-
-    protected void auditProjectRedDiagnosis(TileEntity tileEntity, int[] voxelIds, int count, String result, String diagnosis) {
-        if (MAX_COLORED_LIGHT_AUDIT_LOGS <= 0) {
-            return;
-        }
-        BlockPos pos = tileEntity != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.tileEntityPos(tileEntity) : null;
-        String key = "projectred|" + result + "|" + formatBlockPos(pos) + "|" + diagnosis;
-        if (!coloredLightAuditKeys.add(key)) {
-            return;
-        }
-        int logCount = coloredLightAuditCount.incrementAndGet();
-        if (logCount > MAX_COLORED_LIGHT_AUDIT_LOGS) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[ColoredLightAudit] source=projectred pos={} count={} voxels={} result={} {}",
-                formatBlockPos(pos),
-                count,
-                formatVoxelIds(voxelIds, count),
-                result,
-                diagnosis
-        );
-        if (logCount == MAX_COLORED_LIGHT_AUDIT_LOGS) {
-            MainMod.LOGGER.info("[ColoredLightAudit] Reached log cap {}; suppressing further colored-light audit lines.", MAX_COLORED_LIGHT_AUDIT_LOGS);
-        }
-    }
-
     protected void auditProjectRedTileEntity(World world, BlockPos pos, String result) {
         if (world == null || pos == null) {
             return;
@@ -5316,10 +5242,6 @@ abstract class PipelineRuntimeState {
         if (count > 0) {
             putSyntheticLightCandidate(pos, true);
         }
-        String diagnosis = ProjectRedIlluminationCompat.diagnoseHost(tileEntity);
-        if (diagnosis != null) {
-            auditProjectRedDiagnosis(tileEntity, voxelIds, count, result, diagnosis);
-        }
     }
 
     protected boolean recordProjectRedSyntheticLightCandidate(IBlockAccess blockAccess, BlockPos pos, String result) {
@@ -5335,7 +5257,6 @@ abstract class PipelineRuntimeState {
         }
 
         putSyntheticLightCandidate(pos, true);
-        auditProjectRedLight(tileEntity, voxelIds, count, result);
         return true;
     }
 
@@ -5350,17 +5271,6 @@ abstract class PipelineRuntimeState {
         }
     }
 
-    protected void resetColoredLightAudit() {
-        coloredLightAuditKeys.clear();
-        coloredLightAuditCount.set(0);
-    }
-
-    protected boolean shouldAuditSyntheticLight(SyntheticLightInfo lightInfo) {
-        return lightInfo.voxelId > 0
-                || isKnownColoredLightAuditTarget(lightInfo.originalState)
-                || isKnownColoredLightAuditTarget(lightInfo.actualState);
-    }
-
     protected boolean shouldProbeColoredLightTileEntity(IBlockState state, SyntheticLightInfo lightInfo) {
         return isProjectRedTileHost(state)
                 || lightInfo != null && isProjectRedTileHost(lightInfo.originalState)
@@ -5372,33 +5282,6 @@ abstract class PipelineRuntimeState {
         return name != null
                 && (("projectred-illumination".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)))
                 || ("forgemultipartcbe".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)) && "multipart_block".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name))));
-    }
-
-    protected boolean isKnownColoredLightAuditTarget(IBlockState state) {
-        ResourceLocation name = registryName(state);
-        if (name == null) {
-            return false;
-        }
-
-        String namespace = com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name);
-        String path = com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name);
-        if ("projectred-illumination".equals(namespace)
-                || ("forgemultipartcbe".equals(namespace) && "multipart_block".equals(path))) {
-            return true;
-        }
-        if ("thaumcraft".equals(namespace)) {
-            return path.startsWith("candle_") || path.startsWith("nitor_");
-        }
-        if ("bewitchment".equals(namespace)) {
-            return path.endsWith("_candle");
-        }
-        if ("tconstruct".equals(namespace)) {
-            return "seared_furnace_controller".equals(path);
-        }
-        if ("astralsorcery".equals(namespace)) {
-            return "blockcelestialcrystals".equalsIgnoreCase(path) || "blockgemcrystals".equalsIgnoreCase(path);
-        }
-        return false;
     }
 
     protected static ResourceLocation registryName(IBlockState state) {
@@ -5548,10 +5431,6 @@ abstract class PipelineRuntimeState {
         if (mc == null
                 || world == null
                 || !shouldUseCompleteOwnedSkyOverride()) {
-            return;
-        }
-        Object screen = com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc);
-        if (screen != null || com.l.ausm.impl.util.MinecraftReflectionCompat.isGamePaused(mc)) {
             return;
         }
         Object renderer = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProviderSkyRenderer(
@@ -5747,8 +5626,8 @@ abstract class PipelineRuntimeState {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         World world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return world != null
-                && (shouldUseShaderOwnedSkyOverride(world)
-                    || shouldUseShaderlessOwnedSky(mc) && isSimpleVoidWorld(world))
+                && (isPipelineActive && shouldUseShaderOwnedSkyOverride(world)
+                    || shouldUseCompleteOwnedSkyOverride())
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
     }
@@ -5909,11 +5788,11 @@ abstract class PipelineRuntimeState {
     }
 
     public boolean shouldSuppressAstralUpperSkyGeometry() {
-        return shouldSuppressShaderedAstralLowerSky() || shouldSuppressShaderlessSimpleVoidSkyBaseGeometry();
+        return isPipelineActive && shouldSuppressShaderedAstralLowerSky();
     }
 
     public boolean shouldSuppressAstralLowerSkyGeometry() {
-        return shouldSuppressShaderedAstralLowerSky() || shouldSuppressShaderlessSimpleVoidSkyBaseGeometry();
+        return isPipelineActive && shouldSuppressShaderedAstralLowerSky();
     }
 
     protected boolean shouldSuppressShaderlessSimpleVoidSkyBaseGeometry() {
@@ -6161,7 +6040,10 @@ abstract class PipelineRuntimeState {
     }
 
     public void captureShaderlessWorldFramebufferForUi() {
-        if (isPipelineActive || !shaderlessWorldPassActive || isRenderingBetterPortalsNestedView() || isRenderingBetterPortalsRenderPass()) {
+        // EntityRenderer invokes this immediately after renderWorld returns.
+        // finishShaderlessWorldPassRendering has necessarily closed the scope
+        // by then, so shaderlessWorldPassActive must already be false here.
+        if (isPipelineActive || isRenderingBetterPortalsNestedView() || isRenderingBetterPortalsRenderPass()) {
             return;
         }
 
@@ -6262,7 +6144,15 @@ abstract class PipelineRuntimeState {
     }
 
     protected void logShaderlessWorldFramebufferHandoff(String stage, String detail) {
-        // Probe disabled.
+        if (shaderlessWorldFramebufferHandoffLogs++ >= 32) {
+            return;
+        }
+        MainMod.LOGGER.info(
+                "[AUSMShaderlessWorldFramebufferHandoff] stage={} frame={} detail={} gl={}",
+                stage,
+                clientRenderFrameNanos,
+                detail,
+                glStateSummary());
     }
 
     protected String sampleFramebufferForHandoff(int framebuffer, int width, int height) {
@@ -7515,6 +7405,43 @@ abstract class PipelineRuntimeState {
         }
     }
 
+    /**
+     * Temporarily presents immediate-mode/TESR geometry as a shaderpack block-entity material.
+     * This lets compatibility renderers opt only their animated geometry into emission without
+     * making the backing tile or multiblock casing emissive.
+     */
+    public boolean beginDynamicBlockEntityEmission(int blockEntityId) {
+        if (!canRenderDynamicBlockEntityEmission()) {
+            return false;
+        }
+        dynamicBlockEntityIdStack.push(dynamicBlockEntityId);
+        dynamicBlockEntityId = blockEntityId;
+        uploadDynamicBlockEntityId();
+        return true;
+    }
+
+    public void endDynamicBlockEntityEmission() {
+        dynamicBlockEntityId = dynamicBlockEntityIdStack.isEmpty() ? -1 : dynamicBlockEntityIdStack.pop();
+        uploadDynamicBlockEntityId();
+    }
+
+    public boolean canRenderDynamicBlockEntityEmission() {
+        return isPipelineActive
+                && worldFrameActive
+                && activePass != null
+                && activePass.stage() == ProgramStage.GBUFFERS
+                && !renderingShadowMap
+                && !renderingGuiScreen();
+    }
+
+    protected void uploadDynamicBlockEntityId() {
+        ShaderProgram program = activeProgram();
+        if (program == null || GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM) != program.getId()) {
+            return;
+        }
+        uniformRegistry.upload(program, "blockEntityId");
+    }
+
     public boolean shouldRenderEntityWithVanillaProgram(Entity entity) {
         if (!isPipelineActive || !worldFrameActive || activePass == null || renderingShadowMap || renderingGuiScreen()) {
             return false;
@@ -8145,8 +8072,19 @@ abstract class PipelineRuntimeState {
         if (!shouldRouteItemGlintThroughPipeline()) {
             return false;
         }
+        itemGlintMaskDepth++;
         beginPhase(WorldRenderingPhase.ARMOR_GLINT);
         return true;
+    }
+
+    public void endItemGlintPhase() {
+        try {
+            endPass();
+        } finally {
+            if (itemGlintMaskDepth > 0) {
+                itemGlintMaskDepth--;
+            }
+        }
     }
 
     /**
@@ -8396,14 +8334,12 @@ abstract class PipelineRuntimeState {
         GL11.glFrontFace(GL11.GL_CCW);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateCullFaceBack();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-        probeGuiEntityState("entity-prepared");
     }
 
     public void finishGuiEntityPreviewRenderState() {
         if (guiEntityPreviewStateDepth <= 0) {
             return;
         }
-        probeGuiEntityState("entity-return");
         guiEntityPreviewStateDepth--;
         GL11.glPopAttrib();
         if (!isPipelineActive) {
@@ -8422,189 +8358,6 @@ abstract class PipelineRuntimeState {
         } else {
             restoreGuiSafeRenderState("gui-entity-preview");
         }
-    }
-
-    public void probeGuiModelState(String stage) {
-        if (!isPipelineActive || guiModelStateProbeLogs >= MAX_GUI_MODEL_STATE_PROBE_LOGS) {
-            return;
-        }
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        Object screen = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) : null;
-        if (!(screen instanceof net.minecraft.client.gui.inventory.GuiContainer)) {
-            return;
-        }
-        guiModelStateProbeLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMGuiModelState] call={} stage={} screen={} guiDepth={} entityDepth={} frontFace={} cullFace={} cullEnabled={} matrix={} gl={}",
-                guiModelStateProbeLogs,
-                stage,
-                screen != null ? screen.getClass().getName() : "null",
-                guiRenderDepth,
-                guiEntityPreviewStateDepth,
-                GL11.glGetInteger(GL11.GL_FRONT_FACE),
-                GL11.glGetInteger(GL11.GL_CULL_FACE_MODE),
-                GL11.glIsEnabled(GL11.GL_CULL_FACE),
-                guiModelMatrixSummary(),
-                glStateSummary()
-        );
-    }
-
-    public void beginGuiItemModelProbe(ItemStack stack, net.minecraft.client.renderer.block.model.IBakedModel model) {
-        String name = renderedItemDebugName(stack);
-        guiItemProbeNames.push(name);
-        probeGuiItemModel("item-scope", name, model);
-    }
-
-    public void endGuiItemModelProbe() {
-        if (!guiItemProbeNames.isEmpty()) {
-            guiItemProbeNames.pop();
-        }
-    }
-
-    public void probeGuiItemModel(String stage, ItemStack stack, net.minecraft.client.renderer.block.model.IBakedModel model) {
-        probeGuiItemModel(stage, renderedItemDebugName(stack), model);
-    }
-
-    protected void probeGuiItemModel(String stage, String name, net.minecraft.client.renderer.block.model.IBakedModel model) {
-        if (!isPipelineActive
-                || !renderingGuiScreen()
-                || guiItemModelProbeLogs >= MAX_GUI_ITEM_MODEL_PROBE_LOGS
-                || name == null
-                || !name.startsWith("bloodmagic:")) {
-            return;
-        }
-
-        int quads = 0;
-        int diffuseQuads = 0;
-        LinkedHashSet<String> formats = new LinkedHashSet<>();
-        if (model != null) {
-            for (net.minecraft.util.EnumFacing face : net.minecraft.util.EnumFacing.values()) {
-                List<net.minecraft.client.renderer.block.model.BakedQuad> faceQuads = com.l.ausm.impl.util.MinecraftReflectionCompat.bakedModelQuads(model, null, face, 0L);
-                quads += faceQuads.size();
-                for (net.minecraft.client.renderer.block.model.BakedQuad quad : faceQuads) {
-                    if (com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadApplyDiffuseLighting(quad)) {
-                        diffuseQuads++;
-                    }
-                    formats.add(guiProbeFormatSummary(com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadFormat(quad)));
-                }
-            }
-            List<net.minecraft.client.renderer.block.model.BakedQuad> generalQuads = com.l.ausm.impl.util.MinecraftReflectionCompat.bakedModelQuads(model, null, null, 0L);
-            quads += generalQuads.size();
-            for (net.minecraft.client.renderer.block.model.BakedQuad quad : generalQuads) {
-                if (com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadApplyDiffuseLighting(quad)) {
-                    diffuseQuads++;
-                }
-                formats.add(guiProbeFormatSummary(com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadFormat(quad)));
-            }
-        }
-
-        guiItemModelProbeLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMGuiItemModel] call={} stage={} item={} model={} builtIn={} gui3d={} quads={} diffuseQuads={} formats={} lighting={} rescale={} normalize={} twoSided={} shadeModel={} frontFace={} cull={} gl={}",
-                guiItemModelProbeLogs,
-                stage,
-                name,
-                model != null ? model.getClass().getName() : "null",
-                model != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean(model, new String[] {"func_188618_c", "isBuiltInRenderer"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false),
-                model != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean(model, new String[] {"func_177555_b", "isGui3d"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false),
-                quads,
-                diffuseQuads,
-                formats,
-                GL11.glIsEnabled(GL11.GL_LIGHTING),
-                GL11.glIsEnabled(GL12.GL_RESCALE_NORMAL),
-                GL11.glIsEnabled(GL11.GL_NORMALIZE),
-                GL11.glGetBoolean(GL11.GL_LIGHT_MODEL_TWO_SIDE),
-                GL11.glGetInteger(GL11.GL_SHADE_MODEL),
-                GL11.glGetInteger(GL11.GL_FRONT_FACE),
-                GL11.glIsEnabled(GL11.GL_CULL_FACE),
-                glStateSummary()
-        );
-    }
-
-    public void probeGuiItemBufferDraw(BufferBuilder buffer, net.minecraft.client.renderer.vertex.VertexFormat format) {
-        String name = guiItemProbeNames.peek();
-        if (!isPipelineActive
-                || !renderingGuiScreen()
-                || guiItemModelProbeLogs >= MAX_GUI_ITEM_MODEL_PROBE_LOGS
-                || name == null
-                || !name.startsWith("bloodmagic:")) {
-            return;
-        }
-        guiItemModelProbeLogs++;
-        MainMod.LOGGER.info(
-                "[AUSMGuiItemDraw] call={} item={} vertices={} drawMode={} format={} vertexArray={} colorArray={} normalArray={} texCoordArray={} lighting={} rescale={} frontFace={} cull={} gl={}",
-                guiItemModelProbeLogs,
-                name,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexCount(buffer),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(buffer, -1, "field_179006_k", "drawMode"),
-                guiProbeFormatSummary(format),
-                GL11.glIsEnabled(GL11.GL_VERTEX_ARRAY),
-                GL11.glIsEnabled(GL11.GL_COLOR_ARRAY),
-                GL11.glIsEnabled(GL11.GL_NORMAL_ARRAY),
-                GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY),
-                GL11.glIsEnabled(GL11.GL_LIGHTING),
-                GL11.glIsEnabled(GL12.GL_RESCALE_NORMAL),
-                GL11.glGetInteger(GL11.GL_FRONT_FACE),
-                GL11.glIsEnabled(GL11.GL_CULL_FACE),
-                glStateSummary()
-        );
-    }
-
-    protected static String guiProbeFormatSummary(net.minecraft.client.renderer.vertex.VertexFormat format) {
-        if (format == null) {
-            return "null";
-        }
-        return "size=" + ExtendedVertexFormats.size(format)
-                + ",elements=" + com.l.ausm.impl.util.MinecraftReflectionCompat.callInt(format,
-                new String[] {"func_177345_h", "getElementCount"},
-                com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS,
-                -1)
-                + ",normal=" + ExtendedVertexFormats.hasNormal(format)
-                + ",uv1=" + ExtendedVertexFormats.hasUvOffset(format, 1);
-    }
-
-    protected String guiModelMatrixSummary() {
-        guiModelMatrixProbe.clear();
-        GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, guiModelMatrixProbe);
-        float m00 = guiModelMatrixProbe.get(0);
-        float m01 = guiModelMatrixProbe.get(1);
-        float m02 = guiModelMatrixProbe.get(2);
-        float m10 = guiModelMatrixProbe.get(4);
-        float m11 = guiModelMatrixProbe.get(5);
-        float m12 = guiModelMatrixProbe.get(6);
-        float m20 = guiModelMatrixProbe.get(8);
-        float m21 = guiModelMatrixProbe.get(9);
-        float m22 = guiModelMatrixProbe.get(10);
-        float determinant = m00 * (m11 * m22 - m12 * m21)
-                - m10 * (m01 * m22 - m02 * m21)
-                + m20 * (m01 * m12 - m02 * m11);
-        return "diag=" + formatProbeFloat(m00) + '/' + formatProbeFloat(m11) + '/' + formatProbeFloat(m22)
-                + ",det=" + formatProbeFloat(determinant)
-                + ",translation=" + formatProbeFloat(guiModelMatrixProbe.get(12)) + '/'
-                + formatProbeFloat(guiModelMatrixProbe.get(13)) + '/'
-                + formatProbeFloat(guiModelMatrixProbe.get(14));
-    }
-
-    public void probeGuiEntityState(String stage) {
-        if (guiEntityStateProbeLogs >= MAX_GUI_ENTITY_STATE_PROBE_LOGS) {
-            return;
-        }
-        guiEntityStateProbeLogs++;
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        Object screen = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) : null;
-        MainMod.LOGGER.info(
-                "[AUSMGuiEntityState] call={} stage={} screen={} guiDepth={} entityDepth={} frontFace={} cullFace={} cullEnabled={} matrix={} gl={}",
-                guiEntityStateProbeLogs,
-                stage,
-                screen != null ? screen.getClass().getName() : "null",
-                guiRenderDepth,
-                guiEntityPreviewStateDepth,
-                GL11.glGetInteger(GL11.GL_FRONT_FACE),
-                GL11.glGetInteger(GL11.GL_CULL_FACE_MODE),
-                GL11.glIsEnabled(GL11.GL_CULL_FACE),
-                guiModelMatrixSummary(),
-                glStateSummary()
-        );
     }
 
     public boolean isInventoryEntityPreview(net.minecraft.entity.Entity entity, double x, double y, double z) {
@@ -8727,6 +8480,20 @@ abstract class PipelineRuntimeState {
         return renderingGuiScreen();
     }
 
+    public void beginGuiItemRenderScope() {
+        guiItemRenderDepth++;
+    }
+
+    public void endGuiItemRenderScope() {
+        if (guiItemRenderDepth > 0) {
+            guiItemRenderDepth--;
+        }
+    }
+
+    public boolean isRenderingGuiItemContext() {
+        return renderingGuiScreen() || guiItemRenderDepth > 0;
+    }
+
     public boolean shouldDrawActiveProgramAsPatches() {
         return hasBoundPipelineProgram()
                 && activeProgramTessellated
@@ -8819,6 +8586,9 @@ abstract class PipelineRuntimeState {
         }
         if (bindingProgram.stage() == ProgramStage.GBUFFERS) {
             TextureBinder.bindMaterialFallbackTextures();
+            if (pass == RenderPass.GBUFFERS_ARMOR_GLINT && itemGlintMaskDepth > 0) {
+                bindItemGlintBaseAtlas();
+            }
         }
 
         program.bind();
@@ -8854,7 +8624,10 @@ abstract class PipelineRuntimeState {
         }
         uniformRegistry.uploadAll(program);
         if (!packDirectives.customUniforms().isEmpty()) {
-            packDirectives.customUniforms().upload(program, uniformRegistry.scalarValuesInto(customUniformScalarScratch));
+            packDirectives.customUniforms().upload(program, uniformRegistry.scalarValuesInto(
+                    customUniformScalarScratch,
+                    packDirectives.customUniforms().builtinDependencies()
+            ));
         }
     }
 
@@ -8908,6 +8681,25 @@ abstract class PipelineRuntimeState {
             com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
         }
         ShaderSamplerState.clampTextureAnisotropyIfNeeded(GL11.GL_TEXTURE_2D);
+    }
+
+    protected void bindItemGlintBaseAtlas() {
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
+        TextureManager textureManager = MinecraftReflectionCompat.textureManager(mc);
+        if (textureManager == null) {
+            return;
+        }
+        ITextureObject texture = MinecraftReflectionCompat.texture(
+                textureManager, MinecraftReflectionCompat.blocksTexture());
+        if (texture == null) {
+            MinecraftReflectionCompat.bindTexture(textureManager, MinecraftReflectionCompat.blocksTexture());
+            texture = MinecraftReflectionCompat.texture(textureManager, MinecraftReflectionCompat.blocksTexture());
+        }
+        if (texture != null) {
+            TextureBinder.bindRawTexture(TextureBinder.ITEM_GLINT_BASE_ATLAS_TEXTURE_UNIT,
+                    MinecraftReflectionCompat.glTextureId(texture));
+        }
+        TextureBinder.restoreDefaultTextureUnit();
     }
 
     protected void applyAlphaTest(RenderPass pass) {
@@ -9493,6 +9285,63 @@ abstract class PipelineRuntimeState {
     protected abstract void unbindShaderStorageBuffers();
 
     protected static int localActVoxelId(int materialId) {
+        int standardVoxelId = switch (materialId) {
+            case 10056 -> 14; // Lava cauldron
+            case 10068 -> 13; // Lava
+            case 10072 -> 5;  // Fire
+            case 10076 -> 27; // Soul fire
+            case 10216 -> 62; // Crimson stem / hyphae
+            case 10224 -> 63; // Warped stem / hyphae
+            case 10332 -> 36; // Amethyst
+            case 10396 -> 11; // Jack o'lantern
+            case 10404 -> 6;  // Sea pickle
+            case 10412 -> 10; // Glowstone
+            case 10448 -> 18; // Sea lantern
+            case 10452 -> 37; // Magma block
+            case 10476 -> 26; // Crying obsidian
+            case 10496 -> 2;  // Torch
+            case 10500 -> 3;  // End rod
+            case 10508, 10512 -> 39; // Chorus flower
+            case 10516 -> 21; // Lit furnace
+            case 10528 -> 28; // Soul torch
+            case 10544 -> 34; // Glow lichen
+            case 10548 -> 33; // Enchanting table
+            case 10556 -> 58; // Active end portal frame
+            case 10560 -> 12; // Lantern
+            case 10564 -> 29; // Soul lantern
+            case 10572 -> 38; // Dragon egg
+            case 10576 -> 22; // Lit smoker
+            case 10580 -> 23; // Lit blast furnace
+            case 10592 -> 17; // Lit respawn anchor
+            case 10596 -> 66; // Lit redstone wire
+            case 10604 -> 35; // Redstone torch
+            case 10616, 10624 -> 31; // Lit redstone ore
+            case 10632 -> 20; // Glow-berry cave vines
+            case 10640 -> 16; // Lit redstone lamp
+            case 10644 -> 67; // Lit repeater / comparator
+            case 10648 -> 19; // Shroomlight
+            case 10652 -> 15; // Campfire
+            case 10656 -> 30; // Soul campfire
+            case 10680 -> 7;  // Ochre froglight
+            case 10684 -> 8;  // Verdant froglight
+            case 10688 -> 9;  // Pearlescent froglight
+            case 10704 -> 57; // Active sculk sensor
+            case 10788 -> 36; // Active calibrated sculk sensor
+            case 10852 -> 55; // Bright lit copper bulb
+            case 10856 -> 56; // Dim lit copper bulb
+            case 10868 -> 54; // Active trial spawner / vault
+            case 10876 -> 69; // Active ominous trial spawner / vault
+            case 10948 -> 82; // Active creaking heart
+            case 10972 -> 83; // Firefly bush
+            case 10976, 10980 -> 81; // Open eyeblossom
+            case 10984, 10986, 10988 -> 84; // Copper torch / lantern
+            case 30020 -> 25; // Nether portal
+            case 32016 -> 4;  // Beacon
+            default -> 0;
+        };
+        if (standardVoxelId > 0) {
+            return standardVoxelId;
+        }
         if (materialId == 12003 || materialId == 12283) {
             return 3;
         }

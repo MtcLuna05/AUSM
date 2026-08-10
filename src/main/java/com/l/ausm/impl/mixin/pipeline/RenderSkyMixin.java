@@ -63,7 +63,7 @@ public class RenderSkyMixin {
         context.beginPhase(WorldRenderingPhase.SKY);
         if (context.shouldUseShaderOwnedSkyOverride()) {
             // One shader-owned canvas replaces every vanilla or mod renderer
-            // in overworld-like dimensions. Entree owns all sky detail.
+            // in overworld-like dimensions.
             context.renderShaderedSkyBaseBacking();
             context.endPass();
             ci.cancel();
@@ -97,7 +97,6 @@ public class RenderSkyMixin {
         }
         context.renderShaderlessOwnedSkyDetailsAfterCelestials(partialTicks);
         context.sealShaderlessSkyFramebufferAlpha();
-        context.logHiddenSkyFramebufferProbe("post-sky");
         context.endPass();
     }
 

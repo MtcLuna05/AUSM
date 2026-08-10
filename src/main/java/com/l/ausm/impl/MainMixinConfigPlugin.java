@@ -30,6 +30,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         if (mixinClassName.endsWith(".NothiriumRenderChunkTaskSortTranslucentMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskSortTranslucent.class", true);
         }
+        if (mixinClassName.endsWith(".NothiriumShadowChunkAccessMixin")) {
+            return optionalTargetPresent(mixinClassName, "meldexun/nothirium/renderer/chunk/AbstractRenderChunk.class", true);
+        }
         if (mixinClassName.endsWith(".NothiriumChunkRendererDynamicVboMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/ChunkRendererDynamicVbo.class", true);
         }
@@ -53,6 +56,14 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         }
         if (mixinClassName.endsWith(".NothiriumSectionRenderCacheDynamicLightMixin")) {
             return optionalTargetPresent(mixinClassName, "meldexun/nothirium/mc/renderer/chunk/SectionRenderCache.class", true);
+        }
+        if (mixinClassName.endsWith(".EntityCullingQueryLatencyMixin")) {
+            return optionalTargetPresent(mixinClassName,
+                    "meldexun/entityculling/util/culling/CullingInstance.class", true);
+        }
+        if (mixinClassName.endsWith(".EfficientEntitiesModelRendererCompatMixin")) {
+            return optionalTargetPresent(mixinClassName,
+                    "com/michaelsebero/efficiententities/mixin/MixinModelRenderer.class", true);
         }
         if (mixinClassName.endsWith(".CustomMainMenuGuiCustomMixin")) {
             return optionalTargetPresent(mixinClassName, "lumien/custommainmenu/gui/GuiCustom.class", false);
@@ -122,6 +133,13 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         }
         if (mixinClassName.endsWith(".GpomBetterPortalsClientWorldCleanupMixin")) {
             return optionalTargetPresent(mixinClassName, "com/l/gpom/compat/betterportals/BetterPortalsClientWorldCleanup.class", false);
+        }
+        if (mixinClassName.endsWith(".EuphoriaPatcherEntreeMixin")) {
+            // Euphoria Patcher is added to Foundation's game class loader only
+            // after early mixin selection. A mods-directory fallback makes
+            // Mixin request the target too soon; Foundation then caches that
+            // miss and Forge cannot construct Euphoria's own mod instance.
+            return optionalTargetPresent(mixinClassName, "com/euphoriapatches/euphoria_patcher/EuphoriaPatcher.class", false);
         }
         if (mixinClassName.endsWith(".BetweenlandsMessageSyncChunkStorageMixin")) {
             return optionalTargetPresent(mixinClassName, "thebetweenlands/common/network/clientbound/MessageSyncChunkStorage.class", true);

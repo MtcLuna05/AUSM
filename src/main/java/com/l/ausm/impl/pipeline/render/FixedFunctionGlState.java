@@ -4,6 +4,7 @@ import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureManager;
+import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
@@ -12,8 +13,12 @@ import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GLContext;
 
+import java.nio.FloatBuffer;
+
 public final class FixedFunctionGlState {
     public static final float TRANSLUCENT_ALPHA_REF = 0.003921569F;
+    private static final ThreadLocal<FloatBuffer> TEXTURE_MATRIX_PROBE =
+            ThreadLocal.withInitial(() -> BufferUtils.createFloatBuffer(16));
 
     private FixedFunctionGlState() {
     }
@@ -87,6 +92,67 @@ public final class FixedFunctionGlState {
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
+    }
+
+    /**
+     * World particles use fixed-function texture coordinates. A GUI glint or
+     * compatibility renderer that leaves a projected texture matrix behind can
+     * therefore turn each particle quad into a screen/terrain-sized plane even
+     * when every other GL boundary state is canonical.
+     */
+    public static void resetVanillaTextureMatrices() {
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+        try {
+            resetTextureMatrix(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+            resetTextureMatrix(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
+        } finally {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(previousActiveTexture);
+            GL11.glMatrixMode(previousMatrixMode);
+        }
+    }
+
+    private static void resetTextureMatrix(int textureUnit) {
+        com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(textureUnit);
+        GL11.glMatrixMode(GL11.GL_TEXTURE);
+        GL11.glLoadIdentity();
+    }
+
+    public static String textureMatrixSummary() {
+        FloatBuffer matrix = TEXTURE_MATRIX_PROBE.get();
+        matrix.clear();
+        GL11.glGetFloat(GL11.GL_TEXTURE_MATRIX, matrix);
+        return "textureMatrix="
+                + matrix.get(0) + '/' + matrix.get(5) + '/' + matrix.get(10) + '/' + matrix.get(15)
+                + ",translate=" + matrix.get(12) + '/' + matrix.get(13) + '/' + matrix.get(14);
+    }
+
+    public static String clientArraySummary() {
+        int previousClientTexture = GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE);
+        int defaultUnit = com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit();
+        int lightmapUnit = com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit();
+        boolean defaultTexCoords;
+        boolean lightmapTexCoords;
+        try {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(defaultUnit);
+            defaultTexCoords = GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(lightmapUnit);
+            lightmapTexCoords = GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY);
+        } finally {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(previousClientTexture);
+        }
+        int vao = GLContext.getCapabilities().OpenGL30
+                ? GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING)
+                : 0;
+        return "vao=" + vao
+                + ",array=" + GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING)
+                + ",element=" + GL11.glGetInteger(GL15.GL_ELEMENT_ARRAY_BUFFER_BINDING)
+                + ",vertex=" + GL11.glIsEnabled(GL11.GL_VERTEX_ARRAY)
+                + ",color=" + GL11.glIsEnabled(GL11.GL_COLOR_ARRAY)
+                + ",normal=" + GL11.glIsEnabled(GL11.GL_NORMAL_ARRAY)
+                + ",uv0=" + defaultTexCoords
+                + ",uv1=" + lightmapTexCoords
+                + ",clientTex=" + GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE);
     }
 
     public static String summary() {

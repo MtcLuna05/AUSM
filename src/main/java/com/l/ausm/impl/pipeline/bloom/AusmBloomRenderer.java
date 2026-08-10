@@ -11,6 +11,7 @@ import com.l.ausm.impl.pipeline.pack.ShaderPack;
 import com.l.ausm.impl.pipeline.pack.ShaderPackLayout;
 import com.l.ausm.impl.pipeline.pack.ShaderPreprocessor;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
+import com.l.ausm.impl.pipeline.render.TextureBinder;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -55,12 +56,8 @@ public final class AusmBloomRenderer {
     private static final float FRAMEBUFFER_BLOOM_STRENGTH = 0.525F;
     private static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
     private static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = false;
-    private static final int BLOOM_RENDER_LOG_LIMIT = 0;
-    private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 0;
-    // These probes are intentionally short-lived.  They include a few small
-    // framebuffer reads plus two source snapshots, enough to identify whether
-    // Bloom is lost while drawing, blurring, depth-masking, or presenting
-    // without continuously penalising shadered play.
+    private static final int BLOOM_RENDER_LOG_LIMIT = 8;
+    private static final int BLOOM_ZERO_RENDER_LOG_LIMIT = 8;
     private static final int BLOOM_PROBE_LIMIT = 0;
     private static final int BLOOM_DEPTH_LEAK_PROBE_ATTEMPT_LIMIT = 0;
     private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_FACTOR = -1.0F;
@@ -70,8 +67,10 @@ public final class AusmBloomRenderer {
     private Framebuffer bloomLayerTarget;
     private Framebuffer bloomDownsampleTarget;
     private Framebuffer bloomBlurTarget;
+    private Framebuffer translucentAttenuationTarget;
     private int bloomDepthTexture;
     private int finalDepthTexture;
+    private int translucentDepthTexture;
     private int width = -1;
     private int height = -1;
     private int halfWidth = -1;
@@ -81,6 +80,7 @@ public final class AusmBloomRenderer {
     private int blurProgram = -1;
     private int compositeProgram = -1;
     private int emissiveExtractProgram = -1;
+    private int translucentAttenuationProgram = -1;
     private String compositeVertexSource = VERTEX_SHADER;
     private String compositeFragmentSource = COMPOSITE_FRAGMENT_SHADER;
     private float bloomStrength = DEFAULT_BLOOM_STRENGTH;
@@ -88,6 +88,7 @@ public final class AusmBloomRenderer {
     private boolean shaderPackCompositeOverride;
     private boolean shaderPackCompositeReplace;
     private boolean layerBloomPending;
+    private boolean translucentAttenuationAvailable;
     private boolean loggedLayerRenderer;
     private boolean loggedShaderlessEmissiveRenderer;
     private boolean loggedProgramFailure;
@@ -109,6 +110,7 @@ public final class AusmBloomRenderer {
     private LumenizedTicketBridge lumenizedTickets;
     private boolean globalFacadesBloomResolved;
     private Method globalFacadesBloomMethod;
+    private Method globalFacadesTranslucentAttenuationMethod;
     private boolean loggedGlobalFacadesBloomBridge;
 
     public void configure(ShaderPack pack, ShaderProperties properties) {
@@ -172,6 +174,7 @@ public final class AusmBloomRenderer {
         }
 
         layerBloomPending = false;
+        translucentAttenuationAvailable = false;
         pendingBloomPeakProbe = null;
         int targetWidth = targetWidth(pipelineDepthSource, minecraftDepthSource);
         int targetHeight = targetHeight(pipelineDepthSource, minecraftDepthSource);
@@ -180,7 +183,6 @@ public final class AusmBloomRenderer {
         }
         RenderState state = captureState();
         int rendered = 0;
-        int passedSamples = -1;
         boolean sharedMinecraftDepth = false;
         try {
             // In shaderless mode, keep the bloom target attached to the live
@@ -191,25 +193,28 @@ public final class AusmBloomRenderer {
             if (!sharedMinecraftDepth) {
                 copyDepth(pipelineDepthSource, minecraftDepthSource);
             }
-            logDepthAttachmentProbe("prepared", minecraftDepthSource, sharedMinecraftDepth);
             bindLayerTargetForGeometry();
-            int query = beginBloomOcclusionProbe();
-            if (query > 0) {
-                GL15.glBeginQuery(GL15.GL_SAMPLES_PASSED, query);
-            }
-            try {
-                rendered = renderBloomGeometry(renderGlobal, bloomLayer, partialTicks, pass, entity);
-                rendered += renderGlobalFacadesBloomGeometry();
-            } finally {
-                if (query > 0) {
-                    GL15.glEndQuery(GL15.GL_SAMPLES_PASSED);
-                    passedSamples = GL15.glGetQueryObjecti(query, GL15.GL_QUERY_RESULT);
-                }
-            }
+            rendered = renderBloomGeometry(renderGlobal, bloomLayer, partialTicks, pass, entity,
+                    !sharedMinecraftDepth, true);
+            rendered += renderGlobalFacadesBloomGeometry();
             if (rendered > 0) {
+                if (sharedMinecraftDepth) {
+                    // Never write into Minecraft's live shaderless depth
+                    // renderbuffer. Reattach AUSM's private depth and replay
+                    // only the sparse bloom mesh to obtain true emitter depth.
+                    restoreLayerDepthAttachment();
+                    sharedMinecraftDepth = false;
+                    bindLayerTargetForGeometry();
+                    com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+                    GL11.glClearDepth(1.0D);
+                    GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
+                    copyDepth(pipelineDepthSource, minecraftDepthSource);
+                    renderBloomGeometry(renderGlobal, bloomLayer, partialTicks, pass, entity, true, false);
+                }
                 copyDepthTexture(bloomLayerTarget, true);
+                translucentAttenuationAvailable = captureTranslucentAttenuation(
+                        renderGlobal, partialTicks, pass, entity, pipelineDepthSource, minecraftDepthSource);
             }
-            logDepthAttachmentProbe("after-geometry", minecraftDepthSource, sharedMinecraftDepth);
             if (bloomRenderLogs < BLOOM_RENDER_LOG_LIMIT) {
                 bloomRenderLogs++;
                 MainMod.LOGGER.info("[AUSMBloomDraw] layer={} rendered={} defer={} depthSource={} target={}",
@@ -219,10 +224,7 @@ public final class AusmBloomRenderer {
                         pipelineDepthSource != null ? "pipeline" : (minecraftDepthSource != null ? "minecraft" : "none"),
                         com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget));
             }
-            if (rendered > 0 && passedSamples != 0) {
-                // Startup invokes this path before any BLOOM VBO exists. Only
-                // spend the bounded readback budget once geometry really drew.
-                pendingBloomPeakProbe = captureBloomLayerPeakProbe();
+            if (rendered > 0) {
                 layerBloomPending = true;
                 if (!loggedLayerRenderer) {
                     loggedLayerRenderer = true;
@@ -232,7 +234,6 @@ public final class AusmBloomRenderer {
                     compositePendingLayerBloom(minecraftDepthSource, false);
                 }
             }
-            logBloomFrameProbe(rendered, passedSamples, sharedMinecraftDepth, deferComposite);
         } finally {
             if (sharedMinecraftDepth) {
                 restoreLayerDepthAttachment();
@@ -280,6 +281,7 @@ public final class AusmBloomRenderer {
 
     public int renderEmissiveTerrainBloomCount(Framebuffer target, DeferredFramebuffer pipelineDepthSource,
                                                IntSupplier geometryRenderer, boolean allowPipelineActive) {
+        translucentAttenuationAvailable = false;
         if (target == null
                 || geometryRenderer == null
                 || com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(target) <= 0
@@ -330,6 +332,7 @@ public final class AusmBloomRenderer {
 
     public void clearPendingLayerBloom() {
         layerBloomPending = false;
+        translucentAttenuationAvailable = false;
     }
 
     public boolean hasBloomResources() {
@@ -345,11 +348,14 @@ public final class AusmBloomRenderer {
         deleteFramebuffer(bloomLayerTarget);
         deleteFramebuffer(bloomDownsampleTarget);
         deleteFramebuffer(bloomBlurTarget);
+        deleteFramebuffer(translucentAttenuationTarget);
         bloomLayerTarget = null;
         bloomDownsampleTarget = null;
         bloomBlurTarget = null;
+        translucentAttenuationTarget = null;
         deleteTexture(bloomDepthTexture);
         deleteTexture(finalDepthTexture);
+        deleteTexture(translucentDepthTexture);
         if (bloomOcclusionQuery > 0) {
             GL15.glDeleteQueries(bloomOcclusionQuery);
             bloomOcclusionQuery = 0;
@@ -360,6 +366,7 @@ public final class AusmBloomRenderer {
         }
         bloomDepthTexture = 0;
         finalDepthTexture = 0;
+        translucentDepthTexture = 0;
         width = -1;
         height = -1;
         halfWidth = -1;
@@ -371,11 +378,14 @@ public final class AusmBloomRenderer {
         deleteProgram(blurProgram);
         deleteProgram(compositeProgram);
         deleteProgram(emissiveExtractProgram);
+        deleteProgram(translucentAttenuationProgram);
         copyProgram = -1;
         thresholdProgram = -1;
         blurProgram = -1;
         compositeProgram = -1;
         emissiveExtractProgram = -1;
+        translucentAttenuationProgram = -1;
+        translucentAttenuationAvailable = false;
         resetShaderPackConfiguration();
     }
 
@@ -401,41 +411,32 @@ public final class AusmBloomRenderer {
                 // low-value halo replace the entire scene with near-black.
                 // Use the unblurred parsed layer so black stays discarded and
                 // the visible pixels are exactly the emitted bloom colour.
-                BloomPeakProbe layerPeak = pendingBloomPeakProbe;
-                String targetBefore = sampleFramebufferColorAtScaled(target, layerPeak, bloomLayerTarget);
                 compositeTexture(target, layerTexture, 1.0F,
-                        preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
+                        preHandDepthTexture, postHandDepthTexture, useSceneDepthMask, false);
                 composited = true;
-                logBloomCompositeProbe(target, useSceneDepthMask, true, layerPeak,
-                        "raw-layer", targetBefore,
-                        sampleFramebufferColorAtScaled(target, layerPeak, bloomLayerTarget));
-            } else if (runBlurChain(layerTexture, false)) {
+            } else {
                 boolean useSceneDepthMask = copyDepthTexture(target, false);
-                BloomPeakProbe layerPeak = pendingBloomPeakProbe;
-                String blurredAtLayerPeak = sampleFramebufferColorAtScaled(
-                        bloomDownsampleTarget, layerPeak, bloomLayerTarget);
-                String targetBefore = sampleFramebufferColorAtScaled(target, layerPeak, bloomLayerTarget);
-                logBloomDepthLeakProbe(useSceneDepthMask);
-                compositeBlurredBloom(target, bloomStrength, preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
+                if (!runBlurChain(layerTexture, useSceneDepthMask)) {
+                    if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
+                        bloomCompositeLogs++;
+                        MainMod.LOGGER.warn("[AUSMBloomComposite] result=blur-failed target={} layer={}",
+                                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(target),
+                                com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget));
+                    }
+                    return false;
+                }
+                compositeBlurredBloom(target, bloomStrength, preHandDepthTexture, postHandDepthTexture,
+                        useSceneDepthMask);
                 composited = true;
-                logBloomCompositeProbe(target, useSceneDepthMask, composited, layerPeak,
-                        blurredAtLayerPeak, targetBefore,
-                        sampleFramebufferColorAtScaled(target, layerPeak, bloomLayerTarget));
                 if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
                     bloomCompositeLogs++;
                     MainMod.LOGGER.info("[AUSMBloomComposite] result=blurred target={} layer={}",
                             com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(target),
                             com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget));
                 }
-            } else if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
-                bloomCompositeLogs++;
-                MainMod.LOGGER.warn("[AUSMBloomComposite] result=blur-failed target={} layer={}",
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(target),
-                        com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomLayerTarget));
             }
         } finally {
             layerBloomPending = false;
-            pendingBloomPeakProbe = null;
             if (state != null) {
                 state.restore();
             }
@@ -1075,12 +1076,14 @@ public final class AusmBloomRenderer {
             bindHalfTarget(bloomBlurTarget);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(blurProgram);
             bindTextureUniform(blurProgram, "source", com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), 0);
+            bindDepthAwareBlurUniforms(false);
             setUniform2f(blurProgram, "direction", 1.0F / Math.max(1, halfWidth), 0.0F);
             drawFullscreenQuad();
 
             bindHalfTarget(bloomDownsampleTarget);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(blurProgram);
             bindTextureUniform(blurProgram, "source", com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomBlurTarget), 0);
+            bindDepthAwareBlurUniforms(false);
             setUniform2f(blurProgram, "direction", 0.0F, 1.0F / Math.max(1, halfHeight));
             drawFullscreenQuad();
         }
@@ -1094,15 +1097,16 @@ public final class AusmBloomRenderer {
     private void compositeBlurredBloom(Framebuffer target, float strength, int preHandDepthTexture, int postHandDepthTexture,
                                        boolean useSceneDepthMask) {
         compositeTexture(target, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), strength,
-                preHandDepthTexture, postHandDepthTexture, useSceneDepthMask);
+                preHandDepthTexture, postHandDepthTexture, useSceneDepthMask, true);
     }
 
     private void compositeTexture(Framebuffer target, int texture, float strength) {
-        compositeTexture(target, texture, strength, 0, 0, false);
+        compositeTexture(target, texture, strength, 0, 0, false, false);
     }
 
     private void compositeTexture(Framebuffer target, int texture, float strength,
-                                  int preHandDepthTexture, int postHandDepthTexture, boolean useSceneDepthMask) {
+                                  int preHandDepthTexture, int postHandDepthTexture, boolean useSceneDepthMask,
+                                  boolean bloomTextureCarriesDepth) {
         if (target == null || compositeProgram() == -1) {
             return;
         }
@@ -1116,6 +1120,11 @@ public final class AusmBloomRenderer {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
+        // A shader pass may leave any sampler unit active. Enabling fixed-
+        // function texturing before returning to unit zero enables that
+        // auxiliary unit as a legacy texture stage; once shaders are disabled,
+        // particles and terrain then combine it with their atlas coordinates.
+        TextureBinder.restoreDefaultTextureUnit();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         GL11.glEnable(GL11.GL_TEXTURE_2D);
         if (shaderPackCompositeOverride && shaderPackCompositeReplace) {
@@ -1148,23 +1157,31 @@ public final class AusmBloomRenderer {
             bindTextureUniform(compositeProgram, "bloomDepth", bloomDepthTexture, 3);
             bindTextureUniform(compositeProgram, "finalDepth", finalDepthTexture, 4);
         }
+        if (translucentAttenuationAvailable && translucentAttenuationTarget != null) {
+            bindTextureUniform(compositeProgram, "translucentTransmission",
+                    MinecraftReflectionCompat.framebufferTexture(translucentAttenuationTarget), 5);
+            bindTextureUniform(compositeProgram, "translucentDepth", translucentDepthTexture, 6);
+        }
         setUniform1f(compositeProgram, "strength", strength);
         setUniform1i(compositeProgram, "useHandMask", useHandMask ? 1 : 0);
         setUniform1i(compositeProgram, "useSceneDepthMask", useSceneDepthMask ? 1 : 0);
+        setUniform1i(compositeProgram, "useBloomTextureDepth", bloomTextureCarriesDepth ? 1 : 0);
+        setUniform1i(compositeProgram, "useTranslucentDampening", translucentAttenuationAvailable ? 1 : 0);
         drawFullscreenQuad();
     }
 
     private int renderBloomGeometry(RenderGlobal renderGlobal, BlockRenderLayer bloomLayer,
-                                    double partialTicks, int pass, Entity entity) {
+                                    double partialTicks, int pass, Entity entity,
+                                    boolean writeDepth, boolean writeColor) {
         bindBlockAtlasOnDefaultTextureUnit();
 
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
-        // Source faces share the copied terrain depth. This conservative bias
-        // prevents equal-depth flicker while depth-aware blur/compositing keeps
-        // foreground occlusion intact without CPU VBO readback.
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+        // Source faces start against copied terrain depth. Private targets also
+        // record the winning bloom fragments' real depth; shaderless mode uses
+        // a private depth-only replay so Minecraft's live depth is never changed.
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(writeDepth);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
         GL11.glPolygonOffset(SHADERLESS_EMISSIVE_DEPTH_BIAS_FACTOR, SHADERLESS_EMISSIVE_DEPTH_BIAS_UNITS);
@@ -1172,7 +1189,8 @@ public final class AusmBloomRenderer {
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(
+                writeColor, writeColor, writeColor, writeColor);
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
         int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
         boolean pushedProjection = false;
@@ -1213,16 +1231,95 @@ public final class AusmBloomRenderer {
         }
     }
 
-    private int renderGlobalFacadesBloomGeometry() {
-        if (!globalFacadesBloomResolved) {
-            globalFacadesBloomResolved = true;
-            try {
-                Class<?> renderer = Class.forName("com.l.globalfacades.client.render.FacadeWorldRenderer");
-                globalFacadesBloomMethod = renderer.getMethod("renderBloomForAusm");
-            } catch (ReflectiveOperationException | LinkageError ignored) {
-                globalFacadesBloomMethod = null;
-            }
+    private boolean captureTranslucentAttenuation(RenderGlobal renderGlobal, double partialTicks, int pass,
+                                                   Entity entity, DeferredFramebuffer pipelineDepthSource,
+                                                   Framebuffer minecraftDepthSource) {
+        int program = translucentAttenuationProgram();
+        if (program == -1 || translucentAttenuationTarget == null || translucentDepthTexture <= 0) {
+            return false;
         }
+
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(translucentAttenuationTarget, false);
+        GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        GL11.glViewport(0, 0, width, height);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        GL11.glClearColor(1.0F, 1.0F, 1.0F, 1.0F);
+        GL11.glClearDepth(1.0D);
+        GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+        copyDepth(pipelineDepthSource, minecraftDepthSource, translucentAttenuationTarget);
+
+        bindBlockAtlasOnDefaultTextureUnit();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(program);
+        bindTextureUniform(program, "terrain", GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D), 0);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.001F);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+        // Each back-to-front translucent surface multiplies the accumulated
+        // light transmission. Depth writes retain the nearest translucent
+        // surface while still accepting every subsequently-nearer layer.
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+                GL11.GL_ZERO, GL11.GL_SRC_COLOR, GL11.GL_ZERO, GL11.GL_ONE);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+
+        int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+        boolean pushedProjection = false;
+        boolean pushedModelView = false;
+        int rendered;
+        try {
+            Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+            Object entityRenderer = minecraft == null ? null : MinecraftReflectionCompat.entityRenderer(minecraft);
+            if (entityRenderer instanceof EntityRendererAccessor) {
+                GL11.glMatrixMode(GL11.GL_PROJECTION);
+                GL11.glPushMatrix();
+                pushedProjection = true;
+                GL11.glMatrixMode(GL11.GL_MODELVIEW);
+                GL11.glPushMatrix();
+                pushedModelView = true;
+                ((EntityRendererAccessor) entityRenderer).ausm$setupCameraTransform((float) partialTicks, 2);
+                MatrixState.captureGbufferMatrices();
+            }
+            rendered = PipelineContext.getInstance()
+                    .renderAusmOwnedNothiriumTranslucentGeometry(partialTicks, entity);
+            if (rendered <= 0) {
+                rendered = MinecraftReflectionCompat.renderBlockLayer(
+                        renderGlobal, BlockRenderLayer.TRANSLUCENT, partialTicks, pass, entity);
+            }
+        } finally {
+            if (pushedModelView) {
+                GL11.glMatrixMode(GL11.GL_MODELVIEW);
+                GL11.glPopMatrix();
+            }
+            if (pushedProjection) {
+                GL11.glMatrixMode(GL11.GL_PROJECTION);
+                GL11.glPopMatrix();
+            }
+            GL11.glMatrixMode(previousMatrixMode);
+        }
+
+        // GlobalFacades supplies world-space overlay vertices and applies its
+        // own camera translation, so render it after restoring the matrices
+        // used by the chunk-VBO replay.
+        bindBlockAtlasOnDefaultTextureUnit();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(program);
+        bindTextureUniform(program, "terrain", GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D), 0);
+        rendered += renderGlobalFacadesTranslucentAttenuationGeometry();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+
+        return rendered > 0 && copyDepthTexture(translucentAttenuationTarget, translucentDepthTexture);
+    }
+
+    private int renderGlobalFacadesBloomGeometry() {
+        resolveGlobalFacadesBloomBridge();
         if (globalFacadesBloomMethod == null) {
             return 0;
         }
@@ -1239,12 +1336,49 @@ public final class AusmBloomRenderer {
         }
     }
 
+    private int renderGlobalFacadesTranslucentAttenuationGeometry() {
+        resolveGlobalFacadesBloomBridge();
+        if (globalFacadesTranslucentAttenuationMethod == null) {
+            return 0;
+        }
+        try {
+            Object result = globalFacadesTranslucentAttenuationMethod.invoke(null);
+            return result instanceof Boolean && (Boolean) result ? 1 : 0;
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            return 0;
+        }
+    }
+
+    private void resolveGlobalFacadesBloomBridge() {
+        if (globalFacadesBloomResolved) {
+            return;
+        }
+        globalFacadesBloomResolved = true;
+        try {
+            Class<?> renderer = Class.forName("com.l.globalfacades.client.render.FacadeWorldRenderer");
+            globalFacadesBloomMethod = renderer.getMethod("renderBloomForAusm");
+            try {
+                globalFacadesTranslucentAttenuationMethod = renderer.getMethod(
+                        "renderTranslucentAttenuationForAusm");
+            } catch (NoSuchMethodException ignored) {
+                globalFacadesTranslucentAttenuationMethod = null;
+            }
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            globalFacadesBloomMethod = null;
+            globalFacadesTranslucentAttenuationMethod = null;
+        }
+    }
+
     private void clearLayerTarget(boolean preserveDepth) {
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
         com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(bloomLayerTarget, false);
         GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glViewport(0, 0, width, height);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        if (!preserveDepth) {
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
+        }
         GL11.glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
         GL11.glClearDepth(1.0D);
         GL11.glClear(preserveDepth ? GL11.GL_COLOR_BUFFER_BIT : GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
@@ -1327,8 +1461,16 @@ public final class AusmBloomRenderer {
     }
 
     private void copyDepth(DeferredFramebuffer pipelineDepthSource, Framebuffer minecraftDepthSource) {
+        copyDepth(pipelineDepthSource, minecraftDepthSource, bloomLayerTarget);
+    }
+
+    private void copyDepth(DeferredFramebuffer pipelineDepthSource, Framebuffer minecraftDepthSource,
+                           Framebuffer destination) {
+        if (destination == null) {
+            return;
+        }
         if (pipelineDepthSource != null) {
-            pipelineDepthSource.blitDepthTo(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(bloomLayerTarget), width, height);
+            pipelineDepthSource.blitDepthTo(com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(destination), width, height);
             return;
         }
         if (minecraftDepthSource == null || com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((minecraftDepthSource), 0, "field_147624_h", "depthBuffer") <= 0) {
@@ -1339,7 +1481,7 @@ public final class AusmBloomRenderer {
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         try {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(minecraftDepthSource));
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(bloomLayerTarget));
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(destination));
             GL30.glBlitFramebuffer(
                     0,
                     0,
@@ -1398,7 +1540,11 @@ public final class AusmBloomRenderer {
         bloomLayerTarget = resizeFramebuffer(bloomLayerTarget, width, height, true);
         bloomDownsampleTarget = resizeFramebuffer(bloomDownsampleTarget, halfWidth, halfHeight, false);
         bloomBlurTarget = resizeFramebuffer(bloomBlurTarget, halfWidth, halfHeight, false);
+        translucentAttenuationTarget = resizeFramebuffer(translucentAttenuationTarget, width, height, true);
+        configureFloatingColorAttachment(bloomDownsampleTarget, halfWidth, halfHeight);
+        configureFloatingColorAttachment(bloomBlurTarget, halfWidth, halfHeight);
         return bloomLayerTarget != null && bloomDownsampleTarget != null && bloomBlurTarget != null
+                && translucentAttenuationTarget != null
                 && ensureDepthMaskTextures();
     }
 
@@ -1420,10 +1566,36 @@ public final class AusmBloomRenderer {
         return framebuffer;
     }
 
+    private static void configureFloatingColorAttachment(Framebuffer framebuffer, int width, int height) {
+        if (framebuffer == null) {
+            return;
+        }
+        int texture = MinecraftReflectionCompat.framebufferTexture(framebuffer);
+        if (texture <= 0) {
+            return;
+        }
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        try {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA16F, width, height, 0,
+                    GL11.GL_RGBA, GL11.GL_FLOAT, (ByteBuffer) null);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+        } finally {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
+            GL13.glActiveTexture(previousActiveTexture);
+        }
+    }
+
     private boolean ensureDepthMaskTextures() {
         bloomDepthTexture = resizeDepthTexture(bloomDepthTexture, width, height);
         finalDepthTexture = resizeDepthTexture(finalDepthTexture, width, height);
-        return bloomDepthTexture > 0 && finalDepthTexture > 0;
+        translucentDepthTexture = resizeDepthTexture(translucentDepthTexture, width, height);
+        return bloomDepthTexture > 0 && finalDepthTexture > 0 && translucentDepthTexture > 0;
     }
 
     private static int resizeDepthTexture(int texture, int width, int height) {
@@ -1455,13 +1627,20 @@ public final class AusmBloomRenderer {
         if (source == null || width <= 0 || height <= 0 || bloomDepthTexture <= 0 || finalDepthTexture <= 0) {
             return false;
         }
+        return copyDepthTexture(source, bloomDepth ? bloomDepthTexture : finalDepthTexture);
+    }
+
+    private boolean copyDepthTexture(Framebuffer source, int destinationTexture) {
+        if (source == null || width <= 0 || height <= 0 || destinationTexture <= 0) {
+            return false;
+        }
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
         try {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, com.l.ausm.impl.util.MinecraftReflectionCompat.framebufferObject(source));
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, bloomDepth ? bloomDepthTexture : finalDepthTexture);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, destinationTexture);
             GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
             return GL11.glGetError() == GL11.GL_NO_ERROR;
         } catch (RuntimeException | LinkageError ignored) {
@@ -1561,6 +1740,18 @@ public final class AusmBloomRenderer {
             );
         }
         return emissiveExtractProgram;
+    }
+
+    private int translucentAttenuationProgram() {
+        if (translucentAttenuationProgram == -1) {
+            translucentAttenuationProgram = createProgram(
+                    "translucent-bloom-attenuation",
+                    TRANSLUCENT_ATTENUATION_VERTEX_SHADER,
+                    TRANSLUCENT_ATTENUATION_FRAGMENT_SHADER,
+                    false
+            );
+        }
+        return translucentAttenuationProgram;
     }
 
     private int createProgram(String name, String fragmentSource) {
@@ -1763,6 +1954,8 @@ public final class AusmBloomRenderer {
         private final boolean polygonOffsetFill;
         private final boolean depthMask;
         private final int depthFunc;
+        private final int alphaFunc;
+        private final float alphaRef;
         private final float polygonOffsetFactor;
         private final float polygonOffsetUnits;
         private final int blendSrcRgb;
@@ -1795,6 +1988,8 @@ public final class AusmBloomRenderer {
             polygonOffsetFill = GL11.glIsEnabled(GL11.GL_POLYGON_OFFSET_FILL);
             depthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
             depthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
+            alphaFunc = GL11.glGetInteger(GL11.GL_ALPHA_TEST_FUNC);
+            alphaRef = GL11.glGetFloat(GL11.GL_ALPHA_TEST_REF);
             polygonOffsetFactor = GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_FACTOR);
             polygonOffsetUnits = GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_UNITS);
             blendSrcRgb = GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB);
@@ -1833,6 +2028,7 @@ public final class AusmBloomRenderer {
             com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(texture);
             com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(depthMask);
             GL11.glDepthFunc(depthFunc);
+            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(alphaFunc, alphaRef);
             GL11.glPolygonOffset(polygonOffsetFactor, polygonOffsetUnits);
             if (polygonOffsetFill) {
                 GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
@@ -2004,12 +2200,69 @@ public final class AusmBloomRenderer {
             }
             """;
 
+    private static final String TRANSLUCENT_ATTENUATION_VERTEX_SHADER = """
+            #version 120
+            uniform vec3 ausm_ChunkOffset;
+            varying vec2 textureCoords;
+            varying vec4 vertexColor;
+            void main() {
+                vec4 position = gl_Vertex + vec4(ausm_ChunkOffset, 0.0);
+                gl_Position = gl_ModelViewProjectionMatrix * position;
+                textureCoords = gl_MultiTexCoord0.st;
+                vertexColor = gl_Color;
+            }
+            """;
+
+    private static final String TRANSLUCENT_ATTENUATION_FRAGMENT_SHADER = """
+            #version 120
+            uniform sampler2D terrain;
+            varying vec2 textureCoords;
+            varying vec4 vertexColor;
+            void main() {
+                vec4 albedo = texture2D(terrain, textureCoords) * vertexColor;
+                if (albedo.a <= 0.003921569) {
+                    discard;
+                }
+                float opacity = clamp(albedo.a, 0.0, 1.0);
+                vec3 tint = clamp(albedo.rgb, vec3(0.04), vec3(1.0));
+                // White glass loses a little bloom energy; coloured glass also
+                // filters the transmitted channels. Two visible faces naturally
+                // compound, as light entering and leaving a block should.
+                vec3 filtered = mix(vec3(0.72), tint, 0.65);
+                vec3 transmission = mix(vec3(1.0), filtered, opacity);
+                gl_FragColor = vec4(clamp(transmission, vec3(0.08), vec3(1.0)), 1.0);
+            }
+            """;
+
     private static final String COPY_FRAGMENT_SHADER = """
             #version 120
             uniform sampler2D source;
+            uniform sampler2D bloomDepth;
+            uniform sampler2D sceneDepth;
+            uniform vec2 sourceTexel;
+            uniform int depthAware;
             varying vec2 textureCoords;
             void main() {
-                gl_FragColor = texture2D(source, textureCoords);
+                if (depthAware == 0) {
+                    gl_FragColor = texture2D(source, textureCoords);
+                    return;
+                }
+                vec2 offset = sourceTexel * 0.5;
+                vec2 uv0 = textureCoords + vec2(-offset.x, -offset.y);
+                vec2 uv1 = textureCoords + vec2( offset.x, -offset.y);
+                vec2 uv2 = textureCoords + vec2(-offset.x,  offset.y);
+                vec2 uv3 = textureCoords + vec2( offset.x,  offset.y);
+                vec4 c0 = texture2D(source, uv0);
+                vec4 c1 = texture2D(source, uv1);
+                vec4 c2 = texture2D(source, uv2);
+                vec4 c3 = texture2D(source, uv3);
+                vec3 color = (c0.rgb + c1.rgb + c2.rgb + c3.rgb) * 0.25;
+                float depth = 1.0;
+                if (max(c0.r, max(c0.g, c0.b)) > 0.00001) depth = min(depth, texture2D(bloomDepth, uv0).r);
+                if (max(c1.r, max(c1.g, c1.b)) > 0.00001) depth = min(depth, texture2D(bloomDepth, uv1).r);
+                if (max(c2.r, max(c2.g, c2.b)) > 0.00001) depth = min(depth, texture2D(bloomDepth, uv2).r);
+                if (max(c3.r, max(c3.g, c3.b)) > 0.00001) depth = min(depth, texture2D(bloomDepth, uv3).r);
+                gl_FragColor = vec4(color, depth);
             }
             """;
 
@@ -2029,15 +2282,31 @@ public final class AusmBloomRenderer {
     private static final String BLUR_FRAGMENT_SHADER = """
             #version 120
             uniform sampler2D source;
+            uniform sampler2D bloomDepth;
+            uniform sampler2D sceneDepth;
             uniform vec2 direction;
+            uniform int depthAware;
             varying vec2 textureCoords;
             void main() {
-                vec3 sum = texture2D(source, textureCoords).rgb * 0.2270270270;
-                sum += texture2D(source, textureCoords + direction * 1.3846153846).rgb * 0.3162162162;
-                sum += texture2D(source, textureCoords - direction * 1.3846153846).rgb * 0.3162162162;
-                sum += texture2D(source, textureCoords + direction * 3.2307692308).rgb * 0.0702702703;
-                sum += texture2D(source, textureCoords - direction * 3.2307692308).rgb * 0.0702702703;
-                gl_FragColor = vec4(sum, 1.0);
+                vec4 c0 = texture2D(source, textureCoords);
+                vec4 c1 = texture2D(source, textureCoords + direction * 1.3846153846);
+                vec4 c2 = texture2D(source, textureCoords - direction * 1.3846153846);
+                vec4 c3 = texture2D(source, textureCoords + direction * 3.2307692308);
+                vec4 c4 = texture2D(source, textureCoords - direction * 3.2307692308);
+                vec3 sum = c0.rgb * 0.2270270270;
+                sum += c1.rgb * 0.3162162162;
+                sum += c2.rgb * 0.3162162162;
+                sum += c3.rgb * 0.0702702703;
+                sum += c4.rgb * 0.0702702703;
+                float depth = 1.0;
+                if (depthAware == 1) {
+                    if (max(c0.r, max(c0.g, c0.b)) > 0.000001) depth = min(depth, c0.a);
+                    if (max(c1.r, max(c1.g, c1.b)) > 0.000001) depth = min(depth, c1.a);
+                    if (max(c2.r, max(c2.g, c2.b)) > 0.000001) depth = min(depth, c2.a);
+                    if (max(c3.r, max(c3.g, c3.b)) > 0.000001) depth = min(depth, c3.a);
+                    if (max(c4.r, max(c4.g, c4.b)) > 0.000001) depth = min(depth, c4.a);
+                }
+                gl_FragColor = vec4(sum, depth);
             }
             """;
 
@@ -2048,13 +2317,20 @@ public final class AusmBloomRenderer {
             uniform sampler2D postHandDepth;
             uniform sampler2D bloomDepth;
             uniform sampler2D finalDepth;
+            uniform sampler2D translucentTransmission;
+            uniform sampler2D translucentDepth;
             uniform float strength;
             uniform int useHandMask;
             uniform int useSceneDepthMask;
+            uniform int useBloomTextureDepth;
+            uniform int useTranslucentDampening;
             varying vec2 textureCoords;
             void main() {
+                vec4 bloomSample = texture2D(bloom, textureCoords);
+                float emissionDepth = useBloomTextureDepth == 1
+                        ? bloomSample.a
+                        : texture2D(bloomDepth, textureCoords).r;
                 if (useSceneDepthMask == 1) {
-                    float emissionDepth = texture2D(bloomDepth, textureCoords).r;
                     float sceneDepth = texture2D(finalDepth, textureCoords).r;
                     if (emissionDepth > sceneDepth + 0.00002 && sceneDepth < 0.99999) {
                         discard;
@@ -2067,7 +2343,13 @@ public final class AusmBloomRenderer {
                         discard;
                     }
                 }
-                vec3 source = texture2D(bloom, textureCoords).rgb;
+                vec3 source = bloomSample.rgb;
+                if (useTranslucentDampening == 1) {
+                    float filterDepth = texture2D(translucentDepth, textureCoords).r;
+                    if (filterDepth + 0.00002 < emissionDepth && filterDepth < 0.99999) {
+                        source *= texture2D(translucentTransmission, textureCoords).rgb;
+                    }
+                }
                 source = source / (1.0 + max(source, vec3(0.0)));
                 gl_FragColor = vec4(source * strength, 1.0);
             }
