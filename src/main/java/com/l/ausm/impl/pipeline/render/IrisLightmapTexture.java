@@ -1,6 +1,7 @@
 package com.l.ausm.impl.pipeline.render;
 
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.Arrays;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 
 /**
@@ -20,6 +21,13 @@ public final class IrisLightmapTexture {
     private final DynamicTexture texture = new DynamicTexture(SIZE, SIZE);
     private final int[] pixels = MinecraftReflectionCompat.dynamicTextureData(texture);
 
+    public IrisLightmapTexture() {
+        // DynamicTexture does not expose whether its CPU buffer has ever been
+        // uploaded. Seed the mirror with an impossible lightmap value so the
+        // first bind always publishes real contents.
+        Arrays.fill(pixels, 0x01000000);
+    }
+
     public int updateFrom(DynamicTexture vanillaLightmap) {
         if (vanillaLightmap == null) {
             return -1;
@@ -27,10 +35,17 @@ public final class IrisLightmapTexture {
 
         int[] source = MinecraftReflectionCompat.dynamicTextureData(vanillaLightmap);
         int count = Math.min(source.length, pixels.length);
+        boolean changed = source.length != pixels.length;
         for (int i = 0; i < count; i++) {
-            pixels[i] = adaptPixel(source[i]);
+            int adapted = adaptPixel(source[i]);
+            if (pixels[i] != adapted) {
+                pixels[i] = adapted;
+                changed = true;
+            }
         }
-        MinecraftReflectionCompat.invoke(texture, new String[]{"func_110564_a", "updateDynamicTexture"}, MinecraftReflectionCompat.NO_PARAMETERS);
+        if (changed) {
+            MinecraftReflectionCompat.invoke(texture, new String[]{"func_110564_a", "updateDynamicTexture"}, MinecraftReflectionCompat.NO_PARAMETERS);
+        }
         return MinecraftReflectionCompat.glTextureId(texture);
     }
 

@@ -308,12 +308,6 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
         if (!shadowMapUsable || !shadowMapPopulated || shaderProperties == null) {
             return false;
         }
-        // Smooth nearby shadows at the presentation rate while there is frame
-        // time headroom. Detailed casters are distance-LOD'd below, so this
-        // does not multiply the old full-distance workload by refresh rate.
-        if (currentFrameTime <= SHADOW_REALTIME_MAX_FRAME_SECONDS) {
-            return false;
-        }
         int dimensionId = safeDimensionId(world);
         Object time = MinecraftReflectionCompat.invoke(
                 world,
@@ -322,8 +316,15 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
         );
         long worldTime = time instanceof Number ? ((Number) time).longValue() : 0L;
         if (dimensionId != lastShadowRenderDimensionId
-                || worldTime < lastShadowRenderWorldTime
-                || worldTime - lastShadowRenderWorldTime >= SHADOW_STABLE_UPDATE_INTERVAL_TICKS) {
+                || worldTime < lastShadowRenderWorldTime) {
+            return false;
+        }
+
+        long framesPerShadowUpdate = currentFrameTime <= 1.0F / 60.0F ? 3L : 2L;
+        boolean presentationRateLimited = currentFrameTime <= SHADOW_REALTIME_MAX_FRAME_SECONDS
+                && pipelineFrameId % framesPerShadowUpdate != 0L;
+        boolean sameWorldTick = worldTime - lastShadowRenderWorldTime < SHADOW_STABLE_UPDATE_INTERVAL_TICKS;
+        if (!presentationRateLimited && !sameWorldTick) {
             return false;
         }
         double x = PipelineWorldRenderScope.interpolate(MinecraftReflectionCompat.lastTickPosX(viewEntity), MinecraftReflectionCompat.posX(viewEntity), partialTicks);
@@ -336,7 +337,9 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
         // and draws radial terrain rather than the normal forward list. The
         // projection itself is texel-snapped, so tolerate quarter-block
         // motion before rebuilding instead of treating head bob and tiny
-        // mouse movement as a full radial redraw request.
+        // mouse movement as a full radial redraw request. At interactive
+        // frame rates, update the shadow map every second or third presented
+        // frame; its model-view matrix is rebased below between updates.
         boolean reuse = dx * dx + dy * dy + dz * dz < SHADOW_STABLE_UPDATE_MOVEMENT_SQ;
         if (reuse) {
             // The cached depth map was rendered in a coordinate system relative
