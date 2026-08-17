@@ -407,8 +407,9 @@ abstract class PipelineRuntimeState {
     protected int dynamicBlockEntityId = -1;
     protected int itemGlintMaskDepth = 0;
     protected String currentRenderedItemDebugName = "";
+    protected static final float[] NO_ENTITY_COLOR = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
     protected ResourceLocation currentEntityKey = null;
-    protected float[] currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
+    protected float[] currentEntityColor = NO_ENTITY_COLOR;
     protected final float[] currentAstralConstellationColor = new float[]{1.0f, 1.0f, 1.0f};
     protected final float[] currentAstralTierColor = new float[]{1.0f, 1.0f, 1.0f};
     protected float currentAstralSolarEclipseFactor;
@@ -1082,6 +1083,7 @@ abstract class PipelineRuntimeState {
         uniformRegistry.registerFloat("iris_ModelScale", () -> 1.0f);
         uniformRegistry.registerFloat("iris_TextureScale", () -> 1.0f);
         uniformRegistry.registerFloat("iris_GlintAlpha", () -> 1.0f);
+        uniformRegistry.registerFloat("ausmItemAlphaTestRef", () -> currentAlphaTestReference);
         uniformRegistry.registerInt("ausmItemGlintBaseAtlas", () -> TextureBinder.ITEM_GLINT_BASE_ATLAS_TEXTURE_UNIT);
         uniformRegistry.registerInt("ausmItemGlintMask", () -> itemGlintMaskDepth > 0 ? 1 : 0);
         uniformRegistry.registerVec3("u_ModelScale", () -> new float[]{1.0f, 1.0f, 1.0f});
@@ -5895,9 +5897,9 @@ abstract class PipelineRuntimeState {
 
     public boolean shouldSanitizeShaderlessNothiriumFog() {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        WorldClient world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return !isPipelineActive
-                && mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
+                && world != null
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
     }
@@ -5954,10 +5956,10 @@ abstract class PipelineRuntimeState {
 
     protected boolean shouldDisableShaderlessNothiriumTerrainFog() {
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        WorldClient world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
         return !isPipelineActive
-                && mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) != null
-                && isOverworldShaderEnvironment(com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc))
+                && world != null
+                && isOverworldShaderEnvironment(world)
                 && !isRenderingBetterPortalsNestedView()
                 && !isRenderingBetterPortalsRenderPass();
     }
@@ -7222,6 +7224,10 @@ abstract class PipelineRuntimeState {
         }
 
         ResourceLocation entityKey = com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity);
+        return entityId(entityKey);
+    }
+
+    protected int entityId(ResourceLocation entityKey) {
         if (entityKey != null) {
             Integer alias = shaderProperties.entityIds().get(entityKey);
             if (alias != null) {
@@ -7648,12 +7654,12 @@ abstract class PipelineRuntimeState {
                 return new float[]{1.0f, 0.0f, 0.0f, alpha};
             }
         }
-        return new float[]{0.0f, 0.0f, 0.0f, 0.0f};
+        return NO_ENTITY_COLOR;
     }
 
     public void setCurrentEntity(Entity entity) {
         currentEntityKey = com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity);
-        currentEntityId = entityId(entity);
+        currentEntityId = entityId(currentEntityKey);
         currentEntityColor = entityColor(entity);
         uploadEntityUniforms();
     }
@@ -7661,7 +7667,7 @@ abstract class PipelineRuntimeState {
     public void clearCurrentEntity() {
         currentEntityKey = null;
         currentEntityId = 0;
-        currentEntityColor = new float[]{0.0f, 0.0f, 0.0f, 0.0f};
+        currentEntityColor = NO_ENTITY_COLOR;
         uploadEntityUniforms();
     }
 
@@ -8088,6 +8094,18 @@ abstract class PipelineRuntimeState {
     }
 
     /**
+     * Vanilla selects GL_EQUAL before both item-glint model submissions.  Use
+     * direct driver calls at the draw boundary as well: GUI/world transitions
+     * can leave GlStateManager's cached depth function out of sync, causing the
+     * opaque glint texture to cover the item's complete baked quad.
+     */
+    public void prepareItemGlintDrawState() {
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthMask(false);
+        GL11.glDepthFunc(GL11.GL_EQUAL);
+    }
+
+    /**
      * Astral's RenderWorldLast particles use the regular fixed-function entity
      * vertex layout. Route that layout through Entree's translucent entity MRT
      * program instead of writing program-0 colour into only attachment 0.
@@ -8372,14 +8390,19 @@ abstract class PipelineRuntimeState {
     }
 
     public boolean beginGuiItemStateScope() {
-        if (!isPipelineActive) {
-            return false;
-        }
         Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
         if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(mc) == null && !renderingGuiScreen()) {
             return false;
         }
-        GL11.glPushAttrib(GL11.GL_DEPTH_BUFFER_BIT | GL11.GL_ENABLE_BIT | GL11.GL_POLYGON_BIT);
+        GL11.glPushAttrib(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT
+                | GL11.GL_ENABLE_BIT | GL11.GL_POLYGON_BIT);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        // GlStateManager's cache can survive a shader/fixed-function boundary
+        // while the driver state does not. The GUI item's alpha coverage must
+        // be real before it writes the depth mask consumed by GL_EQUAL glint.
+        GL11.glEnable(GL11.GL_ALPHA_TEST);
+        GL11.glAlphaFunc(GL11.GL_GREATER, 0.1F);
         GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glDepthMask(true);
@@ -8390,6 +8413,28 @@ abstract class PipelineRuntimeState {
 
     public void endGuiItemStateScope() {
         GL11.glPopAttrib();
+    }
+
+    /**
+     * Reassert the base item's coverage state at the actual Tessellator draw.
+     * Forge/custom item paths may touch alpha or depth state after the outer
+     * RenderItem scope began; if transparent texels write depth here, the
+     * following GL_EQUAL glint necessarily becomes a rectangular quad.
+     */
+    public void prepareGuiItemBaseDrawState() {
+        if (!isRenderingGuiItemContext()) {
+            return;
+        }
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+        TextureBinder.restoreDefaultTextureUnit();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.1F);
+        GL11.glEnable(GL11.GL_ALPHA_TEST);
+        GL11.glAlphaFunc(GL11.GL_GREATER, 0.1F);
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthFunc(GL11.GL_LEQUAL);
+        GL11.glDepthMask(true);
     }
 
     public boolean beginGuiBuiltInItemStateScope() {
@@ -8880,12 +8925,12 @@ abstract class PipelineRuntimeState {
         }
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        // Water is a translucent terrain pass.  Rebinding its shader program
-        // after Nothirium used to overwrite the translucent state with an
-        // opaque depth write, making coplanar water fragments race each
-        // other and the saved pre-water depth.
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(
-                pass != RenderPass.GBUFFERS_WATER && pass != RenderPass.DH_WATER);
+        // Translucent terrain is sorted only at chunk/section granularity.
+        // Without a depth write, a later water section can overwrite a nearer
+        // modded-fluid surface even though it is geometrically behind it.
+        // Preserve the normal translucent-terrain depth ownership; the saved
+        // pre-water depth remains available through depthtex snapshots.
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
         GL11.glColorMask(true, true, true, true);
     }
 

@@ -37,8 +37,10 @@ final class ItemGlintCoverageTransformStageTest {
         String transformed = ItemGlintCoverageTransformStage.transformFragment(source);
 
         assertTrue(transformed.contains("uniform sampler2D ausmItemGlintBaseAtlas;"));
+        assertTrue(transformed.contains("uniform float ausmItemAlphaTestRef;"));
         assertTrue(transformed.contains("ausmItemGlintMask == 1"));
-        assertTrue(transformed.contains("ausmItemGlintBaseTexCoord).a <= 0.001) discard;"));
+        assertTrue(transformed.contains(
+                "ausmItemGlintBaseTexCoord).a <= max(ausmItemAlphaTestRef, 0.001)) discard;"));
         assertEquals(transformed, ItemGlintCoverageTransformStage.transformFragment(transformed));
     }
 }

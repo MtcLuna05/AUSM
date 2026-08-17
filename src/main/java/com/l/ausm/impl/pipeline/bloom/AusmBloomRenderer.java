@@ -62,6 +62,7 @@ public final class AusmBloomRenderer {
     private static final int BLOOM_DEPTH_LEAK_PROBE_ATTEMPT_LIMIT = 0;
     private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_FACTOR = -1.0F;
     private static final float SHADERLESS_EMISSIVE_DEPTH_BIAS_UNITS = -4.0F;
+    private static final float SHADERED_FRAMED_BLOOM_SOURCE_SCALE = 0.35F;
     private final AusmBloomResourceIndex resourceIndex = new AusmBloomResourceIndex();
     private final IntBuffer viewportBuffer = BufferUtils.createIntBuffer(16);
     private Framebuffer bloomLayerTarget;
@@ -79,6 +80,7 @@ public final class AusmBloomRenderer {
     private int thresholdProgram = -1;
     private int blurProgram = -1;
     private int compositeProgram = -1;
+    private int nativeBloomGeometryProgram = -1;
     private int emissiveExtractProgram = -1;
     private int translucentAttenuationProgram = -1;
     private String compositeVertexSource = VERTEX_SHADER;
@@ -377,12 +379,14 @@ public final class AusmBloomRenderer {
         deleteProgram(thresholdProgram);
         deleteProgram(blurProgram);
         deleteProgram(compositeProgram);
+        deleteProgram(nativeBloomGeometryProgram);
         deleteProgram(emissiveExtractProgram);
         deleteProgram(translucentAttenuationProgram);
         copyProgram = -1;
         thresholdProgram = -1;
         blurProgram = -1;
         compositeProgram = -1;
+        nativeBloomGeometryProgram = -1;
         emissiveExtractProgram = -1;
         translucentAttenuationProgram = -1;
         translucentAttenuationAvailable = false;
@@ -1175,7 +1179,13 @@ public final class AusmBloomRenderer {
                                     boolean writeDepth, boolean writeColor) {
         bindBlockAtlasOnDefaultTextureUnit();
 
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+        int geometryProgram = nativeBloomGeometryProgram();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(Math.max(geometryProgram, 0));
+        if (geometryProgram > 0) {
+            bindSamplerUniform(geometryProgram, "terrain", 0);
+            setUniform1f(geometryProgram, "framedBloomScale",
+                    PipelineContext.getInstance().isActive() ? SHADERED_FRAMED_BLOOM_SOURCE_SCALE : 1.0F);
+        }
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
         // Source faces start against copied terrain depth. Private targets also
@@ -1514,6 +1524,18 @@ public final class AusmBloomRenderer {
         GL11.glDrawBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glViewport(0, 0, halfWidth, halfHeight);
+        // Shaderless Bloom captures translucent attenuation immediately before
+        // this chain. That pass intentionally leaves multiplicative blending
+        // active; applying it to a freshly-cleared blur target multiplies every
+        // source pixel into black. Fullscreen copy/blur passes must own their
+        // complete raster state instead of inheriting the preceding world pass.
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableDepth();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableAlpha();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
         GL11.glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
     }
@@ -1742,6 +1764,18 @@ public final class AusmBloomRenderer {
         return emissiveExtractProgram;
     }
 
+    private int nativeBloomGeometryProgram() {
+        if (nativeBloomGeometryProgram == -1) {
+            nativeBloomGeometryProgram = createProgram(
+                    "native-bloom-geometry",
+                    NATIVE_BLOOM_GEOMETRY_VERTEX_SHADER,
+                    NATIVE_BLOOM_GEOMETRY_FRAGMENT_SHADER,
+                    true
+            );
+        }
+        return nativeBloomGeometryProgram;
+    }
+
     private int translucentAttenuationProgram() {
         if (translucentAttenuationProgram == -1) {
             translucentAttenuationProgram = createProgram(
@@ -1775,6 +1809,11 @@ public final class AusmBloomRenderer {
         GL20.glAttachShader(program, vertex);
         GL20.glAttachShader(program, fragment);
         if (bindPipelineAttributes) {
+            GL20.glBindAttribLocation(
+                    program,
+                    com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE,
+                    "mc_Entity"
+            );
             GL20.glBindAttribLocation(
                     program,
                     com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE,
@@ -2163,6 +2202,7 @@ public final class AusmBloomRenderer {
 
     private static final String EMISSIVE_EXTRACT_VERTEX_SHADER = """
             #version 120
+            attribute vec4 mc_Entity;
             attribute vec4 at_midBlock;
             uniform float forceEmission;
             varying vec2 textureCoords;
@@ -2174,7 +2214,47 @@ public final class AusmBloomRenderer {
                 vertexColor = gl_Color;
                 float rawEmission = at_midBlock.w;
                 float metadataEmission = rawEmission >= 0.5 && rawEmission <= 15.5 ? rawEmission / 15.0 : 0.0;
+                // GPOM dual slopes keep both materials in one host mesh. Its
+                // per-quad provenance marks native BLOOM material with the
+                // framed marker even when that material emits no block light.
+                // Treat only that marker as a bloom source; ordinary frame
+                // geometry and the other half remain dark.
+                if (abs(mc_Entity.w - 150.0) < 0.5) {
+                    metadataEmission = max(metadataEmission, 0.8);
+                }
                 vertexEmission = max(metadataEmission, forceEmission);
+            }
+            """;
+
+    private static final String NATIVE_BLOOM_GEOMETRY_VERTEX_SHADER = """
+            #version 120
+            attribute vec4 mc_Entity;
+            uniform vec3 ausm_ChunkOffset;
+            uniform float framedBloomScale;
+            varying vec2 textureCoords;
+            varying vec4 vertexColor;
+            void main() {
+                vec4 position = gl_Vertex + vec4(ausm_ChunkOffset, 0.0);
+                gl_Position = gl_ModelViewProjectionMatrix * position;
+                textureCoords = gl_MultiTexCoord0.st;
+                vertexColor = gl_Color;
+                if (abs(mc_Entity.w - 151.0) < 0.5) {
+                    vertexColor.rgb *= framedBloomScale;
+                }
+            }
+            """;
+
+    private static final String NATIVE_BLOOM_GEOMETRY_FRAGMENT_SHADER = """
+            #version 120
+            uniform sampler2D terrain;
+            varying vec2 textureCoords;
+            varying vec4 vertexColor;
+            void main() {
+                vec4 color = texture2D(terrain, textureCoords) * vertexColor;
+                if (color.a <= 0.1) {
+                    discard;
+                }
+                gl_FragColor = color;
             }
             """;
 

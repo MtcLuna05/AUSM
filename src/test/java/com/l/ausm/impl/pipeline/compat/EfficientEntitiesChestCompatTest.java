@@ -20,4 +20,10 @@ final class EfficientEntitiesChestCompatTest {
     void rejectsNullClassNames() {
         assertFalse(EfficientEntitiesChestCompat.isChestClassName(null));
     }
+
+    @Test
+    void keepsVanillaModelRenderingWhileShaderPipelineIsActive() {
+        assertTrue(EfficientEntitiesChestCompat.shouldUseVanillaModelRenderer(true));
+        assertFalse(EfficientEntitiesChestCompat.shouldUseVanillaModelRenderer(false));
+    }
 }

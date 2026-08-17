@@ -66,6 +66,7 @@ public final class ItemGlintCoverageTransformStage implements ShaderTransformSta
         String declaration = "// " + MARKER + "\n"
                 + "uniform sampler2D ausmItemGlintBaseAtlas;\n"
                 + "uniform int ausmItemGlintMask;\n"
+                + "uniform float ausmItemAlphaTestRef;\n"
                 + "in vec2 ausmItemGlintBaseTexCoord;\n";
         String transformed = injectAfterVersion(source, declaration);
         sample = FRAGMENT_COLOR_SAMPLE.matcher(transformed);
@@ -76,7 +77,7 @@ public final class ItemGlintCoverageTransformStage implements ShaderTransformSta
         return transformed.substring(0, sample.end())
                 + "\n" + indent
                 + "if (ausmItemGlintMask == 1 && texture2D(ausmItemGlintBaseAtlas, "
-                + "ausmItemGlintBaseTexCoord).a <= 0.001) discard;"
+                + "ausmItemGlintBaseTexCoord).a <= max(ausmItemAlphaTestRef, 0.001)) discard;"
                 + transformed.substring(sample.end());
     }
 

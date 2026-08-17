@@ -13,6 +13,11 @@ public final class CompatibilityTextureFunctionTransformStage implements ShaderT
     private static final Pattern INTEGER_SAMPLER_DECLARATION = Pattern.compile(
             "(?m)^\\s*uniform\\s+[ui]sampler(?:1D|2D|3D|Cube|1DArray|2DArray|CubeArray|Buffer|2DRect)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;"
     );
+    private static final Pattern INTEGER_TEXTURE_CALL = Pattern.compile(
+            "\\btexture2D(Lod)?\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_]*)\\b"
+    );
+    private static final Pattern TEXTURE_LOD_CALL = Pattern.compile("\\btextureLod\\s*\\(");
+    private static final Pattern TEXTURE_CALL = Pattern.compile("\\btexture\\s*\\(");
 
     @Override
     public String apply(String source, ShaderTransformParameters parameters) {
@@ -20,9 +25,8 @@ public final class CompatibilityTextureFunctionTransformStage implements ShaderT
         if (!parameters.compatibilityProfile()) {
             return source;
         }
-        return source
-                .replaceAll("\\btextureLod\\s*\\(", "texture2DLod(")
-                .replaceAll("\\btexture\\s*\\(", "texture2D(");
+        source = TEXTURE_LOD_CALL.matcher(source).replaceAll("texture2DLod(");
+        return TEXTURE_CALL.matcher(source).replaceAll("texture2D(");
     }
 
     private static String normalizeIntegerSamplerTextureCalls(String source, ShaderTransformParameters parameters) {
@@ -39,15 +43,22 @@ public final class CompatibilityTextureFunctionTransformStage implements ShaderT
             return source;
         }
 
-        String transformed = source;
-        for (String sampler : samplers) {
-            transformed = Pattern.compile("\\btexture2D\\s*\\(\\s*" + Pattern.quote(sampler) + "\\b")
-                    .matcher(transformed)
-                    .replaceAll(Matcher.quoteReplacement("texture(" + sampler));
-            transformed = Pattern.compile("\\btexture2DLod\\s*\\(\\s*" + Pattern.quote(sampler) + "\\b")
-                    .matcher(transformed)
-                    .replaceAll(Matcher.quoteReplacement("textureLod(" + sampler));
+        Matcher calls = INTEGER_TEXTURE_CALL.matcher(source);
+        StringBuffer transformed = new StringBuffer(source.length());
+        boolean changed = false;
+        while (calls.find()) {
+            String sampler = calls.group(2);
+            if (!samplers.contains(sampler)) {
+                continue;
+            }
+            String function = calls.group(1) != null ? "textureLod" : "texture";
+            calls.appendReplacement(transformed, Matcher.quoteReplacement(function + "(" + sampler));
+            changed = true;
         }
-        return transformed;
+        if (!changed) {
+            return source;
+        }
+        calls.appendTail(transformed);
+        return transformed.toString();
     }
 }

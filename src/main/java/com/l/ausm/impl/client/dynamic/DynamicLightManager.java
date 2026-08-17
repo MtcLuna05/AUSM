@@ -21,8 +21,10 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
 import net.minecraftforge.fml.relauncher.Side;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Mod.EventBusSubscriber(value = Side.CLIENT, modid = Reference.MODID)
 public final class DynamicLightManager {
@@ -30,6 +32,7 @@ public final class DynamicLightManager {
     private static final int REBUILD_PADDING = 2;
     private static volatile boolean active;
     private static volatile List<DynamicLightSource> activeSources = List.of();
+    private static volatile Map<Long, List<DynamicLightSource>> activeSourcesBySection = Map.of();
     private static Map<String, DynamicLightSource> previousSources = Map.of();
     private static World previousWorld;
     private static int ticks;
@@ -77,20 +80,11 @@ public final class DynamicLightManager {
             return 0;
         }
 
-        int brightest = 0;
-        double blockX = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) + 0.5D;
-        double blockY = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) + 0.5D;
-        double blockZ = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) + 0.5D;
-        for (DynamicLightSource source : activeSources) {
-            int light = source.lightAt(blockX, blockY, blockZ);
-            if (light > brightest) {
-                brightest = light;
-                if (brightest >= 15) {
-                    return 15;
-                }
-            }
-        }
-        return brightest;
+        return DynamicLightSpatialIndex.lightAt(
+                activeSourcesBySection,
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos),
+                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos));
     }
 
     public static boolean shouldApplyToBlockRenderLightQuery(BlockPos pos) {
@@ -165,6 +159,7 @@ public final class DynamicLightManager {
         World world = minecraft != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) : null;
         if (world != previousWorld) {
             activeSources = List.of();
+            activeSourcesBySection = Map.of();
             previousSources = Map.of();
             previousWorld = world;
         }
@@ -177,6 +172,7 @@ public final class DynamicLightManager {
         Map<String, DynamicLightSource> next = collectSources(minecraft);
         logSourceChanges(next);
         activeSources = List.copyOf(next.values());
+        activeSourcesBySection = DynamicLightSpatialIndex.build(next.values());
         active = !activeSources.isEmpty();
         rebuildChangedRegions(world, previousSources, next, forceRebuild);
         previousSources = next;
@@ -204,7 +200,7 @@ public final class DynamicLightManager {
             addHeldSource(sources, player, "off", com.l.ausm.impl.util.MinecraftReflectionCompat.heldItemOffhand(player));
         }
         for (Entity entity : com.l.ausm.impl.util.MinecraftReflectionCompat.loadedEntityList(com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft))) {
-            if (entity == null || com.l.ausm.impl.util.MinecraftReflectionCompat.entityIsDead(entity)) {
+            if (entity == null || entity == player || com.l.ausm.impl.util.MinecraftReflectionCompat.entityIsDead(entity)) {
                 continue;
             }
             if (entity instanceof EntityLivingBase living) {
@@ -270,11 +266,13 @@ public final class DynamicLightManager {
             World world = minecraft != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) : previousWorld;
             active = false;
             activeSources = List.of();
+            activeSourcesBySection = Map.of();
             previousSources = Map.of();
             markSources(world, previous);
         } else {
             active = false;
             activeSources = List.of();
+            activeSourcesBySection = Map.of();
             previousSources = Map.of();
         }
         if (lastLoggedSourceCount != 0) {
@@ -287,40 +285,59 @@ public final class DynamicLightManager {
         if (world == null) {
             return;
         }
+        Set<BlockPos> dirtySections = new LinkedHashSet<>();
         for (Map.Entry<String, DynamicLightSource> entry : previous.entrySet()) {
             DynamicLightSource nextSource = next.get(entry.getKey());
             if (force || nextSource == null || !entry.getValue().sameRenderRegion(nextSource)) {
-                markSource(world, entry.getValue());
+                addSourceSections(dirtySections, entry.getValue());
             }
         }
         for (Map.Entry<String, DynamicLightSource> entry : next.entrySet()) {
             DynamicLightSource previousSource = previous.get(entry.getKey());
             if (force || previousSource == null || !entry.getValue().sameRenderRegion(previousSource)) {
-                markSource(world, entry.getValue());
+                addSourceSections(dirtySections, entry.getValue());
             }
         }
+        markSections(world, dirtySections);
     }
 
     private static void markSources(World world, Map<String, DynamicLightSource> sources) {
         if (world == null) {
             return;
         }
+        Set<BlockPos> dirtySections = new LinkedHashSet<>();
         for (DynamicLightSource source : sources.values()) {
-            markSource(world, source);
+            addSourceSections(dirtySections, source);
+        }
+        markSections(world, dirtySections);
+    }
+
+    private static void addSourceSections(Set<BlockPos> sections, DynamicLightSource source) {
+        int radius = source.light() + REBUILD_PADDING;
+        BlockPos center = source.blockPos();
+        int minSectionX = (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) - radius) >> 4;
+        int maxSectionX = (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) + radius) >> 4;
+        int minSectionY = Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(center) - radius) >> 4;
+        int maxSectionY = Math.min(255, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(center) + radius) >> 4;
+        int minSectionZ = (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) - radius) >> 4;
+        int maxSectionZ = (com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) + radius) >> 4;
+        for (int sectionX = minSectionX; sectionX <= maxSectionX; sectionX++) {
+            for (int sectionY = minSectionY; sectionY <= maxSectionY; sectionY++) {
+                for (int sectionZ = minSectionZ; sectionZ <= maxSectionZ; sectionZ++) {
+                    sections.add(new BlockPos(sectionX, sectionY, sectionZ));
+                }
+            }
         }
     }
 
-    private static void markSource(World world, DynamicLightSource source) {
-        int radius = source.light() + REBUILD_PADDING;
-        BlockPos center = source.blockPos();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(world,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) - radius,
-                Math.max(0, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(center) - radius),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) - radius,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(center) + radius,
-                Math.min(255, com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(center) + radius),
-                com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(center) + radius
-        );
+    private static void markSections(World world, Set<BlockPos> sections) {
+        for (BlockPos section : sections) {
+            int minX = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(section) << 4;
+            int minY = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(section) << 4;
+            int minZ = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(section) << 4;
+            com.l.ausm.impl.util.MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(
+                    world, minX, minY, minZ, minX + 15, Math.min(255, minY + 15), minZ + 15);
+        }
     }
 
     private static int clampLight(int light) {

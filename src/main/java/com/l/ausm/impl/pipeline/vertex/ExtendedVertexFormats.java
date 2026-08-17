@@ -11,24 +11,11 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
 
 import java.nio.ByteBuffer;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Registry for our extended vertex formats containing shader-specific attributes.
  */
 public class ExtendedVertexFormats {
-    private static final Class<?>[] INT_PARAMETER = {int.class};
-    private static final String[] SIZE_NAMES = {"func_177338_f", "getSize"};
-    private static final String[] INTEGER_SIZE_NAMES = {"func_181719_f", "getIntegerSize"};
-    private static final String[] ELEMENT_COUNT_NAMES = {"func_177345_h", "getElementCount"};
-    private static final String[] ELEMENT_NAMES = {"func_177348_c", "getElement"};
-    private static final String[] OFFSET_NAMES = {"func_181720_d", "getOffset"};
-    private static final String[] HAS_COLOR_NAMES = {"func_177346_d", "hasColor"};
-    private static final String[] COLOR_OFFSET_NAMES = {"func_177340_e", "getColorOffset"};
-    private static final String[] HAS_NORMAL_NAMES = {"func_177350_b", "hasNormal"};
-    private static final String[] HAS_UV_OFFSET_NAMES = {"func_177347_a", "hasUvOffset"};
-    private static final String[] UV_OFFSET_NAMES = {"func_177344_b", "getUvOffsetById"};
-
     public static VertexFormat PIPELINE_BLOCK;
     public static VertexFormat PIPELINE_ENTITY;
     public static final int MC_ENTITY_ATTRIBUTE = 11;
@@ -52,8 +39,6 @@ public class ExtendedVertexFormats {
     private static final int PIPELINE_ENTITY_ELEMENT_COUNT = 8;
     private static VertexFormatElement pipelineBlockFirstElement;
     private static VertexFormatElement pipelineEntityFirstElement;
-    private static final ConcurrentHashMap<VertexFormat, Integer> ELEMENT_COUNT_CACHE = new ConcurrentHashMap<>();
-
     // These elements mirror Iris' terrain payload order:
     // mc_Entity, mc_midTexCoord, at_tangent, at_midBlock.
     public static final VertexFormatElement MC_ENTITY = new VertexFormatElement(0, VertexFormatElement.EnumType.SHORT, VertexFormatElement.EnumUsage.PADDING, 4);
@@ -128,8 +113,7 @@ public class ExtendedVertexFormats {
         if (format == PIPELINE_ENTITY) {
             return PIPELINE_ENTITY_SIZE;
         }
-        return format != null ? MinecraftReflectionCompat.callInt(format,
-                SIZE_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
+        return MinecraftReflectionCompat.vertexFormatSize(format);
     }
 
     public static int integerSize(VertexFormat format) {
@@ -139,8 +123,7 @@ public class ExtendedVertexFormats {
         if (format == PIPELINE_ENTITY) {
             return PIPELINE_ENTITY_SIZE / Integer.BYTES;
         }
-        return format != null ? MinecraftReflectionCompat.callInt(format,
-                INTEGER_SIZE_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
+        return MinecraftReflectionCompat.vertexFormatIntegerSize(format);
     }
 
     public static int elementCount(VertexFormat format) {
@@ -150,17 +133,7 @@ public class ExtendedVertexFormats {
         if (format == PIPELINE_ENTITY) {
             return PIPELINE_ENTITY_ELEMENT_COUNT;
         }
-        if (format == null) {
-            return -1;
-        }
-        Integer cached = ELEMENT_COUNT_CACHE.get(format);
-        if (cached != null) {
-            return cached;
-        }
-        int count = MinecraftReflectionCompat.callInt(format,
-                ELEMENT_COUNT_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, -1);
-        Integer existing = ELEMENT_COUNT_CACHE.putIfAbsent(format, count);
-        return existing != null ? existing : count;
+        return MinecraftReflectionCompat.vertexFormatElementCount(format);
     }
 
     public static VertexFormatElement element(VertexFormat format, int index) {
@@ -176,37 +149,32 @@ public class ExtendedVertexFormats {
     }
 
     private static VertexFormatElement rawElement(VertexFormat format, int index) {
-        return format != null ? MinecraftReflectionCompat.call(format, VertexFormatElement.class, null,
-                ELEMENT_NAMES, INT_PARAMETER, index) : null;
+        return MinecraftReflectionCompat.vertexFormatElement(format, index);
     }
 
     public static int offset(VertexFormat format, int index) {
-        return format != null ? MinecraftReflectionCompat.callInt(format,
-                OFFSET_NAMES, INT_PARAMETER, -1, index) : -1;
+        return MinecraftReflectionCompat.vertexFormatOffset(format, index);
     }
 
     public static boolean hasColor(VertexFormat format) {
         if (format == PIPELINE_BLOCK || format == PIPELINE_ENTITY) {
             return true;
         }
-        return format != null && MinecraftReflectionCompat.callBoolean(format,
-                HAS_COLOR_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, false);
+        return MinecraftReflectionCompat.vertexFormatHasColor(format);
     }
 
     public static int colorOffset(VertexFormat format) {
         if (format == PIPELINE_BLOCK || format == PIPELINE_ENTITY) {
             return 12;
         }
-        return format != null ? MinecraftReflectionCompat.callInt(format,
-                COLOR_OFFSET_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, -1) : -1;
+        return MinecraftReflectionCompat.vertexFormatColorOffset(format);
     }
 
     public static boolean hasNormal(VertexFormat format) {
         if (format == PIPELINE_BLOCK || format == PIPELINE_ENTITY) {
             return true;
         }
-        return format != null && MinecraftReflectionCompat.callBoolean(format,
-                HAS_NORMAL_NAMES, MinecraftReflectionCompat.NO_PARAMETERS, false);
+        return MinecraftReflectionCompat.vertexFormatHasNormal(format);
     }
 
     public static boolean hasUvOffset(VertexFormat format, int id) {
@@ -216,8 +184,7 @@ public class ExtendedVertexFormats {
         if (format == PIPELINE_ENTITY) {
             return id == 0;
         }
-        return format != null && MinecraftReflectionCompat.callBoolean(format,
-                HAS_UV_OFFSET_NAMES, INT_PARAMETER, false, id);
+        return MinecraftReflectionCompat.vertexFormatHasUvOffset(format, id);
     }
 
     public static int uvOffsetById(VertexFormat format, int id) {
@@ -227,8 +194,7 @@ public class ExtendedVertexFormats {
         if (format == PIPELINE_BLOCK && id == 1) {
             return 24;
         }
-        return format != null ? MinecraftReflectionCompat.callInt(format,
-                UV_OFFSET_NAMES, INT_PARAMETER, -1, id) : -1;
+        return MinecraftReflectionCompat.vertexFormatUvOffset(format, id);
     }
 
     private static void addElement(VertexFormat format, VertexFormatElement element) {

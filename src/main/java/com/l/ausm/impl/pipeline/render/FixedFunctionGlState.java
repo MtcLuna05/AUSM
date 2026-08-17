@@ -98,14 +98,15 @@ public final class FixedFunctionGlState {
      * World particles use fixed-function texture coordinates. A GUI glint or
      * compatibility renderer that leaves a projected texture matrix behind can
      * therefore turn each particle quad into a screen/terrain-sized plane even
-     * when every other GL boundary state is canonical.
+     * when every other GL boundary state is canonical. Only reset unit zero:
+     * EntityRenderer.enableLightmap() deliberately installs a scaled/translated
+     * matrix on the lightmap unit for Minecraft's packed 0..240 coordinates.
      */
     public static void resetVanillaTextureMatrices() {
         int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
         int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
         try {
             resetTextureMatrix(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-            resetTextureMatrix(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
         } finally {
             com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(previousActiveTexture);
             GL11.glMatrixMode(previousMatrixMode);

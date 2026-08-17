@@ -37,6 +37,9 @@ public class RenderManagerMixin {
         if (context.isRenderingGuiScreen()) {
             return;
         }
+        if (!context.isActive()) {
+            return;
+        }
         ausm$normalizeEntityFaceCulling();
         if (!context.shouldBypassWorldPassRendering()) {
             if (BetterPortalsCompat.isPortalEntity(entity)) {
@@ -60,6 +63,9 @@ public class RenderManagerMixin {
         PipelineContext context = PipelineContext.getInstance();
         if (context.isInventoryEntityPreview(entity, x, y, z)) {
             context.finishGuiEntityPreviewRenderState();
+            return;
+        }
+        if (!context.isActive()) {
             return;
         }
         if (context.isRenderingGuiScreen()) {
@@ -88,6 +94,9 @@ public class RenderManagerMixin {
         if (context.isRenderingGuiScreen()) {
             return;
         }
+        if (!context.isActive()) {
+            return;
+        }
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }
@@ -114,6 +123,9 @@ public class RenderManagerMixin {
     private void ausm$afterRenderMultipass(Entity entity, float partialTicks, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.isRenderingGuiScreen()) {
+            return;
+        }
+        if (!context.isActive()) {
             return;
         }
         if (context.shouldBypassWorldPassRendering()) {

@@ -36,6 +36,16 @@ public final class EfficientEntitiesChestCompat {
         return !stack.isEmpty() && stack.peek();
     }
 
+    /**
+     * Efficient Entities cancels vanilla {@code ModelRenderer.render} when its
+     * helper returns false. Its shared persistent model buffers are not safe
+     * across AUSM's shader phases, so retain vanilla model submission for the
+     * whole time the shader pipeline is active as well as for chests.
+     */
+    public static boolean shouldUseVanillaModelRenderer(boolean shaderPipelineActive) {
+        return shaderPipelineActive || isChestRenderActive();
+    }
+
     static boolean isChest(TileEntity tileEntity) {
         if (tileEntity == null) {
             return false;

@@ -116,7 +116,19 @@ public class RenderItemMixin {
         if (!context.isRenderingGuiItemContext()) {
             context.prepareHandItemDrawState("forge_lit_item");
         } else {
-            AUSM$guiForgeLitStateStack.get().push(context.beginGuiItemStateScope());
+            // renderEffect establishes the glint's GL_EQUAL depth mask before
+            // invoking renderModel. Do not replace that state with the normal
+            // GUI base-item scope (GL_LEQUAL + depth writes), or transparent
+            // pixels in the baked quad become a slot-sized glint rectangle.
+            // RenderItem's two-argument renderModel overload is the common
+            // endpoint for vanilla glint and private copies such as HEI's.
+            // It always delegates here with ItemStack.EMPTY, while ordinary
+            // item submissions retain their real stack.  Use that vanilla
+            // invariant instead of an optional mod-specific marker.
+            boolean renderingGlint = stack.isEmpty() || !AUSM$glintPhaseStack.get().isEmpty();
+            AUSM$guiForgeLitStateStack.get().push(
+                    !renderingGlint && context.beginGuiItemStateScope()
+            );
         }
     }
 
@@ -150,6 +162,8 @@ public class RenderItemMixin {
         PipelineContext context = PipelineContext.getInstance();
         if (!context.isRenderingGuiItemContext()) {
             context.prepareHandItemDrawState("standard_item");
+        } else if (!stack.isEmpty() && AUSM$glintPhaseStack.get().isEmpty()) {
+            context.prepareGuiItemBaseDrawState();
         }
     }
 
@@ -161,6 +175,17 @@ public class RenderItemMixin {
             return;
         }
         AUSM$glintPhaseStack.get().push(context.beginItemGlintPhase());
+    }
+
+    @Inject(
+            method = "renderEffect(Lnet/minecraft/client/renderer/block/model/IBakedModel;)V",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/RenderItem;renderModel(Lnet/minecraft/client/renderer/block/model/IBakedModel;I)V"
+            )
+    )
+    private void ausm$beforeItemGlintModelDraw(IBakedModel model, CallbackInfo ci) {
+        PipelineContext.getInstance().prepareItemGlintDrawState();
     }
 
     @Inject(method = "renderEffect(Lnet/minecraft/client/renderer/block/model/IBakedModel;)V", at = @At("RETURN"))

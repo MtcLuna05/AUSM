@@ -33,6 +33,7 @@
     "compat.DimensionalDoorsEntranceRiftRendererMixin",
     "compat.DimensionalDoorsFloatingRiftRendererMixin",
     "compat.GpomBetterPortalsClientWorldCleanupMixin",
+    "compat.JourneyMapTextureImplMixin",
     "compat.NetherPortalLayerMixin",
     "compat.NothiriumChunkRendererDynamicVboMixin",
     "compat.NothiriumChunkRendererGL15Mixin",

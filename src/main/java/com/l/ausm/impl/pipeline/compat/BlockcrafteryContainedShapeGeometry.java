@@ -33,14 +33,6 @@ public final class BlockcrafteryContainedShapeGeometry {
      * normal to survive the shared-depth LEQUAL test; the base never moves.
      */
     private static final float BLOOM_OVERLAY_DEPTH_LIFT = 0.002F;
-    /**
-     * The shader already renders the framed material's emissive base.  The
-     * copied native BLOOM layer is composited over that base a second time and
-     * must therefore carry halo energy rather than another full-bright copy of
-     * the texture.  Vanilla-format/shaderless meshes keep their native payload;
-     * this attenuation is limited to the extended shader-pipeline overlay.
-     */
-    private static final float SHADERED_FRAMED_BLOOM_SOURCE_SCALE = 0.35F;
     private static final AtomicInteger ENDER_IO_MAPPING_PROBE_COUNT = new AtomicInteger();
     private static final AtomicInteger ENDER_IO_PROJECTION_PROBE_COUNT = new AtomicInteger();
     private static final AtomicInteger ENDER_IO_FACE_PROJECTION_PROBE_COUNT = new AtomicInteger();
@@ -161,8 +153,6 @@ public final class BlockcrafteryContainedShapeGeometry {
             }
         }
         liftBloomOverlay(destination, startByte, hostVertices, stride, liftBloomOverlay);
-        attenuateShaderedFramedBloomOverlay(destination, startByte, hostVertices, stride, format,
-                liftBloomOverlay);
         refreshDerivedPipelineAttributes(destination, host, startByte, hostVertices, stride, format, order);
         markFramedEmission(destination, startByte, hostVertices, stride, format, markFramedEmission);
         markFramedBloomOverlay(destination, startByte, hostVertices, stride, format, liftBloomOverlay);
@@ -270,8 +260,6 @@ public final class BlockcrafteryContainedShapeGeometry {
         }
         ByteBuffer destination = extension.ausm$byteBuffer().duplicate().order(order);
         liftBloomOverlay(destination, (long) start * stride, mappedVertices, stride, liftBloomOverlay);
-        attenuateShaderedFramedBloomOverlay(destination, (long) start * stride, mappedVertices, stride, format,
-                liftBloomOverlay);
         refreshDerivedPipelineAttributes(destination, null, (long) start * stride, mappedVertices,
                 stride, format, order);
         markFramedEmission(destination, (long) start * stride, mappedVertices, stride, format, markFramedEmission);
@@ -306,9 +294,9 @@ public final class BlockcrafteryContainedShapeGeometry {
     }
 
     /**
-     * Tag only the copied BLOOM overlay. The bloom renderer uses program 0
-     * for this pass, so mc_Entity.w is inert visually; the tag lets the
-     * final compile probe distinguish a frame overlay from native bloom VBOs.
+     * Tag only the copied BLOOM overlay. The native Bloom geometry program
+     * reads this marker to attenuate the duplicate framed source only while
+     * the shader pipeline is active; shaderless Bloom retains full energy.
      */
     private static void markFramedBloomOverlay(ByteBuffer destination, long startByte, int vertices,
                                                int stride, VertexFormat format, boolean enabled) {
@@ -325,31 +313,6 @@ public final class BlockcrafteryContainedShapeGeometry {
                 return;
             }
             destination.putShort(offset, (short) BlockRenderContext.FRAMED_BLOOM_OVERLAY_PROBE_MARKER);
-        }
-    }
-
-    private static void attenuateShaderedFramedBloomOverlay(ByteBuffer destination, long startByte, int vertices,
-                                                             int stride, VertexFormat format, boolean enabled) {
-        if (!enabled || !ExtendedVertexFormats.isPipelineBlock(format)) {
-            return;
-        }
-        int colorOffset = ExtendedVertexFormats.colorOffset(format);
-        if (colorOffset < 0 || colorOffset + 4 > stride) {
-            return;
-        }
-        for (int vertex = 0; vertex < vertices; vertex++) {
-            int offset = (int) startByte + vertex * stride + colorOffset;
-            if (offset < 0 || offset + 4 > destination.capacity()) {
-                return;
-            }
-            // Vertex colour is four unsigned bytes in native channel order.
-            // Scaling the first three bytes is order-independent and preserves
-            // the alpha-test coverage in byte four.
-            for (int channel = 0; channel < 3; channel++) {
-                int value = destination.get(offset + channel) & 0xFF;
-                destination.put(offset + channel,
-                        (byte) Math.round(value * SHADERED_FRAMED_BLOOM_SOURCE_SCALE));
-            }
         }
     }
 

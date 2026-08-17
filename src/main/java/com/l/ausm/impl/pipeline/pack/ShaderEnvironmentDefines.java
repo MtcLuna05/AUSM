@@ -9,6 +9,7 @@ import java.util.Map;
 
 public final class ShaderEnvironmentDefines {
     private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
+    public static final double HAND_DEPTH = 0.125D;
 
     private ShaderEnvironmentDefines() {
     }
@@ -44,7 +45,7 @@ public final class ShaderEnvironmentDefines {
         defines.put("MC_GLSL_VERSION", Integer.toString(Math.max(120, glslVersion)));
         defines.put("MC_RENDER_QUALITY", "1.0");
         defines.put("MC_SHADOW_QUALITY", "1.0");
-        defines.put("MC_HAND_DEPTH", "1.0");
+        defines.put("MC_HAND_DEPTH", handDepthDefine());
         defines.put("IS_IRIS", "1");
         defines.put("IRIS_VERSION", "10902");
         addDistantHorizonsDefines(defines);
@@ -61,6 +62,10 @@ public final class ShaderEnvironmentDefines {
             default -> defines.put("OVERWORLD", "1");
         }
         return defines;
+    }
+
+    static String handDepthDefine() {
+        return Double.toString(HAND_DEPTH);
     }
 
     public static String shaderSourceDefines() {

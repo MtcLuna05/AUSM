@@ -1,38 +1,11 @@
 bool coloredFluidMaterial = true;
-vec3 ausmFluidColor = vec3(0.45, 0.58, 0.72);
-
-if (mat == 32620) ausmFluidColor = vec3(1.00, 0.62, 0.18);
-if (mat == 32621) ausmFluidColor = vec3(1.00, 0.20, 0.68);
-if (mat == 32622) ausmFluidColor = vec3(0.25, 0.90, 0.78);
-if (mat == 32623) ausmFluidColor = vec3(0.70, 0.35, 1.00);
-if (mat == 32624) ausmFluidColor = vec3(0.95, 0.48, 0.18);
-if (mat == 32625) ausmFluidColor = vec3(0.95, 0.72, 0.25);
-if (mat == 32626) ausmFluidColor = vec3(0.35, 0.70, 1.00);
-if (mat == 32627) ausmFluidColor = vec3(0.50, 0.35, 0.80);
-if (mat == 32628) ausmFluidColor = vec3(0.95, 0.05, 0.10);
-if (mat == 32629) ausmFluidColor = vec3(0.95, 0.78, 0.18);
-if (mat == 32630) ausmFluidColor = vec3(0.35, 0.85, 0.75);
-if (mat == 32631) ausmFluidColor = vec3(0.35, 0.58, 0.25);
-if (mat == 32632) ausmFluidColor = vec3(0.90, 0.46, 0.18);
-if (mat == 32633) ausmFluidColor = vec3(0.78, 0.52, 0.28);
-if (mat == 32634) ausmFluidColor = vec3(0.35, 0.70, 0.95);
-if (mat == 32635) ausmFluidColor = vec3(0.90, 0.68, 0.25);
-if (mat == 32636) ausmFluidColor = vec3(0.55, 0.80, 0.95);
-if (mat == 32637) ausmFluidColor = vec3(0.70, 0.55, 0.32);
-if (mat == 32638) ausmFluidColor = vec3(0.40, 0.85, 1.00);
-if (mat == 32639) ausmFluidColor = vec3(0.85, 0.58, 0.30);
-if (mat == 32640) ausmFluidColor = vec3(1.00, 0.08, 0.04);
-if (mat == 32641) ausmFluidColor = vec3(0.20, 0.95, 1.00);
-if (mat == 32642) ausmFluidColor = vec3(0.78, 0.35, 1.00);
-if (mat == 32643) ausmFluidColor = vec3(0.25, 0.62, 1.00);
-if (mat == 32644) ausmFluidColor = vec3(0.75, 0.08, 1.00);
-if (mat == 32645) ausmFluidColor = vec3(0.58, 0.70, 0.42);
-
-color.rgb = ausmFluidColor;
-color.a = clamp(max(color.a, 0.72) * 0.82, 0.56, 0.82);
+// The fluid renderer has already combined the fluid's registered tint with
+// its still/flowing sprite in color.  Preserve that authoritative mod color;
+// material IDs select only the generic optical response and emission class.
+color.a = min(color.a, 0.82);
 translucentMultCalculated = true;
 translucentMult = vec4(1.0, 1.0, 1.0, 0.0);
 reflectMult = 0.72 * (0.45 + 0.55 * NdotUmax0);
 smoothnessG = 0.62;
 highlightMult = 0.72 * (16.0 - 15.0 * pow2(fresnel));
-if (mat >= 32640 && mat <= 32645) emission = max(emission, 0.55);
+if (mat >= 32640 && mat <= 32644) emission = max(emission, 0.55);

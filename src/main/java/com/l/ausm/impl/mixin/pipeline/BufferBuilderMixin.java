@@ -228,8 +228,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         long packedEntityData = BlockRenderContext.packedEntityData();
         int packedEntity = (int) packedEntityData;
         int packedEntityHigh = (int) (packedEntityData >>> 32);
-        int midBlockEmission = BlockRenderContext.midBlockEmission();
-        int packedLocalPosition = BlockRenderContext.packedLocalPosition();
         boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
         int customLiquidTint = BlockRenderContext.customLiquidTint();
         int vanillaLightmapEmission = compatibilityEmissiveBoost ? BlockRenderContext.vanillaLightmapEmission() : 0;
@@ -250,13 +248,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             ausm$applyEmissiveLightmap(scratch, 0, vanillaLightmapEmission);
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity;
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh;
-            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
-                    Float.intBitsToFloat(scratch[0]),
-                    Float.intBitsToFloat(scratch[1]),
-                    Float.intBitsToFloat(scratch[2]),
-                    packedLocalPosition,
-                    midBlockEmission
-            );
+            // The complete polygon pass below writes the final mid-block value for every vertex.
             field_178999_b.put(scratch, 0, targetIntStride);
         }
 
@@ -306,8 +298,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         int packedEntityHigh = (int) (packedEntityData >>> 32);
         ausm$probeLiquidPayload("quad", packedEntityData,
                 ExtendedVertexFormats.size(field_179011_q), vertexTotal);
-        int midBlockEmission = BlockRenderContext.midBlockEmission();
-        int packedLocalPosition = BlockRenderContext.packedLocalPosition();
         boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
         int customLiquidTint = BlockRenderContext.customLiquidTint();
         int vanillaLightmapEmission = compatibilityEmissiveBoost ? BlockRenderContext.vanillaLightmapEmission() : 0;
@@ -327,13 +317,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             ausm$applyEmissiveLightmap(scratch, 0, vanillaLightmapEmission);
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity;
             scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh;
-            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET / Integer.BYTES] = BlockRenderContext.midBlock(
-                    Float.intBitsToFloat(scratch[0]),
-                    Float.intBitsToFloat(scratch[1]),
-                    Float.intBitsToFloat(scratch[2]),
-                    packedLocalPosition,
-                    midBlockEmission
-            );
+            // The complete polygon pass below writes the final mid-block value for every vertex.
             field_178999_b.put(scratch, 0, targetStride);
         }
 
@@ -687,13 +671,14 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Inject(method = "func_181675_d", at = @At("HEAD"))
     private void ausm$applyEmissiveLightmap(CallbackInfo ci) {
-        ausm$sanitizeCurrentAgricraftCropVertex();
-        ausm$applyBloomMaskCurrentVertex();
-        ausm$applyCustomLiquidTintCurrentVertex();
-        ausm$recordPipelineEmissionBloomMetadata();
+        BlockRenderContext.State blockState = BlockRenderContext.currentState();
+        ausm$sanitizeCurrentAgricraftCropVertex(blockState);
+        ausm$applyBloomMaskCurrentVertex(blockState);
+        ausm$applyCustomLiquidTintCurrentVertex(blockState);
+        ausm$recordPipelineEmissionBloomMetadata(blockState);
 
         int blockEmission = ausm$shouldApplyCompatibilityEmissiveBoost()
-                ? BlockRenderContext.vanillaLightmapEmission()
+                ? blockState.vanillaLightmapEmission()
                 : 0;
         if (blockEmission <= 0 || field_179011_q == null || !ExtendedVertexFormats.hasUvOffset(field_179011_q, 1)) {
             return;
@@ -712,16 +697,16 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     }
 
     @Unique
-    private void ausm$recordPipelineEmissionBloomMetadata() {
+    private void ausm$recordPipelineEmissionBloomMetadata(BlockRenderContext.State blockState) {
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)
-                || BlockRenderContext.blockEmission() <= 0) {
+                || blockState.blockEmission() <= 0) {
             return;
         }
         ausm$markCurrentContextShaderlessBloomMetadata();
     }
 
-    private void ausm$sanitizeCurrentAgricraftCropVertex() {
-        if (!BlockRenderContext.isAgricraftCrop()
+    private void ausm$sanitizeCurrentAgricraftCropVertex(BlockRenderContext.State blockState) {
+        if (!blockState.isAgricraftCrop()
                 || !ExtendedVertexFormats.isPipelineBlock(field_179011_q)
                 || !ExtendedVertexFormats.hasUvOffset(field_179011_q, 1)) {
             return;
@@ -731,7 +716,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         if (offset < 0 || offset + 4 > field_179001_a.capacity()) {
             return;
         }
-        int packedLightmap = BlockRenderContext.packedLightmap();
+        int packedLightmap = blockState.packedLightmap();
         field_179001_a.putShort(offset, (short) (packedLightmap & 0xFFFF));
         field_179001_a.putShort(offset + 2, (short) ((packedLightmap >>> 16) & 0xFFFF));
     }
@@ -1144,9 +1129,10 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     }
 
     @Unique
-    private void ausm$applyCustomLiquidTintCurrentVertex() {
-        if (BlockRenderContext.bloomMaskFallback()
-                || BlockRenderContext.customLiquidTint() < 0
+    private void ausm$applyCustomLiquidTintCurrentVertex(BlockRenderContext.State blockState) {
+        int customLiquidTint = blockState.customLiquidTint();
+        if (blockState.bloomMaskFallback()
+                || customLiquidTint < 0
                 || field_179011_q == null
                 || !ExtendedVertexFormats.hasColor(field_179011_q)) {
             return;
@@ -1155,8 +1141,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         if (colorOffset < 0 || colorOffset + Integer.BYTES > field_179001_a.capacity()) {
             return;
         }
-        field_179001_a.putInt(colorOffset, ausm$applyCustomLiquidTintColor(field_179001_a.getInt(colorOffset)));
-        ausm$writeBlockAlpha(colorOffset);
+        field_179001_a.putInt(colorOffset,
+                ausm$applyCustomLiquidTintColor(field_179001_a.getInt(colorOffset), customLiquidTint));
+        ausm$writeBlockAlpha(colorOffset, blockState.blockAlpha());
     }
 
     @Unique
@@ -1178,8 +1165,8 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     }
 
     @Unique
-    private void ausm$applyBloomMaskCurrentVertex() {
-        if (!BlockRenderContext.bloomMaskFallback() || field_179011_q == null) {
+    private void ausm$applyBloomMaskCurrentVertex(BlockRenderContext.State blockState) {
+        if (!blockState.bloomMaskFallback() || field_179011_q == null) {
             return;
         }
         int vertexOffset = field_178997_d * ExtendedVertexFormats.size(field_179011_q);
@@ -1273,7 +1260,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Unique
     private void ausm$writeBlockAlpha(int colorOffset) {
-        int alpha = BlockRenderContext.blockAlpha();
+        ausm$writeBlockAlpha(colorOffset, BlockRenderContext.blockAlpha());
+    }
+
+    @Unique
+    private void ausm$writeBlockAlpha(int colorOffset, int alpha) {
         if (alpha >= 0 && colorOffset >= 0 && colorOffset + 3 < field_179001_a.capacity()) {
             field_179001_a.put(colorOffset + 3, (byte) alpha);
         }

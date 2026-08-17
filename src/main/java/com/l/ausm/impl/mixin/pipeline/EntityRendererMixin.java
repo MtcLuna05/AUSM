@@ -33,7 +33,9 @@ import org.lwjgl.opengl.GLContext;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
@@ -42,6 +44,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(EntityRenderer.class)
 public class EntityRendererMixin {
+    private static final int AUSM_WEATHER_RENDER_RADIUS = Math.max(5, Math.min(10,
+            Integer.getInteger("ausm.weatherRenderRadius", 7)));
     private static boolean ausm$loggedSelectionBoxStateRepair;
     private static boolean ausm$loggedEntityStateRepair;
     private static boolean ausm$loggedEntityBufferRepair;
@@ -399,6 +403,13 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassAfterCutoutTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        // Shaderless facades are fixed-function terrain, so submit them at the
+        // opaque/cutout boundary before entities and particles. The later
+        // translucent-terrain bridge remains the shader-pipeline route; the
+        // facade renderer's per-frame guard prevents a duplicate submission.
+        if (!context.isActive()) {
+            com.l.ausm.impl.pipeline.compat.GlobalFacadesTerrainBridge.render(partialTicks);
+        }
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }
@@ -657,6 +668,9 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassBeforeWeather(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (!context.isActive()) {
+            return;
+        }
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }
@@ -679,6 +693,9 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassAfterWeather(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        if (!context.isActive()) {
+            return;
+        }
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }
@@ -698,6 +715,28 @@ public class EntityRendererMixin {
         if (PipelineContext.getInstance().shouldRenderWeather()) {
             func_78474_d(partialTicks);
         }
+    }
+
+    @Inject(method = "func_78484_h", at = @At("HEAD"), cancellable = true)
+    private void ausm$skipDisabledWeatherParticles(CallbackInfo ci) {
+        if (!PipelineContext.getInstance().shouldRenderWeatherParticles()) {
+            ci.cancel();
+        }
+    }
+
+    /**
+     * Fancy vanilla weather performs biome and precipitation-height lookups
+     * for a 21-by-21 column square every rendered frame. A radius of seven
+     * keeps dense nearby rain while reducing that hot loop from 441 to 225
+     * columns. The JVM property allows packs to restore ten or choose any
+     * value from five through ten without another mixin/config fork.
+     */
+    @ModifyConstant(
+            method = "func_78474_d",
+            constant = @Constant(intValue = 10, ordinal = 0)
+    )
+    private int ausm$capFancyWeatherRenderRadius(int vanillaRadius) {
+        return Math.min(vanillaRadius, AUSM_WEATHER_RENDER_RADIUS);
     }
 
     @Redirect(

@@ -1,21 +1,19 @@
 package com.l.ausm.impl.pipeline.compat;
 
 public final class TerrainRenderProbeState {
-    private static final ThreadLocal<Integer> TERRAIN_DISPATCH_START = new ThreadLocal<>();
-
     private TerrainRenderProbeState() {
     }
 
     public static void setTerrainDispatchStart(int startVertex) {
-        TERRAIN_DISPATCH_START.set(startVertex);
+        // The corresponding probe is disabled in production. Keep the call-site ABI stable
+        // without allocating a boxed integer and mutating a ThreadLocal for every rendered block.
     }
 
     public static Integer terrainDispatchStart() {
-        return TERRAIN_DISPATCH_START.get();
+        return null;
     }
 
     public static void clearTerrainDispatchStart() {
-        TERRAIN_DISPATCH_START.remove();
     }
 
     public static int nextTerrainDispatchProbe() {

@@ -201,6 +201,20 @@ public final class MinecraftReflectionCompat {
     private static final Field MINECRAFT_CURRENT_SCREEN_FIELD = firstField(
             Minecraft.class, "field_71462_r", "currentScreen"
     );
+    private static final Field MINECRAFT_WORLD_FIELD = firstField(
+            Minecraft.class, "field_71441_e", "world"
+    );
+    private static final Field MINECRAFT_PLAYER_FIELD = firstField(
+            Minecraft.class, "field_71439_g", "player"
+    );
+    private static final Field MINECRAFT_RENDER_GLOBAL_FIELD = firstField(
+            Minecraft.class, "field_71438_f", "renderGlobal"
+    );
+    private static final Field MINECRAFT_GAME_SETTINGS_FIELD = firstField(
+            Minecraft.class, "field_71474_y", "gameSettings"
+    );
+    private static final Field WORLD_REMOTE_FIELD = firstField(World.class, "field_72995_K", "isRemote");
+    private static final Field WORLD_PROVIDER_FIELD = firstField(World.class, "field_73011_w", "provider");
     private static final Field VEC_X_FIELD = firstField(Vec3d.class, "field_72450_a", "x");
     private static final Field VEC_Y_FIELD = firstField(Vec3d.class, "field_72448_b", "y");
     private static final Field VEC_Z_FIELD = firstField(Vec3d.class, "field_72449_c", "z");
@@ -214,6 +228,50 @@ public final class MinecraftReflectionCompat {
             new String[] {"getRenderPass"},
             NO_PARAMETERS,
             MethodType.methodType(int.class)
+    );
+    private static final MethodHandle PROVIDER_DIMENSION_HANDLE = exactMethodHandle(
+            WorldProvider.class, PROVIDER_DIMENSION_NAMES, NO_PARAMETERS,
+            MethodType.methodType(int.class, WorldProvider.class)
+    );
+    private static final MethodHandle VERTEX_FORMAT_SIZE_HANDLE = exactMethodHandle(
+            VertexFormat.class, new String[] {"func_177338_f", "getSize"}, NO_PARAMETERS,
+            MethodType.methodType(int.class, VertexFormat.class)
+    );
+    private static final MethodHandle VERTEX_FORMAT_INTEGER_SIZE_HANDLE = exactMethodHandle(
+            VertexFormat.class, new String[] {"func_181719_f", "getIntegerSize"}, NO_PARAMETERS,
+            MethodType.methodType(int.class, VertexFormat.class)
+    );
+    private static final MethodHandle VERTEX_FORMAT_ELEMENT_COUNT_HANDLE = exactMethodHandle(
+            VertexFormat.class, new String[] {"func_177345_h", "getElementCount"}, NO_PARAMETERS,
+            MethodType.methodType(int.class, VertexFormat.class)
+    );
+    private static final MethodHandle VERTEX_FORMAT_ELEMENT_HANDLE = exactMethodHandle(
+            VertexFormat.class, new String[] {"func_177348_c", "getElement"}, new Class<?>[] {int.class},
+            MethodType.methodType(VertexFormatElement.class, VertexFormat.class, int.class)
+    );
+    private static final MethodHandle VERTEX_FORMAT_OFFSET_HANDLE = exactMethodHandle(
+            VertexFormat.class, new String[] {"func_181720_d", "getOffset"}, new Class<?>[] {int.class},
+            MethodType.methodType(int.class, VertexFormat.class, int.class)
+    );
+    private static final MethodHandle VERTEX_FORMAT_HAS_COLOR_HANDLE = exactMethodHandle(
+            VertexFormat.class, new String[] {"func_177346_d", "hasColor"}, NO_PARAMETERS,
+            MethodType.methodType(boolean.class, VertexFormat.class)
+    );
+    private static final MethodHandle VERTEX_FORMAT_COLOR_OFFSET_HANDLE = exactMethodHandle(
+            VertexFormat.class, new String[] {"func_177340_e", "getColorOffset"}, NO_PARAMETERS,
+            MethodType.methodType(int.class, VertexFormat.class)
+    );
+    private static final MethodHandle VERTEX_FORMAT_HAS_NORMAL_HANDLE = exactMethodHandle(
+            VertexFormat.class, new String[] {"func_177350_b", "hasNormal"}, NO_PARAMETERS,
+            MethodType.methodType(boolean.class, VertexFormat.class)
+    );
+    private static final MethodHandle VERTEX_FORMAT_HAS_UV_OFFSET_HANDLE = exactMethodHandle(
+            VertexFormat.class, new String[] {"func_177347_a", "hasUvOffset"}, new Class<?>[] {int.class},
+            MethodType.methodType(boolean.class, VertexFormat.class, int.class)
+    );
+    private static final MethodHandle VERTEX_FORMAT_UV_OFFSET_HANDLE = exactMethodHandle(
+            VertexFormat.class, new String[] {"func_177344_b", "getUvOffsetById"}, new Class<?>[] {int.class},
+            MethodType.methodType(int.class, VertexFormat.class, int.class)
     );
     private static final MethodHandle BLOCK_FROM_STATE_HANDLE = exactMethodHandle(
             IBlockState.class, new String[] {"func_177230_c", "getBlock"}, NO_PARAMETERS,
@@ -387,10 +445,25 @@ public final class MinecraftReflectionCompat {
     }
 
     public static WorldProvider worldProvider(World world) {
-        return field(world, WorldProvider.class, null, "field_73011_w", "provider");
+        if (world == null || WORLD_PROVIDER_FIELD == null) {
+            return null;
+        }
+        try {
+            Object provider = WORLD_PROVIDER_FIELD.get(world);
+            return provider instanceof WorldProvider ? (WorldProvider) provider : null;
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+            return null;
+        }
     }
 
     public static int providerDimension(WorldProvider provider) {
+        if (provider != null && PROVIDER_DIMENSION_HANDLE != null) {
+            try {
+                return (int) PROVIDER_DIMENSION_HANDLE.invokeExact(provider);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("providerDimension", failure);
+            }
+        }
         int direct = callInt(provider, PROVIDER_DIMENSION_NAMES, NO_PARAMETERS, Integer.MIN_VALUE);
         if (direct != Integer.MIN_VALUE) {
             return direct;
@@ -406,6 +479,150 @@ public final class MinecraftReflectionCompat {
     public static boolean providerHasSkyLight(WorldProvider provider) {
         return callBoolean(provider, new String[] {"func_191066_m", "hasSkyLight"}, NO_PARAMETERS,
                 fieldBoolean(provider, false, "field_191067_f", "hasSkyLight"));
+    }
+
+    public static int vertexFormatSize(VertexFormat format) {
+        if (format == null) {
+            return -1;
+        }
+        if (VERTEX_FORMAT_SIZE_HANDLE != null) {
+            try {
+                return (int) VERTEX_FORMAT_SIZE_HANDLE.invokeExact(format);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("vertexFormatSize", failure);
+            }
+        }
+        return callInt(format, new String[] {"func_177338_f", "getSize"}, NO_PARAMETERS, -1);
+    }
+
+    public static int vertexFormatIntegerSize(VertexFormat format) {
+        if (format == null) {
+            return -1;
+        }
+        if (VERTEX_FORMAT_INTEGER_SIZE_HANDLE != null) {
+            try {
+                return (int) VERTEX_FORMAT_INTEGER_SIZE_HANDLE.invokeExact(format);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("vertexFormatIntegerSize", failure);
+            }
+        }
+        return callInt(format, new String[] {"func_181719_f", "getIntegerSize"}, NO_PARAMETERS, -1);
+    }
+
+    public static int vertexFormatElementCount(VertexFormat format) {
+        if (format == null) {
+            return -1;
+        }
+        if (VERTEX_FORMAT_ELEMENT_COUNT_HANDLE != null) {
+            try {
+                return (int) VERTEX_FORMAT_ELEMENT_COUNT_HANDLE.invokeExact(format);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("vertexFormatElementCount", failure);
+            }
+        }
+        return callInt(format, new String[] {"func_177345_h", "getElementCount"}, NO_PARAMETERS, -1);
+    }
+
+    public static VertexFormatElement vertexFormatElement(VertexFormat format, int index) {
+        if (format == null) {
+            return null;
+        }
+        if (VERTEX_FORMAT_ELEMENT_HANDLE != null) {
+            try {
+                return (VertexFormatElement) VERTEX_FORMAT_ELEMENT_HANDLE.invokeExact(format, index);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("vertexFormatElement", failure);
+            }
+        }
+        return call(format, VertexFormatElement.class, null,
+                new String[] {"func_177348_c", "getElement"}, new Class<?>[] {int.class}, index);
+    }
+
+    public static int vertexFormatOffset(VertexFormat format, int index) {
+        if (format == null) {
+            return -1;
+        }
+        if (VERTEX_FORMAT_OFFSET_HANDLE != null) {
+            try {
+                return (int) VERTEX_FORMAT_OFFSET_HANDLE.invokeExact(format, index);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("vertexFormatOffset", failure);
+            }
+        }
+        return callInt(format, new String[] {"func_181720_d", "getOffset"},
+                new Class<?>[] {int.class}, -1, index);
+    }
+
+    public static boolean vertexFormatHasColor(VertexFormat format) {
+        if (format == null) {
+            return false;
+        }
+        if (VERTEX_FORMAT_HAS_COLOR_HANDLE != null) {
+            try {
+                return (boolean) VERTEX_FORMAT_HAS_COLOR_HANDLE.invokeExact(format);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("vertexFormatHasColor", failure);
+            }
+        }
+        return callBoolean(format, new String[] {"func_177346_d", "hasColor"}, NO_PARAMETERS, false);
+    }
+
+    public static int vertexFormatColorOffset(VertexFormat format) {
+        if (format == null) {
+            return -1;
+        }
+        if (VERTEX_FORMAT_COLOR_OFFSET_HANDLE != null) {
+            try {
+                return (int) VERTEX_FORMAT_COLOR_OFFSET_HANDLE.invokeExact(format);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("vertexFormatColorOffset", failure);
+            }
+        }
+        return callInt(format, new String[] {"func_177340_e", "getColorOffset"}, NO_PARAMETERS, -1);
+    }
+
+    public static boolean vertexFormatHasNormal(VertexFormat format) {
+        if (format == null) {
+            return false;
+        }
+        if (VERTEX_FORMAT_HAS_NORMAL_HANDLE != null) {
+            try {
+                return (boolean) VERTEX_FORMAT_HAS_NORMAL_HANDLE.invokeExact(format);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("vertexFormatHasNormal", failure);
+            }
+        }
+        return callBoolean(format, new String[] {"func_177350_b", "hasNormal"}, NO_PARAMETERS, false);
+    }
+
+    public static boolean vertexFormatHasUvOffset(VertexFormat format, int id) {
+        if (format == null) {
+            return false;
+        }
+        if (VERTEX_FORMAT_HAS_UV_OFFSET_HANDLE != null) {
+            try {
+                return (boolean) VERTEX_FORMAT_HAS_UV_OFFSET_HANDLE.invokeExact(format, id);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("vertexFormatHasUvOffset", failure);
+            }
+        }
+        return callBoolean(format, new String[] {"func_177347_a", "hasUvOffset"},
+                new Class<?>[] {int.class}, false, id);
+    }
+
+    public static int vertexFormatUvOffset(VertexFormat format, int id) {
+        if (format == null) {
+            return -1;
+        }
+        if (VERTEX_FORMAT_UV_OFFSET_HANDLE != null) {
+            try {
+                return (int) VERTEX_FORMAT_UV_OFFSET_HANDLE.invokeExact(format, id);
+            } catch (Throwable failure) {
+                logHotPathHandleFailure("vertexFormatUvOffset", failure);
+            }
+        }
+        return callInt(format, new String[] {"func_177344_b", "getUvOffsetById"},
+                new Class<?>[] {int.class}, -1, id);
     }
 
     private static int dimensionTypeId(Object dimensionType) {
@@ -439,6 +656,17 @@ public final class MinecraftReflectionCompat {
             }
         }
         return false;
+    }
+
+    public static boolean worldIsRemote(World world) {
+        if (world == null || WORLD_REMOTE_FIELD == null) {
+            return false;
+        }
+        try {
+            return WORLD_REMOTE_FIELD.getBoolean(world);
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+            return false;
+        }
     }
 
     public static boolean worldIsBlockLoaded(World world, BlockPos pos, boolean allowEmpty) {
@@ -1484,19 +1712,38 @@ public final class MinecraftReflectionCompat {
     }
 
     public static WorldClient world(Minecraft minecraft) {
-        return field(minecraft, WorldClient.class, null, "field_71441_e", "world");
+        return minecraftField(minecraft, MINECRAFT_WORLD_FIELD, WorldClient.class);
     }
 
     public static EntityPlayerSP player(Minecraft minecraft) {
-        return field(minecraft, EntityPlayerSP.class, null, "field_71439_g", "player");
+        return minecraftField(minecraft, MINECRAFT_PLAYER_FIELD, EntityPlayerSP.class);
     }
 
     public static RenderGlobal renderGlobal(Minecraft minecraft) {
-        return field(minecraft, RenderGlobal.class, null, "field_71438_f", "renderGlobal");
+        return minecraftField(minecraft, MINECRAFT_RENDER_GLOBAL_FIELD, RenderGlobal.class);
+    }
+
+    private static <T> T minecraftField(Minecraft minecraft, Field field, Class<T> type) {
+        if (minecraft == null || field == null) {
+            return null;
+        }
+        try {
+            Object value = field.get(minecraft);
+            return type.isInstance(value) ? type.cast(value) : null;
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+            return null;
+        }
     }
 
     public static GameSettings gameSettings(Minecraft minecraft) {
-        return field(minecraft, GameSettings.class, null, "field_71474_y", "gameSettings");
+        if (minecraft == null || MINECRAFT_GAME_SETTINGS_FIELD == null) {
+            return null;
+        }
+        try {
+            return (GameSettings) MINECRAFT_GAME_SETTINGS_FIELD.get(minecraft);
+        } catch (ReflectiveOperationException | ClassCastException ignored) {
+            return null;
+        }
     }
 
     public static int renderDistanceChunks(Minecraft minecraft) {

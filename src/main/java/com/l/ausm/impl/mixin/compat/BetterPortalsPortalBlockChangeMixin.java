@@ -1,5 +1,6 @@
 package com.l.ausm.impl.mixin.compat;
 
+import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
@@ -11,8 +12,7 @@ import net.minecraft.world.World;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 
 @Mixin(World.class)
 public class BetterPortalsPortalBlockChangeMixin {
@@ -21,44 +21,46 @@ public class BetterPortalsPortalBlockChangeMixin {
     @Unique
     private BlockPos ausm$previousPortalPos;
 
-    @Inject(
+    @ModifyVariable(
             method = "setBlockState(Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/block/state/IBlockState;I)Z",
-            at = @At("HEAD")
+            at = @At("HEAD"),
+            argsOnly = true
     )
-    private void ausm$capturePortalStateBeforeSetBlock(BlockPos pos, IBlockState newState, int flags,
-                                                       CallbackInfoReturnable<Boolean> cir) {
+    private BlockPos ausm$capturePortalStateBeforeSetBlock(BlockPos capturedPos, BlockPos pos,
+                                                            IBlockState newState, int flags) {
         World world = (World) (Object) this;
-        if (!com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((world), false, "field_72995_K", "isRemote") || !BetterPortalsCompat.isInstalled() || pos == null) {
+        if (!MinecraftReflectionCompat.worldIsRemote(world) || !BetterPortalsCompat.isInstalled() || pos == null) {
             ausm$previousPortalState = null;
             ausm$previousPortalPos = null;
-            return;
+            return capturedPos;
         }
 
         IBlockState oldState = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos);
         if (!ausm$isPortalState(oldState) && !ausm$isPortalState(newState)) {
             ausm$previousPortalState = null;
             ausm$previousPortalPos = null;
-            return;
+            return capturedPos;
         }
 
         ausm$previousPortalState = oldState;
         ausm$previousPortalPos = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos);
+        return capturedPos;
     }
 
-    @Inject(
+    @ModifyReturnValue(
             method = "setBlockState(Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/block/state/IBlockState;I)Z",
             at = @At("RETURN")
     )
-    private void ausm$refreshPortalTerrainAfterSetBlock(BlockPos pos, IBlockState newState, int flags,
-                                                        CallbackInfoReturnable<Boolean> cir) {
+    private boolean ausm$refreshPortalTerrainAfterSetBlock(boolean changed, BlockPos pos,
+                                                            IBlockState newState, int flags) {
         try {
             boolean oldPortal = ausm$isPortalState(ausm$previousPortalState);
             boolean newPortal = ausm$isPortalState(newState);
-            if (!cir.getReturnValueZ()
+            if (!changed
                     || ausm$previousPortalPos == null
                     || !ausm$previousPortalPos.equals(pos)
                     || oldPortal == newPortal) {
-                return;
+                return changed;
             }
 
             World world = (World) (Object) this;
@@ -66,10 +68,11 @@ public class BetterPortalsPortalBlockChangeMixin {
             BlockPos changedPos = ausm$previousPortalPos;
             Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
             if (mc == null) {
-                return;
+                return changed;
             }
             com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> PipelineContext.getInstance()
                     .queueBetterPortalsPortalBlockChanged(world, changedPos, oldState, newState));
+            return changed;
         } finally {
             ausm$previousPortalState = null;
             ausm$previousPortalPos = null;
@@ -78,11 +81,11 @@ public class BetterPortalsPortalBlockChangeMixin {
 
     @Unique
     private boolean ausm$isPortalState(IBlockState state) {
-        if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) == null) {
+        if (state == null) {
             return false;
         }
 
-        Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+        Block block = MinecraftReflectionCompat.blockFromState(state);
         return BetterPortalsCompat.isBetterPortalsPortalBlock(block);
     }
 }

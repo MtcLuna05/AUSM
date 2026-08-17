@@ -25,6 +25,7 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
             "com/shinoow/abyssalcraft/client/render/entity/RenderShadowBeast.class",
             "org/dimdev/dimdoors/client/TileEntityEntranceRiftRenderer.class",
             "org/dimdev/dimdoors/client/TileEntityFloatingRiftRenderer.class",
+            "journeymap/client/render/texture/TextureImpl.class",
             "gregtech/client/utils/BloomEffectUtil.class",
             "thebetweenlands/common/network/clientbound/MessageSyncChunkStorage.class",
             "li/cil/scannable/client/renderer/ScannerRenderer.class",

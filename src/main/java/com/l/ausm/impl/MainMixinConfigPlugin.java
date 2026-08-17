@@ -65,6 +65,10 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
             return optionalTargetPresent(mixinClassName,
                     "com/michaelsebero/efficiententities/mixin/MixinModelRenderer.class", true);
         }
+        if (mixinClassName.endsWith(".JourneyMapTextureImplMixin")) {
+            return optionalTargetPresent(mixinClassName,
+                    "journeymap/client/render/texture/TextureImpl.class", true);
+        }
         if (mixinClassName.endsWith(".CustomMainMenuGuiCustomMixin")) {
             return optionalTargetPresent(mixinClassName, "lumien/custommainmenu/gui/GuiCustom.class", false);
         }
@@ -158,9 +162,6 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
         }
         if (mixinClassName.endsWith(".BewitchmentSyncExtendedPlayerHandlerMixin")) {
             return optionalTargetPresent(mixinClassName, "com/bewitchment/api/message/SyncExtendedPlayer$Handler.class", true);
-        }
-        if (mixinClassName.contains(".hei.")) {
-            return optionalTargetPresent(mixinClassName, "mezz/jei/JEIInternalPlugin.class", false);
         }
         return true;
     }

@@ -209,6 +209,17 @@ public class PipelineContext extends PipelineWorldRenderScope {
     private static final AtomicInteger FLAT_FOLIAGE_HIGHLIGHT_PROBE_LOGS = new AtomicInteger();
     private static final AtomicInteger LILY_PAD_LIGHTING_PROBE_LOGS = new AtomicInteger();
 
+    /**
+     * Public compatibility entrypoint for optional mods that resolve the
+     * pipeline through {@link Class#getMethod(String, Class[])}. The inherited
+     * implementation is declared on package-private {@link PipelineRuntimeState};
+     * exposing it only there makes an otherwise-public Method fail reflective
+     * invocation with IllegalAccessException outside this package.
+     */
+    public static PipelineContext getInstance() {
+        return INSTANCE;
+    }
+
     private void logFlatFoliageHighlightProbe(DeferredFramebuffer framebuffer) {
         Minecraft minecraft = MinecraftReflectionCompat.minecraft();
         World world = minecraft != null ? renderWorld(minecraft) : null;
@@ -382,7 +393,15 @@ public class PipelineContext extends PipelineWorldRenderScope {
 
     public void beginHand() {
         beginTranslucents();
-        if (!isPipelineActive || !pingPongManager.isInitialized() || preHandDepthCopiedThisFrame) {
+        if (!isPipelineActive || !pingPongManager.isInitialized()) {
+            return;
+        }
+
+        // OptiFine/Iris compress first-person geometry into a dedicated near
+        // depth domain. Shader packs use MC_HAND_DEPTH (and Euphoria's 0.56
+        // cutoff) to recognize those pixels during later post processing.
+        GL11.glDepthRange(0.0D, ShaderEnvironmentDefines.HAND_DEPTH);
+        if (preHandDepthCopiedThisFrame) {
             return;
         }
 
@@ -394,15 +413,20 @@ public class PipelineContext extends PipelineWorldRenderScope {
     }
 
     public void finishHand() {
-        if (!isPipelineActive || !pingPongManager.isInitialized()) {
+        if (!isPipelineActive) {
             return;
         }
-
-        // Later post-processing passes use depth snapshots to decide whether a
-        // pixel belongs to stable opaque scene history. Refresh depthtex2 after
-        // the hand draw so held items have a current near-depth classification
-        // without disturbing depthtex1's pre-translucent water/refraction role.
-        pingPongManager.copyPreHandDepth();
+        try {
+            if (pingPongManager.isInitialized()) {
+                // Later post-processing passes use depth snapshots to decide whether a
+                // pixel belongs to stable opaque scene history. Refresh depthtex2 after
+                // the hand draw so held items have a current near-depth classification
+                // without disturbing depthtex1's pre-translucent water/refraction role.
+                pingPongManager.copyPreHandDepth();
+            }
+        } finally {
+            GL11.glDepthRange(0.0D, 1.0D);
+        }
     }
 
     public void blitWorldFramebufferToMinecraft() {
@@ -2298,6 +2322,10 @@ public class PipelineContext extends PipelineWorldRenderScope {
         return isPipelineActive;
     }
 
+    public boolean shouldSuppressSuffocationOverlay() {
+        return isPipelineActive || shaderlessWorldPassActive;
+    }
+
     public boolean shouldForceVanillaTerrainRenderer() {
         return isPipelineActive
                 && (!shouldUseNothiriumMainTerrainBridge()
@@ -2717,7 +2745,11 @@ public class PipelineContext extends PipelineWorldRenderScope {
     }
 
     protected int safeDimensionId(World world) {
-        return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) : Integer.MIN_VALUE;
+        net.minecraft.world.WorldProvider provider =
+                com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
+        return provider != null
+                ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider)
+                : Integer.MIN_VALUE;
     }
 
     protected boolean isOverworldShaderEnvironment(World world) {
@@ -7509,6 +7541,13 @@ public class PipelineContext extends PipelineWorldRenderScope {
         restoreTerrainCulling();
         com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
         resetShaderResourceBindings();
+        // VAO bindings and fixed-function client arrays are not global state:
+        // they survive glUseProgram(0) and are stored on the currently bound
+        // VAO. Leaving a pipeline/DH VAO selected makes the first vanilla VBO
+        // after shader disable (notably Botania's pixel-star VBO) reinterpret
+        // whichever attribute pointers that VAO last contained.
+        FixedFunctionGlState.resetClientArrayState(false);
+        FixedFunctionGlState.resetVanillaTextureMatrices();
         GL11.glColorMask(true, true, true, true);
         GL11.glDepthMask(true);
         GL11.glDepthFunc(GL11.GL_LEQUAL);

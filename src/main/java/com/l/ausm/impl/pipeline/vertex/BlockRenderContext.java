@@ -425,6 +425,11 @@ public final class BlockRenderContext {
         current().clear();
     }
 
+    /** Returns the mutable state owned by the current render thread. */
+    public static State currentState() {
+        return current();
+    }
+
     private static State current() {
         return CURRENT.get();
     }
@@ -433,7 +438,7 @@ public final class BlockRenderContext {
         return Math.max(min, Math.min(max, value));
     }
 
-    private static final class State {
+    public static final class State {
         private int blockEntityId;
         private short renderType = -1;
         private short metadata;
@@ -474,6 +479,34 @@ public final class BlockRenderContext {
         private String debugKind = "unknown";
         private String debugState = "unknown";
         private String debugEffectiveState = "unknown";
+
+        public boolean isAgricraftCrop() {
+            return agricraftCrop;
+        }
+
+        public int packedLightmap() {
+            return packedLightmap;
+        }
+
+        public int vanillaLightmapEmission() {
+            return crystalOnlyEmission || bloomOnlyEmission ? 0 : BlockRenderContext.blockEmission(this);
+        }
+
+        public int blockEmission() {
+            return BlockRenderContext.blockEmission(this);
+        }
+
+        public int blockAlpha() {
+            return blockAlpha;
+        }
+
+        public int customLiquidTint() {
+            return customLiquidTint;
+        }
+
+        public boolean bloomMaskFallback() {
+            return bloomMaskFallback;
+        }
 
         private void clear() {
             blockEntityId = 0;

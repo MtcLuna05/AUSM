@@ -33,11 +33,15 @@ public abstract class ScannableScannerRendererMixin {
     private void ausm$forceRenderModeForAusm(TickEvent.RenderTickEvent event, CallbackInfo ci) {
         if (event == null
                 || event.phase != TickEvent.Phase.START
-                || !PipelineContext.getInstance().isActive()
                 || ausm$hasDepthTexture()) {
             return;
         }
 
+        // Scannable's INJECT mode replaces Minecraft's live framebuffer depth
+        // attachment. That is unsafe for both deferred rendering and AUSM's
+        // shaderless bloom pass, which consume that attachment after terrain
+        // rendering. Keep Scannable on its isolated re-render depth target in
+        // every AUSM configuration, not only while a shader pack is active.
         ausm$setRenderMode();
     }
 

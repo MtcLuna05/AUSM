@@ -28,6 +28,8 @@ import java.nio.IntBuffer;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 public final class BetterPortalsCompat {
     private static final String MOD_ID = "betterportals";
@@ -49,6 +51,7 @@ public final class BetterPortalsCompat {
 
     private static boolean portalEntityClassResolved;
     private static Class<?> portalEntityClass;
+    private static final ConcurrentMap<Class<?>, Boolean> PORTAL_BLOCK_CLASSES = new ConcurrentHashMap<>();
 
     private static final Deque<RenderPassState> renderPassStack = new ArrayDeque<>();
     private static final Deque<PortalRendererGlState> portalRendererStateStack = new ArrayDeque<>();
@@ -398,6 +401,16 @@ public final class BetterPortalsCompat {
             return false;
         }
         Class<?> type = block.getClass();
+        Boolean cached = PORTAL_BLOCK_CLASSES.get(type);
+        if (cached != null) {
+            return cached;
+        }
+        boolean portal = isBetterPortalsPortalBlockClass(type);
+        Boolean existing = PORTAL_BLOCK_CLASSES.putIfAbsent(type, portal);
+        return existing != null ? existing : portal;
+    }
+
+    private static boolean isBetterPortalsPortalBlockClass(Class<?> type) {
         String name = type.getName();
         if (name.startsWith("de.johni0702.minecraft.betterportals.")
                 && name.contains("Portal")) {

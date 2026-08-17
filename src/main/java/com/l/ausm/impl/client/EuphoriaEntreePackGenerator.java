@@ -51,7 +51,7 @@ public final class EuphoriaEntreePackGenerator {
     private static final String NATIVE_ENTREE_TAR_SHA256 = "1025144fba3cebec88e39bc15231d17bb16430a4ddfbc6975c93c5140415a065";
     private static final String NATIVE_EUPHORIA_TAR_SHA256 = "bfb06adddad37b81f90101c3a5203f40742c375a22d94f5d85c3070820ee7c8c";
     private static final String EUPHORIA_MARKER = "// Euphoria Patches 1.9.3";
-    private static final String GENERATOR_VERSION = "ausm-entree-euphoria-v4";
+    private static final String GENERATOR_VERSION = "ausm-entree-euphoria-v6";
     private static final String MARKER_FILE = ".ausm-euphoria-entree-version";
     private static final String STAGING_NAME = ".ausm-entree-euphoria-staging";
     private static final String PREVIOUS_NAME = ".ausm-entree-euphoria-previous";
@@ -154,6 +154,7 @@ public final class EuphoriaEntreePackGenerator {
         deleteTree(staging);
         copyTree(euphoria, staging);
         overlayBundledFiles(staging);
+        patchReflectiveCaustics(staging);
         mergeEntreeBlockMappings(staging.resolve("shaders/block.properties"), entreeBlocks);
         Files.writeString(staging.resolve(MARKER_FILE), token, StandardCharsets.UTF_8);
         publish(shaderpacks, staging, target);
@@ -184,6 +185,7 @@ public final class EuphoriaEntreePackGenerator {
             requireEuphoriaMarker(staging);
 
             overlayBundledFiles(staging);
+            patchReflectiveCaustics(staging);
             mergeEntreeBlockMappings(staging.resolve("shaders/block.properties"), extractedEntree.resolve("shaders/block.properties"));
             Files.writeString(staging.resolve(MARKER_FILE), token, StandardCharsets.UTF_8);
             publish(shaderpacks, staging, target);
@@ -289,6 +291,59 @@ public final class EuphoriaEntreePackGenerator {
                 Files.copy(stream, destination, StandardCopyOption.REPLACE_EXISTING);
             }
         }
+    }
+
+    private static void patchReflectiveCaustics(Path staging) throws IOException {
+        Path mainLighting = staging.resolve("shaders/lib/lighting/mainLighting.glsl");
+        String source = Files.readString(mainLighting, StandardCharsets.UTF_8).replace("\r\n", "\n");
+
+        source = replaceExactlyOnce(
+                source,
+                "#if SHADOW_QUALITY > -1 && (defined OVERWORLD || defined END) && !defined DH_TERRAIN && !defined DH_WATER && !defined VOXY_PATCH\n"
+                        + "    #include \"/lib/lighting/shadowSampling.glsl\"\n"
+                        + "#endif\n",
+                "#if SHADOW_QUALITY > -1 && (defined OVERWORLD || defined END) && !defined DH_TERRAIN && !defined DH_WATER && !defined VOXY_PATCH\n"
+                        + "    #include \"/lib/lighting/shadowSampling.glsl\"\n"
+                        + "    #ifdef REFLECTIVE_CAUSTICS\n"
+                        + "        #include \"/lib/lighting/reflectiveCaustics.glsl\"\n"
+                        + "    #endif\n"
+                        + "#endif\n",
+                "reflective-caustics include"
+        );
+        source = replaceExactlyOnce(
+                source,
+                "    vec3 sceneLighting = lightColorM * shadowLightMult + ambientColorM * ambientMult;\n",
+                "    vec3 sceneLighting = lightColorM * shadowLightMult + ambientColorM * ambientMult;\n"
+                        + "    #if defined REFLECTIVE_CAUSTICS && defined OVERWORLD && (defined GBUFFERS_TERRAIN || defined GBUFFERS_BLOCK)\n"
+                        + "        sceneLighting += lightColorM * GetReflectiveCaustics(playerPos, worldGeoNormal, lightmap.y);\n"
+                        + "    #endif\n",
+                "reflective-caustics lighting hook"
+        );
+
+        Files.writeString(mainLighting, source, StandardCharsets.UTF_8);
+
+        Path shadow = staging.resolve("shaders/program/shadow.glsl");
+        source = Files.readString(shadow, StandardCharsets.UTF_8).replace("\r\n", "\n");
+        source = replaceExactlyOnce(
+                source,
+                "                if (mat == 32000) { // Water\n"
+                        + "                    vec3 worldPos = position.xyz + cameraPosition;\n",
+                "                if (mat == 32000) { // Water\n"
+                        + "                    #ifdef REFLECTIVE_CAUSTICS\n"
+                        + "                        color1.a = 0.03125; // Water-only marker for reflected-light tracing\n"
+                        + "                    #endif\n"
+                        + "                    vec3 worldPos = position.xyz + cameraPosition;\n",
+                "reflective-caustics water marker"
+        );
+        Files.writeString(shadow, source, StandardCharsets.UTF_8);
+    }
+
+    private static String replaceExactlyOnce(String source, String needle, String replacement, String description) throws IOException {
+        int first = source.indexOf(needle);
+        if (first < 0 || source.indexOf(needle, first + needle.length()) >= 0) {
+            throw new IOException("Could not uniquely apply Entree " + description + " patch");
+        }
+        return source.substring(0, first) + replacement + source.substring(first + needle.length());
     }
 
     private static List<String> readManifest() throws IOException {
