@@ -300,7 +300,7 @@ compileJava {
 jar {
     archiveClassifier = 'dev'
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    if (configurations.contain.size() > 0) {
+    if (!configurations.contain.isEmpty()) {
         into('/') {
             from configurations.contain
         }
@@ -310,7 +310,7 @@ jar {
             def attribute_map = [:]
             attribute_map['ModType'] = "CRL"
             attribute_map['MixinConfigs'] = "${mod_id}.default.mixin.json,${mod_id}.mod.mixin.json"
-            if (configurations.contain.size() > 0) {
+            if (!configurations.contain.isEmpty()) {
                 attribute_map['ContainedDeps'] = configurations.contain.collect { it.name }.join(' ')
                 attribute_map['NonModDeps'] = true
             }

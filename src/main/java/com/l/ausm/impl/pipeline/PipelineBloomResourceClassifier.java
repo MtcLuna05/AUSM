@@ -3,6 +3,11 @@ package com.l.ausm.impl.pipeline;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomRenderer;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
@@ -13,12 +18,9 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraft.util.EnumFacing;
 
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
-/** Detects bloom-bearing model resources and retains the result per block state. */
+/**
+ * Detects bloom-bearing model resources and retains the result per block state.
+ */
 final class PipelineBloomResourceClassifier {
     private final AusmBloomRenderer bloomRenderer;
     private final ConcurrentMap<String, Boolean> stateCache = new ConcurrentHashMap<>();
@@ -56,7 +58,7 @@ final class PipelineBloomResourceClassifier {
             return false;
         }
         IBakedModel model = MinecraftReflectionCompat.call(dispatcher, IBakedModel.class, null,
-                new String[] {"func_184389_a", "getModelForState"}, new Class<?>[] {IBlockState.class}, state);
+                new String[]{"func_184389_a", "getModelForState"}, new Class<?>[]{IBlockState.class}, state);
         if (model == null) {
             return false;
         }
@@ -108,7 +110,7 @@ final class PipelineBloomResourceClassifier {
     }
 
     private static boolean isEmissiveSpriteName(String spriteName) {
-        String normalized = spriteName.toLowerCase(java.util.Locale.ROOT);
+        String normalized = spriteName.toLowerCase(Locale.ROOT);
         return normalized.endsWith("_e") || normalized.contains("_e/") || normalized.contains("/emissive")
                 || normalized.contains("_emissive") || normalized.contains("/glow") || normalized.contains("_glow")
                 || normalized.contains("/bloom") || normalized.contains("_bloom");

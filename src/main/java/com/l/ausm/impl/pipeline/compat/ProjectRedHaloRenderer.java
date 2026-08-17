@@ -1,26 +1,27 @@
 package com.l.ausm.impl.pipeline.compat;
 
+import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
-import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.Tessellator;
+import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
+import net.minecraft.client.renderer.vertex.VertexFormat;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.ResourceLocation;
-import net.minecraft.item.Item;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL20;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-
 public final class ProjectRedHaloRenderer {
     private static final int HALO_ALPHA = 112;
     private static final int[] HALO_TEXTURE_UNITS = {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit(),
-            com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit(),
+            MinecraftReflectionCompat.defaultTexUnit(),
+            MinecraftReflectionCompat.lightmapTexUnit(),
             GL13.GL_TEXTURE2
     };
 
@@ -64,7 +65,7 @@ public final class ProjectRedHaloRenderer {
         savedBlendSrc = GL11.glGetInteger(GL11.GL_BLEND_SRC);
         savedBlendDst = GL11.glGetInteger(GL11.GL_BLEND_DST);
 
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+        MinecraftReflectionCompat.glUseProgram(0);
         for (int i = 0; i < HALO_TEXTURE_UNITS.length; i++) {
             GL13.glActiveTexture(HALO_TEXTURE_UNITS[i]);
             savedTexture2D[i] = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
@@ -74,13 +75,13 @@ public final class ProjectRedHaloRenderer {
         }
         GL13.glActiveTexture(savedActiveTexture);
 
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179112_b", "blendFunc"},
-                new Class<?>[] {int.class, int.class}, (GL11.GL_SRC_ALPHA), (GL11.GL_ONE));;
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+        MinecraftReflectionCompat.glStateEnableBlend();
+        MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179112_b", "blendFunc"},
+                new Class<?>[]{int.class, int.class}, GL11.GL_SRC_ALPHA, GL11.GL_ONE);
+        MinecraftReflectionCompat.glStateDisableTexture2D();
+        MinecraftReflectionCompat.glStateDisableLighting();
+        MinecraftReflectionCompat.glStateDisableCull();
+        MinecraftReflectionCompat.glStateDepthMask(false);
     }
 
     public static void renderImmediateHalo(Object cuboid, int color, Object transformation) {
@@ -94,11 +95,11 @@ public final class ProjectRedHaloRenderer {
         int blue = (rgba >>> 8) & 255;
         int alpha = HALO_ALPHA;
 
-        Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
-        BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181706_f", "POSITION_COLOR"));
+        Tessellator tessellator = MinecraftReflectionCompat.tessellator();
+        BufferBuilder buffer = MinecraftReflectionCompat.tessellatorBuffer(tessellator);
+        MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS, MinecraftReflectionCompat.field(DefaultVertexFormats.class, VertexFormat.class, null, "field_181706_f", "POSITION_COLOR"));
         emitCuboid(buffer, cuboid, transformation, red, green, blue, alpha, 0.03D, activeHaloScale());
-        com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+        MinecraftReflectionCompat.tessellatorDraw(tessellator);
     }
 
     public static void renderImmediateLampItem(int color) {
@@ -109,12 +110,12 @@ public final class ProjectRedHaloRenderer {
 
         beginImmediateHalo();
         try {
-            Tessellator tessellator = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator();
-            BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS, com.l.ausm.impl.util.MinecraftReflectionCompat.field(net.minecraft.client.renderer.vertex.DefaultVertexFormats.class, net.minecraft.client.renderer.vertex.VertexFormat.class, null, "field_181706_f", "POSITION_COLOR"));
+            Tessellator tessellator = MinecraftReflectionCompat.tessellator();
+            BufferBuilder buffer = MinecraftReflectionCompat.tessellatorBuffer(tessellator);
+            MinecraftReflectionCompat.bufferBegin(buffer, GL11.GL_QUADS, MinecraftReflectionCompat.field(DefaultVertexFormats.class, VertexFormat.class, null, "field_181706_f", "POSITION_COLOR"));
             emitBox(buffer, -0.03D, -0.03D, -0.03D, 1.03D, 1.03D, 1.03D,
                     red, green, blue, HALO_ALPHA, activeHaloScale());
-            com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+            MinecraftReflectionCompat.tessellatorDraw(tessellator);
         } finally {
             endImmediateHalo();
         }
@@ -130,7 +131,7 @@ public final class ProjectRedHaloRenderer {
             return false;
         }
 
-        int metadata = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack);
+        int metadata = MinecraftReflectionCompat.itemStackMetadata(stack);
         int color = Math.floorMod(metadata, 16);
         renderImmediateLampItem(color);
         return true;
@@ -150,19 +151,19 @@ public final class ProjectRedHaloRenderer {
         } catch (ReflectiveOperationException | RuntimeException e) {
             if (!originalRendererFailureLogged) {
                 originalRendererFailureLogged = true;
-                com.l.ausm.impl.MainMod.LOGGER.warn("[ProjectRedHalo] Failed to call original CodeChicken item renderer for {}", itemName(stack), e);
+                MainMod.LOGGER.warn("[ProjectRedHalo] Failed to call original CodeChicken item renderer for {}", itemName(stack), e);
             }
         }
     }
 
     public static void renderSolidProjectRedRendererItem(ItemStack stack, String source) {
-        int metadata = !com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack) ? com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack) : 0;
+        int metadata = !MinecraftReflectionCompat.itemStackIsEmpty(stack) ? MinecraftReflectionCompat.itemStackMetadata(stack) : 0;
         int color = Math.floorMod(metadata, 16);
         renderImmediateLampItem(color);
     }
 
     private static boolean isProjectRedIlluminationItem(ItemStack stack, ResourceLocation name) {
-        if (name != null && "projectred-illumination".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(name)) && isProjectRedLightItem(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(name))) {
+        if (name != null && "projectred-illumination".equals(MinecraftReflectionCompat.resourceNamespace(name)) && isProjectRedLightItem(MinecraftReflectionCompat.resourcePath(name))) {
             return true;
         }
 
@@ -195,17 +196,17 @@ public final class ProjectRedHaloRenderer {
     }
 
     private static ResourceLocation itemName(ItemStack stack) {
-        Item item = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack);
-        return item != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.call((item), net.minecraft.util.ResourceLocation.class, null, new String[] {"getRegistryName"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS) : null;
+        Item item = MinecraftReflectionCompat.itemStackItem(stack);
+        return item != null ? MinecraftReflectionCompat.call(item, ResourceLocation.class, null, new String[]{"getRegistryName"}, MinecraftReflectionCompat.NO_PARAMETERS) : null;
     }
 
     private static String itemClassName(ItemStack stack) {
-        Item item = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack);
+        Item item = MinecraftReflectionCompat.itemStackItem(stack);
         return item != null ? item.getClass().getName() : "";
     }
 
     private static boolean hasItem(ItemStack stack) {
-        return !com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack) && com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack) != null;
+        return !MinecraftReflectionCompat.itemStackIsEmpty(stack) && MinecraftReflectionCompat.itemStackItem(stack) != null;
     }
 
     public static void endImmediateHalo() {
@@ -216,23 +217,23 @@ public final class ProjectRedHaloRenderer {
             return;
         }
 
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(savedDepthMask);
+        MinecraftReflectionCompat.glStateDepthMask(savedDepthMask);
         if (savedCull) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableCull();
+            MinecraftReflectionCompat.glStateEnableCull();
         } else {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableCull();
+            MinecraftReflectionCompat.glStateDisableCull();
         }
         if (savedLighting) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179145_e", "enableLighting"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+            MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179145_e", "enableLighting"}, MinecraftReflectionCompat.NO_PARAMETERS);
         } else {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableLighting();
+            MinecraftReflectionCompat.glStateDisableLighting();
         }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179112_b", "blendFunc"},
-                new Class<?>[] {int.class, int.class}, (savedBlendSrc), (savedBlendDst));;
+        MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179112_b", "blendFunc"},
+                new Class<?>[]{int.class, int.class}, savedBlendSrc, savedBlendDst);
         if (savedBlend) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
+            MinecraftReflectionCompat.glStateEnableBlend();
         } else {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableBlend();
+            MinecraftReflectionCompat.glStateDisableBlend();
         }
 
         for (int i = 0; i < HALO_TEXTURE_UNITS.length; i++) {
@@ -245,7 +246,7 @@ public final class ProjectRedHaloRenderer {
             }
         }
         GL13.glActiveTexture(savedActiveTexture);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(savedProgram);
+        MinecraftReflectionCompat.glUseProgram(savedProgram);
         activeScale = 1.0D;
     }
 
@@ -365,9 +366,9 @@ public final class ProjectRedHaloRenderer {
             double transformedX = field(vertex, "x").getDouble(vertex);
             double transformedY = field(vertex, "y").getDouble(vertex);
             double transformedZ = field(vertex, "z").getDouble(vertex);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, transformedX, transformedY, transformedZ, red, green, blue, alpha);
+            MinecraftReflectionCompat.bufferPosColorEnd(buffer, transformedX, transformedY, transformedZ, red, green, blue, alpha);
         } catch (ReflectiveOperationException ignored) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bufferPosColorEnd(buffer, x, y, z, red, green, blue, alpha);
+            MinecraftReflectionCompat.bufferPosColorEnd(buffer, x, y, z, red, green, blue, alpha);
         }
     }
 

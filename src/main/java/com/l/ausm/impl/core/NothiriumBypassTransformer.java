@@ -1,14 +1,20 @@
 package com.l.ausm.impl.core;
 
+import java.io.File;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import net.minecraft.launchwrapper.IClassTransformer;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
-import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.AnnotationNode;
+import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FrameNode;
-import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
@@ -18,16 +24,9 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.io.File;
-
 /**
  * Lets vanilla RenderGlobal run while AUSM shaders are active.
- *
+ * <p>
  * Nothirium replaces RenderGlobal with mixin handlers that cancel terrain setup,
  * chunk updates, and block-layer rendering. That is fine for vanilla, but shader
  * packs need vanilla/AUSM terrain passes so water, shadows, and extended vertex
@@ -182,7 +181,7 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
                 continue;
             }
             if (annotation.values == null) {
-                annotation.values = new java.util.ArrayList<>();
+                annotation.values = new ArrayList<>();
             }
             for (int index = 0; index < annotation.values.size(); index += 2) {
                 if ("require".equals(annotation.values.get(index))) {
@@ -346,7 +345,7 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         LabelNode continueLabel = new LabelNode();
         InsnList guard = new InsnList();
         for (int local = 1; local <= 6; local++) {
-            guard.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ILOAD, local));
+            guard.add(new VarInsnNode(Opcodes.ILOAD, local));
         }
         guard.add(new MethodInsnNode(
                 Opcodes.INVOKESTATIC,

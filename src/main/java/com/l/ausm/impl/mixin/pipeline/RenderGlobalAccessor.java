@@ -1,17 +1,16 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import net.minecraft.client.renderer.RenderGlobal;
-import net.minecraft.client.renderer.ChunkRenderContainer;
-import net.minecraft.client.renderer.ViewFrustum;
+import java.util.Set;
 import net.minecraft.client.multiplayer.WorldClient;
+import net.minecraft.client.renderer.ChunkRenderContainer;
+import net.minecraft.client.renderer.RenderGlobal;
+import net.minecraft.client.renderer.ViewFrustum;
 import net.minecraft.client.renderer.chunk.ChunkRenderDispatcher;
 import net.minecraft.client.renderer.chunk.IRenderChunkFactory;
 import net.minecraft.client.renderer.chunk.RenderChunk;
 import net.minecraft.client.renderer.vertex.VertexBuffer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
-
-import java.util.Set;
 
 @Mixin(RenderGlobal.class)
 public interface RenderGlobalAccessor {

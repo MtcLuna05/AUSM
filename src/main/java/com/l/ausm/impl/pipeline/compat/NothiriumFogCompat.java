@@ -1,12 +1,11 @@
 package com.l.ausm.impl.pipeline.compat;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import java.nio.FloatBuffer;
 import meldexun.nothirium.mc.util.FogUtil;
 import meldexun.renderlib.util.GLShader;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
-
-import java.nio.FloatBuffer;
 
 public final class NothiriumFogCompat {
     private NothiriumFogCompat() {

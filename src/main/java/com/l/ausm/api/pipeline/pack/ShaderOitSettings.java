@@ -2,7 +2,6 @@ package com.l.ausm.api.pipeline.pack;
 
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.api.pipeline.fbo.ColorBufferFormat;
-
 import java.util.List;
 import java.util.Map;
 

@@ -3,14 +3,15 @@ package com.l.ausm.impl;
 import com.l.ausm.api.shader.ShaderPackController;
 import com.l.ausm.impl.client.ClientSettingsConfig;
 import com.l.ausm.impl.client.dynamic.DynamicLightConfig;
-import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
-import com.l.ausm.impl.pipeline.compat.CeleritasCompat;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
+import com.l.ausm.impl.pipeline.compat.CeleritasCompat;
+import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.proxy.IProxy;
-import com.l.ausm.impl.util.NoOpLogger;
-import net.minecraft.client.Minecraft;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import com.l.ausm.impl.util.NoOpLogger;
+import java.nio.file.Path;
+import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.SidedProxy;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
@@ -53,8 +54,8 @@ public class MainMod {
         // Initialize custom vertex formats for the shaders
         ExtendedVertexFormats.initialize();
 
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        java.nio.file.Path gameDir = com.l.ausm.impl.util.MinecraftReflectionCompat.gameDir(minecraft).toPath();
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        Path gameDir = MinecraftReflectionCompat.gameDir(minecraft).toPath();
 
         dynamicLightConfig = new DynamicLightConfig(gameDir);
         dynamicLightConfig.load();

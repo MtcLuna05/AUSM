@@ -1,15 +1,12 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import com.l.ausm.api.pipeline.pack.ShaderOptions;
 import com.l.ausm.impl.MainMod;
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -32,7 +29,7 @@ final class ShaderPropertiesPreprocessor {
             return properties;
         }
         try {
-            properties.load(new java.io.StringReader(activeProperties.toString()));
+            properties.load(new StringReader(activeProperties.toString()));
         } catch (IOException e) {
             MainMod.LOGGER.error("[ShaderProperties] Failed to parse preprocessed shader properties", e);
         }

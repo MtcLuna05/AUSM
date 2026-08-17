@@ -2,7 +2,9 @@ package com.l.ausm.impl.pipeline.compat;
 
 import java.lang.reflect.Method;
 
-/** Optional bridge used while AUSM's translucent terrain shader is still bound. */
+/**
+ * Optional bridge used while AUSM's translucent terrain shader is still bound.
+ */
 public final class GlobalFacadesTerrainBridge {
     private static volatile boolean resolved;
     private static Method renderMethod;

@@ -1,10 +1,8 @@
 package com.l.ausm.api.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-
+import com.l.ausm.api.pipeline.shader.ProgramArrayId;
 import com.l.ausm.api.pipeline.shader.ProgramId;
-
+import com.l.ausm.api.pipeline.shader.ShaderProgramArrayKey;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;

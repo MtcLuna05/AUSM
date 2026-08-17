@@ -1,14 +1,11 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.api.pipeline.shader.RenderPass;
-import net.minecraft.client.renderer.OpenGlHelper;
-
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import net.minecraft.client.renderer.OpenGlHelper;
+import org.lwjgl.opengl.GL20;
 
 public record ShaderTransformParameters(
         int shaderType,
@@ -22,11 +19,11 @@ public record ShaderTransformParameters(
     }
 
     public boolean fragmentShader() {
-        return shaderType == com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL20.GL_FRAGMENT_SHADER, "field_153210_r", "GL_FRAGMENT_SHADER");
+        return shaderType == MinecraftReflectionCompat.fieldInt(OpenGlHelper.class, GL20.GL_FRAGMENT_SHADER, "field_153210_r", "GL_FRAGMENT_SHADER");
     }
 
     public boolean vertexShader() {
-        return shaderType == com.l.ausm.impl.util.MinecraftReflectionCompat.glVertexShader();
+        return shaderType == MinecraftReflectionCompat.glVertexShader();
     }
 
     public boolean compatibilityProfile() {

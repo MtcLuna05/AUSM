@@ -1,11 +1,6 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.MainMod;
-
 import java.nio.file.Path;
 
 public final class FolderShaderPack extends CachedShaderPack {

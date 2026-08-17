@@ -6,7 +6,9 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Makes the Entree-native output available before Euphoria scans shaderpacks. */
+/**
+ * Makes the Entree-native output available before Euphoria scans shaderpacks.
+ */
 @Mixin(targets = "com.euphoriapatches.euphoria_patcher.EuphoriaPatcher", remap = false)
 public abstract class EuphoriaPatcherEntreeMixin {
 

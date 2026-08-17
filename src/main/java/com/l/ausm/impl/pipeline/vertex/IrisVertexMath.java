@@ -120,7 +120,7 @@ public final class IrisVertexMath {
         if (!isFinite(value)) {
             value = 0.0f;
         }
-        value = Math.max(-1.0f, Math.min(1.0f, value));
+        value = Math.clamp(value, -1.0f, 1.0f);
         return (int) (value * 127.0f) & 0xFF;
     }
 

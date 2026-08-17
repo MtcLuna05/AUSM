@@ -2,6 +2,7 @@ package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.pipeline.compat.NothiriumShadowChunkAccess;
 import com.l.ausm.impl.pipeline.compat.NothiriumVisibleTerrainCache;
+import java.util.concurrent.CompletableFuture;
 import meldexun.nothirium.api.renderer.IVBOPart;
 import meldexun.nothirium.api.renderer.chunk.ChunkRenderPass;
 import meldexun.nothirium.util.SectionPos;
@@ -10,8 +11,6 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.util.concurrent.CompletableFuture;
 
 /**
  * Exposes the already-resident section position and VBO-part lookup to AUSM's

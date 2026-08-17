@@ -1,7 +1,6 @@
 package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -113,9 +112,9 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     vec3 rainyDome = mix(lowerColor, topColor, 0.48);
                     result = mix(result, rainyDome, ausmOfficial01(rainAmount * 0.75));
 
-	                    vec3 rainColor = min(result, vec3(0.17, 0.185, 0.235));
-	                    return mix(result, rainColor, ausmOfficial01(rainAmount * 0.50));
-	                }
+                     vec3 rainColor = min(result, vec3(0.17, 0.185, 0.235));
+                     return mix(result, rainColor, ausmOfficial01(rainAmount * 0.50));
+                 }
 
                 vec3 ausmOfficialUiSkyColor(vec2 uv) {
                     float horizonY = 0.50;
@@ -127,10 +126,10 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     float band = (uv.y - (horizonY - softness)) / (softness * 2.0);
                     return mix(dayLower, dayTop, ausmOfficialSmoother(band));
                 }
-	                """ + officialCelestialFunctionsSource() + """
+                """ + officialCelestialFunctionsSource() + """
 
-	                float ausmOfficialSkyRepairAmount(vec2 uv, vec3 color) {
-	                    float minChannel = min(min(color.r, color.g), color.b);
+                 float ausmOfficialSkyRepairAmount(vec2 uv, vec3 color) {
+                     float minChannel = min(min(color.r, color.g), color.b);
                     float skyMax = max(max(skyColor.r, skyColor.g), skyColor.b);
                     bool whiteClear = minChannel > 0.985 && skyMax > 0.012;
                     return whiteClear ? 1.0 : 0.0;
@@ -190,17 +189,17 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
 
                 void main() {
                     vec2 uv = gl_FragCoord.xy / max(vec2(viewWidth, viewHeight), vec2(1.0));
-	                    vec4 color = texture2D(colortex0, uv);
-	                    float depth = ausmOfficialSceneDepth(uv);
-	                    bool ausmOfficialSkyPixel = depth > 0.999 && !ausmOfficialHasNearbySceneGeometry(uv);
+                     vec4 color = texture2D(colortex0, uv);
+                     float depth = ausmOfficialSceneDepth(uv);
+                     bool ausmOfficialSkyPixel = depth > 0.999 && !ausmOfficialHasNearbySceneGeometry(uv);
                     if (ausmUiSkyRepair > 0 && ausmOfficialSkyPixel
                             && ausmOfficialShouldRepairUiSkyPixel(depth, color.rgb, uv)) {
-	                        color.rgb = ausmOfficialUiSkyColor(uv);
-	                    } else if (ausmOfficialShouldRepairSkyPixel(depth, color.rgb, uv) && ausmSkyboxRepair > 0) {
-	                        color.rgb = ausmOfficialSkyColor(uv);
-	                    } else if (depth > 0.999 && ausmSkyboxRepair > 0) {
-	                        float repairAmount = ausmOfficialSkyRepairAmount(uv, color.rgb);
-	                        color.rgb = mix(color.rgb, ausmOfficialSkyColor(uv), repairAmount);
+                         color.rgb = ausmOfficialUiSkyColor(uv);
+                     } else if (ausmOfficialShouldRepairSkyPixel(depth, color.rgb, uv) && ausmSkyboxRepair > 0) {
+                         color.rgb = ausmOfficialSkyColor(uv);
+                     } else if (depth > 0.999 && ausmSkyboxRepair > 0) {
+                         float repairAmount = ausmOfficialSkyRepairAmount(uv, color.rgb);
+                         color.rgb = mix(color.rgb, ausmOfficialSkyColor(uv), repairAmount);
                     }
                     gl_FragData[0] = vec4(color.rgb, 1.0);
                 }
@@ -370,9 +369,9 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     vec3 rainyDome = mix(lowerColor, topColor, 0.48);
                     result = mix(result, rainyDome, ausmOfficial01(rainAmount * 0.75));
 
-	                    vec3 rainColor = min(result, vec3(0.17, 0.185, 0.235));
-	                    return mix(result, rainColor, ausmOfficial01(rainAmount * 0.50));
-	                }
+                     vec3 rainColor = min(result, vec3(0.17, 0.185, 0.235));
+                     return mix(result, rainColor, ausmOfficial01(rainAmount * 0.50));
+                 }
 
                 vec3 ausmOfficialUiSkyColor(vec2 uv) {
                     float horizonY = 0.50;
@@ -384,7 +383,7 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     float band = (uv.y - (horizonY - softness)) / (softness * 2.0);
                     return mix(dayLower, dayTop, ausmOfficialSmoother(band));
                 }
-	                """ + officialCelestialFunctionsSource() + """
+                """ + officialCelestialFunctionsSource() + """
 
                 float ausmOfficialSkyRepairAmount(vec2 uv, vec3 color) {
                     float minChannel = min(min(color.r, color.g), color.b);
@@ -449,24 +448,24 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                     vec2 uv = gl_FragCoord.xy / max(vec2(viewWidth, viewHeight), vec2(1.0));
                     vec4 ausmOfficialSourceColor = texture2D(colortex0, uv);
                     ausmOfficialFinalColor = ausmOfficialSourceColor;
-		                    ausmOriginalFinalMain();
-	                    if (ausmSkyboxRepair > 0) {
-	                        float ausmOfficialSourceMax = max(max(ausmOfficialSourceColor.r, ausmOfficialSourceColor.g), ausmOfficialSourceColor.b);
+                      ausmOriginalFinalMain();
+                     if (ausmSkyboxRepair > 0) {
+                         float ausmOfficialSourceMax = max(max(ausmOfficialSourceColor.r, ausmOfficialSourceColor.g), ausmOfficialSourceColor.b);
                         float ausmOfficialFinalMax = max(max(ausmOfficialFinalColor.r, ausmOfficialFinalColor.g), ausmOfficialFinalColor.b);
                         if (ausmOfficialSourceMax > 0.005 && ausmOfficialFinalMax <= 0.001) {
                             ausmOfficialFinalColor.rgb = ausmOfficialSourceColor.rgb;
-	                        }
-	                    }
-	                    float depth = ausmOfficialSceneDepth(uv);
-		                    bool ausmOfficialSkyPixel = depth > 0.999 && !ausmOfficialHasNearbySceneGeometry(uv);
+                         }
+                     }
+                     float depth = ausmOfficialSceneDepth(uv);
+                      bool ausmOfficialSkyPixel = depth > 0.999 && !ausmOfficialHasNearbySceneGeometry(uv);
                     if (ausmUiSkyRepair > 0 && ausmOfficialSkyPixel
                             && ausmOfficialShouldRepairUiSkyPixel(depth, ausmOfficialFinalColor.rgb, uv)) {
-	                        ausmOfficialFinalColor.rgb = ausmOfficialUiSkyColor(uv);
-	                    } else if (ausmOfficialShouldRepairSkyPixel(depth, ausmOfficialFinalColor.rgb, uv) && ausmSkyboxRepair > 0) {
-	                        ausmOfficialFinalColor.rgb = ausmOfficialSkyColor(uv);
-	                    } else if (depth > 0.999 && ausmSkyboxRepair > 0) {
-	                        float repairAmount = ausmOfficialSkyRepairAmount(uv, ausmOfficialFinalColor.rgb);
-	                        ausmOfficialFinalColor.rgb = mix(ausmOfficialFinalColor.rgb, ausmOfficialSkyColor(uv), repairAmount);
+                         ausmOfficialFinalColor.rgb = ausmOfficialUiSkyColor(uv);
+                     } else if (ausmOfficialShouldRepairSkyPixel(depth, ausmOfficialFinalColor.rgb, uv) && ausmSkyboxRepair > 0) {
+                         ausmOfficialFinalColor.rgb = ausmOfficialSkyColor(uv);
+                     } else if (depth > 0.999 && ausmSkyboxRepair > 0) {
+                         float repairAmount = ausmOfficialSkyRepairAmount(uv, ausmOfficialFinalColor.rgb);
+                         ausmOfficialFinalColor.rgb = mix(ausmOfficialFinalColor.rgb, ausmOfficialSkyColor(uv), repairAmount);
                     }
                     gl_FragData[0] = vec4(ausmOfficialFinalColor.rgb, 1.0);
                 }

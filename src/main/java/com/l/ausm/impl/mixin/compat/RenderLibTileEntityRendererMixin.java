@@ -2,14 +2,13 @@ package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.util.ArrayDeque;
-import java.util.Deque;
 
 /**
  * RenderLib renders tile entities as a batch. Binding the block-entity shader once

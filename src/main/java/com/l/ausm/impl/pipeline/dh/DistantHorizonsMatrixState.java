@@ -1,10 +1,11 @@
 package com.l.ausm.impl.pipeline.dh;
 
+import java.nio.FloatBuffer;
 import org.lwjgl.BufferUtils;
 
-import java.nio.FloatBuffer;
-
-/** Owns Distant Horizons camera matrices and model offset independently of pipeline lifecycle. */
+/**
+ * Owns Distant Horizons camera matrices and model offset independently of pipeline lifecycle.
+ */
 public final class DistantHorizonsMatrixState {
     private final FloatBuffer projection = BufferUtils.createFloatBuffer(16);
     private final FloatBuffer projectionInverse = BufferUtils.createFloatBuffer(16);
@@ -13,11 +14,25 @@ public final class DistantHorizonsMatrixState {
     private final float[] scratch = new float[16];
     private final float[] modelOffset = {0.0F, 0.0F, 0.0F};
 
-    public FloatBuffer projection() { return projection; }
-    public FloatBuffer projectionInverse() { return projectionInverse; }
-    public FloatBuffer modelView() { return modelView; }
-    public FloatBuffer modelViewProjection() { return modelViewProjection; }
-    public float[] modelOffset() { return modelOffset; }
+    public FloatBuffer projection() {
+        return projection;
+    }
+
+    public FloatBuffer projectionInverse() {
+        return projectionInverse;
+    }
+
+    public FloatBuffer modelView() {
+        return modelView;
+    }
+
+    public FloatBuffer modelViewProjection() {
+        return modelViewProjection;
+    }
+
+    public float[] modelOffset() {
+        return modelOffset;
+    }
 
     public void update(Object renderParam) throws ReflectiveOperationException {
         copy(renderParam, "dhProjectionMatrix", projection);

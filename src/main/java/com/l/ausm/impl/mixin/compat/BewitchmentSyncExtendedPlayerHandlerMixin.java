@@ -1,5 +1,6 @@
 package com.l.ausm.impl.mixin.compat;
 
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.common.network.simpleimpl.IMessage;
 import net.minecraftforge.fml.common.network.simpleimpl.MessageContext;
@@ -18,8 +19,8 @@ public class BewitchmentSyncExtendedPlayerHandlerMixin {
     )
     private void ausm$skipSyncWithoutPlayer(IMessage message, MessageContext context,
                                             CallbackInfoReturnable<IMessage> cir) {
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.player(minecraft) == null) {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || MinecraftReflectionCompat.player(minecraft) == null) {
             cir.setReturnValue(null);
         }
     }

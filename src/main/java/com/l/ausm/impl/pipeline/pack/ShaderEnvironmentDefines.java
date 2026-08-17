@@ -2,10 +2,10 @@ package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.pack.ShaderOption;
 import com.l.ausm.api.pipeline.pack.ShaderOptions;
-import net.minecraftforge.fml.common.Loader;
-
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
+import net.minecraftforge.fml.common.Loader;
 
 public final class ShaderEnvironmentDefines {
     private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
@@ -176,7 +176,7 @@ public final class ShaderEnvironmentDefines {
         if (directives == null || directives.capabilities() == null) {
             return true;
         }
-        String featureName = flag.name().toLowerCase(java.util.Locale.ROOT);
+        String featureName = flag.name().toLowerCase(Locale.ROOT);
         if (directives.features().requires(featureName) || directives.features().optional(featureName)) {
             return true;
         }

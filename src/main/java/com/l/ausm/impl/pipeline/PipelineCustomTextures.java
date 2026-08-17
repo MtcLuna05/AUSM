@@ -14,11 +14,6 @@ import com.l.ausm.impl.pipeline.shader.FullscreenArrayProgram;
 import com.l.ausm.impl.pipeline.shader.ShaderBindingLayout;
 import com.l.ausm.impl.pipeline.shader.ShaderProgram;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.ITextureObject;
-import net.minecraft.client.renderer.texture.TextureManager;
-import org.lwjgl.opengl.GL11;
-
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
@@ -30,6 +25,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.ITextureObject;
+import net.minecraft.client.renderer.texture.TextureManager;
+import org.lwjgl.opengl.GL11;
 
 final class PipelineCustomTextures {
     private final Map<RenderPass, List<LoadedCustomTexture>> customTextures = new EnumMap<>(RenderPass.class);

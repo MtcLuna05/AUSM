@@ -1,9 +1,5 @@
 package com.l.ausm.api.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 /**
  * Iris-style rendering phases.
  *
@@ -70,7 +66,7 @@ public enum WorldRenderingPhase {
     public boolean usesBlockAtlas() {
         return switch (this) {
             case TERRAIN_SOLID, TERRAIN_CUTOUT_MIPPED, TERRAIN_CUTOUT, TERRAIN_TRANSLUCENT, TRIPWIRE,
-                    DESTROY, BLOCK_ENTITIES, BLOCK_ENTITIES_TRANSLUCENT, ITEM, HAND_SOLID, HAND_TRANSLUCENT -> true;
+                 DESTROY, BLOCK_ENTITIES, BLOCK_ENTITIES_TRANSLUCENT, ITEM, HAND_SOLID, HAND_TRANSLUCENT -> true;
             default -> false;
         };
     }
@@ -78,7 +74,7 @@ public enum WorldRenderingPhase {
     public boolean usesEntityFormat() {
         return switch (this) {
             case ITEM, ENTITIES, ENTITIES_TRANSLUCENT, LIGHTNING, BLOCK_ENTITIES, BLOCK_ENTITIES_TRANSLUCENT,
-                    BEACON_BEAM, ARMOR_GLINT, SPIDER_EYES, HAND_SOLID, HAND_TRANSLUCENT -> true;
+                 BEACON_BEAM, ARMOR_GLINT, SPIDER_EYES, HAND_SOLID, HAND_TRANSLUCENT -> true;
             default -> false;
         };
     }

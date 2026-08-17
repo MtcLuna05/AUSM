@@ -4,10 +4,11 @@ import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.api.pipeline.pack.ShaderProgramDirectives;
 import com.l.ausm.api.pipeline.shader.ProgramArrayId;
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
 import java.util.List;
 
-/** Runtime slot for an Iris indexed fullscreen program such as setup1 or begin2. */
+/**
+ * Runtime slot for an Iris indexed fullscreen program such as setup1 or begin2.
+ */
 public final class FullscreenArrayProgram {
     private final ProgramArrayId arrayId;
     private final int index;

@@ -2,7 +2,6 @@ package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.shader.ProgramStage;
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
 import java.util.regex.Pattern;
 
 /**
@@ -35,8 +34,8 @@ public final class EntityAdvancedMaterialFallbackTransformStage implements Shade
     private static boolean usesEntityFallback(RenderPass pass) {
         return switch (pass) {
             case GBUFFERS_ENTITIES, GBUFFERS_ENTITIES_TRANSLUCENT, GBUFFERS_ENTITIES_GLOWING,
-                    GBUFFERS_HAND, GBUFFERS_HAND_WATER, GBUFFERS_ITEM, GBUFFERS_LIGHTNING,
-                    GBUFFERS_ARMOR_GLINT, GBUFFERS_SPIDEREYES -> true;
+                 GBUFFERS_HAND, GBUFFERS_HAND_WATER, GBUFFERS_ITEM, GBUFFERS_LIGHTNING,
+                 GBUFFERS_ARMOR_GLINT, GBUFFERS_SPIDEREYES -> true;
             default -> false;
         };
     }

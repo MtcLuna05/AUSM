@@ -1,11 +1,7 @@
 package com.l.ausm.impl.pipeline.vertex;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-import net.minecraft.client.renderer.vertex.VertexFormat;
-
 import java.nio.ByteBuffer;
+import net.minecraft.client.renderer.vertex.VertexFormat;
 
 /**
  * Interface injected into BufferBuilder to avoid illegal mixin casting.

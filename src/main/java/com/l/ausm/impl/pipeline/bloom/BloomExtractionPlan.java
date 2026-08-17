@@ -3,7 +3,9 @@ package com.l.ausm.impl.pipeline.bloom;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.util.BlockRenderLayer;
 
-/** Shared immutable plan for the terrain passes used by shaderless bloom extraction. */
+/**
+ * Shared immutable plan for the terrain passes used by shaderless bloom extraction.
+ */
 public final class BloomExtractionPlan {
     private static final BlockRenderLayer[] TERRAIN_LAYERS = {
             BlockRenderLayer.SOLID,

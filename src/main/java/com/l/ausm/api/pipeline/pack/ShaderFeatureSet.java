@@ -1,8 +1,5 @@
 package com.l.ausm.api.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;

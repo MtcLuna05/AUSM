@@ -1,23 +1,18 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
-import com.l.ausm.impl.MainMod;
-import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
-import com.l.ausm.impl.pipeline.PipelineContext;
-import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
-import net.minecraft.client.renderer.entity.Render;
+import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.ResourceLocation;
+import org.lwjgl.opengl.GL11;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.lwjgl.opengl.GL11;
 
 @Mixin(RenderManager.class)
 public class RenderManagerMixin {
@@ -146,8 +141,8 @@ public class RenderManagerMixin {
     }
 
     private static void ausm$logBetweenlandsRender(String stage, PipelineContext context, Entity entity, boolean vanillaProgram) {
-        ResourceLocation key = entity != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.entityKey(entity) : null;
-        if (key == null || !"thebetweenlands".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(key)) || ausm$betweenlandsRenderLogCount++ >= AUSM_MAX_BETWEENLANDS_RENDER_LOGS) {
+        ResourceLocation key = entity != null ? MinecraftReflectionCompat.entityKey(entity) : null;
+        if (key == null || !"thebetweenlands".equals(MinecraftReflectionCompat.resourceNamespace(key)) || ausm$betweenlandsRenderLogCount++ >= AUSM_MAX_BETWEENLANDS_RENDER_LOGS) {
             return;
         }
         MainMod.LOGGER.info(
@@ -159,9 +154,9 @@ public class RenderManagerMixin {
                 vanillaProgram,
                 key,
                 entity.getClass().getName(),
-                Math.round(com.l.ausm.impl.util.MinecraftReflectionCompat.posX(entity) * 10.0D) / 10.0D,
-                Math.round(com.l.ausm.impl.util.MinecraftReflectionCompat.posY(entity) * 10.0D) / 10.0D,
-                Math.round(com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(entity) * 10.0D) / 10.0D
+                Math.round(MinecraftReflectionCompat.posX(entity) * 10.0D) / 10.0D,
+                Math.round(MinecraftReflectionCompat.posY(entity) * 10.0D) / 10.0D,
+                Math.round(MinecraftReflectionCompat.posZ(entity) * 10.0D) / 10.0D
         );
     }
 

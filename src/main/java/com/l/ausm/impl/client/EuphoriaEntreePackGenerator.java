@@ -2,11 +2,6 @@ package com.l.ausm.impl.client;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import net.minecraft.client.Minecraft;
-import net.minecraftforge.fml.common.FMLCommonHandler;
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
-import net.minecraftforge.fml.common.gameevent.TickEvent;
-
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -32,6 +27,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import net.minecraft.client.Minecraft;
+import net.minecraftforge.fml.common.FMLCommonHandler;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.common.gameevent.TickEvent;
 
 /**
  * Builds Entree + Euphoria and overlays AUSM's maintained Entree additions.
@@ -73,7 +72,9 @@ public final class EuphoriaEntreePackGenerator {
         FMLCommonHandler.instance().bus().register(INSTANCE);
     }
 
-    /** Called by the Euphoria Patcher constructor compatibility hook. */
+    /**
+     * Called by the Euphoria Patcher constructor compatibility hook.
+     */
     public static void generateNow() {
         INSTANCE.generateIfNeeded();
     }

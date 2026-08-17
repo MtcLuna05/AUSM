@@ -1,11 +1,7 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
-import com.l.ausm.impl.pipeline.vertex.SeparateAoColorWriter;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
+import com.l.ausm.impl.pipeline.vertex.SeparateAoColorWriter;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraftforge.client.model.pipeline.VertexBufferConsumer;
 import org.spongepowered.asm.mixin.Mixin;

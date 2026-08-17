@@ -3,13 +3,14 @@ package com.l.ausm.impl.pipeline.compat;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.Arrays;
+import java.util.IdentityHashMap;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.BlockRenderLayer;
+import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
-
-import java.util.IdentityHashMap;
 
 /**
  * Shared, backend-neutral decisions made while a chunk section is compiled.
@@ -75,7 +76,7 @@ public final class TerrainCompileCoordinator {
             return (vanillaLayer != null && layer == vanillaLayer)
                     || pipeline.shouldRenderBloomSourceInBaseLayer(state, layer);
         }
-        int bit = 1 << Math.max(0, Math.min(30, layer.ordinal()));
+        int bit = 1 << Math.clamp(layer.ordinal(), 0, 30);
         if ((decision.knownLayers & bit) == 0) {
             boolean nativeLayer = MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer);
             boolean forcedBase = pipeline.shouldRenderBloomSourceInBaseLayer(state, layer);
@@ -89,7 +90,7 @@ public final class TerrainCompileCoordinator {
 
     private static boolean isBlockcrafteryState(IBlockState state) {
         Block block = MinecraftReflectionCompat.blockFromState(state);
-        net.minecraft.util.ResourceLocation name = block == null
+        ResourceLocation name = block == null
                 ? null : MinecraftReflectionCompat.blockRegistryName(block);
         return "blockcraftery".equals(MinecraftReflectionCompat.resourceNamespace(name));
     }
@@ -159,7 +160,7 @@ public final class TerrainCompileCoordinator {
         private void nextGeneration() {
             generation++;
             if (generation == 0) {
-                java.util.Arrays.fill(dynamicFallbackGeneration, 0);
+                Arrays.fill(dynamicFallbackGeneration, 0);
                 generation = 1;
             }
         }

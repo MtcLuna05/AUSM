@@ -2,6 +2,8 @@ package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
 import net.minecraftforge.client.event.RenderWorldLastEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
@@ -10,9 +12,6 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 
 @Mixin(targets = "li.cil.scannable.client.renderer.ScannerRenderer", remap = false)
 public abstract class ScannableScannerRendererMixin {

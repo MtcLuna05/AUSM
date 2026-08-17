@@ -1,9 +1,9 @@
 package com.l.ausm.impl.mixin.compat;
 
-import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
@@ -27,7 +27,7 @@ public class BetterPortalsPortalBlockChangeMixin {
             argsOnly = true
     )
     private BlockPos ausm$capturePortalStateBeforeSetBlock(BlockPos capturedPos, BlockPos pos,
-                                                            IBlockState newState, int flags) {
+                                                           IBlockState newState, int flags) {
         World world = (World) (Object) this;
         if (!MinecraftReflectionCompat.worldIsRemote(world) || !BetterPortalsCompat.isInstalled() || pos == null) {
             ausm$previousPortalState = null;
@@ -35,7 +35,7 @@ public class BetterPortalsPortalBlockChangeMixin {
             return capturedPos;
         }
 
-        IBlockState oldState = com.l.ausm.impl.util.MinecraftReflectionCompat.worldBlockState(world, pos);
+        IBlockState oldState = MinecraftReflectionCompat.worldBlockState(world, pos);
         if (!ausm$isPortalState(oldState) && !ausm$isPortalState(newState)) {
             ausm$previousPortalState = null;
             ausm$previousPortalPos = null;
@@ -43,7 +43,7 @@ public class BetterPortalsPortalBlockChangeMixin {
         }
 
         ausm$previousPortalState = oldState;
-        ausm$previousPortalPos = com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosToImmutable(pos);
+        ausm$previousPortalPos = MinecraftReflectionCompat.blockPosToImmutable(pos);
         return capturedPos;
     }
 
@@ -52,7 +52,7 @@ public class BetterPortalsPortalBlockChangeMixin {
             at = @At("RETURN")
     )
     private boolean ausm$refreshPortalTerrainAfterSetBlock(boolean changed, BlockPos pos,
-                                                            IBlockState newState, int flags) {
+                                                           IBlockState newState, int flags) {
         try {
             boolean oldPortal = ausm$isPortalState(ausm$previousPortalState);
             boolean newPortal = ausm$isPortalState(newState);
@@ -66,11 +66,11 @@ public class BetterPortalsPortalBlockChangeMixin {
             World world = (World) (Object) this;
             IBlockState oldState = ausm$previousPortalState;
             BlockPos changedPos = ausm$previousPortalPos;
-            Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+            Minecraft mc = MinecraftReflectionCompat.minecraft();
             if (mc == null) {
                 return changed;
             }
-            com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> PipelineContext.getInstance()
+            MinecraftReflectionCompat.addScheduledTask(mc, () -> PipelineContext.getInstance()
                     .queueBetterPortalsPortalBlockChanged(world, changedPos, oldState, newState));
             return changed;
         } finally {

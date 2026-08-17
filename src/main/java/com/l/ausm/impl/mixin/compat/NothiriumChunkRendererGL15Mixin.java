@@ -2,8 +2,8 @@ package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.NothiriumPipelineCompat;
-import meldexun.nothirium.api.renderer.chunk.ChunkRenderPass;
 import meldexun.nothirium.api.renderer.IVBOPart;
+import meldexun.nothirium.api.renderer.chunk.ChunkRenderPass;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Constant;

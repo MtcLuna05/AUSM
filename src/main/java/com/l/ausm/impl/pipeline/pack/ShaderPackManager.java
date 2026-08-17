@@ -5,44 +5,28 @@ import com.l.ausm.api.shader.ShaderPackInfo;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
-import net.minecraft.client.Minecraft;
-
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.file.FileAlreadyExistsException;
-import java.nio.file.Files;
-import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
-import java.text.Normalizer;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
-import java.util.stream.Stream;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.WorldClient;
+import net.minecraft.world.WorldProvider;
 
 public class ShaderPackManager implements ShaderPackController {
     private static final String OFF_PACK_NAME = "OFF";
     private static final String INTERNAL_PACK_NAME = "(internal)";
-    private static final int SHADER_PROPERTIES_CACHE_LIMIT = 24;
     private static final int SHADER_TOGGLE_TIMING_PROBE_LIMIT = 0;
 
-    private final Path shaderpacksDir;
-    private final Path optionOverridesDir;
-    private final Path shaderConfigFile;
+    private final ShaderPackRepository repository;
+    private final ShaderPackConfigurationStore configurationStore;
     private ShaderPack currentPack = NoneShaderPack.INSTANCE;
     private Map<String, String> currentOptionOverrides = Map.of();
-    private final Map<String, ShaderProperties> shaderPropertiesCache = new LinkedHashMap<>() {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, ShaderProperties> eldest) {
-            return size() > SHADER_PROPERTIES_CACHE_LIMIT;
-        }
-    };
+    private final ShaderPropertiesCache shaderPropertiesCache = new ShaderPropertiesCache();
     private String selectedPackName = OFF_PACK_NAME;
     private boolean shadersEnabled = false;
     private boolean pendingPipelineReload = false;
@@ -55,28 +39,10 @@ public class ShaderPackManager implements ShaderPackController {
     private int shaderToggleTimingProbeLogs;
 
     public ShaderPackManager(Path minecraftRunDir) {
-        this.shaderpacksDir = minecraftRunDir.resolve("shaderpacks");
+        repository = new ShaderPackRepository(minecraftRunDir.resolve("shaderpacks"));
         Path configDir = minecraftRunDir.resolve("config").resolve("ausm");
-        this.optionOverridesDir = configDir.resolve("shader-options");
-        this.shaderConfigFile = configDir.resolve("shaders.properties");
-        ensureDirectoryExists();
-    }
-
-    private void ensureDirectoryExists() {
-        if (!Files.exists(shaderpacksDir)) {
-            try {
-                MainMod.LOGGER.info("Shaderpacks directory not found, creating at: {}", shaderpacksDir.toAbsolutePath());
-                Files.createDirectories(shaderpacksDir);
-                Files.createDirectories(optionOverridesDir);
-            } catch (IOException e) {
-                MainMod.LOGGER.error("Failed to create shaderpacks directory!", e);
-            }
-        }
-        try {
-            Files.createDirectories(optionOverridesDir);
-        } catch (IOException e) {
-            MainMod.LOGGER.error("Failed to create shader option config directory!", e);
-        }
+        configurationStore = new ShaderPackConfigurationStore(configDir);
+        repository.ensureDirectoryExists();
     }
 
     /**
@@ -142,17 +108,9 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     public void loadSavedConfiguration() {
-        Properties properties = new Properties();
-        if (Files.isRegularFile(shaderConfigFile)) {
-            try (InputStream stream = Files.newInputStream(shaderConfigFile)) {
-                properties.load(stream);
-            } catch (IOException e) {
-                MainMod.LOGGER.error("Failed to read shader configuration", e);
-            }
-        }
-
-        selectedPackName = properties.getProperty("selectedPack", OFF_PACK_NAME);
-        boolean savedEnabled = Boolean.parseBoolean(properties.getProperty("enabled", "false").trim());
+        SavedShaderConfiguration saved = configurationStore.load(OFF_PACK_NAME);
+        selectedPackName = saved.selectedPackName();
+        boolean savedEnabled = saved.enabled();
         boolean packAvailable = !isOffPack(selectedPackName) && isPackAvailable(selectedPackName);
         shadersEnabled = !automaticShaderDisablingEnabled() && savedEnabled && packAvailable;
         currentPack = NoneShaderPack.INSTANCE;
@@ -174,32 +132,7 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     private ShaderPack openPack(String packName) {
-        Path packPath = resolveShaderPackPath(packName);
-        if (packPath == null) {
-            MainMod.LOGGER.warn("Attempted to load shaderpack with invalid path name '{}'; disabling shaders.", packName);
-            return null;
-        }
-        if (!Files.exists(packPath)) {
-            MainMod.LOGGER.warn("Attempted to load shaderpack '{}', but it does not exist at '{}'", packName, packPath.toAbsolutePath());
-            return null;
-        }
-
-        try {
-            if (Files.isDirectory(packPath)) {
-                MainMod.LOGGER.info("Loading folder shaderpack: {}", packName);
-                return new FolderShaderPack(packPath);
-            }
-            if (packName.endsWith(".zip")) {
-                MainMod.LOGGER.info("Loading zip shaderpack: {}", packName);
-                return new ZipShaderPack(packPath);
-            }
-
-            MainMod.LOGGER.warn("Cannot load shaderpack '{}' because it is neither a folder nor a zip file.", packName);
-            return null;
-        } catch (IOException e) {
-            MainMod.LOGGER.error("Failed to load shaderpack '{}'", packName, e);
-            return null;
-        }
+        return repository.open(packName);
     }
 
     private void setPack(ShaderPack newPack) {
@@ -223,7 +156,7 @@ public class ShaderPackManager implements ShaderPackController {
             rebuildInactiveVanillaRenderers();
             return;
         }
-        
+
         // Notify the pipeline to reload and compile shaders
         ShaderProperties properties = getShaderProperties(newPack.getName(), currentOptionOverrides);
         initializeCurrentPipeline(properties, shadersEnabled && !isOffPack(selectedPackName));
@@ -234,30 +167,11 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     public Path getShaderpacksDir() {
-        return shaderpacksDir;
+        return repository.directory();
     }
 
     public String importShaderPack(Path source) throws IOException {
-        if (source == null || !isValidPackPath(source)) {
-            return null;
-        }
-
-        Files.createDirectories(shaderpacksDir);
-        String name = source.getFileName().toString();
-        Path target = shaderpacksDir.resolve(name);
-        if (Files.exists(target)) {
-            if (Files.isSameFile(source, target)) {
-                return name;
-            }
-            throw new FileAlreadyExistsException(target.toString());
-        }
-
-        if (Files.isDirectory(source)) {
-            copyDirectory(source, target);
-        } else {
-            Files.copy(source, target);
-        }
-        return name;
+        return repository.importPack(source);
     }
 
     @Override
@@ -283,24 +197,7 @@ public class ShaderPackManager implements ShaderPackController {
      * Lists available packs in the shaderpacks folder.
      */
     public List<String> getAvailablePacks() {
-        List<String> packs = new ArrayList<>();
-        packs.add(OFF_PACK_NAME);
-
-        if (!Files.exists(shaderpacksDir)) {
-            return packs;
-        }
-
-        try (Stream<Path> stream = Files.list(shaderpacksDir)) {
-            stream.forEach(path -> {
-                if (isValidPackPath(path)) {
-                    packs.add(path.getFileName().toString());
-                }
-            });
-        } catch (IOException e) {
-            MainMod.LOGGER.error("Failed to list available shaderpacks!", e);
-        }
-        packs.subList(1, packs.size()).sort(String.CASE_INSENSITIVE_ORDER.thenComparing(Comparator.naturalOrder()));
-        return packs;
+        return repository.availablePacks(OFF_PACK_NAME);
     }
 
     public void reloadPack() {
@@ -729,7 +626,8 @@ public class ShaderPackManager implements ShaderPackController {
 
         Map<String, String> safeOverrides = overrides == null || overrides.isEmpty() ? Map.of() : Map.copyOf(overrides);
         int safeDimensionId = dimensionId == Integer.MIN_VALUE ? ShaderDimensionContext.currentDimensionId() : dimensionId;
-        String cacheKey = shaderPropertiesCacheKey(packName, safeOverrides, safeDimensionId, shaderPackFingerprint(packName));
+        String cacheKey = ShaderPropertiesCache.key(
+                packName, safeOverrides, safeDimensionId, shaderPackFingerprint(packName));
         ShaderProperties cached = shaderPropertiesCache.get(cacheKey);
         if (cached != null) {
             return cached;
@@ -816,11 +714,7 @@ public class ShaderPackManager implements ShaderPackController {
             return;
         }
 
-        try {
-            Files.deleteIfExists(optionFile(packName));
-        } catch (IOException e) {
-            MainMod.LOGGER.error("Failed to reset shader options for '{}'", packName, e);
-        }
+        configurationStore.resetOptions(packName);
         if (isCurrentPack(packName)) {
             if (currentOptionOverrides.isEmpty()) {
                 return;
@@ -916,39 +810,7 @@ public class ShaderPackManager implements ShaderPackController {
         if (packName == null || isOffPack(packName) || INTERNAL_PACK_NAME.equals(packName)) {
             return "internal";
         }
-
-        Path path = resolveShaderPackPath(packName);
-        if (path == null) {
-            return "invalid";
-        }
-        if (!Files.exists(path)) {
-            return "missing";
-        }
-
-        if (Files.isRegularFile(path)) {
-            return Long.toString(safePathFingerprint(path));
-        }
-
-        try (Stream<Path> stream = Files.walk(path)) {
-            long fingerprint = stream
-                    .filter(Files::isRegularFile)
-                    .mapToLong(this::safePathFingerprint)
-                    .reduce(17L, (current, value) -> current * 31L + value);
-            return Long.toString(fingerprint);
-        } catch (IOException e) {
-            MainMod.LOGGER.warn("Failed to fingerprint shaderpack '{}'; falling back to directory timestamp.", packName, e);
-            return Long.toString(safePathFingerprint(path));
-        }
-    }
-
-    private long safePathFingerprint(Path path) {
-        try {
-            long modified = Files.getLastModifiedTime(path).toMillis();
-            long size = Files.isRegularFile(path) ? Files.size(path) : 0L;
-            return modified * 31L + size;
-        } catch (IOException e) {
-            return 0L;
-        }
+        return repository.fingerprint(packName);
     }
 
     private void rebuildInactiveVanillaRenderers() {
@@ -992,47 +854,11 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     private Map<String, String> loadOptionOverrides(String packName) {
-        if (packName == null || INTERNAL_PACK_NAME.equals(packName)) {
-            return Map.of();
-        }
-
-        Path file = optionFile(packName);
-        if (!Files.isRegularFile(file)) {
-            return Map.of();
-        }
-
-        Properties properties = new Properties();
-        try (InputStream stream = Files.newInputStream(file)) {
-            properties.load(stream);
-        } catch (IOException e) {
-            MainMod.LOGGER.error("Failed to read shader options for '{}'", packName, e);
-            return Map.of();
-        }
-
-        Map<String, String> values = new LinkedHashMap<>();
-        for (String key : properties.stringPropertyNames()) {
-            values.put(key, properties.getProperty(key));
-        }
-        return values;
+        return configurationStore.loadOptions(packName, INTERNAL_PACK_NAME);
     }
 
     private void saveOptionOverrides(String packName, Map<String, String> values) {
-        Properties properties = new Properties();
-        values.forEach(properties::setProperty);
-
-        try {
-            Files.createDirectories(optionOverridesDir);
-            try (OutputStream stream = Files.newOutputStream(optionFile(packName))) {
-                properties.store(stream, "AUSM shader option overrides");
-            }
-        } catch (IOException e) {
-            MainMod.LOGGER.error("Failed to save shader options for '{}'", packName, e);
-        }
-    }
-
-    private Path optionFile(String packName) {
-        String safeName = packName.replaceAll("[^A-Za-z0-9._-]", "_");
-        return optionOverridesDir.resolve(safeName + ".properties");
+        configurationStore.saveOptions(packName, values);
     }
 
     private void clearShaderPropertiesCache() {
@@ -1040,26 +866,13 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     private void clearShaderPropertiesCacheExcept(String packName) {
-        if (packName == null || packName.isBlank()) {
-            clearShaderPropertiesCache();
-            return;
-        }
-        shaderPropertiesCache.keySet().removeIf(key -> !isShaderPropertiesCacheKeyForPack(key, packName));
+        shaderPropertiesCache.clearExcept(packName);
     }
 
     private void saveShaderConfig() {
-        Properties properties = new Properties();
-        properties.setProperty("selectedPack", isOffPack(selectedPackName) ? OFF_PACK_NAME : selectedPackName);
-        properties.setProperty("enabled", Boolean.toString(shadersEnabled));
-
-        try {
-            Files.createDirectories(shaderConfigFile.getParent());
-            try (OutputStream stream = Files.newOutputStream(shaderConfigFile)) {
-                properties.store(stream, "AUSM shader configuration");
-            }
-        } catch (IOException e) {
-            MainMod.LOGGER.error("Failed to save shader configuration", e);
-        }
+        configurationStore.save(
+                isOffPack(selectedPackName) ? OFF_PACK_NAME : selectedPackName,
+                shadersEnabled);
     }
 
     private boolean isCurrentPack(String packName) {
@@ -1070,155 +883,7 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     private boolean isPackAvailable(String packName) {
-        if (isOffPack(packName)) {
-            return false;
-        }
-
-        Path packPath = resolveShaderPackPath(packName);
-        if (packPath == null) {
-            return false;
-        }
-        return Files.isDirectory(packPath) || Files.isRegularFile(packPath);
-    }
-
-    private Path resolveShaderPackPath(String packName) {
-        if (packName == null || packName.isEmpty()) {
-            return null;
-        }
-        try {
-            Path direct = shaderpacksDir.resolve(packName);
-            if (Files.exists(direct)) {
-                return direct;
-            }
-            Path aliasMatch = findShaderPackPathByAlias(packName);
-            return aliasMatch != null ? aliasMatch : direct;
-        } catch (InvalidPathException e) {
-            Path aliasMatch = findShaderPackPathByAlias(packName);
-            if (aliasMatch != null) {
-                MainMod.LOGGER.warn("Resolved shaderpack '{}' through directory scan because the JVM filesystem encoding rejected the saved name.", packName);
-                return aliasMatch;
-            }
-            MainMod.LOGGER.warn("Ignoring shaderpack name with invalid filesystem encoding: '{}'", packName);
-            return null;
-        }
-    }
-
-    private Path findShaderPackPathByAlias(String packName) {
-        if (!Files.exists(shaderpacksDir)) {
-            return null;
-        }
-
-        String targetAlias = shaderPackAlias(packName);
-        if (targetAlias.isEmpty()) {
-            return null;
-        }
-
-        Path bestPath = null;
-        int bestScore = Integer.MAX_VALUE;
-        int bestLengthDelta = Integer.MAX_VALUE;
-        try (Stream<Path> stream = Files.list(shaderpacksDir)) {
-            for (Path path : stream.toList()) {
-                if (!isValidPackPath(path)) {
-                    continue;
-                }
-                Path fileName = path.getFileName();
-                String candidateName = fileName != null ? fileName.toString() : "";
-                int score = shaderPackAliasDistance(targetAlias, shaderPackAlias(candidateName));
-                if (score < 0) {
-                    continue;
-                }
-                int lengthDelta = Math.abs(candidateName.length() - packName.length());
-                if (score < bestScore
-                        || (score == bestScore && lengthDelta < bestLengthDelta)
-                        || (score == bestScore && lengthDelta == bestLengthDelta && Files.isDirectory(path) && bestPath != null && !Files.isDirectory(bestPath))) {
-                    bestPath = path;
-                    bestScore = score;
-                    bestLengthDelta = lengthDelta;
-                }
-            }
-        } catch (IOException e) {
-            MainMod.LOGGER.warn("Failed to scan shaderpacks for alias match for '{}'", packName, e);
-        }
-        return bestPath;
-    }
-
-    private static int shaderPackAliasDistance(String targetAlias, String candidateAlias) {
-        if (targetAlias.equals(candidateAlias)) {
-            return 0;
-        }
-        int distance = boundedEditDistance(targetAlias, candidateAlias, 2);
-        return distance <= 2 ? distance : -1;
-    }
-
-    private static String shaderPackAlias(String name) {
-        if (name == null) {
-            return "";
-        }
-        String normalized = Normalizer.normalize(name, Normalizer.Form.NFKD).toLowerCase(Locale.ROOT);
-        StringBuilder builder = new StringBuilder(normalized.length());
-        for (int index = 0; index < normalized.length(); index++) {
-            char ch = normalized.charAt(index);
-            if (ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9') {
-                builder.append(ch);
-            }
-        }
-        String alias = builder.toString();
-        if (alias.endsWith("zip")) {
-            alias = alias.substring(0, alias.length() - 3);
-        }
-        return alias;
-    }
-
-    private static int boundedEditDistance(String left, String right, int maxDistance) {
-        if (Math.abs(left.length() - right.length()) > maxDistance) {
-            return maxDistance + 1;
-        }
-        int[] previous = new int[right.length() + 1];
-        int[] current = new int[right.length() + 1];
-        for (int j = 0; j <= right.length(); j++) {
-            previous[j] = j;
-        }
-        for (int i = 1; i <= left.length(); i++) {
-            current[0] = i;
-            int rowMin = current[0];
-            for (int j = 1; j <= right.length(); j++) {
-                int cost = left.charAt(i - 1) == right.charAt(j - 1) ? 0 : 1;
-                current[j] = Math.min(Math.min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost);
-                rowMin = Math.min(rowMin, current[j]);
-            }
-            if (rowMin > maxDistance) {
-                return maxDistance + 1;
-            }
-            int[] swap = previous;
-            previous = current;
-            current = swap;
-        }
-        return previous[right.length()];
-    }
-
-    private boolean isValidPackPath(Path path) {
-        if (path == null || !Files.exists(path)) {
-            return false;
-        }
-        if (Files.isDirectory(path)) {
-            return true;
-        }
-        String fileName = path.getFileName().toString().toLowerCase();
-        return Files.isRegularFile(path) && fileName.endsWith(".zip");
-    }
-
-    private void copyDirectory(Path source, Path target) throws IOException {
-        try (Stream<Path> stream = Files.walk(source)) {
-            for (Path path : stream.sorted().toList()) {
-                Path relative = source.relativize(path);
-                Path destination = target.resolve(relative);
-                if (Files.isDirectory(path)) {
-                    Files.createDirectories(destination);
-                } else {
-                    Files.copy(path, destination);
-                }
-            }
-        }
+        return !isOffPack(packName) && repository.isAvailable(packName);
     }
 
     private void fallbackToOff(String message, String packName) {
@@ -1237,13 +902,13 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     private int getClientDimensionId() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        net.minecraft.client.multiplayer.WorldClient world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        net.minecraft.world.WorldProvider provider = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
+        WorldClient world = mc != null ? MinecraftReflectionCompat.world(mc) : null;
+        WorldProvider provider = MinecraftReflectionCompat.worldProvider(world);
         if (provider == null) {
             return Integer.MIN_VALUE;
         }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider);
+        return MinecraftReflectionCompat.providerDimension(provider);
     }
 
     private int getEffectiveRenderDimensionId() {
@@ -1262,22 +927,4 @@ public class ShaderPackManager implements ShaderPackController {
         return pack == null || INTERNAL_PACK_NAME.equals(pack.getName());
     }
 
-    private static String shaderPropertiesCacheKey(String packName, Map<String, String> overrides, int dimensionId, String packFingerprint) {
-        String safePackName = packName != null ? packName : "";
-        StringBuilder builder = new StringBuilder(safePackName.length() + 32);
-        builder.append(safePackName).append('\0').append(dimensionId).append('\0').append(packFingerprint != null ? packFingerprint : "");
-        if (overrides != null && !overrides.isEmpty()) {
-            new java.util.TreeMap<>(overrides).forEach((key, value) ->
-                    builder.append('\0')
-                            .append(key != null ? key : "")
-                            .append('=')
-                            .append(value != null ? value : ""));
-        }
-        return builder.toString();
-    }
-
-    private static boolean isShaderPropertiesCacheKeyForPack(String cacheKey, String packName) {
-        String safePackName = packName != null ? packName : "";
-        return cacheKey != null && cacheKey.startsWith(safePackName + '\0');
-    }
 }

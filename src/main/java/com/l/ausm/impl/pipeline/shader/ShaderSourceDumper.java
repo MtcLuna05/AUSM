@@ -2,13 +2,12 @@ package com.l.ausm.impl.pipeline.shader;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import net.minecraft.client.Minecraft;
-
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import net.minecraft.client.Minecraft;
 
 final class ShaderSourceDumper {
     private ShaderSourceDumper() {
@@ -28,9 +27,9 @@ final class ShaderSourceDumper {
         }
 
         try {
-            Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+            Minecraft minecraft = MinecraftReflectionCompat.minecraft();
             File gameDir = minecraft != null
-                    ? com.l.ausm.impl.util.MinecraftReflectionCompat.gameDir(minecraft)
+                    ? MinecraftReflectionCompat.gameDir(minecraft)
                     : new File(System.getProperty("user.dir", "."));
             Path directory = gameDir.toPath()
                     .resolve("config")

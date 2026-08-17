@@ -1,10 +1,14 @@
 package com.l.ausm.impl.core;
 
 import com.google.common.collect.ImmutableList;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.function.Function;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.vertex.VertexFormat;
-import net.minecraft.util.EnumFacing;
 import net.minecraft.launchwrapper.IClassTransformer;
+import net.minecraft.util.EnumFacing;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
@@ -18,13 +22,9 @@ import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
-import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.TryCatchBlockNode;
+import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
-
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
-import java.util.function.Function;
 
 public final class InfinityLibBakedModelTransformer implements IClassTransformer {
     private static final String BAKED_MODEL_TARGET = "com.infinityraider.infinitylib.render.block.BakedInfBlockModel";
@@ -358,7 +358,7 @@ public final class InfinityLibBakedModelTransformer implements IClassTransformer
         }
         for (Class<?> type = model.getClass(); type != null; type = type.getSuperclass()) {
             try {
-                java.lang.reflect.Field field = type.getDeclaredField("block");
+                Field field = type.getDeclaredField("block");
                 field.setAccessible(true);
                 return field.get(model);
             } catch (ReflectiveOperationException | RuntimeException ignored) {

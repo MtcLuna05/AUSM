@@ -1,14 +1,15 @@
 package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.BlockRenderLayer;
 
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
-
 public final class ShaderBlockLayerOverrides {
-    private static final AtomicReference<Map<net.minecraft.block.Block, BlockRenderLayer>> ACTIVE_OVERRIDES =
+    private static final AtomicReference<Map<Block, BlockRenderLayer>> ACTIVE_OVERRIDES =
             new AtomicReference<>(Map.of());
 
     private ShaderBlockLayerOverrides() {
@@ -30,7 +31,7 @@ public final class ShaderBlockLayerOverrides {
         if (!PipelineContext.getInstance().shouldApplyShaderBlockLayerOverrides()) {
             return null;
         }
-        net.minecraft.block.Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+        Block block = MinecraftReflectionCompat.blockFromState(state);
         if (block == null) {
             return null;
         }

@@ -6,10 +6,9 @@ import net.minecraftforge.client.model.pipeline.VertexLighterFlat;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
-import org.spongepowered.asm.mixin.injection.Redirect;
-
 
 /**
  * Blockcraftery uses Forge's light pipeline for its generated host shape.
@@ -41,11 +40,11 @@ public abstract class VertexLighterFlatMixin {
             locals = LocalCapture.CAPTURE_FAILHARD
     )
     private void ausm$preserveFramedLuminousEmission(CallbackInfo ci,
-                                                      float[][] position, float[][] normal,
-                                                      float[][] lightmap, float[][] color,
-                                                      int multiplier, VertexFormat format, int count, int vertex,
-                                                      float x, float y, float z,
-                                                      float blockLight, float skyLight) {
+                                                     float[][] position, float[][] normal,
+                                                     float[][] lightmap, float[][] color,
+                                                     int multiplier, VertexFormat format, int count, int vertex,
+                                                     float x, float y, float z,
+                                                     float blockLight, float skyLight) {
         if (!BlockRenderContext.isFramedMaterialOwner() || !BlockRenderContext.framedBloomBoost()
                 || lightmap == null || vertex < 0 || vertex >= lightmap.length
                 || lightmap[vertex] == null || lightmap[vertex].length < 2) {
@@ -74,7 +73,9 @@ public abstract class VertexLighterFlatMixin {
         return 1.0F;
     }
 
-    /** Mirrors Forge LightUtil.diffuseLight(x, y, z) without a runtime member call. */
+    /**
+     * Mirrors Forge LightUtil.diffuseLight(x, y, z) without a runtime member call.
+     */
     private static float diffuseFactor(float x, float y, float z) {
         return Math.min(x * x * 0.6F + y * y * ((3.0F + y) * 0.25F) + z * z * 0.8F, 1.0F);
     }

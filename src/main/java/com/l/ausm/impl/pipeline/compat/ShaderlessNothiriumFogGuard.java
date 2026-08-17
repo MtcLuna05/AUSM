@@ -2,7 +2,9 @@ package com.l.ausm.impl.pipeline.compat;
 
 import org.lwjgl.opengl.GL11;
 
-/** Preserves the caller's fog state around shaderless Nothirium terrain draws. */
+/**
+ * Preserves the caller's fog state around shaderless Nothirium terrain draws.
+ */
 public final class ShaderlessNothiriumFogGuard {
     private int depth;
     private boolean fogPreviouslyEnabled;

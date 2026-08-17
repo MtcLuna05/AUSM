@@ -1,8 +1,6 @@
 package com.l.ausm.api.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-
+import java.util.Locale;
 import java.util.Properties;
 
 public record ShaderRenderSettings(
@@ -111,7 +109,7 @@ public record ShaderRenderSettings(
                 booleanProperty(properties, "beacon.beam.depth", defaults.beaconBeamDepth),
                 weatherGeometry(properties, defaults.weather),
                 weatherParticles(properties, defaults.weatherParticles),
-                properties.getProperty("clouds", defaults.clouds).trim().toLowerCase(java.util.Locale.ROOT),
+                properties.getProperty("clouds", defaults.clouds).trim().toLowerCase(Locale.ROOT),
                 particlesOrdering(properties, defaults.particlesOrdering),
                 booleanProperty(properties, "occlusion.culling", defaults.occlusionCulling),
                 booleanProperty(properties, "underwaterOverlay", defaults.underwaterOverlay),
@@ -155,7 +153,7 @@ public record ShaderRenderSettings(
         if (value == null || value.isBlank()) {
             return fallback;
         }
-        String normalized = value.trim().toLowerCase(java.util.Locale.ROOT);
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
         if ("reversed".equals(normalized)) {
             return true;
         }
@@ -202,7 +200,7 @@ public record ShaderRenderSettings(
     private static String particlesOrdering(Properties properties, String fallback) {
         String ordering = properties.getProperty("particles.ordering");
         if (ordering != null && !ordering.isBlank()) {
-            return ordering.trim().toLowerCase(java.util.Locale.ROOT);
+            return ordering.trim().toLowerCase(Locale.ROOT);
         }
 
         String beforeDeferred = properties.getProperty("particles.before.deferred");
@@ -220,7 +218,7 @@ public record ShaderRenderSettings(
         }
         try {
             float parsed = Float.parseFloat(value.trim());
-            return Math.max(min, Math.min(max, parsed));
+            return Math.clamp(parsed, min, max);
         } catch (NumberFormatException ignored) {
             return fallback;
         }

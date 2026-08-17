@@ -1,8 +1,5 @@
 package com.l.ausm.api.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-
 public record ShaderTextureScale(String widthValue, String heightValue) {
     public int width(int baseWidth) {
         return dimension(widthValue, baseWidth);

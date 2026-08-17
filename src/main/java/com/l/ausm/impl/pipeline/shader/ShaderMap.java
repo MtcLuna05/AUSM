@@ -1,9 +1,5 @@
 package com.l.ausm.impl.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 /**
  * Iris-style runtime lookup table keyed by {@link ShaderKey}.
  */

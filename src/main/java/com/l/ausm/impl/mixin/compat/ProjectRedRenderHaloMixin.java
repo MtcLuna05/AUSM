@@ -1,6 +1,10 @@
 package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.pipeline.compat.ProjectRedHaloRenderer;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.entity.Entity;
@@ -12,10 +16,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 
 @Mixin(targets = "mrtjp.projectred.core.RenderHalo$", remap = false)
 public class ProjectRedRenderHaloMixin {
@@ -32,21 +32,21 @@ public class ProjectRedRenderHaloMixin {
         }
 
         ci.cancel();
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        Entity viewEntity = minecraft != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(minecraft) : null;
-        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) == null || viewEntity == null) {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        Entity viewEntity = minecraft != null ? MinecraftReflectionCompat.renderViewEntity(minecraft) : null;
+        if (minecraft == null || MinecraftReflectionCompat.world(minecraft) == null || viewEntity == null) {
             ausm$clearProjectRedHaloQueue();
             return;
         }
 
         float partialTicks = event.getPartialTicks();
-        double viewX = com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity)
-                + (com.l.ausm.impl.util.MinecraftReflectionCompat.posX(viewEntity) - com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosX(viewEntity)) * partialTicks;
-        double viewY = com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity)
-                + (com.l.ausm.impl.util.MinecraftReflectionCompat.posY(viewEntity) - com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosY(viewEntity)) * partialTicks;
-        double viewZ = com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity)
-                + (com.l.ausm.impl.util.MinecraftReflectionCompat.posZ(viewEntity) - com.l.ausm.impl.util.MinecraftReflectionCompat.lastTickPosZ(viewEntity)) * partialTicks;
-        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179094_E", "pushMatrix"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+        double viewX = MinecraftReflectionCompat.lastTickPosX(viewEntity)
+                + (MinecraftReflectionCompat.posX(viewEntity) - MinecraftReflectionCompat.lastTickPosX(viewEntity)) * partialTicks;
+        double viewY = MinecraftReflectionCompat.lastTickPosY(viewEntity)
+                + (MinecraftReflectionCompat.posY(viewEntity) - MinecraftReflectionCompat.lastTickPosY(viewEntity)) * partialTicks;
+        double viewZ = MinecraftReflectionCompat.lastTickPosZ(viewEntity)
+                + (MinecraftReflectionCompat.posZ(viewEntity) - MinecraftReflectionCompat.lastTickPosZ(viewEntity)) * partialTicks;
+        MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179094_E", "pushMatrix"}, MinecraftReflectionCompat.NO_PARAMETERS);
         try {
             ProjectRedHaloRenderer.beginImmediateHalo();
             try {
@@ -62,7 +62,7 @@ public class ProjectRedRenderHaloMixin {
             }
         } finally {
             ausm$clearProjectRedHaloQueue();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179121_F", "popMatrix"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+            MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179121_F", "popMatrix"}, MinecraftReflectionCompat.NO_PARAMETERS);
         }
     }
 
@@ -123,9 +123,9 @@ public class ProjectRedRenderHaloMixin {
             int color = ((Number) ausm$invoke(lightCache, "color")).intValue();
             Object cuboid = ausm$invoke(lightCache, "cube");
             Object transformation = ausm$translation(
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosX(pos) - viewX,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosY(pos) - viewY,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.blockPosZ(pos) - viewZ
+                    MinecraftReflectionCompat.blockPosX(pos) - viewX,
+                    MinecraftReflectionCompat.blockPosY(pos) - viewY,
+                    MinecraftReflectionCompat.blockPosZ(pos) - viewZ
             );
             ProjectRedHaloRenderer.renderImmediateHalo(cuboid, color, transformation);
         } catch (ReflectiveOperationException | RuntimeException ignored) {

@@ -1,16 +1,13 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import java.io.InputStream;
 
 public final class NoneShaderPack implements ShaderPack {
 
     public static final NoneShaderPack INSTANCE = new NoneShaderPack();
 
-    private NoneShaderPack() {}
+    private NoneShaderPack() {
+    }
 
     @Override
     public String getName() {

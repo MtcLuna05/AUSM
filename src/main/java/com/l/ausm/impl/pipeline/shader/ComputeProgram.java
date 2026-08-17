@@ -7,11 +7,12 @@ import com.l.ausm.impl.pipeline.pack.ShaderPack;
 import com.l.ausm.impl.pipeline.pack.ShaderPackDirectives;
 import com.l.ausm.impl.pipeline.pack.ShaderPreprocessor;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.io.IOException;
+import java.util.Arrays;
 import net.minecraft.client.renderer.OpenGlHelper;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL43;
-
-import java.io.IOException;
 
 public final class ComputeProgram {
     private final ComputeProgramSource source;
@@ -49,15 +50,15 @@ public final class ComputeProgram {
                 return null;
             }
 
-            int shader = com.l.ausm.impl.util.MinecraftReflectionCompat.glCreateShader(GL43.GL_COMPUTE_SHADER);
+            int shader = MinecraftReflectionCompat.glCreateShader(GL43.GL_COMPUTE_SHADER);
             GL20.glShaderSource(shader, processed);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glCompileShader(shader);
-            if (com.l.ausm.impl.util.MinecraftReflectionCompat.glGetShaderi(shader, com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL20.GL_COMPILE_STATUS, "field_153208_p", "GL_COMPILE_STATUS")) == 0) {
-                String log = com.l.ausm.impl.util.MinecraftReflectionCompat.glGetShaderInfoLog(shader, 32768);
+            MinecraftReflectionCompat.glCompileShader(shader);
+            if (MinecraftReflectionCompat.glGetShaderi(shader, MinecraftReflectionCompat.fieldInt(OpenGlHelper.class, GL20.GL_COMPILE_STATUS, "field_153208_p", "GL_COMPILE_STATUS")) == 0) {
+                String log = MinecraftReflectionCompat.glGetShaderInfoLog(shader, 32768);
                 MainMod.LOGGER.error("[ShaderCompiler] Failed to compile compute shader '{}': {}", source.path(), log);
                 ShaderSourceDumper.dumpFailedSource(source.path(), processed);
                 ShaderCompileNotifications.reportFailure(source.path());
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(shader);
+                MinecraftReflectionCompat.glDeleteShader(shader);
                 return null;
             }
 
@@ -65,13 +66,13 @@ public final class ComputeProgram {
             program.attachShader(shader);
             if (!program.link()) {
                 program.delete();
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(shader);
+                MinecraftReflectionCompat.glDeleteShader(shader);
                 MainMod.LOGGER.error("[ShaderCompiler] Failed to link compute program '{}'", source.name());
                 ShaderCompileNotifications.reportFailure(source.path());
                 return null;
             }
 
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(shader);
+            MinecraftReflectionCompat.glDeleteShader(shader);
             int[] workGroups = parseWorkGroups(processed);
             float[] workGroupRelative = parseWorkGroupRelative(processed);
             if (workGroups == null && source.hasFixedWorkGroups()) {
@@ -83,8 +84,8 @@ public final class ComputeProgram {
             MainMod.LOGGER.debug(
                     "[ShaderCompiler] Successfully compiled compute program: {} workGroups={} workGroupsRender={}",
                     source.name(),
-                    workGroups == null ? "auto" : java.util.Arrays.toString(workGroups),
-                    workGroupRelative == null ? "none" : java.util.Arrays.toString(workGroupRelative)
+                    workGroups == null ? "auto" : Arrays.toString(workGroups),
+                    workGroupRelative == null ? "none" : Arrays.toString(workGroupRelative)
             );
             return new ComputeProgram(source, program, workGroups, workGroupRelative);
         } catch (IOException e) {

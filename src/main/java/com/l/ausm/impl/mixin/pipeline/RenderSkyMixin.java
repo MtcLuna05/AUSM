@@ -1,13 +1,10 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
-import com.l.ausm.impl.pipeline.PipelineContext;
-import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -22,10 +19,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.lwjgl.opengl.GL11;
-
-import java.util.ArrayDeque;
-import java.util.Deque;
 
 /**
  * Mixin to bind the sky shader programs.
@@ -34,6 +27,7 @@ import java.util.Deque;
 public class RenderSkyMixin {
     private static final ThreadLocal<Deque<Object>> ausm$blockedSkyRenderers = ThreadLocal.withInitial(ArrayDeque::new);
     private static final ResourceLocation ausm$moonPhasesTexture = new ResourceLocation("textures/environment/moon_phases.png");
+
     @Inject(method = "markBlocksForUpdate", at = @At("HEAD"))
     private void ausm$ensureViewFrustumBeforeBlockUpdate(int minX, int minY, int minZ,
                                                          int maxX, int maxY, int maxZ,
@@ -119,8 +113,8 @@ public class RenderSkyMixin {
             }
             MinecraftReflectionCompat.invoke(
                     skyRenderer,
-                    new String[] {"render"},
-                    new Class<?>[] {float.class, WorldClient.class, Minecraft.class},
+                    new String[]{"render"},
+                    new Class<?>[]{float.class, WorldClient.class, Minecraft.class},
                     partialTicks,
                     world,
                     minecraft);
@@ -133,8 +127,8 @@ public class RenderSkyMixin {
             if (!context.shouldSuppressVoidWorldCustomSkyRenderer(skyRenderer, world)) {
                 MinecraftReflectionCompat.invoke(
                         skyRenderer,
-                        new String[] {"render"},
-                        new Class<?>[] {float.class, WorldClient.class, Minecraft.class},
+                        new String[]{"render"},
+                        new Class<?>[]{float.class, WorldClient.class, Minecraft.class},
                         partialTicks,
                         world,
                         minecraft);
@@ -195,7 +189,7 @@ public class RenderSkyMixin {
                 ausm$forceResetTessellator(tessellator);
                 return;
             }
-            com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+            MinecraftReflectionCompat.tessellatorDraw(tessellator);
         } finally {
             context.endPass();
         }
@@ -245,7 +239,7 @@ public class RenderSkyMixin {
             ausm$forceResetTessellator(tessellator);
             return;
         }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+        MinecraftReflectionCompat.tessellatorDraw(tessellator);
     }
 
     @Redirect(
@@ -266,18 +260,18 @@ public class RenderSkyMixin {
         if (minecraft != null && MinecraftReflectionCompat.textureManager(minecraft) != null) {
             MinecraftReflectionCompat.bindTexture(MinecraftReflectionCompat.textureManager(minecraft), ausm$moonPhasesTexture);
         }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+        MinecraftReflectionCompat.tessellatorDraw(tessellator);
     }
 
     private static void ausm$forceResetTessellator() {
-        ausm$forceResetTessellator(com.l.ausm.impl.util.MinecraftReflectionCompat.tessellator());
+        ausm$forceResetTessellator(MinecraftReflectionCompat.tessellator());
     }
 
     private static void ausm$forceResetTessellator(Tessellator tessellator) {
         if (tessellator == null) {
             return;
         }
-        BufferBuilder buffer = com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorBuffer(tessellator);
+        BufferBuilder buffer = MinecraftReflectionCompat.tessellatorBuffer(tessellator);
         MinecraftReflectionCompat.forceResetBufferDrawingState(buffer);
     }
 
@@ -312,7 +306,7 @@ public class RenderSkyMixin {
         if (context.shouldSuppressVanillaUpperSkyGeometry()) {
             return;
         }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
+        MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179148_o", "callList"}, new Class<?>[]{int.class}, list);
     }
 
     @Inject(
@@ -356,7 +350,7 @@ public class RenderSkyMixin {
         if (PipelineContext.getInstance().shouldSuppressVanillaStarsGeometry()) {
             return;
         }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
+        MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179148_o", "callList"}, new Class<?>[]{int.class}, list);
     }
 
     @Redirect(
@@ -397,7 +391,7 @@ public class RenderSkyMixin {
         }
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
+            MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179148_o", "callList"}, new Class<?>[]{int.class}, list);
         } finally {
             context.endPass();
         }
@@ -419,7 +413,7 @@ public class RenderSkyMixin {
         }
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class, new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, (list));;
+            MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179148_o", "callList"}, new Class<?>[]{int.class}, list);
         } finally {
             context.endPass();
         }
@@ -442,7 +436,7 @@ public class RenderSkyMixin {
         }
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.tessellatorDraw(tessellator);
+            MinecraftReflectionCompat.tessellatorDraw(tessellator);
         } finally {
             context.endPass();
         }

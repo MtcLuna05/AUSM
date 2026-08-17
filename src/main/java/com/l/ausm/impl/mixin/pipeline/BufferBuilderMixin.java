@@ -1,24 +1,25 @@
 package com.l.ausm.impl.mixin.pipeline;
 
+import com.l.ausm.impl.pipeline.vertex.BufferVertexDataAdapter;
 import com.l.ausm.impl.MainMod;
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
+import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
-import com.l.ausm.impl.pipeline.vertex.IrisVertexMath;
+import com.l.ausm.impl.pipeline.vertex.PipelineVertexAttributeWriter;
 import com.l.ausm.impl.pipeline.vertex.SeparateAoColorWriter;
-import com.l.ausm.impl.pipeline.PipelineContext;
-import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
-import com.l.ausm.impl.pipeline.compat.TerrainRenderProbeState;
-import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.IntBuffer;
+import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.client.renderer.vertex.VertexFormatElement;
 import net.minecraft.util.BlockRenderLayer;
-import net.minecraftforge.client.MinecraftForgeClient;
+import org.lwjgl.opengl.GL11;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -26,12 +27,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.lwjgl.opengl.GL11;
-
-import java.nio.ByteBuffer;
-import java.nio.IntBuffer;
-import java.nio.ByteOrder;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @Mixin(BufferBuilder.class)
 public class BufferBuilderMixin implements IBufferBuilderExtension {
@@ -43,12 +38,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Unique
     private boolean ausm$shaderlessBloomMetadata;
-
-    @Unique
-    private static final ThreadLocal<int[]> AUSM$VERTEX_SCRATCH = ThreadLocal.withInitial(() -> new int[16]);
-
-    @Unique
-    private static final ThreadLocal<float[]> AUSM$NORMAL_SCRATCH = ThreadLocal.withInitial(() -> new float[3]);
 
     @Unique
     private static final boolean AUSM$LITTLE_ENDIAN = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
@@ -111,7 +100,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Override
     public void ausm$truncateVertexCount(int vertexCount) {
-        field_178997_d = Math.max(0, Math.min(vertexCount, field_178997_d));
+        field_178997_d = Math.clamp(field_178997_d, 0, vertexCount);
     }
 
     @Override
@@ -214,7 +203,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         source.order(field_179001_a.order());
         int sourceBytes = source.remaining();
         int targetStride = ExtendedVertexFormats.size(field_179011_q);
-        int sourceStride = ausm$pipelineBlockBulkStride(source, sourceBytes, targetStride);
+        int sourceStride = BufferVertexDataAdapter.pipelineBlockBulkStride(source, sourceBytes, targetStride);
         if (sourceStride < 0) {
             return;
         }
@@ -223,7 +212,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         int vertexTotal = sourceBytes / sourceStride;
         int targetIntStride = ExtendedVertexFormats.integerSize(field_179011_q);
         int sourceIntStride = sourceStride / Integer.BYTES;
-        int[] scratch = ausm$vertexScratch(targetIntStride);
+        int[] scratch = BufferVertexDataAdapter.vertexScratch(targetIntStride);
         boolean compatibilityEmissiveBoost = ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost();
         long packedEntityData = BlockRenderContext.packedEntityData();
         int packedEntity = (int) packedEntityData;
@@ -241,8 +230,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             for (int sourceInt = 0; sourceInt < sourceIntStride; sourceInt++) {
                 scratch[sourceInt] = source.getInt();
             }
-            ausm$clearVertexScratchTail(scratch, sourceIntStride, targetIntStride);
-            ausm$sanitizeAgricraftCropVertex(scratch, 0, sourceIntStride, agricraftCrop, agricraftPackedLight);
+            BufferVertexDataAdapter.clearVertexScratchTail(scratch, sourceIntStride, targetIntStride);
+            BufferVertexDataAdapter.sanitizeAgricraftCropVertex(
+                    scratch, 0, sourceIntStride, agricraftCrop, agricraftPackedLight);
             ausm$applyBloomMaskVertexData(scratch, 0, bloomMaskFallback);
             ausm$applyCustomLiquidTintVertexData(scratch, 0, bloomMaskFallback, customLiquidTint);
             ausm$applyEmissiveLightmap(scratch, 0, vanillaLightmapEmission);
@@ -256,7 +246,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         ausm$logVertexExpandProbe("bulk-out", sourceBytes, sourceStride, targetStride, vertexBase, vertexTotal, field_178997_d, compatibilityEmissiveBoost);
 
         for (int vertex = 0; vertex + 3 < vertexTotal; vertex += 4) {
-            ausm$writeDerivedBlockAttributesForPolygon(vertexBase + vertex, 4);
+            PipelineVertexAttributeWriter.writeBlockPolygon(field_179001_a, field_179011_q, vertexBase + vertex, 4);
         }
 
         ausm$markCurrentContextShaderlessBloomMetadata();
@@ -284,14 +274,14 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
 
         int targetStride = ExtendedVertexFormats.integerSize(field_179011_q);
-        int sourceStride = ausm$pipelineBlockVertexStride(vertexData, targetStride);
+        int sourceStride = BufferVertexDataAdapter.pipelineBlockVertexStride(vertexData, targetStride);
         if (sourceStride < 0) {
             return;
         }
 
         int vertexBase = field_178997_d;
         int vertexTotal = vertexData.length / sourceStride;
-        int[] scratch = ausm$vertexScratch(targetStride);
+        int[] scratch = BufferVertexDataAdapter.vertexScratch(targetStride);
         boolean compatibilityEmissiveBoost = ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost();
         long packedEntityData = BlockRenderContext.packedEntityData();
         int packedEntity = (int) packedEntityData;
@@ -310,8 +300,9 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             int source = vertex * sourceStride;
             int copyInts = Math.min(sourceStride, targetStride);
             System.arraycopy(vertexData, source, scratch, 0, copyInts);
-            ausm$clearVertexScratchTail(scratch, copyInts, targetStride);
-            ausm$sanitizeAgricraftCropVertex(scratch, 0, sourceStride, agricraftCrop, agricraftPackedLight);
+            BufferVertexDataAdapter.clearVertexScratchTail(scratch, copyInts, targetStride);
+            BufferVertexDataAdapter.sanitizeAgricraftCropVertex(
+                    scratch, 0, sourceStride, agricraftCrop, agricraftPackedLight);
             ausm$applyBloomMaskVertexData(scratch, 0, bloomMaskFallback);
             ausm$applyCustomLiquidTintVertexData(scratch, 0, bloomMaskFallback, customLiquidTint);
             ausm$applyEmissiveLightmap(scratch, 0, vanillaLightmapEmission);
@@ -325,7 +316,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         ausm$logVertexExpandProbe("quad-out", vertexData.length, sourceStride, targetStride, vertexBase, vertexTotal, field_178997_d, compatibilityEmissiveBoost);
 
         for (int vertex = 0; vertex + 3 < vertexTotal; vertex += 4) {
-            ausm$writeDerivedBlockAttributesForPolygon(vertexBase + vertex, 4);
+            PipelineVertexAttributeWriter.writeBlockPolygon(field_179001_a, field_179011_q, vertexBase + vertex, 4);
         }
 
         ausm$markCurrentContextShaderlessBloomMetadata();
@@ -357,103 +348,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         return thread != null && thread.contains("Chunk");
     }
 
-    @Unique
-    private static int[] ausm$vertexScratch(int size) {
-        int[] scratch = AUSM$VERTEX_SCRATCH.get();
-        if (scratch.length < size) {
-            scratch = new int[size];
-            AUSM$VERTEX_SCRATCH.set(scratch);
-        }
-        return scratch;
-    }
-
-    @Unique
-    private static void ausm$clearVertexScratchTail(int[] scratch, int from, int to) {
-        if (scratch == null || from >= to) {
-            return;
-        }
-        for (int index = Math.max(0, from); index < to; index++) {
-            scratch[index] = 0;
-        }
-    }
-
-    private static int ausm$pipelineBlockVertexStride(int[] vertexData, int targetStride) {
-        int sourceInts = vertexData != null ? vertexData.length : 0;
-        if (sourceInts <= 0) {
-            return -1;
-        }
-
-        // BakedQuad is four vertices. A vanilla 1.12 quad is 28 ints, which is
-        // also divisible by the 14-int pipeline stride, so classify by quad
-        // vertex count before using divisibility. Some Forge/model pipelines
-        // include a normal slot and produce 8-int vertices.
-        if (sourceInts % 4 == 0 && sourceInts <= 4 * targetStride) {
-            int quadStride = sourceInts / 4;
-            if (quadStride == 7 || quadStride == 8 || quadStride == 14 || quadStride == targetStride) {
-                return quadStride;
-            }
-        }
-        if (sourceInts % 7 == 0 && ausm$looksLikeVanillaIntStride(vertexData, 7)) {
-            return 7;
-        }
-        if (sourceInts % 8 == 0 && ausm$looksLikeVanillaIntStride(vertexData, 8)) {
-            return 8;
-        }
-        if (sourceInts % 7 == 0 && sourceInts % targetStride != 0) {
-            return 7;
-        }
-        if (sourceInts % 8 == 0 && sourceInts % targetStride != 0) {
-            return 8;
-        }
-        if (sourceInts % 14 == 0) {
-            return 14;
-        }
-        return sourceInts % targetStride == 0 ? targetStride : -1;
-    }
-
-    private static void ausm$sanitizeAgricraftCropVertex(int[] expandedData, int target, int sourceStride,
-                                                         boolean agricraftCrop, int packedLightmap) {
-        if (!agricraftCrop
-                || expandedData == null
-                || (sourceStride != 7 && sourceStride != 8 && sourceStride != 14)
-                || target < 0
-                || target + 6 >= expandedData.length) {
-            return;
-        }
-        // AgriCraft/InfinityLib emits dynamic crop quads through an ITEM-like
-        // tessellator. If those quads are later treated as BLOCK vertices, UV0
-        // or packed normal data lands in UV1/lightmap and appears as blue bands.
-        expandedData[target + 6] = packedLightmap;
-    }
-
-    private static int ausm$pipelineBlockBulkStride(ByteBuffer source, int sourceBytes, int targetStride) {
-        int vanillaStride = 7 * Integer.BYTES;
-        int forgeNormalStride = 8 * Integer.BYTES;
-        int optifineStride = 14 * Integer.BYTES;
-        if (sourceBytes == 4 * vanillaStride) {
-            return vanillaStride;
-        }
-        if (sourceBytes == 4 * forgeNormalStride) {
-            return forgeNormalStride;
-        }
-        if (sourceBytes % vanillaStride == 0 && ausm$looksLikeVanillaByteStride(source, sourceBytes, vanillaStride)) {
-            return vanillaStride;
-        }
-        if (sourceBytes % forgeNormalStride == 0 && ausm$looksLikeVanillaByteStride(source, sourceBytes, forgeNormalStride)) {
-            return forgeNormalStride;
-        }
-        if (sourceBytes % optifineStride == 0) {
-            return optifineStride;
-        }
-        if (sourceBytes % vanillaStride == 0) {
-            return vanillaStride;
-        }
-        if (sourceBytes % forgeNormalStride == 0 && sourceBytes % targetStride != 0) {
-            return forgeNormalStride;
-        }
-        return sourceBytes % targetStride == 0 ? targetStride : -1;
-    }
-
     private boolean ausm$rewriteVanillaEmissiveVertexData(int[] vertexData, CallbackInfo ci) {
         if (!ausm$canRewriteVanillaEmissiveData() || vertexData == null) {
             return false;
@@ -469,7 +363,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
 
         int vertexTotal = vertexData.length / targetStride;
-        int[] scratch = ausm$vertexScratch(targetStride);
+        int[] scratch = BufferVertexDataAdapter.vertexScratch(targetStride);
         boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
         int customLiquidTint = BlockRenderContext.customLiquidTint();
         int blockAlpha = BlockRenderContext.blockAlpha();
@@ -509,7 +403,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
 
         int vertexTotal = sourceBytes / (targetStride * Integer.BYTES);
-        int[] scratch = ausm$vertexScratch(targetStride);
+        int[] scratch = BufferVertexDataAdapter.vertexScratch(targetStride);
         boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
         int customLiquidTint = BlockRenderContext.customLiquidTint();
         int blockAlpha = BlockRenderContext.blockAlpha();
@@ -559,7 +453,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return;
         }
         ausm$markShaderlessBloomMetadata();
-        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
     }
 
     @Unique
@@ -601,72 +495,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                                 + ", format=" + field_179011_q);
             }
         }
-    }
-
-    private static boolean ausm$looksLikeVanillaIntStride(int[] data, int strideInts) {
-        if (data == null || data.length < strideInts * 2 || data.length % strideInts != 0) {
-            return false;
-        }
-        int vertices = Math.min(data.length / strideInts, 8);
-        for (int vertex = 0; vertex < vertices; vertex++) {
-            if (!ausm$looksLikeVanillaVertex(data, vertex * strideInts, strideInts)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean ausm$looksLikeVanillaByteStride(ByteBuffer data, int sourceBytes, int strideBytes) {
-        if (data == null || sourceBytes < strideBytes * 2 || sourceBytes % strideBytes != 0) {
-            return false;
-        }
-        int vertices = Math.min(sourceBytes / strideBytes, 8);
-        for (int vertex = 0; vertex < vertices; vertex++) {
-            if (!ausm$looksLikeVanillaVertex(data, vertex * strideBytes, strideBytes / Integer.BYTES)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean ausm$looksLikeVanillaVertex(int[] data, int base, int strideInts) {
-        if (base < 0 || base + 6 >= data.length || strideInts < 7) {
-            return false;
-        }
-        return ausm$looksLikePosition(data[base], data[base + 1], data[base + 2])
-                && ausm$looksLikeColor(data[base + 3])
-                && ausm$looksLikeUv(data[base + 4], data[base + 5]);
-    }
-
-    private static boolean ausm$looksLikeVanillaVertex(ByteBuffer data, int base, int strideInts) {
-        if (base < 0 || base + 7 * Integer.BYTES > data.limit() || strideInts < 7) {
-            return false;
-        }
-        return ausm$looksLikePosition(data.getInt(base), data.getInt(base + 4), data.getInt(base + 8))
-                && ausm$looksLikeColor(data.getInt(base + 12))
-                && ausm$looksLikeUv(data.getInt(base + 16), data.getInt(base + 20));
-    }
-
-    private static boolean ausm$looksLikePosition(int xBits, int yBits, int zBits) {
-        float x = Float.intBitsToFloat(xBits);
-        float y = Float.intBitsToFloat(yBits);
-        float z = Float.intBitsToFloat(zBits);
-        return Float.isFinite(x) && Float.isFinite(y) && Float.isFinite(z)
-                && Math.abs(x) < 4096.0f
-                && Math.abs(y) < 4096.0f
-                && Math.abs(z) < 4096.0f;
-    }
-
-    private static boolean ausm$looksLikeUv(int uBits, int vBits) {
-        float u = Float.intBitsToFloat(uBits);
-        float v = Float.intBitsToFloat(vBits);
-        return Float.isFinite(u) && Float.isFinite(v)
-                && Math.abs(u) < 64.0f
-                && Math.abs(v) < 64.0f;
-    }
-
-    private static boolean ausm$looksLikeColor(int color) {
-        return ((color >>> 24) & 0xFF) > 0;
     }
 
     @Inject(method = "func_181675_d", at = @At("HEAD"))
@@ -752,10 +580,10 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
 
         if (field_179006_k == GL11.GL_QUADS && field_178997_d >= 4 && field_178997_d % 4 == 0) {
-            ausm$writeDerivedBlockAttributesForPolygon(field_178997_d - 4, 4);
+            PipelineVertexAttributeWriter.writeBlockPolygon(field_179001_a, field_179011_q, field_178997_d - 4, 4);
             ausm$resetPipelineVertexCursor();
         } else if (field_179006_k == GL11.GL_TRIANGLES && field_178997_d >= 3 && field_178997_d % 3 == 0) {
-            ausm$writeDerivedBlockAttributesForPolygon(field_178997_d - 3, 3);
+            PipelineVertexAttributeWriter.writeBlockPolygon(field_179001_a, field_179011_q, field_178997_d - 3, 3);
             ausm$resetPipelineVertexCursor();
         }
     }
@@ -770,10 +598,10 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
 
         if (field_179006_k == GL11.GL_QUADS && field_178997_d >= 4 && field_178997_d % 4 == 0) {
-            ausm$writeDerivedEntityAttributesForPolygon(field_178997_d - 4, 4);
+            PipelineVertexAttributeWriter.writeEntityPolygon(field_179001_a, field_179011_q, field_178997_d - 4, 4);
             ausm$resetPipelineVertexCursor();
         } else if (field_179006_k == GL11.GL_TRIANGLES && field_178997_d >= 3 && field_178997_d % 3 == 0) {
-            ausm$writeDerivedEntityAttributesForPolygon(field_178997_d - 3, 3);
+            PipelineVertexAttributeWriter.writeEntityPolygon(field_179001_a, field_179011_q, field_178997_d - 3, 3);
             ausm$resetPipelineVertexCursor();
         }
     }
@@ -838,7 +666,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             if (sourceStride == targetStride) {
                 System.arraycopy(vertexData, source, expandedData, target, targetStride);
             } else {
-                copyVanillaEntityVertex(vertexData, source, expandedData, target);
+                BufferVertexDataAdapter.copyVanillaEntityVertex(vertexData, source, expandedData, target);
             }
             expandedData[target + ExtendedVertexFormats.PIPELINE_ENTITY_MC_ENTITY_OFFSET / Integer.BYTES] =
                     PipelineContext.getInstance().currentEntityId() & 0xFFFF;
@@ -851,94 +679,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         field_178997_d += vertexTotal;
 
         for (int vertex = 0; vertex + 3 < vertexTotal; vertex += 4) {
-            ausm$writeDerivedEntityAttributesForPolygon(vertexBase + vertex, 4);
+            PipelineVertexAttributeWriter.writeEntityPolygon(field_179001_a, field_179011_q, vertexBase + vertex, 4);
         }
 
         ausm$resetPipelineVertexCursor();
         ci.cancel();
-    }
-
-    private static void copyVanillaEntityVertex(int[] sourceData, int source, int[] targetData, int target) {
-        targetData[target] = sourceData[source];
-        targetData[target + 1] = sourceData[source + 1];
-        targetData[target + 2] = sourceData[source + 2];
-        targetData[target + 3] = sourceData[source + 3];
-        targetData[target + 4] = sourceData[source + 4];
-        targetData[target + 5] = sourceData[source + 5];
-        targetData[target + 6] = sourceData[source + 6];
-    }
-
-    private void ausm$writeDerivedBlockAttributesForPolygon(int firstVertex, int vertexAmount) {
-        int stride = ExtendedVertexFormats.size(field_179011_q);
-        int base = firstVertex * stride;
-        if (vertexAmount < 3 || base < 0 || base + (vertexAmount - 1) * stride + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET + 4 > field_179001_a.capacity()) {
-            return;
-        }
-
-        float v0x = field_179001_a.getFloat(base);
-        float v0y = field_179001_a.getFloat(base + 4);
-        float v0z = field_179001_a.getFloat(base + 8);
-        float v1x = field_179001_a.getFloat(base + stride);
-        float v1y = field_179001_a.getFloat(base + stride + 4);
-        float v1z = field_179001_a.getFloat(base + stride + 8);
-        float v2x = field_179001_a.getFloat(base + 2 * stride);
-        float v2y = field_179001_a.getFloat(base + 2 * stride + 4);
-        float v2z = field_179001_a.getFloat(base + 2 * stride + 8);
-        int lastVertexOffset = vertexAmount == 4 ? 3 * stride : 2 * stride;
-        float v3x = field_179001_a.getFloat(base + lastVertexOffset);
-        float v3y = field_179001_a.getFloat(base + lastVertexOffset + 4);
-        float v3z = field_179001_a.getFloat(base + lastVertexOffset + 8);
-
-        float v0u = field_179001_a.getFloat(base + 16);
-        float v0v = field_179001_a.getFloat(base + 20);
-        float v1u = field_179001_a.getFloat(base + stride + 16);
-        float v1v = field_179001_a.getFloat(base + stride + 20);
-        float v2u = field_179001_a.getFloat(base + 2 * stride + 16);
-        float v2v = field_179001_a.getFloat(base + 2 * stride + 20);
-        float v3u = field_179001_a.getFloat(base + lastVertexOffset + 16);
-        float v3v = field_179001_a.getFloat(base + lastVertexOffset + 20);
-
-        float[] normal = AUSM$NORMAL_SCRATCH.get();
-        IrisVertexMath.computeFaceNormal(normal,
-                v0x, v0y, v0z,
-                v1x, v1y, v1z,
-                v2x, v2y, v2z,
-                v3x, v3y, v3z);
-        int packedNormal = IrisVertexMath.packNormal(normal[0], normal[1], normal[2]);
-        int packedTangent = IrisVertexMath.computeTangent(normal[0], normal[1], normal[2],
-                v0x, v0y, v0z, v0u, v0v,
-                v1x, v1y, v1z, v1u, v1v,
-                v2x, v2y, v2z, v2u, v2v);
-        float midU = vertexAmount == 4 ? (v0u + v1u + v2u + v3u) * 0.25f : (v0u + v1u + v2u) / 3.0f;
-        float midV = vertexAmount == 4 ? (v0v + v1v + v2v + v3v) * 0.25f : (v0v + v1v + v2v) / 3.0f;
-        int packedLocalPosition = BlockRenderContext.packedLocalPosition();
-        int midBlockEmission = BlockRenderContext.midBlockEmission();
-
-        for (int vertex = 0; vertex < vertexAmount; vertex++) {
-            int vertexBase = base + vertex * stride;
-            int tangent = packedTangent;
-            if (vertexAmount == 3) {
-                int vertexNormal = field_179001_a.getInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET);
-                tangent = IrisVertexMath.computeSmoothTangent(IrisVertexMath.unpackSnormByte(vertexNormal),
-                        IrisVertexMath.unpackSnormByte(vertexNormal >> 8),
-                        IrisVertexMath.unpackSnormByte(vertexNormal >> 16),
-                        v0x, v0y, v0z, v0u, v0v,
-                        v1x, v1y, v1z, v1u, v1v,
-                        v2x, v2y, v2z, v2u, v2v);
-            } else {
-                field_179001_a.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET, packedNormal);
-            }
-            field_179001_a.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET, midU);
-            field_179001_a.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET + 4, midV);
-            field_179001_a.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_TANGENT_OFFSET, tangent);
-            field_179001_a.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET, BlockRenderContext.midBlock(
-                    field_179001_a.getFloat(vertexBase),
-                    field_179001_a.getFloat(vertexBase + 4),
-                    field_179001_a.getFloat(vertexBase + 8),
-                    packedLocalPosition,
-                    midBlockEmission
-            ));
-        }
     }
 
     private static void ausm$applyEmissiveLightmap(int[] vertexData, int vertexBase, boolean compatibilityBoost) {
@@ -948,7 +693,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         int blockEmission = BlockRenderContext.vanillaLightmapEmission();
         ausm$applyEmissiveLightmap(vertexData, vertexBase, blockEmission);
         if (blockEmission > 0) {
-            PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
+            PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
         }
     }
 
@@ -967,69 +712,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         return (sky << 16) | block;
     }
 
-    private void ausm$writeDerivedEntityAttributesForPolygon(int firstVertex, int vertexAmount) {
-        int stride = ExtendedVertexFormats.size(field_179011_q);
-        int base = firstVertex * stride;
-        if (vertexAmount < 3 || base < 0 || base + (vertexAmount - 1) * stride + ExtendedVertexFormats.PIPELINE_ENTITY_TANGENT_OFFSET + 4 > field_179001_a.capacity()) {
-            return;
-        }
-
-        float v0x = field_179001_a.getFloat(base);
-        float v0y = field_179001_a.getFloat(base + 4);
-        float v0z = field_179001_a.getFloat(base + 8);
-        float v1x = field_179001_a.getFloat(base + stride);
-        float v1y = field_179001_a.getFloat(base + stride + 4);
-        float v1z = field_179001_a.getFloat(base + stride + 8);
-        float v2x = field_179001_a.getFloat(base + 2 * stride);
-        float v2y = field_179001_a.getFloat(base + 2 * stride + 4);
-        float v2z = field_179001_a.getFloat(base + 2 * stride + 8);
-        int lastVertexOffset = vertexAmount == 4 ? 3 * stride : 2 * stride;
-        float v3x = field_179001_a.getFloat(base + lastVertexOffset);
-        float v3y = field_179001_a.getFloat(base + lastVertexOffset + 4);
-        float v3z = field_179001_a.getFloat(base + lastVertexOffset + 8);
-
-        float v0u = field_179001_a.getFloat(base + 16);
-        float v0v = field_179001_a.getFloat(base + 20);
-        float v1u = field_179001_a.getFloat(base + stride + 16);
-        float v1v = field_179001_a.getFloat(base + stride + 20);
-        float v2u = field_179001_a.getFloat(base + 2 * stride + 16);
-        float v2v = field_179001_a.getFloat(base + 2 * stride + 20);
-        float v3u = field_179001_a.getFloat(base + lastVertexOffset + 16);
-        float v3v = field_179001_a.getFloat(base + lastVertexOffset + 20);
-
-        float[] normal = AUSM$NORMAL_SCRATCH.get();
-        IrisVertexMath.computeFaceNormal(normal,
-                v0x, v0y, v0z,
-                v1x, v1y, v1z,
-                v2x, v2y, v2z,
-                v3x, v3y, v3z);
-        int packedNormal = IrisVertexMath.packNormal(normal[0], normal[1], normal[2]);
-        int packedTangent = IrisVertexMath.computeTangent(normal[0], normal[1], normal[2],
-                v0x, v0y, v0z, v0u, v0v,
-                v1x, v1y, v1z, v1u, v1v,
-                v2x, v2y, v2z, v2u, v2v);
-        float midU = vertexAmount == 4 ? (v0u + v1u + v2u + v3u) * 0.25f : (v0u + v1u + v2u) / 3.0f;
-        float midV = vertexAmount == 4 ? (v0v + v1v + v2v + v3v) * 0.25f : (v0v + v1v + v2v) / 3.0f;
-
-        for (int vertex = 0; vertex < vertexAmount; vertex++) {
-            int vertexBase = base + vertex * stride;
-            int tangent = packedTangent;
-            if (vertexAmount == 3) {
-                int vertexNormal = field_179001_a.getInt(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_NORMAL_OFFSET);
-                tangent = IrisVertexMath.computeSmoothTangent(IrisVertexMath.unpackSnormByte(vertexNormal),
-                        IrisVertexMath.unpackSnormByte(vertexNormal >> 8),
-                        IrisVertexMath.unpackSnormByte(vertexNormal >> 16),
-                        v0x, v0y, v0z, v0u, v0v,
-                        v1x, v1y, v1z, v1u, v1v,
-                        v2x, v2y, v2z, v2u, v2v);
-            } else {
-                field_179001_a.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_NORMAL_OFFSET, packedNormal);
-            }
-            field_179001_a.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_MID_TEX_COORD_OFFSET, midU);
-            field_179001_a.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_MID_TEX_COORD_OFFSET + 4, midV);
-            field_179001_a.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_TANGENT_OFFSET, tangent);
-        }
-    }
 
     @Inject(method = "func_178978_a", at = @At("HEAD"))
     private void ausm$captureTranslucentAlpha(float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex, CallbackInfo ci) {
@@ -1040,7 +722,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
         ausm$capturedTranslucentAlpha = -1;
         ausm$capturedTranslucentAlphaOffset = -1;
-        BlockRenderLayer layer = com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer();
+        BlockRenderLayer layer = MinecraftReflectionCompat.currentRenderLayer();
         if ((layer != BlockRenderLayer.TRANSLUCENT && !AusmBloomLayer.isBloomLayer(layer))
                 || vertexIndex <= 0
                 || vertexIndex > field_178997_d
@@ -1100,7 +782,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
         ausm$applyBloomMaskVertexData(vertexData, vertexBase, bloomMaskFallback);
         if (bloomMaskFallback) {
-            PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
+            PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
         }
     }
 
@@ -1120,7 +802,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Unique
     private static void ausm$applyCustomLiquidTintVertexData(int[] vertexData, int vertexBase,
-                                                            boolean bloomMaskFallback, int customLiquidTint) {
+                                                             boolean bloomMaskFallback, int customLiquidTint) {
         if (bloomMaskFallback || customLiquidTint < 0 || vertexData == null || vertexBase < 0
                 || vertexBase + 3 >= vertexData.length) {
             return;
@@ -1181,7 +863,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             }
         }
         ausm$markShaderlessBloomMetadata();
-        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
     }
 
     @Unique
@@ -1201,7 +883,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             }
         }
         ausm$markShaderlessBloomMetadata();
-        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer());
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
     }
 
     @Unique
@@ -1254,7 +936,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                 BlockRenderContext.midBlockEmission(),
                 stride,
                 vertexTotal,
-                com.l.ausm.impl.util.MinecraftReflectionCompat.currentRenderLayer()
+                MinecraftReflectionCompat.currentRenderLayer()
         );
     }
 

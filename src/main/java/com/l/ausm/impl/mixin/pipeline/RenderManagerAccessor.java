@@ -1,12 +1,11 @@
 package com.l.ausm.impl.mixin.pipeline;
 
+import java.util.Map;
 import net.minecraft.client.renderer.entity.Render;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.entity.Entity;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
-
-import java.util.Map;
 
 @Mixin(RenderManager.class)
 public interface RenderManagerAccessor {

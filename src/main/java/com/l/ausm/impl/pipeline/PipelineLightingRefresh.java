@@ -1,6 +1,7 @@
 package com.l.ausm.impl.pipeline;
 
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.function.BiConsumer;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.multiplayer.ChunkProviderClient;
 import net.minecraft.client.multiplayer.WorldClient;
@@ -9,9 +10,9 @@ import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.Chunk;
 
-import java.util.function.BiConsumer;
-
-/** Executes bounded chunk and block lighting refreshes through mapping-safe accessors. */
+/**
+ * Executes bounded chunk and block lighting refreshes through mapping-safe accessors.
+ */
 final class PipelineLightingRefresh {
     private PipelineLightingRefresh() {
     }
@@ -21,7 +22,7 @@ final class PipelineLightingRefresh {
             return 0;
         }
         ChunkProviderClient provider = MinecraftReflectionCompat.call(worldClient, ChunkProviderClient.class, null,
-                new String[] {"func_72863_F", "getChunkProvider"}, MinecraftReflectionCompat.NO_PARAMETERS);
+                new String[]{"func_72863_F", "getChunkProvider"}, MinecraftReflectionCompat.NO_PARAMETERS);
         if (provider == null) {
             return 0;
         }
@@ -29,18 +30,18 @@ final class PipelineLightingRefresh {
         for (int chunkZ = minZ >> 4; chunkZ <= maxZ >> 4; chunkZ++) {
             for (int chunkX = minX >> 4; chunkX <= maxX >> 4; chunkX++) {
                 Chunk chunk = MinecraftReflectionCompat.call(provider, Chunk.class, null,
-                        new String[] {"func_186026_b", "getLoadedChunk"}, new Class<?>[] {int.class, int.class}, chunkX, chunkZ);
+                        new String[]{"func_186026_b", "getLoadedChunk"}, new Class<?>[]{int.class, int.class}, chunkX, chunkZ);
                 if (chunk == null || MinecraftReflectionCompat.callBoolean(chunk,
-                        new String[] {"func_76621_g", "isEmpty"}, MinecraftReflectionCompat.NO_PARAMETERS, false)) {
+                        new String[]{"func_76621_g", "isEmpty"}, MinecraftReflectionCompat.NO_PARAMETERS, false)) {
                     continue;
                 }
                 try {
                     if (MinecraftReflectionCompat.providerHasSkyLight(MinecraftReflectionCompat.worldProvider(world))) {
-                        MinecraftReflectionCompat.invoke(chunk, new String[] {"func_76603_b", "generateSkylightMap"}, MinecraftReflectionCompat.NO_PARAMETERS);
+                        MinecraftReflectionCompat.invoke(chunk, new String[]{"func_76603_b", "generateSkylightMap"}, MinecraftReflectionCompat.NO_PARAMETERS);
                     }
-                    MinecraftReflectionCompat.invoke(chunk, new String[] {"func_76613_n", "resetRelightChecks"}, MinecraftReflectionCompat.NO_PARAMETERS);
-                    MinecraftReflectionCompat.invoke(chunk, new String[] {"func_76594_o", "enqueueRelightChecks"}, MinecraftReflectionCompat.NO_PARAMETERS);
-                    MinecraftReflectionCompat.invoke(chunk, new String[] {"func_150809_p", "checkLight"}, MinecraftReflectionCompat.NO_PARAMETERS);
+                    MinecraftReflectionCompat.invoke(chunk, new String[]{"func_76613_n", "resetRelightChecks"}, MinecraftReflectionCompat.NO_PARAMETERS);
+                    MinecraftReflectionCompat.invoke(chunk, new String[]{"func_76594_o", "enqueueRelightChecks"}, MinecraftReflectionCompat.NO_PARAMETERS);
+                    MinecraftReflectionCompat.invoke(chunk, new String[]{"func_150809_p", "checkLight"}, MinecraftReflectionCompat.NO_PARAMETERS);
                     refreshed++;
                 } catch (RuntimeException | LinkageError ignored) {
                 }
@@ -74,11 +75,11 @@ final class PipelineLightingRefresh {
                         continue;
                     }
                     try {
-                        MinecraftReflectionCompat.callBoolean(world, new String[] {"func_180500_c", "checkLightFor"},
-                                new Class<?>[] {EnumSkyBlock.class, BlockPos.class}, false, EnumSkyBlock.BLOCK, pos);
+                        MinecraftReflectionCompat.callBoolean(world, new String[]{"func_180500_c", "checkLightFor"},
+                                new Class<?>[]{EnumSkyBlock.class, BlockPos.class}, false, EnumSkyBlock.BLOCK, pos);
                         if (MinecraftReflectionCompat.providerHasSkyLight(MinecraftReflectionCompat.worldProvider(world))) {
-                            MinecraftReflectionCompat.callBoolean(world, new String[] {"func_180500_c", "checkLightFor"},
-                                    new Class<?>[] {EnumSkyBlock.class, BlockPos.class}, false, EnumSkyBlock.SKY, pos);
+                            MinecraftReflectionCompat.callBoolean(world, new String[]{"func_180500_c", "checkLightFor"},
+                                    new Class<?>[]{EnumSkyBlock.class, BlockPos.class}, false, EnumSkyBlock.SKY, pos);
                         }
                         checks++;
                     } catch (RuntimeException | LinkageError ignored) {

@@ -1,9 +1,5 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import java.io.IOException;
 import java.io.InputStream;
 

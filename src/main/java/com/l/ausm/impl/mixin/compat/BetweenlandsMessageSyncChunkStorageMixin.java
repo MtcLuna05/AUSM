@@ -1,7 +1,8 @@
 package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
-import net.minecraft.client.Minecraft;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.lang.reflect.Method;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.World;
@@ -11,8 +12,6 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.lang.reflect.Method;
 
 @Mixin(targets = "thebetweenlands.common.network.clientbound.MessageSyncChunkStorage", remap = false)
 public class BetweenlandsMessageSyncChunkStorageMixin {
@@ -29,7 +28,7 @@ public class BetweenlandsMessageSyncChunkStorageMixin {
             return;
         }
 
-        WorldClient world = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft() != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()) : null;
+        WorldClient world = MinecraftReflectionCompat.minecraft() != null ? MinecraftReflectionCompat.world(MinecraftReflectionCompat.minecraft()) : null;
         if (world == null) {
             ci.cancel();
             return;
@@ -37,15 +36,15 @@ public class BetweenlandsMessageSyncChunkStorageMixin {
 
         Chunk chunk;
         try {
-            chunk = com.l.ausm.impl.util.MinecraftReflectionCompat.call((world), net.minecraft.world.chunk.Chunk.class, null, new String[] {"func_72964_e", "getChunk"},
-                new Class<?>[] {int.class, int.class}, (com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((pos), 0, "field_77276_a", "x")), (com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt((pos), 0, "field_77275_b", "z")));
+            chunk = MinecraftReflectionCompat.call(world, Chunk.class, null, new String[]{"func_72964_e", "getChunk"},
+                    new Class<?>[]{int.class, int.class}, MinecraftReflectionCompat.fieldInt(pos, 0, "field_77276_a", "x"), MinecraftReflectionCompat.fieldInt(pos, 0, "field_77275_b", "z"));
         } catch (RuntimeException e) {
             logSkippedPacket("chunk lookup failed", e);
             ci.cancel();
             return;
         }
 
-        if (chunk == null || com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((chunk), new String[] {"func_76621_g", "isEmpty"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
+        if (chunk == null || MinecraftReflectionCompat.callBoolean(chunk, new String[]{"func_76621_g", "isEmpty"}, MinecraftReflectionCompat.NO_PARAMETERS, false)) {
             ci.cancel();
             return;
         }

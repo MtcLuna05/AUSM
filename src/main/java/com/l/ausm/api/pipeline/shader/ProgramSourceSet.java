@@ -1,9 +1,5 @@
 package com.l.ausm.api.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 public record ProgramSourceSet(
         ProgramId programId,
         String vertexPath,

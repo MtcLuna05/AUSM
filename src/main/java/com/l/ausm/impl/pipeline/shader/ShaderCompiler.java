@@ -1,21 +1,21 @@
 package com.l.ausm.impl.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import com.l.ausm.api.pipeline.shader.ProgramSourceSet;
+import com.l.ausm.api.pipeline.shader.RenderPass;
+import com.l.ausm.api.pipeline.shader.ShaderProgramSource;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.client.ShaderCompileNotifications;
 import com.l.ausm.impl.pipeline.pack.ShaderPack;
-import com.l.ausm.impl.pipeline.pack.ShaderProperties;
+import com.l.ausm.impl.pipeline.pack.ShaderPackDirectives;
 import com.l.ausm.impl.pipeline.pack.ShaderPreprocessor;
+import com.l.ausm.impl.pipeline.pack.ShaderProperties;
 import com.l.ausm.impl.pipeline.pack.ShaderTransformPipeline;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.io.IOException;
 import net.minecraft.client.renderer.OpenGlHelper;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.GL40;
-
-import java.io.IOException;
 
 /**
  * Responsible for loading GLSL source, compiling shaders, and linking them into a ShaderProgram.
@@ -24,6 +24,7 @@ public class ShaderCompiler {
     /**
      * Attempts to build a complete ShaderProgram for a given RenderPass.
      * Searches the ShaderPack for supported shader stages and links them into one program.
+     *
      * @return The linked program, or null if no required shaders were found/compiled.
      */
     public static ShaderProgram compilePass(ShaderPack pack, RenderPass pass) {
@@ -44,7 +45,7 @@ public class ShaderCompiler {
             RenderPass pass,
             ShaderProperties properties,
             ShaderProgramSource source,
-            com.l.ausm.impl.pipeline.pack.ShaderPackDirectives directives
+            ShaderPackDirectives directives
     ) {
         ShaderProgramSource sources = source != null ? source : sourceFromResolver(pack, pass, properties);
         return compileSource(pack, properties, sources, pass, pass.getProgramName(), directives);
@@ -64,7 +65,7 @@ public class ShaderCompiler {
             ShaderProperties properties,
             ShaderProgramSource source,
             RenderPass bindingPass,
-            com.l.ausm.impl.pipeline.pack.ShaderPackDirectives directives
+            ShaderPackDirectives directives
     ) {
         return compileSource(pack, properties, source, bindingPass, source.name(), directives);
     }
@@ -75,13 +76,13 @@ public class ShaderCompiler {
             ShaderProgramSource sources,
             RenderPass bindingPass,
             String programName,
-            com.l.ausm.impl.pipeline.pack.ShaderPackDirectives directives
+            ShaderPackDirectives directives
     ) {
         boolean hasFragmentSource = sources.fragmentPath() != null || sources.fragmentSource() != null;
         boolean generatedLegacyVertex = sources.vertexPath() == null && hasFragmentSource;
         int vertexShader = generatedLegacyVertex
-                ? compileInlineShaderTarget(legacyVertexSource(), programName + " legacy vertex", com.l.ausm.impl.util.MinecraftReflectionCompat.glVertexShader(), bindingPass)
-                : compileShaderTarget(pack, sources.vertexPath(), sources.vertexSource(), com.l.ausm.impl.util.MinecraftReflectionCompat.glVertexShader(), properties, bindingPass, programName + " vertex", directives);
+                ? compileInlineShaderTarget(legacyVertexSource(), programName + " legacy vertex", MinecraftReflectionCompat.glVertexShader(), bindingPass)
+                : compileShaderTarget(pack, sources.vertexPath(), sources.vertexSource(), MinecraftReflectionCompat.glVertexShader(), properties, bindingPass, programName + " vertex", directives);
         int tessellationControlShader = compileShaderTarget(
                 pack,
                 sources.tessellationControlPath(),
@@ -102,8 +103,8 @@ public class ShaderCompiler {
                 programName + " tessellation evaluation",
                 directives
         );
-        int fragmentShader = compileShaderTarget(pack, sources.fragmentPath(), sources.fragmentSource(), com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL20.GL_FRAGMENT_SHADER, "field_153210_r", "GL_FRAGMENT_SHADER"), properties, bindingPass, programName + " fragment", directives);
-        
+        int fragmentShader = compileShaderTarget(pack, sources.fragmentPath(), sources.fragmentSource(), MinecraftReflectionCompat.fieldInt(OpenGlHelper.class, GL20.GL_FRAGMENT_SHADER, "field_153210_r", "GL_FRAGMENT_SHADER"), properties, bindingPass, programName + " fragment", directives);
+
         // Geometry shaders use GL32, ensure compatibility
         int geometryShader = compileShaderTarget(pack, sources.geometryPath(), sources.geometrySource(), GL32.GL_GEOMETRY_SHADER, properties, bindingPass, programName + " geometry", directives);
 
@@ -114,11 +115,12 @@ public class ShaderCompiler {
                 || failedDeclaredStage(sources.fragmentPath(), sources.fragmentSource(), fragmentShader)
                 || failedDeclaredStage(sources.geometryPath(), sources.geometrySource(), geometryShader)) {
             MainMod.LOGGER.error("[ShaderCompiler] Program '{}' disabled because at least one declared stage failed to compile.", programName);
-            if (vertexShader != -1) com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(vertexShader);
-            if (tessellationControlShader != -1) com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(tessellationControlShader);
-            if (tessellationEvaluationShader != -1) com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(tessellationEvaluationShader);
-            if (fragmentShader != -1) com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(fragmentShader);
-            if (geometryShader != -1) com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(geometryShader);
+            if (vertexShader != -1) MinecraftReflectionCompat.glDeleteShader(vertexShader);
+            if (tessellationControlShader != -1) MinecraftReflectionCompat.glDeleteShader(tessellationControlShader);
+            if (tessellationEvaluationShader != -1)
+                MinecraftReflectionCompat.glDeleteShader(tessellationEvaluationShader);
+            if (fragmentShader != -1) MinecraftReflectionCompat.glDeleteShader(fragmentShader);
+            if (geometryShader != -1) MinecraftReflectionCompat.glDeleteShader(geometryShader);
             return null;
         }
 
@@ -145,11 +147,11 @@ public class ShaderCompiler {
         }
 
         // Cleanup the individual shader objects now that they are linked into the program
-        if (vertexShader != -1) com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(vertexShader);
-        if (tessellationControlShader != -1) com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(tessellationControlShader);
-        if (tessellationEvaluationShader != -1) com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(tessellationEvaluationShader);
-        if (fragmentShader != -1) com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(fragmentShader);
-        if (geometryShader != -1) com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(geometryShader);
+        if (vertexShader != -1) MinecraftReflectionCompat.glDeleteShader(vertexShader);
+        if (tessellationControlShader != -1) MinecraftReflectionCompat.glDeleteShader(tessellationControlShader);
+        if (tessellationEvaluationShader != -1) MinecraftReflectionCompat.glDeleteShader(tessellationEvaluationShader);
+        if (fragmentShader != -1) MinecraftReflectionCompat.glDeleteShader(fragmentShader);
+        if (geometryShader != -1) MinecraftReflectionCompat.glDeleteShader(geometryShader);
 
         MainMod.LOGGER.debug("[ShaderCompiler] Successfully compiled and linked program: {}", programName);
         return program;
@@ -174,7 +176,7 @@ public class ShaderCompiler {
         );
     }
 
-    private static int compileShaderTarget(ShaderPack pack, String resourcePath, String inlineSource, int shaderType, ShaderProperties properties, RenderPass pass, String inlineName, com.l.ausm.impl.pipeline.pack.ShaderPackDirectives directives) {
+    private static int compileShaderTarget(ShaderPack pack, String resourcePath, String inlineSource, int shaderType, ShaderProperties properties, RenderPass pass, String inlineName, ShaderPackDirectives directives) {
         if (resourcePath == null) {
             if (inlineSource != null && !inlineSource.isBlank()) {
                 return compileInlineShaderTarget(inlineSource, inlineName, shaderType, pass);
@@ -204,17 +206,17 @@ public class ShaderCompiler {
             if (shouldDumpDebugSource(resourcePath)) {
                 ShaderSourceDumper.dumpDebugSource(debugDumpName(resourcePath, shaderType), source);
             }
-            int shaderId = com.l.ausm.impl.util.MinecraftReflectionCompat.glCreateShader(shaderType);
-            
-            GL20.glShaderSource(shaderId, source);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glCompileShader(shaderId);
+            int shaderId = MinecraftReflectionCompat.glCreateShader(shaderType);
 
-            if (com.l.ausm.impl.util.MinecraftReflectionCompat.glGetShaderi(shaderId, com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL20.GL_COMPILE_STATUS, "field_153208_p", "GL_COMPILE_STATUS")) == 0) {
-                String log = com.l.ausm.impl.util.MinecraftReflectionCompat.glGetShaderInfoLog(shaderId, 32768);
+            GL20.glShaderSource(shaderId, source);
+            MinecraftReflectionCompat.glCompileShader(shaderId);
+
+            if (MinecraftReflectionCompat.glGetShaderi(shaderId, MinecraftReflectionCompat.fieldInt(OpenGlHelper.class, GL20.GL_COMPILE_STATUS, "field_153208_p", "GL_COMPILE_STATUS")) == 0) {
+                String log = MinecraftReflectionCompat.glGetShaderInfoLog(shaderId, 32768);
                 MainMod.LOGGER.error("[ShaderCompiler] Failed to compile shader '{}': {}", resourcePath, log);
                 ShaderSourceDumper.dumpFailedSource(resourcePath, source);
                 ShaderCompileNotifications.reportFailure(resourcePath);
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(shaderId);
+                MinecraftReflectionCompat.glDeleteShader(shaderId);
                 return -1;
             }
 
@@ -239,9 +241,9 @@ public class ShaderCompiler {
 
     private static String debugDumpName(String resourcePath, int shaderType) {
         String suffix = "shader";
-        if (shaderType == com.l.ausm.impl.util.MinecraftReflectionCompat.glVertexShader()) {
+        if (shaderType == MinecraftReflectionCompat.glVertexShader()) {
             suffix = "vertex";
-        } else if (shaderType == com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL20.GL_FRAGMENT_SHADER, "field_153210_r", "GL_FRAGMENT_SHADER")) {
+        } else if (shaderType == MinecraftReflectionCompat.fieldInt(OpenGlHelper.class, GL20.GL_FRAGMENT_SHADER, "field_153210_r", "GL_FRAGMENT_SHADER")) {
             suffix = "fragment";
         } else if (shaderType == GL40.GL_TESS_CONTROL_SHADER) {
             suffix = "tesscontrol";
@@ -259,17 +261,17 @@ public class ShaderCompiler {
 
     private static int compileInlineShaderTarget(String source, String name, int shaderType, RenderPass pass) {
         String processed = ShaderTransformPipeline.transform(source, shaderType, pass);
-        int shaderId = com.l.ausm.impl.util.MinecraftReflectionCompat.glCreateShader(shaderType);
+        int shaderId = MinecraftReflectionCompat.glCreateShader(shaderType);
 
         GL20.glShaderSource(shaderId, processed);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glCompileShader(shaderId);
+        MinecraftReflectionCompat.glCompileShader(shaderId);
 
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.glGetShaderi(shaderId, com.l.ausm.impl.util.MinecraftReflectionCompat.fieldInt(net.minecraft.client.renderer.OpenGlHelper.class, org.lwjgl.opengl.GL20.GL_COMPILE_STATUS, "field_153208_p", "GL_COMPILE_STATUS")) == 0) {
-            String log = com.l.ausm.impl.util.MinecraftReflectionCompat.glGetShaderInfoLog(shaderId, 32768);
+        if (MinecraftReflectionCompat.glGetShaderi(shaderId, MinecraftReflectionCompat.fieldInt(OpenGlHelper.class, GL20.GL_COMPILE_STATUS, "field_153208_p", "GL_COMPILE_STATUS")) == 0) {
+            String log = MinecraftReflectionCompat.glGetShaderInfoLog(shaderId, 32768);
             MainMod.LOGGER.error("[ShaderCompiler] Failed to compile inline shader '{}': {}", name, log);
             ShaderSourceDumper.dumpFailedSource(name, processed);
             ShaderCompileNotifications.reportFailure(name);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glDeleteShader(shaderId);
+            MinecraftReflectionCompat.glDeleteShader(shaderId);
             return -1;
         }
 

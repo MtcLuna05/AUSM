@@ -3,15 +3,16 @@ package com.l.ausm.impl.mixin.compat;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.NothiriumFogCompat;
 import com.l.ausm.impl.pipeline.compat.NothiriumPipelineCompat;
-import meldexun.nothirium.mc.renderer.chunk.RenderChunk;
 import meldexun.nothirium.api.renderer.IVBOPart;
-import meldexun.nothirium.api.renderer.chunk.IRenderChunkProvider;
 import meldexun.nothirium.api.renderer.chunk.ChunkRenderPass;
-import meldexun.renderlib.util.GLBuffer;
+import meldexun.nothirium.api.renderer.chunk.IRenderChunkProvider;
+import meldexun.nothirium.mc.renderer.chunk.RenderChunk;
 import meldexun.renderlib.util.Frustum;
+import meldexun.renderlib.util.GLBuffer;
 import meldexun.renderlib.util.GLShader;
-import org.spongepowered.asm.mixin.Mixin;
+import org.lwjgl.opengl.GL20;
 import org.spongepowered.asm.mixin.Final;
+import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Constant;
@@ -19,12 +20,13 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.lwjgl.opengl.GL20;
 
 @Mixin(targets = "meldexun.nothirium.mc.renderer.chunk.ChunkRendererGL43", remap = false)
 public class NothiriumChunkRendererGL43Mixin {
-    /** Three slots make the persistent mapped indirect buffers one frame less
-     * likely to need the renderer's blocking timestamp retirement. */
+    /**
+     * Three slots make the persistent mapped indirect buffers one frame less
+     * likely to need the renderer's blocking timestamp retirement.
+     */
     private static final int AUSM_INDIRECT_BUFFER_SLOTS = 3;
 
     private double ausm$cameraX;
@@ -33,7 +35,8 @@ public class NothiriumChunkRendererGL43Mixin {
     private int ausm$cameraOffsetUniform = Integer.MIN_VALUE;
     private boolean ausm$staticOriginsEnabled;
 
-    @Shadow(remap = false) @Final
+    @Shadow(remap = false)
+    @Final
     private GLShader shader;
 
     @ModifyConstant(method = "<init>()V", constant = @Constant(intValue = 2), require = 0, remap = false)
@@ -48,9 +51,9 @@ public class NothiriumChunkRendererGL43Mixin {
 
     @Inject(method = "setup", at = @At("HEAD"), require = 0, remap = false)
     private void ausm$captureCameraForStaticChunkOrigins(IRenderChunkProvider<RenderChunk> provider,
-                                                           double cameraX, double cameraY, double cameraZ,
-                                                           Frustum frustum, int frame,
-                                                           CallbackInfo ci) {
+                                                         double cameraX, double cameraY, double cameraZ,
+                                                         Frustum frustum, int frame,
+                                                         CallbackInfo ci) {
         ausm$cameraX = cameraX;
         ausm$cameraY = cameraY;
         ausm$cameraZ = cameraZ;

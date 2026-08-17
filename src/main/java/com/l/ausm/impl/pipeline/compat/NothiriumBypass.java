@@ -3,9 +3,9 @@ package com.l.ausm.impl.pipeline.compat;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.mixin.pipeline.RenderGlobalAccessor;
 import com.l.ausm.impl.pipeline.PipelineContext;
-import net.minecraft.client.Minecraft;
-
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import java.lang.reflect.Method;
+import net.minecraft.client.Minecraft;
 
 public final class NothiriumBypass {
     private static final String CHUNK_RENDER_MANAGER = "meldexun.nothirium.mc.renderer.ChunkRenderManager";
@@ -323,10 +323,10 @@ public final class NothiriumBypass {
     }
 
     private static boolean hasVanillaViewFrustum() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
         return mc != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor
-                && ((RenderGlobalAccessor) com.l.ausm.impl.util.MinecraftReflectionCompat.renderGlobal(mc)).ausm$viewFrustum() != null;
+                && MinecraftReflectionCompat.renderGlobal(mc) instanceof RenderGlobalAccessor
+                && ((RenderGlobalAccessor) MinecraftReflectionCompat.renderGlobal(mc)).ausm$viewFrustum() != null;
     }
 
     private static boolean shouldUseVanillaForShaderlessBetterPortalsBlockUpdates() {

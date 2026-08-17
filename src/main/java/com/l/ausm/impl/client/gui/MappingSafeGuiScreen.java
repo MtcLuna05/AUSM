@@ -1,15 +1,14 @@
 package com.l.ausm.impl.client.gui;
 
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
 import org.lwjgl.input.Mouse;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Bridges Cleanroom's SRG GUI dispatch to AUSM-owned lifecycle hooks.
@@ -41,8 +40,8 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
         for (GuiButton button : buttonList) {
             MinecraftReflectionCompat.invoke(
                     button,
-                    new String[] {"func_146118_a", "mouseReleased"},
-                    new Class<?>[] {int.class, int.class},
+                    new String[]{"func_146118_a", "mouseReleased"},
+                    new Class<?>[]{int.class, int.class},
                     mouseX,
                     mouseY);
         }
@@ -55,8 +54,8 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
         for (GuiButton button : buttonList) {
             MinecraftReflectionCompat.invoke(
                     button,
-                    new String[] {"func_191745_a", "drawButton"},
-                    new Class<?>[] {Minecraft.class, int.class, int.class, float.class},
+                    new String[]{"func_191745_a", "drawButton"},
+                    new Class<?>[]{Minecraft.class, int.class, int.class, float.class},
                     mc,
                     mouseX,
                     mouseY,
@@ -64,8 +63,8 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
             if (button.getClass().getName().startsWith("com.l.ausm.impl.client.gui.")) {
                 MinecraftReflectionCompat.invoke(
                         button,
-                        new String[] {"drawButton"},
-                        new Class<?>[] {Minecraft.class, int.class, int.class, float.class},
+                        new String[]{"drawButton"},
+                        new Class<?>[]{Minecraft.class, int.class, int.class, float.class},
                         mc,
                         mouseX,
                         mouseY,
@@ -81,8 +80,8 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
         for (GuiButton button : buttonList) {
             Object pressed = MinecraftReflectionCompat.invoke(
                     button,
-                    new String[] {"func_146116_c", "mousePressed"},
-                    new Class<?>[] {Minecraft.class, int.class, int.class},
+                    new String[]{"func_146116_c", "mousePressed"},
+                    new Class<?>[]{Minecraft.class, int.class, int.class},
                     mc,
                     mouseX,
                     mouseY);
@@ -99,7 +98,7 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
     protected void ausm$drawDefaultBackground() {
         MinecraftReflectionCompat.invoke(
                 this,
-                new String[] {"func_146276_q_", "drawDefaultBackground"},
+                new String[]{"func_146276_q_", "drawDefaultBackground"},
                 MinecraftReflectionCompat.NO_PARAMETERS);
     }
 
@@ -124,8 +123,8 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
         for (String line : lines) {
             widest = Math.max(widest, MinecraftReflectionCompat.fontStringWidth(fontRenderer, line));
         }
-        int left = Math.min(x + 10, Math.max(4, width - widest - 8));
-        int top = Math.min(y + 10, Math.max(4, height - lines.size() * 10 - 8));
+        int left = Math.clamp(width - widest - 8, Math.min(4, x + 10), x + 10);
+        int top = Math.clamp(height - lines.size() * 10 - 8, Math.min(4, y + 10), y + 10);
         drawRect(left - 4, top - 4, left + widest + 4, top + lines.size() * 10 + 4, 0xE0101820);
         for (int i = 0; i < lines.size(); i++) {
             MinecraftReflectionCompat.fontDrawString(fontRenderer, lines.get(i), left, top + i * 10, 0xFFF0F0F0);

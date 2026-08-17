@@ -2,15 +2,14 @@ package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import net.minecraft.util.math.Vec3d;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.util.ArrayDeque;
-import java.util.Deque;
 
 @Mixin(targets = "de.johni0702.minecraft.betterportals.client.render.PortalRenderer", remap = false)
 public abstract class BetterPortalsPortalRendererMixin {

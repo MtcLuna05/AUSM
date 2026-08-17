@@ -1,13 +1,10 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.shader.Framebuffer;
@@ -33,8 +30,8 @@ public class MinecraftMixin {
     @Inject(method = "resize(II)V", at = @At("RETURN"))
     private void onResize(int width, int height, CallbackInfo ci) {
         Minecraft mc = (Minecraft) (Object) this;
-        if (!com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((mc), new String[] {"func_152345_ab", "isCallingFromMinecraftThread"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> ausm$resizePipeline(width, height));
+        if (!MinecraftReflectionCompat.callBoolean(mc, new String[]{"func_152345_ab", "isCallingFromMinecraftThread"}, MinecraftReflectionCompat.NO_PARAMETERS, false)) {
+            MinecraftReflectionCompat.addScheduledTask(mc, () -> ausm$resizePipeline(width, height));
             return;
         }
         ausm$resizePipeline(width, height);
@@ -53,13 +50,13 @@ public class MinecraftMixin {
     )
     private void ausm$beforeFramebufferPresentation(CallbackInfo ci) {
         Minecraft mc = (Minecraft) (Object) this;
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
+        if (MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
         PipelineContext context = PipelineContext.getInstance();
-        Framebuffer framebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
-        int width = com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc);
-        int height = com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc);
+        Framebuffer framebuffer = MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        int width = MinecraftReflectionCompat.displayWidth(mc);
+        int height = MinecraftReflectionCompat.displayHeight(mc);
         context.logFramebufferPresentationBoundary("runGameLoop-before-prepare", framebuffer, width, height, true);
         context.clearWorldLoadWindowBackbuffer(mc);
         context.prepareFramebufferPresentation();
@@ -85,7 +82,7 @@ public class MinecraftMixin {
     @Inject(method = "refreshResources", at = @At("RETURN"))
     private void ausm$recoverAfterResourcePackReload(CallbackInfo ci) {
         Minecraft mc = (Minecraft) (Object) this;
-        com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> PipelineContext.getInstance().handleResourcePackReload());
+        MinecraftReflectionCompat.addScheduledTask(mc, () -> PipelineContext.getInstance().handleResourcePackReload());
     }
 
     @Inject(
@@ -95,12 +92,12 @@ public class MinecraftMixin {
     private void ausm$afterFramebufferPresentation(CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         Minecraft mc = (Minecraft) (Object) this;
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) == null) {
+        if (MinecraftReflectionCompat.world(mc) == null) {
             return;
         }
-        Framebuffer framebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
-        int width = com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc);
-        int height = com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc);
+        Framebuffer framebuffer = MinecraftReflectionCompat.minecraftFramebuffer(mc);
+        int width = MinecraftReflectionCompat.displayWidth(mc);
+        int height = MinecraftReflectionCompat.displayHeight(mc);
         context.logFramebufferPresentationBoundary("runGameLoop-after-vanilla-before-direct", framebuffer, width, height, true);
         if (context.isActive() && context.shouldDirectPresentFramebuffer()) {
             context.presentFramebufferDirectly(framebuffer, width, height);
@@ -113,24 +110,24 @@ public class MinecraftMixin {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldDirectPresentFramebuffer()) {
             Minecraft mc = (Minecraft) (Object) this;
-            Framebuffer framebuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(mc);
+            Framebuffer framebuffer = MinecraftReflectionCompat.minecraftFramebuffer(mc);
             context.logFramebufferPresentationBoundary("runGameLoop-before-shaderless-direct", framebuffer,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc),
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), true);
+                    MinecraftReflectionCompat.displayWidth(mc),
+                    MinecraftReflectionCompat.displayHeight(mc), true);
             context.presentFramebufferDirectly(
                     framebuffer,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc),
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc)
+                    MinecraftReflectionCompat.displayWidth(mc),
+                    MinecraftReflectionCompat.displayHeight(mc)
             );
             context.logFramebufferPresentationBoundary("runGameLoop-after-shaderless-direct", framebuffer,
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(mc),
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(mc), true);
+                    MinecraftReflectionCompat.displayWidth(mc),
+                    MinecraftReflectionCompat.displayHeight(mc), true);
         }
     }
 
     @Inject(method = "loadWorld(Lnet/minecraft/client/multiplayer/WorldClient;Ljava/lang/String;)V", at = @At("HEAD"))
     private void ausm$captureWorldBeforeLoad(WorldClient worldClient, String loadingMessage, CallbackInfo ci) {
-        WorldClient currentWorld = com.l.ausm.impl.util.MinecraftReflectionCompat.world((Minecraft) (Object) this);
+        WorldClient currentWorld = MinecraftReflectionCompat.world((Minecraft) (Object) this);
         ausm$hadWorldBeforeLoad = currentWorld != null;
         ausm$previousWorldDimensionId = ausm$dimensionId(currentWorld);
         PipelineContext.getInstance().invalidateWorldLoadPresentationState();
@@ -182,8 +179,8 @@ public class MinecraftMixin {
 
     @Unique
     private int ausm$dimensionId(WorldClient worldClient) {
-        return worldClient != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(worldClient) != null
-                ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(worldClient))
+        return worldClient != null && MinecraftReflectionCompat.worldProvider(worldClient) != null
+                ? MinecraftReflectionCompat.providerDimension(MinecraftReflectionCompat.worldProvider(worldClient))
                 : Integer.MIN_VALUE;
     }
 }

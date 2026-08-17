@@ -1,16 +1,11 @@
 package com.l.ausm.impl.pipeline.vertex;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.nio.ByteBuffer;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.client.renderer.vertex.VertexFormatElement;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
-
-import java.nio.ByteBuffer;
 
 /**
  * Registry for our extended vertex formats containing shader-specific attributes.
@@ -42,10 +37,10 @@ public class ExtendedVertexFormats {
     // These elements mirror Iris' terrain payload order:
     // mc_Entity, mc_midTexCoord, at_tangent, at_midBlock.
     public static final VertexFormatElement MC_ENTITY = new VertexFormatElement(0, VertexFormatElement.EnumType.SHORT, VertexFormatElement.EnumUsage.PADDING, 4);
-    
+
     // mc_midTexCoord: 2 floats = 8 bytes
     public static final VertexFormatElement MC_MID_TEX_COORD = new VertexFormatElement(0, VertexFormatElement.EnumType.FLOAT, VertexFormatElement.EnumUsage.PADDING, 2);
-    
+
     public static final VertexFormatElement AT_TANGENT = new VertexFormatElement(0, VertexFormatElement.EnumType.BYTE, VertexFormatElement.EnumUsage.PADDING, 4);
 
     // at_midBlock: 3 byte local midpoint + 1 byte emission slot.
@@ -198,7 +193,7 @@ public class ExtendedVertexFormats {
     }
 
     private static void addElement(VertexFormat format, VertexFormatElement element) {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.addElement(format, element);
+        MinecraftReflectionCompat.addElement(format, element);
     }
 
     private static int getOffset(VertexFormat format, int index) {

@@ -1,11 +1,10 @@
 package com.l.ausm.impl.client.gui;
 
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.List;
 import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.gui.GuiButton;
 import org.lwjgl.input.Keyboard;
-
-import java.util.List;
 
 final class GuiControlHints {
     private static final String LABEL_KEY = "gui.ausm.controls";

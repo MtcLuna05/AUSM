@@ -6,16 +6,15 @@ import com.l.ausm.impl.client.dynamic.DynamicLightConfig;
 import com.l.ausm.impl.client.dynamic.DynamicLightManager;
 import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import net.minecraft.client.gui.GuiButton;
-import net.minecraft.client.gui.GuiScreen;
-import org.lwjgl.input.Keyboard;
-
 import java.awt.Desktop;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
+import net.minecraft.client.gui.GuiButton;
+import net.minecraft.client.gui.GuiScreen;
+import org.lwjgl.input.Keyboard;
 
 public class GuiDynamicLights extends MappingSafeGuiScreen {
     private static final int ID_DONE = 200;
@@ -99,7 +98,7 @@ public class GuiDynamicLights extends MappingSafeGuiScreen {
 
         switch (MinecraftReflectionCompat.guiButtonId(button)) {
             case ID_DONE:
-                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, parent);
+                MinecraftReflectionCompat.displayGuiScreen(this.mc, parent);
                 break;
             case ID_TOGGLE:
                 setEnabled(!enabled());
@@ -138,7 +137,7 @@ public class GuiDynamicLights extends MappingSafeGuiScreen {
     @Override
     protected void ausm$keyTyped(char typedChar, int keyCode) throws IOException {
         if (keyCode == Keyboard.KEY_ESCAPE) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, GuiControlHints.isShiftDown() ? null : parent);
+            MinecraftReflectionCompat.displayGuiScreen(this.mc, GuiControlHints.isShiftDown() ? null : parent);
             return;
         }
         super.ausm$keyTyped(typedChar, keyCode);

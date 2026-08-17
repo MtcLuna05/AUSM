@@ -1,8 +1,10 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import net.minecraft.client.Minecraft;
-
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import java.util.function.Supplier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.WorldClient;
+import net.minecraft.world.WorldProvider;
 
 public final class ShaderDimensionContext {
     private static final ThreadLocal<Integer> OVERRIDE_DIMENSION = new ThreadLocal<>();
@@ -16,13 +18,13 @@ public final class ShaderDimensionContext {
             return override;
         }
 
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        net.minecraft.client.multiplayer.WorldClient world = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(mc) : null;
-        net.minecraft.world.WorldProvider provider = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
+        WorldClient world = mc != null ? MinecraftReflectionCompat.world(mc) : null;
+        WorldProvider provider = MinecraftReflectionCompat.worldProvider(world);
         if (provider == null) {
             return 0;
         }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider);
+        return MinecraftReflectionCompat.providerDimension(provider);
     }
 
     public static <T> T withDimension(int dimensionId, Supplier<T> action) {

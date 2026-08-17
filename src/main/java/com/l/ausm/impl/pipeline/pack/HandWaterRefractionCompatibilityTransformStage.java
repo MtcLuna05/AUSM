@@ -1,7 +1,6 @@
 package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 

@@ -1,9 +1,5 @@
 package com.l.ausm.api.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import java.util.Locale;
 
 public record ShaderAlphaTest(int function, float reference) {

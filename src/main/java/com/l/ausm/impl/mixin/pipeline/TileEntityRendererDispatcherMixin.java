@@ -1,24 +1,19 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.EfficientEntitiesChestCompat;
-import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import net.minecraft.client.renderer.texture.TextureManager;
+import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
 import net.minecraft.tileentity.TileEntity;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.util.ArrayDeque;
-import java.util.Deque;
 
 /**
  * Binds the OptiFine block-entity program while tile entities render.

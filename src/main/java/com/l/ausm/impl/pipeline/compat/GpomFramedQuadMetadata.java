@@ -1,11 +1,12 @@
 package com.l.ausm.impl.pipeline.compat;
 
+import java.lang.reflect.Method;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 
-import java.lang.reflect.Method;
-
-/** Optional, reflection-only bridge to GPOM's per-quad framed material data. */
+/**
+ * Optional, reflection-only bridge to GPOM's per-quad framed material data.
+ */
 public final class GpomFramedQuadMetadata {
     private static final String PROVENANCE = "com.l.gpom.compat.framed.FramedQuadProvenance";
 

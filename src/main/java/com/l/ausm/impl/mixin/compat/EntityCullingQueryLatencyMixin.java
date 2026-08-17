@@ -8,7 +8,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-
 /**
  * EntityCulling 6.5 waits for the previous timestamp query from the first
  * visibility lookup of every frame. A late query turns glGetQueryObjecti64

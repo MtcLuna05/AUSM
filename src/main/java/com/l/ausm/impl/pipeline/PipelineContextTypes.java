@@ -1,11 +1,8 @@
 package com.l.ausm.impl.pipeline;
 
-import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.multiplayer.WorldClient;
-import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.AxisAlignedBB;
-import net.minecraft.world.IBlockAccess;
 
 final class ShaderChunkRefresh {
     final WorldClient world;

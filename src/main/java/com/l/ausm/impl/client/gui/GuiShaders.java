@@ -6,14 +6,6 @@ import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.l.ausm.impl.pipeline.pack.ShaderPackManager;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import net.minecraft.client.gui.GuiButton;
-import net.minecraft.client.gui.GuiScreen;
-import org.lwjgl.glfw.GLFW;
-import org.lwjgl.glfw.GLFWDropCallback;
-import org.lwjgl.input.Keyboard;
-import org.lwjgl.input.Mouse;
-import org.lwjgl.opengl.Display;
-
 import java.awt.Desktop;
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
@@ -22,6 +14,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import net.minecraft.client.gui.GuiButton;
+import net.minecraft.client.gui.GuiScreen;
+import org.lwjgl.glfw.GLFW;
+import org.lwjgl.glfw.GLFWDropCallback;
+import org.lwjgl.input.Keyboard;
+import org.lwjgl.input.Mouse;
+import org.lwjgl.opengl.Display;
 
 public class GuiShaders extends MappingSafeGuiScreen {
     private static final int ID_DONE = 200;
@@ -36,7 +36,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
 
     private final GuiScreen parentScreen;
     private GuiSlotShaders shaderList;
-    
+
     private GuiButton applyButton;
     private GuiButton refreshButton;
     private GuiButton optionsButton;
@@ -144,11 +144,11 @@ public class GuiShaders extends MappingSafeGuiScreen {
         switch (MinecraftReflectionCompat.guiButtonId(button)) {
             case ID_DONE:
                 if (this.parentScreen == null) {
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.setField((this.mc), (null), "field_71462_r", "currentScreen");;
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((this.mc), new String[] {"func_71381_h", "setIngameFocus"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);;
+                    MinecraftReflectionCompat.setField(this.mc, null, "field_71462_r", "currentScreen");
+                    MinecraftReflectionCompat.invoke(this.mc, new String[]{"func_71381_h", "setIngameFocus"}, MinecraftReflectionCompat.NO_PARAMETERS);
                     return;
                 }
-                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, this.parentScreen);
+                MinecraftReflectionCompat.displayGuiScreen(this.mc, this.parentScreen);
                 break;
             case ID_APPLY:
                 applySelectedPack();
@@ -165,7 +165,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
                 updateEnabledButton();
                 break;
             case ID_SETTINGS:
-                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, new GuiDynamicLights(this));
+                MinecraftReflectionCompat.displayGuiScreen(this.mc, new GuiDynamicLights(this));
                 break;
             case ID_PREVIEW:
                 setPreviewHidden(!previewHidden);
@@ -174,7 +174,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
                 openShaderpacksFolder();
                 break;
             case ID_CANCEL:
-                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, this.parentScreen);
+                MinecraftReflectionCompat.displayGuiScreen(this.mc, this.parentScreen);
                 break;
             default:
                 break;
@@ -252,7 +252,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
         if (!canConfigure(packName)) {
             return;
         }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, new GuiShaderOptions(this, packName));
+        MinecraftReflectionCompat.displayGuiScreen(this.mc, new GuiShaderOptions(this, packName));
     }
 
     @Override
@@ -291,14 +291,14 @@ public class GuiShaders extends MappingSafeGuiScreen {
     protected void ausm$keyTyped(char typedChar, int keyCode) throws IOException {
         if (keyCode == Keyboard.KEY_ESCAPE) {
             if (GuiControlHints.isShiftDown()) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, null);
+                MinecraftReflectionCompat.displayGuiScreen(this.mc, null);
                 return;
             }
             if (previewHidden) {
                 setPreviewHidden(false);
                 return;
             }
-            com.l.ausm.impl.util.MinecraftReflectionCompat.displayGuiScreen(this.mc, parentScreen);
+            MinecraftReflectionCompat.displayGuiScreen(this.mc, parentScreen);
             return;
         }
         if (keyCode == Keyboard.KEY_TAB) {
@@ -353,11 +353,11 @@ public class GuiShaders extends MappingSafeGuiScreen {
     }
 
     private int currentMouseX() {
-        return Mouse.getX() * this.width / com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(this.mc);
+        return Mouse.getX() * this.width / MinecraftReflectionCompat.displayWidth(this.mc);
     }
 
     private int currentMouseY() {
-        return this.height - Mouse.getY() * this.height / com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(this.mc) - 1;
+        return this.height - Mouse.getY() * this.height / MinecraftReflectionCompat.displayHeight(this.mc) - 1;
     }
 
     private void moveFocusHorizontal(int direction) {
@@ -535,6 +535,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
 
         int desired = 28 + textWidth + 24;
         int max = Math.max(220, this.width - 180);
+        // This is not a Math.clamp: narrow screens intentionally allow max below 296.
         return Math.min(Math.max(296, desired), max);
     }
 
@@ -581,7 +582,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
             return "Disabled by Celeritas";
         }
         return (dynamicLightsEnabled() ? "On" : "Off")
-                + " / " + String.format(java.util.Locale.ROOT, "%.2fx", MainMod.getDynamicLightConfig().lightMultiplier());
+                + " / " + String.format(Locale.ROOT, "%.2fx", MainMod.getDynamicLightConfig().lightMultiplier());
     }
 
     private boolean dynamicLightsAvailable() {
@@ -663,7 +664,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
                     paths.add(Paths.get(name));
                 }
             }
-            com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(this.mc, () -> handleDroppedFiles(paths));
+            MinecraftReflectionCompat.addScheduledTask(this.mc, () -> handleDroppedFiles(paths));
         });
         previousDropCallback = GLFW.glfwSetDropCallback(window, dropCallback);
     }

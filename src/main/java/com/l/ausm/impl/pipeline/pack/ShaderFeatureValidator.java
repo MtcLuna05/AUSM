@@ -1,10 +1,10 @@
 package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.pack.ShaderFeatureSet;
-import org.lwjgl.opengl.GLContext;
-
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import org.lwjgl.opengl.GLContext;
 
 /**
  * Validates Iris feature declarations before AUSM allocates GL resources.
@@ -58,7 +58,7 @@ public final class ShaderFeatureValidator {
         if (!used || flag.hardwareSupported()) {
             return;
         }
-        errors.add(source + " require " + flag.name().toLowerCase(java.util.Locale.ROOT) + ": " + flag.unavailableReason());
+        errors.add(source + " require " + flag.name().toLowerCase(Locale.ROOT) + ": " + flag.unavailableReason());
     }
 
     private static void validateGeometryCapability(boolean used, List<String> errors) {

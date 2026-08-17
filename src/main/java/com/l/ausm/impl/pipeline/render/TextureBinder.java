@@ -1,17 +1,16 @@
 package com.l.ausm.impl.pipeline.render;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
-import com.l.ausm.impl.pipeline.PipelineContext;
-import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.fbo.Attachment;
+import com.l.ausm.api.pipeline.shader.RenderPass;
+import com.l.ausm.impl.MainMod;
+import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.fbo.DeferredFramebuffer;
 import com.l.ausm.impl.pipeline.fbo.ShadowFramebuffer;
 import com.l.ausm.impl.pipeline.shader.ShaderBindingLayout;
-import net.minecraft.client.renderer.GlStateManager;
-import net.minecraft.client.renderer.OpenGlHelper;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
+import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
@@ -19,9 +18,6 @@ import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL33;
 import org.lwjgl.opengl.GLContext;
-
-import java.nio.ByteBuffer;
-import java.nio.FloatBuffer;
 
 /**
  * Handles binding the G-Buffer textures into the correct OpenGL Texture Units
@@ -47,7 +43,9 @@ public class TextureBinder {
     public static final int COLORTEX9_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 2;
     public static final int COLORTEX16_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 3;
     public static final int CENTER_DEPTH_SMOOTH_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 4;
-    /** Spare gbuffers unit used only while masking item glint against the block/item atlas. */
+    /**
+     * Spare gbuffers unit used only while masking item glint against the block/item atlas.
+     */
     public static final int ITEM_GLINT_BASE_ATLAS_TEXTURE_UNIT = ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT - 4;
     public static final int SPECULAR_TEXTURE_UNIT = ShaderBindingLayout.CUSTOM_TEXTURE_BASE_UNIT - 3;
     private static int fallbackBlackTexture = -1;
@@ -66,7 +64,7 @@ public class TextureBinder {
     private static int shadowBindingProbeCount;
 
     /**
-     * Binds the multiple render targets (MRTs) from the "read" framebuffer 
+     * Binds the multiple render targets (MRTs) from the "read" framebuffer
      * so that the fullscreen shader pass can sample them.
      */
     public static void bindDeferredTextures() {
@@ -393,7 +391,7 @@ public class TextureBinder {
     }
 
     public static void restoreDefaultTextureUnit() {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        MinecraftReflectionCompat.glStateSetActiveTexture(MinecraftReflectionCompat.defaultTexUnit());
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
     }
 
@@ -410,8 +408,8 @@ public class TextureBinder {
             restoreDefaultTextureUnit();
             return;
         }
-        int defaultUnit = com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit();
-        int lightmapUnit = com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit();
+        int defaultUnit = MinecraftReflectionCompat.defaultTexUnit();
+        int lightmapUnit = MinecraftReflectionCompat.lightmapTexUnit();
         // AUSM's local bloom composite uses units 0..6. Limiting the cleanup
         // to the first eight also stays within Minecraft 1.12's fixed-size
         // GlStateManager texture cache on drivers advertising hundreds of
@@ -424,11 +422,11 @@ public class TextureBinder {
             if (textureUnit == defaultUnit || textureUnit == lightmapUnit) {
                 continue;
             }
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(textureUnit);
+            MinecraftReflectionCompat.glStateSetActiveTexture(textureUnit);
             if (GL11.glIsEnabled(GL11.GL_TEXTURE_2D)) {
                 appendTextureUnit(enabledBefore, unit);
             }
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDisableTexture2D();
+            MinecraftReflectionCompat.glStateDisableTexture2D();
             if (GL11.glIsEnabled(GL11.GL_TEXTURE_2D)) {
                 appendTextureUnit(enabledAfter, unit);
             }
@@ -523,7 +521,7 @@ public class TextureBinder {
                 GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
                 GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
                 GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_DEPTH_TEXTURE_MODE, GL11.GL_LUMINANCE);
-                FloatBuffer depth = org.lwjgl.BufferUtils.createFloatBuffer(1);
+                FloatBuffer depth = BufferUtils.createFloatBuffer(1);
                 depth.put(1.0f).flip();
                 GL11.glTexImage2D(
                         GL11.GL_TEXTURE_2D,
@@ -542,7 +540,7 @@ public class TextureBinder {
             GL11.glTexParameteri(
                     GL11.GL_TEXTURE_2D,
                     GL14.GL_TEXTURE_COMPARE_MODE,
-                        GL14.GL_COMPARE_R_TO_TEXTURE
+                    GL14.GL_COMPARE_R_TO_TEXTURE
             );
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
             return neutralShadowDepthTexture;
@@ -559,7 +557,7 @@ public class TextureBinder {
             if (neutralShadowRawDepthTexture == -1) {
                 neutralShadowRawDepthTexture = GL11.glGenTextures();
                 GL11.glBindTexture(GL11.GL_TEXTURE_2D, neutralShadowRawDepthTexture);
-                FloatBuffer depth = org.lwjgl.BufferUtils.createFloatBuffer(1);
+                FloatBuffer depth = BufferUtils.createFloatBuffer(1);
                 depth.put(1.0f).flip();
                 GL11.glTexImage2D(
                         GL11.GL_TEXTURE_2D,
@@ -650,7 +648,7 @@ public class TextureBinder {
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
-            ByteBuffer pixel = org.lwjgl.BufferUtils.createByteBuffer(4);
+            ByteBuffer pixel = BufferUtils.createByteBuffer(4);
             pixel.put(r).put(g).put(b).put(a).flip();
             GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, 1, 1, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
             return texture;

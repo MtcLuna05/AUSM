@@ -1,6 +1,5 @@
 package com.l.ausm.impl.mixin.compat;
 
-import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import net.minecraft.client.renderer.RenderGlobal;
@@ -22,7 +21,7 @@ public class LumenizedDisableBloomMixin {
         PipelineContext context = PipelineContext.getInstance();
         if (!logged) {
             logged = true;
-            
+
         }
 
         if (context.isActive()) {

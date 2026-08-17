@@ -8,7 +8,9 @@ import net.minecraft.client.renderer.texture.DynamicTexture;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 
-/** Restores and refreshes vanilla's lightmap using mapping-safe renderer access. */
+/**
+ * Restores and refreshes vanilla's lightmap using mapping-safe renderer access.
+ */
 final class PipelineVanillaLightmapState {
     private PipelineVanillaLightmapState() {
     }

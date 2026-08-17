@@ -2,7 +2,6 @@ package com.l.ausm.impl.pipeline.shader;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.pack.ShaderExpressionEvaluator;
-
 import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.Map;

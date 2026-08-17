@@ -1,7 +1,7 @@
 package com.l.ausm.impl.mixin.compat;
 
-import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import com.l.ausm.impl.client.dynamic.DynamicLightManager;
+import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import net.minecraft.util.math.BlockPos;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;

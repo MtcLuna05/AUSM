@@ -1,8 +1,5 @@
 package com.l.ausm.api.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;

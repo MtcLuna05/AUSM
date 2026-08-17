@@ -54,14 +54,14 @@ public class BlockModelRendererMixin {
                         metadata.emission()
                 );
             }
-            return com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadVertexData(quad);
+            return MinecraftReflectionCompat.bakedQuadVertexData(quad);
         }
         BlockRenderContext.clearQuadOverrides();
-        TextureAtlasSprite sprite = quad != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadSprite(quad) : null;
-        String spriteName = sprite != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.spriteIconName(sprite) : null;
+        TextureAtlasSprite sprite = quad != null ? MinecraftReflectionCompat.bakedQuadSprite(quad) : null;
+        String spriteName = sprite != null ? MinecraftReflectionCompat.spriteIconName(sprite) : null;
         BlockRenderContext.setQuadSprite(spriteName);
         PipelineContext.getInstance().applyFramedQuadMaterial(quad, spriteName);
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadVertexData(quad);
+        return MinecraftReflectionCompat.bakedQuadVertexData(quad);
     }
 
     @Redirect(

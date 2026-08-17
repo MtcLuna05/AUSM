@@ -1,12 +1,7 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.MainMod;
-import net.minecraft.client.Minecraft;
-
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -14,7 +9,9 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import net.minecraft.client.Minecraft;
 
 public final class ShaderLang {
 
@@ -46,16 +43,16 @@ public final class ShaderLang {
                 "lang/en_US.lang",
                 "lang/en_us.lang",
                 layout.langPath(language + ".lang"),
-                layout.langPath(language.toLowerCase(java.util.Locale.ROOT) + ".lang"),
+                layout.langPath(language.toLowerCase(Locale.ROOT) + ".lang"),
                 "lang/" + language + ".lang",
-                "lang/" + language.toLowerCase(java.util.Locale.ROOT) + ".lang"
+                "lang/" + language.toLowerCase(Locale.ROOT) + ".lang"
         );
     }
 
     private static String currentLanguage() {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
         String language = mc != null
-                ? com.l.ausm.impl.util.MinecraftReflectionCompat.field((com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(mc)), String.class, "", "field_74363_ab", "language")
+                ? MinecraftReflectionCompat.field(MinecraftReflectionCompat.gameSettings(mc), String.class, "", "field_74363_ab", "language")
                 : "";
         if (language == null || language.isBlank()) {
             return "en_US";

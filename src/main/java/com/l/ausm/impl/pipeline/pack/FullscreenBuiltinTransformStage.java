@@ -1,7 +1,6 @@
 package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.shader.ProgramStage;
-
 import java.util.regex.Pattern;
 
 /**

@@ -1,6 +1,8 @@
 package com.l.ausm.impl.pipeline.dh;
 
-/** Built-in shader sources used only by the retained Distant Horizons fallback path. */
+/**
+ * Built-in shader sources used only by the retained Distant Horizons fallback path.
+ */
 public final class DistantHorizonsInternalShaders {
     public static final String FALLBACK_VERTEX = """
             #version 150 core

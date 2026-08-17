@@ -3,6 +3,7 @@ package com.l.ausm.impl.mixin.compat;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.world.World;
@@ -13,8 +14,6 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Redirect;
-
-import java.util.List;
 
 @Mixin(targets = "hellfirepvp.astralsorcery.client.sky.RenderSkybox", remap = false)
 public class AstralSorceryRenderSkyboxMixin {
@@ -64,25 +63,25 @@ public class AstralSorceryRenderSkyboxMixin {
                 && otherSkyRenderer != null) {
             MinecraftReflectionCompat.invoke(
                     otherSkyRenderer,
-                    new String[] {"render"},
-                    new Class<?>[] {float.class, WorldClient.class, Minecraft.class},
+                    new String[]{"render"},
+                    new Class<?>[]{float.class, WorldClient.class, Minecraft.class},
                     partialTicks,
                     world,
                     minecraft);
         }
         MinecraftReflectionCompat.invoke(
                 astralSky,
-                new String[] {"render"},
-                new Class<?>[] {float.class, WorldClient.class, Minecraft.class},
+                new String[]{"render"},
+                new Class<?>[]{float.class, WorldClient.class, Minecraft.class},
                 partialTicks,
                 world,
                 minecraft);
     }
 
     private static void ausm$logVoidSkyMode() {
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
         World world = minecraft != null
-                ? com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft)
+                ? MinecraftReflectionCompat.world(minecraft)
                 : null;
         boolean customSky = PipelineContext.getInstance().isCustomVoidWorldSkyEnabled(world);
         if (ausm$lastCustomVoidSky == null || ausm$lastCustomVoidSky != customSky) {

@@ -1,10 +1,12 @@
 package com.l.ausm.impl.mixin.compat;
 
 import appeng.api.util.AEColor;
+import appeng.block.networking.BlockCableBus;
 import appeng.client.render.cablebus.CableBusBakedModel;
 import appeng.client.render.cablebus.CableBusRenderState;
-import appeng.block.networking.BlockCableBus;
 import com.l.ausm.impl.pipeline.compat.AppliedEnergisticsFacadeQuadMetadata;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.List;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.util.EnumFacing;
@@ -13,8 +15,6 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-
-import java.util.List;
 
 @Mixin(value = CableBusBakedModel.class, remap = false)
 public class AppliedEnergisticsCableBusBakedModelMixin {
@@ -36,7 +36,7 @@ public class AppliedEnergisticsCableBusBakedModelMixin {
             return;
         }
         for (BakedQuad quad : quads) {
-            if (quad != null && com.l.ausm.impl.util.MinecraftReflectionCompat.bakedQuadHasTintIndex(quad)) {
+            if (quad != null && MinecraftReflectionCompat.bakedQuadHasTintIndex(quad)) {
                 AppliedEnergisticsFacadeQuadMetadata.markCableBusTint(quad, tintColors);
             }
         }
@@ -47,7 +47,7 @@ public class AppliedEnergisticsCableBusBakedModelMixin {
             return null;
         }
         try {
-            Object value = com.l.ausm.impl.util.MinecraftReflectionCompat.stateValue(extendedState, BlockCableBus.RENDER_STATE_PROPERTY);
+            Object value = MinecraftReflectionCompat.stateValue(extendedState, BlockCableBus.RENDER_STATE_PROPERTY);
             return value instanceof CableBusRenderState ? (CableBusRenderState) value : null;
         } catch (RuntimeException ignored) {
             return null;

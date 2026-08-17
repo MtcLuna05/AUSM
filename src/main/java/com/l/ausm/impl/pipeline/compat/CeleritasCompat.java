@@ -47,7 +47,7 @@ public final class CeleritasCompat {
         );
         if (celeritas) {
             MainMod.LOGGER.info(
-                "[CeleritasCompat] optimization mode: Celeritas frame-ahead/compile helpers retained; AUSM owns terrain, entity, and pass rendering"
+                    "[CeleritasCompat] optimization mode: Celeritas frame-ahead/compile helpers retained; AUSM owns terrain, entity, and pass rendering"
             );
         }
     }

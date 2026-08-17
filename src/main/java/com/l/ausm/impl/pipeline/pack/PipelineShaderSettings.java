@@ -1,7 +1,6 @@
 package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
@@ -14,7 +13,9 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Resolves active shader-pack constants without coupling parsing to render lifecycle state. */
+/**
+ * Resolves active shader-pack constants without coupling parsing to render lifecycle state.
+ */
 public final class PipelineShaderSettings {
     private static final Pattern CONST_SETTING_PATTERN = Pattern.compile("^\\s*const\\s+\\w+\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*([^;\\s]+).*$");
     private static final Pattern DEFINE_SETTING_PATTERN = Pattern.compile("^\\s*#define\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s+([^/\\s]+))?.*$");
@@ -210,13 +211,16 @@ public final class PipelineShaderSettings {
             defines.putAll(ShaderEnvironmentDefines.defineMap(properties.options()));
         }
 
-        private String value() { return value; }
+        private String value() {
+            return value;
+        }
 
         private void scan(String path) {
             if (!pack.hasResource(path) || !visited.add(path)) return;
             try (var stream = pack.getResourceAsStream(path)) {
                 if (stream == null) return;
-                for (String line : new String(stream.readAllBytes(), StandardCharsets.UTF_8).split("\\R", -1)) scanLine(path, line);
+                for (String line : new String(stream.readAllBytes(), StandardCharsets.UTF_8).split("\\R", -1))
+                    scanLine(path, line);
             } catch (IOException ignored) {
             } finally {
                 visited.remove(path);
@@ -226,19 +230,43 @@ public final class PipelineShaderSettings {
         private void scanLine(String currentFile, String line) {
             String trimmed = line.trim();
             if (trimmed.startsWith("#include ")) {
-                if (active()) { String path = includePath(trimmed, currentFile); if (path != null) scan(path); }
+                if (active()) {
+                    String path = includePath(trimmed, currentFile);
+                    if (path != null) scan(path);
+                }
                 return;
             }
-            if (trimmed.startsWith("#if ")) { pushCondition(evaluateCondition(trimmed.substring(4))); return; }
-            if (trimmed.startsWith("#ifdef ")) { pushCondition(defines.containsKey(trimmed.substring(7).trim())); return; }
-            if (trimmed.startsWith("#ifndef ")) { pushCondition(!defines.containsKey(trimmed.substring(8).trim())); return; }
-            if (trimmed.startsWith("#elif ")) { replaceCondition(evaluateCondition(trimmed.substring(6))); return; }
-            if (trimmed.startsWith("#else")) { replaceCondition(true); return; }
-            if (trimmed.startsWith("#endif")) { if (!conditions.isEmpty()) conditions.pop(); return; }
+            if (trimmed.startsWith("#if ")) {
+                pushCondition(evaluateCondition(trimmed.substring(4)));
+                return;
+            }
+            if (trimmed.startsWith("#ifdef ")) {
+                pushCondition(defines.containsKey(trimmed.substring(7).trim()));
+                return;
+            }
+            if (trimmed.startsWith("#ifndef ")) {
+                pushCondition(!defines.containsKey(trimmed.substring(8).trim()));
+                return;
+            }
+            if (trimmed.startsWith("#elif ")) {
+                replaceCondition(evaluateCondition(trimmed.substring(6)));
+                return;
+            }
+            if (trimmed.startsWith("#else")) {
+                replaceCondition(true);
+                return;
+            }
+            if (trimmed.startsWith("#endif")) {
+                if (!conditions.isEmpty()) conditions.pop();
+                return;
+            }
             if (!active()) return;
             String source = stripLineComment(line);
             Matcher define = DEFINE_SETTING_PATTERN.matcher(source);
-            if (define.matches()) { applyDefine(define.group(1), define.group(2)); return; }
+            if (define.matches()) {
+                applyDefine(define.group(1), define.group(2));
+                return;
+            }
             Matcher constant = CONST_SETTING_PATTERN.matcher(source);
             if (constant.matches()) {
                 defines.put(constant.group(1), constant.group(2));
@@ -265,15 +293,25 @@ public final class PipelineShaderSettings {
             conditions.push(new ConditionFrame(previous.parentActive, active, previous.branchMatched || condition));
         }
 
-        private boolean active() { return conditions.isEmpty() || conditions.peek().active; }
-        private boolean evaluateCondition(String expression) { return ShaderExpressionEvaluator.evaluate(stripLineComment(expression), defines); }
-        private String stripLineComment(String value) { int start = value.indexOf("//"); return start < 0 ? value : value.substring(0, start); }
+        private boolean active() {
+            return conditions.isEmpty() || conditions.peek().active;
+        }
+
+        private boolean evaluateCondition(String expression) {
+            return ShaderExpressionEvaluator.evaluate(stripLineComment(expression), defines);
+        }
+
+        private String stripLineComment(String value) {
+            int start = value.indexOf("//");
+            return start < 0 ? value : value.substring(0, start);
+        }
     }
 
     private static final class ConditionFrame {
         private final boolean parentActive;
         private final boolean active;
         private final boolean branchMatched;
+
         private ConditionFrame(boolean parentActive, boolean active, boolean branchMatched) {
             this.parentActive = parentActive;
             this.active = active;

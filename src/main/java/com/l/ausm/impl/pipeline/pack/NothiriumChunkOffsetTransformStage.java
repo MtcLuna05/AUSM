@@ -2,7 +2,6 @@ package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.shader.ProgramStage;
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
 import java.util.EnumSet;
 import java.util.Set;
 import java.util.regex.Matcher;

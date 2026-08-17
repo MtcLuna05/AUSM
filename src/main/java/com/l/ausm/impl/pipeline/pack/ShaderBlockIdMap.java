@@ -1,17 +1,7 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import net.minecraft.block.Block;
-import net.minecraft.block.properties.IProperty;
-import net.minecraft.block.state.IBlockState;
-import net.minecraft.util.BlockRenderLayer;
-import net.minecraft.util.ResourceLocation;
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -19,14 +9,23 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.List;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import net.minecraft.block.Block;
+import net.minecraft.block.properties.IProperty;
+import net.minecraft.block.state.IBlockState;
+import net.minecraft.util.BlockRenderLayer;
+import net.minecraft.util.ResourceLocation;
 
 public final class ShaderBlockIdMap {
-    /** Dedicated non-waving material for BOP's coplanar ground leaf cards. */
+    /**
+     * Dedicated non-waving material for BOP's coplanar ground leaf cards.
+     */
     static final int BOP_LEAF_PILE_MATERIAL_ID = 12284;
 
     private static final ColorAlias[] MINECRAFT_DYE_COLORS = {
@@ -154,7 +153,7 @@ public final class ShaderBlockIdMap {
      * paged 1.12 leaf blocks. Material zero gives those quads ordinary solid
      * receiver bias, which makes dense/overlaid leaf faces shadow each other
      * as dark coplanar cards. Reuse the pack's native leaf material.
-     *
+     * <p>
      * BOP leaf piles are states of plant_0 rather than their own block. They
      * are mapped above to AUSM's dedicated non-waving thin-card material.
      */
@@ -241,8 +240,8 @@ public final class ShaderBlockIdMap {
             return block;
         }
 
-        for (ResourceLocation key : com.l.ausm.impl.util.MinecraftReflectionCompat.registryKeys(com.l.ausm.impl.util.MinecraftReflectionCompat.field(Block.class, Object.class, null, "field_149771_c", "REGISTRY"))) {
-            if (namespace.equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(key)) && path.equalsIgnoreCase(com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(key))) {
+        for (ResourceLocation key : MinecraftReflectionCompat.registryKeys(MinecraftReflectionCompat.field(Block.class, Object.class, null, "field_149771_c", "REGISTRY"))) {
+            if (namespace.equalsIgnoreCase(MinecraftReflectionCompat.resourceNamespace(key)) && path.equalsIgnoreCase(MinecraftReflectionCompat.resourcePath(key))) {
                 return registryBlock(key);
             }
         }
@@ -450,7 +449,7 @@ public final class ShaderBlockIdMap {
     }
 
     private static BlockRenderLayer parseLayer(String value) {
-        return switch (value.toLowerCase(java.util.Locale.ROOT).replace("-", "_")) {
+        return switch (value.toLowerCase(Locale.ROOT).replace("-", "_")) {
             case "solid" -> BlockRenderLayer.SOLID;
             case "cutout" -> BlockRenderLayer.CUTOUT;
             case "cutout_mipped", "cutout_mip", "cutoutmipped" -> BlockRenderLayer.CUTOUT_MIPPED;
@@ -460,20 +459,22 @@ public final class ShaderBlockIdMap {
     }
 
     private static List<ResourceLocation> legacyAliases(ResourceLocation resource) {
-        if (!"minecraft".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.resourceNamespace(resource))) {
+        if (!"minecraft".equals(MinecraftReflectionCompat.resourceNamespace(resource))) {
             return List.of();
         }
 
-        return switch (com.l.ausm.impl.util.MinecraftReflectionCompat.resourcePath(resource)) {
+        return switch (MinecraftReflectionCompat.resourcePath(resource)) {
             case "grass", "short_grass", "tall_grass", "fern", "large_fern" -> minecraft("tallgrass", "double_plant");
             case "dead_bush" -> minecraft("deadbush");
             case "cobweb" -> minecraft("web");
             case "lily_pad" -> minecraft("waterlily");
             case "sugar_cane" -> minecraft("reeds");
             case "dandelion" -> minecraft("yellow_flower");
-            case "poppy", "blue_orchid", "allium", "azure_bluet", "red_tulip", "orange_tulip", "white_tulip", "pink_tulip", "oxeye_daisy" -> minecraft("red_flower");
+            case "poppy", "blue_orchid", "allium", "azure_bluet", "red_tulip", "orange_tulip", "white_tulip",
+                 "pink_tulip", "oxeye_daisy" -> minecraft("red_flower");
             case "sunflower", "lilac", "rose_bush", "peony" -> minecraft("double_plant");
-            case "oak_sapling", "spruce_sapling", "birch_sapling", "jungle_sapling", "acacia_sapling", "dark_oak_sapling" -> minecraft("sapling");
+            case "oak_sapling", "spruce_sapling", "birch_sapling", "jungle_sapling", "acacia_sapling",
+                 "dark_oak_sapling" -> minecraft("sapling");
             case "carrots" -> minecraft("carrots");
             case "potatoes" -> minecraft("potatoes");
             case "beetroots" -> minecraft("beetroots");
@@ -497,13 +498,13 @@ public final class ShaderBlockIdMap {
     }
 
     private static List<ResourceLocation> minecraft(String... paths) {
-        return java.util.Arrays.stream(paths)
+        return Arrays.stream(paths)
                 .map(path -> new ResourceLocation("minecraft", path))
                 .toList();
     }
 
     private static Block registryBlock(ResourceLocation resource) {
-        Object value = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((com.l.ausm.impl.util.MinecraftReflectionCompat.field(Block.class, Object.class, null, "field_149771_c", "REGISTRY")), new String[] {"func_82594_a", "getObject", "getValue"}, new Class<?>[] {net.minecraft.util.ResourceLocation.class}, (resource));
+        Object value = MinecraftReflectionCompat.invoke(MinecraftReflectionCompat.field(Block.class, Object.class, null, "field_149771_c", "REGISTRY"), new String[]{"func_82594_a", "getObject", "getValue"}, new Class<?>[]{ResourceLocation.class}, resource);
         return value instanceof Block ? (Block) value : null;
     }
 
@@ -608,7 +609,7 @@ public final class ShaderBlockIdMap {
         }
 
         private int resolveId(IBlockState state) {
-            Block block = com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state);
+            Block block = MinecraftReflectionCompat.blockFromState(state);
             if (block == null) {
                 return 0;
             }
@@ -649,7 +650,7 @@ public final class ShaderBlockIdMap {
     public record StateRule(Block block, String propertyName, String propertyValue, int id) {
         @SuppressWarnings({"rawtypes", "unchecked"})
         public boolean matches(IBlockState state) {
-            if (state == null || com.l.ausm.impl.util.MinecraftReflectionCompat.blockFromState(state) != block) {
+            if (state == null || MinecraftReflectionCompat.blockFromState(state) != block) {
                 return false;
             }
 
@@ -662,10 +663,10 @@ public final class ShaderBlockIdMap {
                 return false;
             }
 
-            for (Map.Entry<IProperty<?>, Comparable<?>> entry : com.l.ausm.impl.util.MinecraftReflectionCompat.stateProperties(state).entrySet()) {
+            for (Map.Entry<IProperty<?>, Comparable<?>> entry : MinecraftReflectionCompat.stateProperties(state).entrySet()) {
                 IProperty property = entry.getKey();
-                if (property != null && propertyName.equals(com.l.ausm.impl.util.MinecraftReflectionCompat.propertyName(property))) {
-                    String valueName = com.l.ausm.impl.util.MinecraftReflectionCompat.propertyValueName(property, entry.getValue());
+                if (property != null && propertyName.equals(MinecraftReflectionCompat.propertyName(property))) {
+                    String valueName = MinecraftReflectionCompat.propertyValueName(property, entry.getValue());
                     return valueName != null && valueName.equalsIgnoreCase(propertyValue);
                 }
             }

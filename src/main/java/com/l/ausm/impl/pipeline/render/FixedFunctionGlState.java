@@ -2,6 +2,7 @@ package com.l.ausm.impl.pipeline.render;
 
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.nio.FloatBuffer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureManager;
 import org.lwjgl.BufferUtils;
@@ -13,8 +14,6 @@ import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GLContext;
 
-import java.nio.FloatBuffer;
-
 public final class FixedFunctionGlState {
     public static final float TRANSLUCENT_ALPHA_REF = 0.003921569F;
     private static final ThreadLocal<FloatBuffer> TEXTURE_MATRIX_PROBE =
@@ -24,39 +23,39 @@ public final class FixedFunctionGlState {
     }
 
     public static void prepareTranslucentBlockLayer(Minecraft mc) {
-        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc) != null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.enableLightmap(com.l.ausm.impl.util.MinecraftReflectionCompat.entityRenderer(mc));
+        if (mc != null && MinecraftReflectionCompat.entityRenderer(mc) != null) {
+            MinecraftReflectionCompat.enableLightmap(MinecraftReflectionCompat.entityRenderer(mc));
         }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        TextureManager textureManager = com.l.ausm.impl.util.MinecraftReflectionCompat.textureManager(mc);
+        MinecraftReflectionCompat.setActiveTexture(MinecraftReflectionCompat.defaultTexUnit());
+        MinecraftReflectionCompat.glStateEnableTexture2D();
+        TextureManager textureManager = MinecraftReflectionCompat.textureManager(mc);
         if (textureManager != null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bindTexture(textureManager, com.l.ausm.impl.util.MinecraftReflectionCompat.blocksTexture());
+            MinecraftReflectionCompat.bindTexture(textureManager, MinecraftReflectionCompat.blocksTexture());
         }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        MinecraftReflectionCompat.setClientActiveTexture(MinecraftReflectionCompat.defaultTexUnit());
         prepareTranslucentDepthBlendState();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     public static void prepareTranslucentDepthBlendState() {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableDepth();
+        MinecraftReflectionCompat.glStateEnableDepth();
         GL11.glDepthFunc(GL11.GL_LEQUAL);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, TRANSLUCENT_ALPHA_REF);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+        MinecraftReflectionCompat.glStateEnableAlpha();
+        MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, TRANSLUCENT_ALPHA_REF);
+        MinecraftReflectionCompat.glStateEnableBlend();
+        MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(false);
+        MinecraftReflectionCompat.glStateDepthMask(false);
     }
 
     public static void forceTranslucentBlockLayer() {
-        GL13.glActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        GL13.glActiveTexture(MinecraftReflectionCompat.defaultTexUnit());
         GL11.glEnable(GL11.GL_TEXTURE_2D);
-        GL13.glClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        GL13.glClientActiveTexture(MinecraftReflectionCompat.defaultTexUnit());
         GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glDepthFunc(GL11.GL_LEQUAL);
         GL11.glEnable(GL11.GL_ALPHA_TEST);
@@ -73,7 +72,7 @@ public final class FixedFunctionGlState {
 
     public static void resetClientArrayState(boolean resetProgram) {
         if (resetProgram) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
+            MinecraftReflectionCompat.glUseProgram(0);
         }
         if (GLContext.getCapabilities().OpenGL30) {
             GL30.glBindVertexArray(0);
@@ -84,9 +83,9 @@ public final class FixedFunctionGlState {
         GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
         GL11.glDisableClientState(GL11.GL_COLOR_ARRAY);
         GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit());
+        MinecraftReflectionCompat.setClientActiveTexture(MinecraftReflectionCompat.lightmapTexUnit());
         GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+        MinecraftReflectionCompat.setClientActiveTexture(MinecraftReflectionCompat.defaultTexUnit());
         GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
         ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
@@ -106,15 +105,15 @@ public final class FixedFunctionGlState {
         int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
         int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
         try {
-            resetTextureMatrix(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
+            resetTextureMatrix(MinecraftReflectionCompat.defaultTexUnit());
         } finally {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(previousActiveTexture);
+            MinecraftReflectionCompat.setActiveTexture(previousActiveTexture);
             GL11.glMatrixMode(previousMatrixMode);
         }
     }
 
     private static void resetTextureMatrix(int textureUnit) {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.setActiveTexture(textureUnit);
+        MinecraftReflectionCompat.setActiveTexture(textureUnit);
         GL11.glMatrixMode(GL11.GL_TEXTURE);
         GL11.glLoadIdentity();
     }
@@ -130,17 +129,17 @@ public final class FixedFunctionGlState {
 
     public static String clientArraySummary() {
         int previousClientTexture = GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE);
-        int defaultUnit = com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit();
-        int lightmapUnit = com.l.ausm.impl.util.MinecraftReflectionCompat.lightmapTexUnit();
+        int defaultUnit = MinecraftReflectionCompat.defaultTexUnit();
+        int lightmapUnit = MinecraftReflectionCompat.lightmapTexUnit();
         boolean defaultTexCoords;
         boolean lightmapTexCoords;
         try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(defaultUnit);
+            MinecraftReflectionCompat.setClientActiveTexture(defaultUnit);
             defaultTexCoords = GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(lightmapUnit);
+            MinecraftReflectionCompat.setClientActiveTexture(lightmapUnit);
             lightmapTexCoords = GL11.glIsEnabled(GL11.GL_TEXTURE_COORD_ARRAY);
         } finally {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.setClientActiveTexture(previousClientTexture);
+            MinecraftReflectionCompat.setClientActiveTexture(previousClientTexture);
         }
         int vao = GLContext.getCapabilities().OpenGL30
                 ? GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING)

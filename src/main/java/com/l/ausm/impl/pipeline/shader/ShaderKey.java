@@ -1,11 +1,11 @@
 package com.l.ausm.impl.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.api.pipeline.pack.ShaderAlphaTest;
-
+import com.l.ausm.api.pipeline.shader.FogMode;
+import com.l.ausm.api.pipeline.shader.LightingModel;
+import com.l.ausm.api.pipeline.shader.ProgramGroup;
+import com.l.ausm.api.pipeline.shader.ProgramId;
+import com.l.ausm.api.pipeline.shader.RenderPass;
 import java.util.Locale;
 
 /**

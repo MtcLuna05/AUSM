@@ -2,6 +2,7 @@ package com.l.ausm.impl.mixin.pipeline;
 
 import com.l.ausm.impl.client.ShaderCompileNotifications;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.ScaledResolution;
 import net.minecraftforge.client.GuiIngameForge;
@@ -29,14 +30,14 @@ public class GuiIngameForgeMixin {
         if (ausm$isHudHidden()) {
             return;
         }
-        ShaderCompileNotifications.renderOverlay(new ScaledResolution(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft()));
+        ShaderCompileNotifications.renderOverlay(new ScaledResolution(MinecraftReflectionCompat.minecraft()));
     }
 
     private boolean ausm$isHudHidden() {
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
         return minecraft != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft) == null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft) != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.hideGui(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft));
+                && MinecraftReflectionCompat.currentScreen(minecraft) == null
+                && MinecraftReflectionCompat.gameSettings(minecraft) != null
+                && MinecraftReflectionCompat.hideGui(MinecraftReflectionCompat.gameSettings(minecraft));
     }
 }

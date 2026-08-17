@@ -1,6 +1,7 @@
 package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
+import java.nio.FloatBuffer;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.spongepowered.asm.mixin.Mixin;
@@ -9,8 +10,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.nio.FloatBuffer;
 
 @Mixin(targets = "meldexun.nothirium.mc.util.FogUtil", remap = false)
 public class NothiriumFogUtilMixin {

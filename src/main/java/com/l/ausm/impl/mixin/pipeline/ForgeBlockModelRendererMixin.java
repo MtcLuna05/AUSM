@@ -1,5 +1,6 @@
 package com.l.ausm.impl.mixin.pipeline;
 
+import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
 import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
@@ -9,10 +10,8 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraftforge.client.model.pipeline.ForgeBlockModelRenderer;
 import net.minecraftforge.client.model.pipeline.IVertexConsumer;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
-
 
 @Mixin(value = ForgeBlockModelRenderer.class, remap = false)
 public abstract class ForgeBlockModelRendererMixin {
@@ -30,15 +29,15 @@ public abstract class ForgeBlockModelRendererMixin {
         boolean framed = BlockRenderContext.isFramedMaterialOwner();
         TextureAtlasSprite sprite = framed ? MinecraftReflectionCompat.bakedQuadSprite(quad) : null;
         String spriteName = sprite != null ? MinecraftReflectionCompat.spriteIconName(sprite) : null;
-            if (framed) {
-                BlockRenderContext.clearQuadOverrides();
-                BlockRenderContext.setQuadSprite(spriteName);
-                PipelineContext.getInstance().applyFramedQuadMaterial(quad, spriteName);
-            }
+        if (framed) {
+            BlockRenderContext.clearQuadOverrides();
+            BlockRenderContext.setQuadSprite(spriteName);
+            PipelineContext.getInstance().applyFramedQuadMaterial(quad, spriteName);
+        }
         try {
             if (!MinecraftReflectionCompat.bakedQuadPipe(quad, consumer)
                     && BlockRendererDispatcherHooks.FRAMED_PIPE_FAILURE_COUNT.incrementAndGet() <= 8) {
-                com.l.ausm.impl.MainMod.LOGGER.error(
+                MainMod.LOGGER.error(
                         "[AUSMFramedQuadPipeFailure] quad={} consumer={} framed={}",
                         quad != null ? quad.getClass().getName() : "null",
                         consumer != null ? consumer.getClass().getName() : "null",

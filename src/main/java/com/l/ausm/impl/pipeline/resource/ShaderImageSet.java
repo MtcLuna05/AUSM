@@ -6,26 +6,27 @@ import com.l.ausm.impl.pipeline.render.ShaderTextureLoader;
 import com.l.ausm.impl.pipeline.render.TextureBinder;
 import com.l.ausm.impl.pipeline.shader.ShaderBindingLayout;
 import com.l.ausm.impl.pipeline.shader.ShaderProgram;
-import net.minecraft.client.renderer.OpenGlHelper;
-import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL12;
-import org.lwjgl.opengl.GL13;
-import org.lwjgl.opengl.GL15;
-import org.lwjgl.opengl.GL42;
-import org.lwjgl.opengl.GL44;
-import org.lwjgl.opengl.GLContext;
-
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GL42;
+import org.lwjgl.opengl.GL44;
+import org.lwjgl.opengl.GLContext;
 
 public final class ShaderImageSet {
     private static final long MAX_RETAINED_CLEAR_BUFFER_BYTES = 32L * 1024L * 1024L;
     private final List<ShaderImageDirective> images;
     private final List<LoadedImage> loadedImages = new ArrayList<>();
-    private static final ByteBuffer ZERO_CLEAR_VALUE = org.lwjgl.BufferUtils.createByteBuffer(16);
-    private final ByteBuffer singleUintPixel = org.lwjgl.BufferUtils.createByteBuffer(4).order(ByteOrder.nativeOrder());
+    private static final ByteBuffer ZERO_CLEAR_VALUE = BufferUtils.createByteBuffer(16);
+    private final ByteBuffer singleUintPixel = BufferUtils.createByteBuffer(4).order(ByteOrder.nativeOrder());
     private int width;
     private int height;
 
@@ -80,13 +81,13 @@ public final class ShaderImageSet {
             );
             int imageLocation = program.getUniformLocation(directive.name());
             if (imageLocation != -1) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(imageLocation, image.unit());
+                MinecraftReflectionCompat.glUniform1i(imageLocation, image.unit());
             }
             if (directive.samplerName() != null && !directive.samplerName().isBlank()) {
                 TextureBinder.bindTexture(image.textureTarget(), image.samplerUnit(), image.textureId());
                 int location = program.getUniformLocation(directive.samplerName());
                 if (location != -1) {
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(location, image.samplerUnit());
+                    MinecraftReflectionCompat.glUniform1i(location, image.samplerUnit());
                 }
             }
         }
@@ -107,13 +108,13 @@ public final class ShaderImageSet {
             );
             int imageLocation = program.getUniformLocation(directive.name());
             if (imageLocation != -1) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(imageLocation, image.unit());
+                MinecraftReflectionCompat.glUniform1i(imageLocation, image.unit());
             }
             if (directive.samplerName() != null && !directive.samplerName().isBlank()) {
                 TextureBinder.bindTexture(image.textureTarget(), image.samplerUnit(), 0);
                 int location = program.getUniformLocation(directive.samplerName());
                 if (location != -1) {
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(location, image.samplerUnit());
+                    MinecraftReflectionCompat.glUniform1i(location, image.samplerUnit());
                 }
             }
         }
@@ -161,7 +162,7 @@ public final class ShaderImageSet {
         ShaderImageDirective directive = image.directive();
         int pixelFormat = ShaderTextureLoader.pixelFormat(directive.format());
         int pixelType = compatiblePixelType(image.internalFormat(), pixelFormat, ShaderTextureLoader.pixelType(directive.pixelType()));
-        if (pixelFormat != org.lwjgl.opengl.GL30.GL_RED_INTEGER) {
+        if (pixelFormat != GL30.GL_RED_INTEGER) {
             return false;
         }
 
@@ -239,9 +240,12 @@ public final class ShaderImageSet {
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GL11.glBindTexture(image.textureTarget(), image.textureId());
         switch (directive.target()) {
-            case TEXTURE_1D -> GL11.glTexSubImage1D(image.textureTarget(), 0, 0, image.width(), pixelFormat, pixelType, pixels);
-            case TEXTURE_2D -> GL11.glTexSubImage2D(image.textureTarget(), 0, 0, 0, image.width(), image.height(), pixelFormat, pixelType, pixels);
-            case TEXTURE_3D -> GL12.glTexSubImage3D(image.textureTarget(), 0, 0, 0, 0, image.width(), image.height(), image.depth(), pixelFormat, pixelType, pixels);
+            case TEXTURE_1D ->
+                    GL11.glTexSubImage1D(image.textureTarget(), 0, 0, image.width(), pixelFormat, pixelType, pixels);
+            case TEXTURE_2D ->
+                    GL11.glTexSubImage2D(image.textureTarget(), 0, 0, 0, image.width(), image.height(), pixelFormat, pixelType, pixels);
+            case TEXTURE_3D ->
+                    GL12.glTexSubImage3D(image.textureTarget(), 0, 0, 0, 0, image.width(), image.height(), image.depth(), pixelFormat, pixelType, pixels);
         }
         int error = GL11.glGetError();
         if (error != GL11.GL_NO_ERROR) {
@@ -305,9 +309,12 @@ public final class ShaderImageSet {
         }
 
         switch (directive.target()) {
-            case TEXTURE_1D -> GL11.glTexImage1D(target, 0, internalFormat, imageWidth, 0, pixelFormat, pixelType, (ByteBuffer) null);
-            case TEXTURE_2D -> GL11.glTexImage2D(target, 0, internalFormat, imageWidth, imageHeight, 0, pixelFormat, pixelType, (ByteBuffer) null);
-            case TEXTURE_3D -> GL12.glTexImage3D(target, 0, internalFormat, imageWidth, imageHeight, imageDepth, 0, pixelFormat, pixelType, (ByteBuffer) null);
+            case TEXTURE_1D ->
+                    GL11.glTexImage1D(target, 0, internalFormat, imageWidth, 0, pixelFormat, pixelType, (ByteBuffer) null);
+            case TEXTURE_2D ->
+                    GL11.glTexImage2D(target, 0, internalFormat, imageWidth, imageHeight, 0, pixelFormat, pixelType, (ByteBuffer) null);
+            case TEXTURE_3D ->
+                    GL12.glTexImage3D(target, 0, internalFormat, imageWidth, imageHeight, imageDepth, 0, pixelFormat, pixelType, (ByteBuffer) null);
         }
         ByteBuffer perFrameClearPixels = directive.clear()
                 ? retainedClearBuffer(pixelFormat, pixelType, imageWidth, imageHeight, imageDepth)
@@ -342,30 +349,30 @@ public final class ShaderImageSet {
             return requestedPixelType;
         }
         return switch (internalFormat) {
-            case org.lwjgl.opengl.GL30.GL_R8UI,
-                 org.lwjgl.opengl.GL30.GL_RG8UI,
-                 org.lwjgl.opengl.GL30.GL_RGB8UI,
-                 org.lwjgl.opengl.GL30.GL_RGBA8UI -> GL11.GL_UNSIGNED_BYTE;
-            case org.lwjgl.opengl.GL30.GL_R8I,
-                 org.lwjgl.opengl.GL30.GL_RG8I,
-                 org.lwjgl.opengl.GL30.GL_RGB8I,
-                 org.lwjgl.opengl.GL30.GL_RGBA8I -> GL11.GL_BYTE;
-            case org.lwjgl.opengl.GL30.GL_R16UI,
-                 org.lwjgl.opengl.GL30.GL_RG16UI,
-                 org.lwjgl.opengl.GL30.GL_RGB16UI,
-                 org.lwjgl.opengl.GL30.GL_RGBA16UI -> GL11.GL_UNSIGNED_SHORT;
-            case org.lwjgl.opengl.GL30.GL_R16I,
-                 org.lwjgl.opengl.GL30.GL_RG16I,
-                 org.lwjgl.opengl.GL30.GL_RGB16I,
-                 org.lwjgl.opengl.GL30.GL_RGBA16I -> GL11.GL_SHORT;
-            case org.lwjgl.opengl.GL30.GL_R32UI,
-                 org.lwjgl.opengl.GL30.GL_RG32UI,
-                 org.lwjgl.opengl.GL30.GL_RGB32UI,
-                 org.lwjgl.opengl.GL30.GL_RGBA32UI -> GL11.GL_UNSIGNED_INT;
-            case org.lwjgl.opengl.GL30.GL_R32I,
-                 org.lwjgl.opengl.GL30.GL_RG32I,
-                 org.lwjgl.opengl.GL30.GL_RGB32I,
-                 org.lwjgl.opengl.GL30.GL_RGBA32I -> GL11.GL_INT;
+            case GL30.GL_R8UI,
+                 GL30.GL_RG8UI,
+                 GL30.GL_RGB8UI,
+                 GL30.GL_RGBA8UI -> GL11.GL_UNSIGNED_BYTE;
+            case GL30.GL_R8I,
+                 GL30.GL_RG8I,
+                 GL30.GL_RGB8I,
+                 GL30.GL_RGBA8I -> GL11.GL_BYTE;
+            case GL30.GL_R16UI,
+                 GL30.GL_RG16UI,
+                 GL30.GL_RGB16UI,
+                 GL30.GL_RGBA16UI -> GL11.GL_UNSIGNED_SHORT;
+            case GL30.GL_R16I,
+                 GL30.GL_RG16I,
+                 GL30.GL_RGB16I,
+                 GL30.GL_RGBA16I -> GL11.GL_SHORT;
+            case GL30.GL_R32UI,
+                 GL30.GL_RG32UI,
+                 GL30.GL_RGB32UI,
+                 GL30.GL_RGBA32UI -> GL11.GL_UNSIGNED_INT;
+            case GL30.GL_R32I,
+                 GL30.GL_RG32I,
+                 GL30.GL_RGB32I,
+                 GL30.GL_RGBA32I -> GL11.GL_INT;
             default -> requestedPixelType;
         };
     }
@@ -375,7 +382,7 @@ public final class ShaderImageSet {
         if (size <= 0 || size > MAX_RETAINED_CLEAR_BUFFER_BYTES || size > Integer.MAX_VALUE) {
             return null;
         }
-        return org.lwjgl.BufferUtils.createByteBuffer((int) size);
+        return BufferUtils.createByteBuffer((int) size);
     }
 
     private static ByteBuffer zeroPixels(int pixelFormat, int pixelType, int width, int height, int depth) {
@@ -383,14 +390,14 @@ public final class ShaderImageSet {
         if (size <= 0 || size > MAX_RETAINED_CLEAR_BUFFER_BYTES || size > Integer.MAX_VALUE) {
             return null;
         }
-        return org.lwjgl.BufferUtils.createByteBuffer((int) size);
+        return BufferUtils.createByteBuffer((int) size);
     }
 
     private static int componentCount(int pixelFormat) {
         return switch (pixelFormat) {
-            case GL11.GL_RED, org.lwjgl.opengl.GL30.GL_RED_INTEGER -> 1;
-            case org.lwjgl.opengl.GL30.GL_RG, org.lwjgl.opengl.GL30.GL_RG_INTEGER -> 2;
-            case GL11.GL_RGB, GL12.GL_BGR, org.lwjgl.opengl.GL30.GL_RGB_INTEGER, org.lwjgl.opengl.GL30.GL_BGR_INTEGER -> 3;
+            case GL11.GL_RED, GL30.GL_RED_INTEGER -> 1;
+            case GL30.GL_RG, GL30.GL_RG_INTEGER -> 2;
+            case GL11.GL_RGB, GL12.GL_BGR, GL30.GL_RGB_INTEGER, GL30.GL_BGR_INTEGER -> 3;
             default -> 4;
         };
     }
@@ -400,7 +407,7 @@ public final class ShaderImageSet {
             case GL11.GL_BYTE, GL11.GL_UNSIGNED_BYTE, GL12.GL_UNSIGNED_BYTE_3_3_2, GL12.GL_UNSIGNED_BYTE_2_3_3_REV -> 1;
             case GL11.GL_SHORT, GL11.GL_UNSIGNED_SHORT, GL12.GL_UNSIGNED_SHORT_5_6_5, GL12.GL_UNSIGNED_SHORT_5_6_5_REV,
                  GL12.GL_UNSIGNED_SHORT_4_4_4_4, GL12.GL_UNSIGNED_SHORT_4_4_4_4_REV, GL12.GL_UNSIGNED_SHORT_5_5_5_1,
-                 GL12.GL_UNSIGNED_SHORT_1_5_5_5_REV, org.lwjgl.opengl.GL30.GL_HALF_FLOAT -> 2;
+                 GL12.GL_UNSIGNED_SHORT_1_5_5_5_REV, GL30.GL_HALF_FLOAT -> 2;
             default -> 4;
         };
     }

@@ -1,12 +1,9 @@
 package com.l.ausm.api.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.api.pipeline.shader.ProgramId;
-
+import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -29,7 +26,7 @@ public record ShaderProgramDirectives(
         Map<Attachment, Boolean> explicitFlips
 ) {
     public Attachment[] clearAttachments(Iterable<Attachment> buffers) {
-        java.util.EnumSet<Attachment> attachments = java.util.EnumSet.noneOf(Attachment.class);
+        EnumSet<Attachment> attachments = EnumSet.noneOf(Attachment.class);
         for (Attachment attachment : buffers) {
             if (!clearDisabledBuffers.contains(attachment)) {
                 attachments.add(attachment);
@@ -39,7 +36,7 @@ public record ShaderProgramDirectives(
     }
 
     public Attachment[] flippedAttachments(Iterable<Attachment> buffers) {
-        java.util.List<Attachment> flipped = new java.util.ArrayList<>();
+        List<Attachment> flipped = new ArrayList<>();
         for (Attachment attachment : buffers) {
             if (explicitFlips.get(attachment) != Boolean.FALSE) {
                 flipped.add(attachment);

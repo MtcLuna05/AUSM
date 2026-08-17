@@ -3,15 +3,15 @@ package com.l.ausm.impl.pipeline.resource;
 import com.l.ausm.api.pipeline.pack.ShaderStorageBufferDirective;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.pack.ShaderPack;
-import org.lwjgl.BufferUtils;
-import org.lwjgl.opengl.GL15;
-import org.lwjgl.opengl.GL30;
-import org.lwjgl.opengl.GL43;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.TreeMap;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GL43;
 
 public final class ShaderStorageBufferSet {
     private final Map<Integer, BuiltShaderStorageBuffer> buffers;
@@ -121,8 +121,8 @@ public final class ShaderStorageBufferSet {
             content.flip();
             GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0L, content);
         }
-        int error = org.lwjgl.opengl.GL11.glGetError();
-        if (error != org.lwjgl.opengl.GL11.GL_NO_ERROR) {
+        int error = GL11.glGetError();
+        if (error != GL11.GL_NO_ERROR) {
             MainMod.LOGGER.warn("[ShaderStorageBuffers] GL error allocating SSBO {}: 0x{}", index, Integer.toHexString(error));
         }
     }

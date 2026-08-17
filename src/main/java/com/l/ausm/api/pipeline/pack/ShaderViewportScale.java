@@ -1,8 +1,5 @@
 package com.l.ausm.api.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-
 public record ShaderViewportScale(float scale, float offsetX, float offsetY) {
     public static final ShaderViewportScale DEFAULT = new ShaderViewportScale(1.0f, 0.0f, 0.0f);
 

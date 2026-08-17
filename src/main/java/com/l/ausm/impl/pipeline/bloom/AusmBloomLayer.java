@@ -1,13 +1,12 @@
 package com.l.ausm.impl.pipeline.bloom;
 
 import com.l.ausm.impl.MainMod;
-import net.minecraft.util.BlockRenderLayer;
-import net.minecraftforge.common.util.EnumHelper;
-import net.minecraftforge.fml.common.Loader;
-
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import net.minecraft.util.BlockRenderLayer;
+import net.minecraftforge.common.util.EnumHelper;
+import net.minecraftforge.fml.common.Loader;
 
 public final class AusmBloomLayer {
     private static final String LUMENIZED_MOD_ID = "lumenized";

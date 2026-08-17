@@ -1,6 +1,7 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import net.minecraft.client.renderer.GlStateManager;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.nio.FloatBuffer;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.spongepowered.asm.mixin.Mixin;
@@ -8,8 +9,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.nio.FloatBuffer;
 
 @Mixin(targets = "lumien.custommainmenu.gui.GuiCustom", remap = false)
 public class CustomMainMenuGuiCustomMixin {
@@ -35,7 +34,7 @@ public class CustomMainMenuGuiCustomMixin {
             remap = false
     )
     private void ausm$syncRawColorWithGlStateManager(float red, float green, float blue) {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(red, green, blue, 1.0F);
+        MinecraftReflectionCompat.glStateColor(red, green, blue, 1.0F);
         GL11.glColor4f(red, green, blue, 1.0F);
     }
 

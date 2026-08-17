@@ -1,8 +1,8 @@
 package com.l.ausm.impl.mixin.compat;
 
+import com.l.ausm.impl.pipeline.compat.NothiriumPipelineCompat;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import com.l.ausm.impl.pipeline.compat.NothiriumPipelineCompat;
 import meldexun.memoryutil.UnsafeByteBuffer;
 import meldexun.nothirium.api.renderer.IVBOPart;
 import org.spongepowered.asm.mixin.Final;
@@ -50,7 +50,7 @@ public class NothiriumRenderChunkTaskSortTranslucentMixin {
         if (vboPart == null || !vboPart.isValid()) {
             return original;
         }
-        int stride = ausm$effectiveVertexStride(ExtendedVertexFormats.size(com.l.ausm.impl.util.MinecraftReflectionCompat.blockFormat()));
+        int stride = ausm$effectiveVertexStride(ExtendedVertexFormats.size(MinecraftReflectionCompat.blockFormat()));
         if (stride <= 0 || !ausm$vertexDataFitsStride(stride)) {
             return original;
         }

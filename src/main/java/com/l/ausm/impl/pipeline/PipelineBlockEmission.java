@@ -1,13 +1,15 @@
 package com.l.ausm.impl.pipeline;
 
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.Map;
 import net.minecraft.block.Block;
+import net.minecraft.block.properties.IProperty;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.ResourceLocation;
 
-import java.util.Map;
-
-/** Classifies emissive block states without coupling that policy to render lifecycle state. */
+/**
+ * Classifies emissive block states without coupling that policy to render lifecycle state.
+ */
 final class PipelineBlockEmission {
 
     static int intrinsicEmission(IBlockState state) {
@@ -24,7 +26,7 @@ final class PipelineBlockEmission {
         }
         String path = MinecraftReflectionCompat.resourcePath(registryName(state));
         if ("blockcelestialcrystals".equalsIgnoreCase(path)) {
-            return clampLightValue(6 + Math.max(0, Math.min(4, parseIntProperty(state, "stage", 2))));
+            return clampLightValue(6 + Math.clamp(parseIntProperty(state, "stage", 2), 0, 4));
         }
         if ("blockgemcrystals".equalsIgnoreCase(path)) {
             String stage = propertyValue(state, "stage");
@@ -97,8 +99,8 @@ final class PipelineBlockEmission {
         if (state == null || propertyName == null) {
             return null;
         }
-        for (Map.Entry<net.minecraft.block.properties.IProperty<?>, Comparable<?>> entry : MinecraftReflectionCompat.stateProperties(state).entrySet()) {
-            net.minecraft.block.properties.IProperty property = entry.getKey();
+        for (Map.Entry<IProperty<?>, Comparable<?>> entry : MinecraftReflectionCompat.stateProperties(state).entrySet()) {
+            IProperty property = entry.getKey();
             if (property != null && propertyName.equals(MinecraftReflectionCompat.propertyName(property))) {
                 return MinecraftReflectionCompat.propertyValueName(property, entry.getValue());
             }
@@ -107,6 +109,6 @@ final class PipelineBlockEmission {
     }
 
     private static int clampLightValue(int value) {
-        return Math.max(0, Math.min(15, value));
+        return Math.clamp(value, 0, 15);
     }
 }

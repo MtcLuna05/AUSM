@@ -1,14 +1,9 @@
 package com.l.ausm.impl.pipeline.vertex;
 
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
-import net.minecraft.client.renderer.vertex.VertexFormat;
-
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import net.minecraft.client.renderer.vertex.VertexFormat;
 
 public final class SeparateAoColorWriter {
     private static final boolean LITTLE_ENDIAN = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
@@ -130,6 +125,6 @@ public final class SeparateAoColorWriter {
     }
 
     private static float clamp(float value, float min, float max) {
-        return Math.max(min, Math.min(max, value));
+        return Math.clamp(value, min, max);
     }
 }

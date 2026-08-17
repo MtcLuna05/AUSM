@@ -2,15 +2,15 @@ package com.l.ausm.impl.client;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.gui.GuiIngame;
 import net.minecraft.client.gui.GuiNewChat;
 import net.minecraft.client.gui.ScaledResolution;
+import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.TextComponentString;
-
-import java.util.ArrayList;
-import java.util.List;
 
 public final class ShaderCompileNotifications {
     private static final List<String> FAILURES = new ArrayList<>();
@@ -57,11 +57,11 @@ public final class ShaderCompileNotifications {
     }
 
     private static void postChatMessage(String message) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        GuiIngame ingameGui = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.field((mc), net.minecraft.client.gui.GuiIngame.class, null, "field_71456_v", "ingameGUI") : null;
-        GuiNewChat chat = ingameGui != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.call((ingameGui), net.minecraft.client.gui.GuiNewChat.class, null, new String[] {"func_146158_b", "getChatGUI"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS) : null;
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
+        GuiIngame ingameGui = mc != null ? MinecraftReflectionCompat.field(mc, GuiIngame.class, null, "field_71456_v", "ingameGUI") : null;
+        GuiNewChat chat = ingameGui != null ? MinecraftReflectionCompat.call(ingameGui, GuiNewChat.class, null, new String[]{"func_146158_b", "getChatGUI"}, MinecraftReflectionCompat.NO_PARAMETERS) : null;
         if (chat != null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke((chat), new String[] {"func_146227_a", "printChatMessage"}, new Class<?>[] {net.minecraft.util.text.ITextComponent.class}, (new TextComponentString("[AUSM] " + message)));;
+            MinecraftReflectionCompat.invoke(chat, new String[]{"func_146227_a", "printChatMessage"}, new Class<?>[]{ITextComponent.class}, new TextComponentString("[AUSM] " + message));
         }
     }
 
@@ -76,12 +76,12 @@ public final class ShaderCompileNotifications {
         }
         overlayTicks--;
 
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc == null || com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc) == null || resolution == null) {
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
+        if (mc == null || MinecraftReflectionCompat.fontRenderer(mc) == null || resolution == null) {
             return;
         }
 
-        FontRenderer font = com.l.ausm.impl.util.MinecraftReflectionCompat.fontRenderer(mc);
+        FontRenderer font = MinecraftReflectionCompat.fontRenderer(mc);
         int textWidth = MinecraftReflectionCompat.fontStringWidth(font, overlayText);
         int x = Math.max(6, (MinecraftReflectionCompat.scaledResolutionWidth(resolution) - textWidth) / 2);
         int y = 8;

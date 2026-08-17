@@ -35,7 +35,7 @@ public final class BlockcrafteryContainedStateCompat {
         // Asynchronous world slices can omit the tile's live state.  Their
         // backing client world remains the Blockcraftery source of truth.
         IBlockAccess backing = MinecraftReflectionCompat.call(blockAccess, IBlockAccess.class, null,
-                new String[] {"getWorld"}, MinecraftReflectionCompat.NO_PARAMETERS);
+                new String[]{"getWorld"}, MinecraftReflectionCompat.NO_PARAMETERS);
         if (backing != null && backing != blockAccess) {
             state = stateFromTile(MinecraftReflectionCompat.blockAccessTileEntity(backing, pos), hostState);
             if (state != null) {

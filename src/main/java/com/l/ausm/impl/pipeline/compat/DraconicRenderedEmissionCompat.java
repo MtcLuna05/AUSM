@@ -1,11 +1,12 @@
 package com.l.ausm.impl.pipeline.compat;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
-
 import java.util.ArrayDeque;
 import java.util.Deque;
 
-/** Runtime bridge used by the lazy Draconic Evolution renderer transformer. */
+/**
+ * Runtime bridge used by the lazy Draconic Evolution renderer transformer.
+ */
 public final class DraconicRenderedEmissionCompat {
     private static final int DYNAMIC_EMISSION_BLOCK_ENTITY_ID = 21024;
     private static final ThreadLocal<Deque<Boolean>> EMISSION_SCOPES =

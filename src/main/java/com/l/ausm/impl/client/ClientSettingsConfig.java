@@ -1,7 +1,6 @@
 package com.l.ausm.impl.client;
 
 import com.l.ausm.impl.MainMod;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -154,6 +153,6 @@ public final class ClientSettingsConfig {
         if (!Float.isFinite(value)) {
             return min;
         }
-        return Math.max(min, Math.min(max, value));
+        return Math.clamp(value, min, max);
     }
 }

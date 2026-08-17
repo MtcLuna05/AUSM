@@ -1,17 +1,15 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
-import com.l.ausm.impl.MainMod;
+import com.l.ausm.api.pipeline.pack.ShaderOption;
+import com.l.ausm.api.pipeline.pack.ShaderOptions;
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
+import com.l.ausm.impl.MainMod;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -249,7 +247,7 @@ public final class ShaderOptionScanner {
 
         int commentStart = line.indexOf("//");
         String constPart = commentStart >= 0 ? line.substring(0, commentStart) : line;
-        java.util.regex.Matcher matcher = java.util.regex.Pattern
+        Matcher matcher = Pattern
                 .compile("^\\s*const\\s+\\w+\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*([^;\\s]+)")
                 .matcher(constPart);
         if (!matcher.find()) {
@@ -315,7 +313,7 @@ public final class ShaderOptionScanner {
 
     private static String formatDecimal(BigDecimal value, String sample) {
         int scale = Math.max(0, sample.indexOf('.') >= 0 ? sample.length() - sample.indexOf('.') - 1 : 0);
-        return value.setScale(scale, java.math.RoundingMode.HALF_UP).toPlainString();
+        return value.setScale(scale, RoundingMode.HALF_UP).toPlainString();
     }
 
     private record DefineOption(String name, String value, String choices, boolean enabled) {

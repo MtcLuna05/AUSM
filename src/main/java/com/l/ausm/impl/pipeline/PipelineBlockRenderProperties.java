@@ -8,7 +8,9 @@ import net.minecraft.util.EnumBlockRenderType;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
 
-/** Safe render-property queries shared by block policy, diagnostics, and terrain compatibility. */
+/**
+ * Safe render-property queries shared by block policy, diagnostics, and terrain compatibility.
+ */
 final class PipelineBlockRenderProperties {
     private PipelineBlockRenderProperties() {
     }
@@ -45,12 +47,12 @@ final class PipelineBlockRenderProperties {
 
     static boolean opaqueCube(IBlockState state) {
         return state != null && MinecraftReflectionCompat.callBoolean(state,
-                new String[] {"func_185913_b", "isOpaqueCube"}, MinecraftReflectionCompat.NO_PARAMETERS, false);
+                new String[]{"func_185913_b", "isOpaqueCube"}, MinecraftReflectionCompat.NO_PARAMETERS, false);
     }
 
     static boolean fullCube(IBlockState state) {
         return state != null && MinecraftReflectionCompat.callBoolean(state,
-                new String[] {"func_185917_h", "isFullCube"}, MinecraftReflectionCompat.NO_PARAMETERS, false);
+                new String[]{"func_185917_h", "isFullCube"}, MinecraftReflectionCompat.NO_PARAMETERS, false);
     }
 
     static boolean canRenderInLayer(IBlockState state, BlockRenderLayer layer) {

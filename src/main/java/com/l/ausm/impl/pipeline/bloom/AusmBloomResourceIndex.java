@@ -1,8 +1,7 @@
 package com.l.ausm.impl.pipeline.bloom;
 
 import com.l.ausm.impl.MainMod;
-import net.minecraft.client.Minecraft;
-
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -14,6 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
+import net.minecraft.client.Minecraft;
 
 public final class AusmBloomResourceIndex {
     private final AtomicBoolean scanned = new AtomicBoolean();
@@ -29,12 +29,12 @@ public final class AusmBloomResourceIndex {
             return;
         }
 
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        File runDir = mc != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.gameDir(mc) : new File(System.getProperty("user.dir", "."));
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
+        File runDir = mc != null ? MinecraftReflectionCompat.gameDir(mc) : new File(System.getProperty("user.dir", "."));
         scanPackRoot(new File(runDir, "resourcepacks"));
         scanPackRoot(new File(runDir, "mods"));
 
-        
+
     }
 
     public boolean hasBloomResources() {

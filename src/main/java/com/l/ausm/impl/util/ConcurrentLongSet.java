@@ -2,7 +2,9 @@ package com.l.ausm.impl.util;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
-/** A small striped primitive set for render-thread reads and chunk-worker updates. */
+/**
+ * A small striped primitive set for render-thread reads and chunk-worker updates.
+ */
 public final class ConcurrentLongSet {
     private static final int STRIPE_COUNT = 32;
     private static final int STRIPE_MASK = STRIPE_COUNT - 1;

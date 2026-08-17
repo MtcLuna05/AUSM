@@ -12,7 +12,6 @@ import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
-import org.objectweb.asm.tree.VarInsnNode;
 
 public final class ClientPacketNullPlayerTransformer implements IClassTransformer {
     private static final String TOMBSTONE_RUNNABLE = "ovh.corail.tombstone.network.SyncCapClientMessage$Handler$1";

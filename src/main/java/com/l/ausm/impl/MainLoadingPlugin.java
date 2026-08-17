@@ -1,9 +1,5 @@
 package com.l.ausm.impl;
 
-import net.minecraft.launchwrapper.Launch;
-import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin;
-import org.jetbrains.annotations.Nullable;
-
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
@@ -11,6 +7,9 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.jar.JarFile;
+import net.minecraft.launchwrapper.Launch;
+import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin;
+import org.jetbrains.annotations.Nullable;
 
 public class MainLoadingPlugin implements IFMLLoadingPlugin {
     private static final String[] EARLY_OPTIONAL_COMPAT_TARGETS = {

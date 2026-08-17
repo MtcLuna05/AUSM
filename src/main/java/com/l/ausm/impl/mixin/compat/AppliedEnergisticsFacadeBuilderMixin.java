@@ -6,6 +6,8 @@ import appeng.client.render.cablebus.FacadeRenderState;
 import appeng.thirdparty.codechicken.lib.model.Quad;
 import com.l.ausm.impl.pipeline.compat.AppliedEnergisticsFacadeQuadMetadata;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.List;
+import java.util.function.Function;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.block.model.IBakedModel;
@@ -20,9 +22,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.util.List;
-import java.util.function.Function;
 
 @Mixin(value = FacadeBuilder.class, remap = false)
 public class AppliedEnergisticsFacadeBuilderMixin {
@@ -43,8 +42,8 @@ public class AppliedEnergisticsFacadeBuilderMixin {
                                           List<BakedQuad> quads,
                                           Function<ResourceLocation, IBakedModel> modelLookup,
                                           CallbackInfo ci) {
-        Object world = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(renderState, new String[] {"getWorld"}, new Class<?>[0]);
-        Object pos = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(renderState, new String[] {"getPos"}, new Class<?>[0]);
+        Object world = MinecraftReflectionCompat.invoke(renderState, new String[]{"getWorld"}, new Class<?>[0]);
+        Object pos = MinecraftReflectionCompat.invoke(renderState, new String[]{"getPos"}, new Class<?>[0]);
         ausm$currentFacadeWorld.set(world instanceof IBlockAccess ? (IBlockAccess) world : null);
         ausm$currentFacadePos.set(pos instanceof BlockPos ? (BlockPos) pos : null);
     }

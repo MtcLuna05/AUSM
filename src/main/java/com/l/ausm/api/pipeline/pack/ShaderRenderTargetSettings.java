@@ -3,9 +3,9 @@ package com.l.ausm.api.pipeline.pack;
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.api.pipeline.fbo.ColorBufferFormat;
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -151,11 +151,11 @@ public record ShaderRenderTargetSettings(
         private final Map<Attachment, ShaderTextureScale> textureScales = new EnumMap<>(Attachment.class);
         private final Map<Attachment, float[]> clearColors = new EnumMap<>(Attachment.class);
         private final Set<Attachment> explicitFormats = EnumSet.noneOf(Attachment.class);
-        private final Map<Integer, Boolean> shadowDepthNearest = new java.util.HashMap<>();
-        private final Map<Integer, Boolean> shadowDepthMipmap = new java.util.HashMap<>();
-        private final Map<Integer, Boolean> shadowColorClear = new java.util.HashMap<>();
-        private final Map<Integer, Boolean> shadowColorNearest = new java.util.HashMap<>();
-        private final Map<Integer, Boolean> shadowColorMipmap = new java.util.HashMap<>();
+        private final Map<Integer, Boolean> shadowDepthNearest = new HashMap<>();
+        private final Map<Integer, Boolean> shadowDepthMipmap = new HashMap<>();
+        private final Map<Integer, Boolean> shadowColorClear = new HashMap<>();
+        private final Map<Integer, Boolean> shadowColorNearest = new HashMap<>();
+        private final Map<Integer, Boolean> shadowColorMipmap = new HashMap<>();
         private boolean shadowHardwareFiltering = false;
 
         public void setFormat(Attachment attachment, ColorBufferFormat format) {

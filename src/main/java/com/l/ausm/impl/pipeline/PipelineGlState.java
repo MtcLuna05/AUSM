@@ -3,8 +3,8 @@ package com.l.ausm.impl.pipeline;
 import com.l.ausm.impl.pipeline.matrix.MatrixState;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.nio.FloatBuffer;
 import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
@@ -13,9 +13,9 @@ import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL43;
 import org.lwjgl.opengl.GLContext;
 
-import java.nio.FloatBuffer;
-
-/** Stateless GL queries and global pipeline-state restoration helpers. */
+/**
+ * Stateless GL queries and global pipeline-state restoration helpers.
+ */
 final class PipelineGlState {
     private static int maxDrawBuffers = -1;
     private static int maxShaderStorageBufferBindings = -1;

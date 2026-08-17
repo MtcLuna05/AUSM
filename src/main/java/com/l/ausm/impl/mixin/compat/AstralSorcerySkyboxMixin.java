@@ -3,15 +3,18 @@ package com.l.ausm.impl.mixin.compat;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.world.World;
+import net.minecraft.world.WorldProvider;
+import org.lwjgl.opengl.GL11;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.lwjgl.opengl.GL11;
 
 @Mixin(targets = "hellfirepvp.astralsorcery.client.sky.RenderAstralSkybox", remap = false)
 public class AstralSorcerySkyboxMixin {
@@ -38,8 +41,8 @@ public class AstralSorcerySkyboxMixin {
             if (context.shouldSuppressAstralUpperSkyGeometry()) {
                 return;
             }
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
-                    new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, displayList);
+            MinecraftReflectionCompat.invoke(GlStateManager.class,
+                    new String[]{"func_179148_o", "callList"}, new Class<?>[]{int.class}, displayList);
         } finally {
             context.endPass();
         }
@@ -62,8 +65,8 @@ public class AstralSorcerySkyboxMixin {
         }
         context.beginPhase(WorldRenderingPhase.SKY_GROUND);
         try {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(net.minecraft.client.renderer.GlStateManager.class,
-                    new String[] {"func_179148_o", "callList"}, new Class<?>[] {int.class}, displayList);
+            MinecraftReflectionCompat.invoke(GlStateManager.class,
+                    new String[]{"func_179148_o", "callList"}, new Class<?>[]{int.class}, displayList);
         } finally {
             context.endPass();
         }
@@ -145,12 +148,12 @@ public class AstralSorcerySkyboxMixin {
         context.setSkyDetailKind(4);
         context.beginPhase(WorldRenderingPhase.ASTRAL_STARS);
         if (context.shouldSuppressShaderlessOwnedSkyBaseGeometry()) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+            MinecraftReflectionCompat.glUseProgram(0);
+            MinecraftReflectionCompat.glStateEnableTexture2D();
+            MinecraftReflectionCompat.glStateEnableBlend();
+            MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                     GL11.GL_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+            MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         }
     }
 
@@ -194,8 +197,8 @@ public class AstralSorcerySkyboxMixin {
         if (ausm$isSimpleVoidWorld(world)) {
             return ausm$voidWorldAstralStarBrightnessInput(world);
         }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((world), new String[] {"func_72880_h", "getStarBrightness"},
-                new Class<?>[] {float.class}, 0.0F, (partialTicks));
+        return MinecraftReflectionCompat.callFloat(world, new String[]{"func_72880_h", "getStarBrightness"},
+                new Class<?>[]{float.class}, 0.0F, partialTicks);
     }
 
     @Redirect(
@@ -210,11 +213,11 @@ public class AstralSorcerySkyboxMixin {
     private void ausm$boostVoidWorldAstralStarColor(float red, float green, float blue, float alpha, World world, float partialTicks) {
         if (ausm$isSimpleVoidWorld(world)) {
             float visibility = ausm$voidWorldAstralNightVisibility(world);
-            float boosted = Math.min(1.0F, Math.max(red, 0.62F * visibility));
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(boosted, boosted, boosted, alpha);
+            float boosted = Math.clamp(red, 0.62F * visibility, 1.0F);
+            MinecraftReflectionCompat.glStateColor(boosted, boosted, boosted, alpha);
             return;
         }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(red, green, blue, alpha);
+        MinecraftReflectionCompat.glStateColor(red, green, blue, alpha);
     }
 
     @Redirect(
@@ -241,8 +244,8 @@ public class AstralSorcerySkyboxMixin {
         if (ausm$isSimpleVoidWorld(world)) {
             return ausm$voidWorldAstralConstellationBrightnessInput(world);
         }
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.callFloat((world), new String[] {"func_72880_h", "getStarBrightness"},
-                new Class<?>[] {float.class}, 0.0F, (partialTicks));
+        return MinecraftReflectionCompat.callFloat(world, new String[]{"func_72880_h", "getStarBrightness"},
+                new Class<?>[]{float.class}, 0.0F, partialTicks);
     }
 
     @Inject(method = "renderSunsetToBackground", at = @At("HEAD"), cancellable = true, remap = false)
@@ -283,16 +286,16 @@ public class AstralSorcerySkyboxMixin {
     }
 
     private static boolean ausm$isSimpleVoidWorld(World world) {
-        net.minecraft.world.WorldProvider provider = com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world);
+        WorldProvider provider = MinecraftReflectionCompat.worldProvider(world);
         return provider != null
-                && com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(provider) == 43;
+                && MinecraftReflectionCompat.providerDimension(provider) == 43;
     }
 
     private static long ausm$starRenderTime(World world) {
         if (!ausm$usesCustomVoidSky(world)) {
-            Object time = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(
+            Object time = MinecraftReflectionCompat.invoke(
                     world,
-                    new String[] {"func_72820_D", "getWorldTime"},
+                    new String[]{"func_72820_D", "getWorldTime"},
                     new Class<?>[0]
             );
             return time instanceof Number ? ((Number) time).longValue() : 0L;
@@ -313,12 +316,12 @@ public class AstralSorcerySkyboxMixin {
     }
 
     private static float ausm$voidWorldAstralNightFactor(World world) {
-        float timeAngle = (com.l.ausm.impl.util.MinecraftReflectionCompat.worldTime(world) % 24000L) / 24000.0F;
+        float timeAngle = (MinecraftReflectionCompat.worldTime(world) % 24000L) / 24000.0F;
         return Math.max((float) Math.sin(timeAngle * -6.2831855F), 0.0F);
     }
 
     private static float ausm$smoothstep(float edge0, float edge1, float value) {
-        float t = Math.max(0.0F, Math.min(1.0F, (value - edge0) / (edge1 - edge0)));
+        float t = Math.clamp((value - edge0) / (edge1 - edge0), 0.0F, 1.0F);
         return t * t * (3.0F - 2.0F * t);
     }
 
@@ -333,14 +336,14 @@ public class AstralSorcerySkyboxMixin {
 
     private static float ausm$solarEclipseFactor(float partialTicks) {
         try {
-            Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-            if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) == null) {
+            Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+            if (minecraft == null || MinecraftReflectionCompat.world(minecraft) == null) {
                 return 0.0f;
             }
 
             Class<?> handlerClass = Class.forName("hellfirepvp.astralsorcery.common.constellation.distribution.ConstellationSkyHandler");
             Object handler = handlerClass.getMethod("getInstance").invoke(null);
-            Object worldHandler = handlerClass.getMethod("getWorldHandler", World.class).invoke(handler, com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft));
+            Object worldHandler = handlerClass.getMethod("getWorldHandler", World.class).invoke(handler, MinecraftReflectionCompat.world(minecraft));
             if (worldHandler == null) {
                 return 0.0f;
             }
@@ -359,7 +362,7 @@ public class AstralSorcerySkyboxMixin {
 
             float interpolated = prevTick + (tick - prevTick) * partialTicks;
             float distanceFromPeak = Math.abs(interpolated - halfDuration) / halfDuration;
-            return Math.max(0.0f, Math.min(1.0f, 1.0f - distanceFromPeak));
+            return Math.clamp(1.0f - distanceFromPeak, 0.0f, 1.0f);
         } catch (ReflectiveOperationException | LinkageError ignored) {
             return 0.0f;
         }

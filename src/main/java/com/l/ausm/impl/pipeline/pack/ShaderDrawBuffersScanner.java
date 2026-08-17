@@ -1,23 +1,20 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
-import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.fbo.Attachment;
+import com.l.ausm.api.pipeline.pack.ShaderOption;
+import com.l.ausm.api.pipeline.pack.ShaderOptions;
 import com.l.ausm.api.pipeline.shader.ProgramId;
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
+import com.l.ausm.impl.MainMod;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.ArrayDeque;
-import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;

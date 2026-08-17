@@ -1,21 +1,18 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import com.l.ausm.api.pipeline.pack.ShaderOption;
+import com.l.ausm.api.pipeline.pack.ShaderOptions;
 import com.l.ausm.api.pipeline.shader.RenderPass;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -454,7 +451,7 @@ public class ShaderPreprocessor {
     private static boolean isTerrainAlias(RenderPass pass) {
         return switch (pass) {
             case GBUFFERS_TERRAIN_SOLID, GBUFFERS_TERRAIN_CUTOUT_MIP, GBUFFERS_TERRAIN_CUTOUT,
-                    GBUFFERS_DAMAGEDBLOCK -> true;
+                 GBUFFERS_DAMAGEDBLOCK -> true;
             default -> false;
         };
     }
@@ -537,7 +534,7 @@ public class ShaderPreprocessor {
         }
         return switch (name) {
             case "PREPARE", "SHADOW", "DEFERRED", "COMPOSITE", "FINAL",
-                    "AUSM_SIMPLE_VOID_WORLD" -> true;
+                 "AUSM_SIMPLE_VOID_WORLD" -> true;
             default -> false;
         };
     }

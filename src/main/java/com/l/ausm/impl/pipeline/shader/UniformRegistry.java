@@ -1,23 +1,18 @@
 package com.l.ausm.impl.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
-import net.minecraft.client.renderer.OpenGlHelper;
-import org.lwjgl.BufferUtils;
-import org.lwjgl.opengl.GL20;
-
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL20;
 
 /**
  * Handles the declaration, evaluation, and uploading of GLSL Uniforms.
@@ -43,7 +38,7 @@ public class UniformRegistry {
         activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glUniform1i(location, value);
+                MinecraftReflectionCompat.glUniform1i(location, value);
             }
         }));
     }
@@ -134,7 +129,7 @@ public class UniformRegistry {
         activeBindingsByProgram.clear();
         bindings.put(name, new UniformBinding<>(name, supplier, (location, value) -> {
             if (location != -1) {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.glUniformMatrix4(location, false, value);
+                MinecraftReflectionCompat.glUniformMatrix4(location, false, value);
             }
         }));
     }

@@ -1,9 +1,5 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import java.util.regex.Pattern;
 
 public final class MidTexCoordAliasTransformStage implements ShaderTransformStage {

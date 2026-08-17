@@ -1,11 +1,7 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
-import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
+import com.l.ausm.impl.pipeline.PipelineContext;
 import net.minecraft.client.renderer.tileentity.TileEntityBeaconRenderer;
 import net.minecraft.tileentity.TileEntityBeacon;
 import org.spongepowered.asm.mixin.Mixin;

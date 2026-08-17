@@ -1,12 +1,15 @@
 package com.l.ausm.impl.pipeline.vertex;
 
+import java.util.Locale;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
 
 public final class BlockRenderContext {
     public static final int BLOOM_ONLY_MASK_EMISSION = 16;
     public static final int FRAMED_BLOOM_BOOST_MARKER = 150;
-    /** Reserved only for bounded diagnostics of the copied frame BLOOM overlay. */
+    /**
+     * Reserved only for bounded diagnostics of the copied frame BLOOM overlay.
+     */
     public static final int FRAMED_BLOOM_OVERLAY_PROBE_MARKER = 151;
 
     private static final ThreadLocal<State> CURRENT = ThreadLocal.withInitial(State::new);
@@ -18,7 +21,9 @@ public final class BlockRenderContext {
         current().blockEntityId = blockEntityId;
     }
 
-    /** Sets the complete per-block terrain context with one ThreadLocal lookup. */
+    /**
+     * Sets the complete per-block terrain context with one ThreadLocal lookup.
+     */
     public static void configureBlock(int blockEntityId, short renderType, int metadata,
                                       int x, int y, int z, IBlockAccess blockAccess, BlockPos blockPos,
                                       boolean framedMaterialOwner, boolean agricraftCrop, int packedLightmap,
@@ -306,7 +311,7 @@ public final class BlockRenderContext {
         if (spriteName == null) {
             return false;
         }
-        String normalized = spriteName.toLowerCase(java.util.Locale.ROOT);
+        String normalized = spriteName.toLowerCase(Locale.ROOT);
         return normalized.contains("astralsorcery:blocks/crystal/")
                 && !normalized.contains("rock");
     }
@@ -425,7 +430,9 @@ public final class BlockRenderContext {
         current().clear();
     }
 
-    /** Returns the mutable state owned by the current render thread. */
+    /**
+     * Returns the mutable state owned by the current render thread.
+     */
     public static State currentState() {
         return current();
     }
@@ -435,7 +442,7 @@ public final class BlockRenderContext {
     }
 
     private static int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(max, value));
+        return Math.clamp(value, min, max);
     }
 
     public static final class State {

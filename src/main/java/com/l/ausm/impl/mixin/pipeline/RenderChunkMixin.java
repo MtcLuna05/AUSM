@@ -1,18 +1,18 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
+import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import com.l.ausm.impl.pipeline.vertex.IPipelineRenderChunk;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.Arrays;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.chunk.CompiledChunk;
 import net.minecraft.client.renderer.chunk.RenderChunk;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.util.BlockRenderLayer;
+import net.minecraft.world.World;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -20,9 +20,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import net.minecraft.world.World;
-
-import java.util.Arrays;
 
 @Mixin(RenderChunk.class)
 public class RenderChunkMixin implements IPipelineRenderChunk {
@@ -95,15 +92,15 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
         int index = ausm$layerIndex(layer);
         if (index >= 0) {
             ausm$pipelineVertexFormatByLayer()[index] = ausm$pendingPipelineVertexFormat;
-            boolean hasBloomMetadata = bufferBuilder instanceof com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension extension
+            boolean hasBloomMetadata = bufferBuilder instanceof IBufferBuilderExtension extension
                     && extension.ausm$hasShaderlessBloomMetadata();
             ausm$shaderlessBloomMetadataByLayer()[index] = hasBloomMetadata;
             PipelineContext.getInstance().recordShaderlessBloomLayerSummary(
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.renderChunkPosition((RenderChunk) (Object) this),
+                    MinecraftReflectionCompat.renderChunkPosition((RenderChunk) (Object) this),
                     layer,
                     hasBloomMetadata
             );
-            if (bufferBuilder instanceof com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension extension) {
+            if (bufferBuilder instanceof IBufferBuilderExtension extension) {
                 extension.ausm$resetShaderlessBloomMetadata();
             }
         }
@@ -154,6 +151,6 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
 
     @Unique
     private static int ausm$dimensionId(World world) {
-        return world != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(world)) : Integer.MIN_VALUE;
+        return world != null && MinecraftReflectionCompat.worldProvider(world) != null ? MinecraftReflectionCompat.providerDimension(MinecraftReflectionCompat.worldProvider(world)) : Integer.MIN_VALUE;
     }
 }

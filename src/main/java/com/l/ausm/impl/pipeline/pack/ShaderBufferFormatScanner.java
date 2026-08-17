@@ -1,14 +1,13 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
-import com.l.ausm.impl.MainMod;
 import com.l.ausm.api.pipeline.fbo.Attachment;
 import com.l.ausm.api.pipeline.fbo.ColorBufferFormat;
+import com.l.ausm.api.pipeline.pack.ShaderOption;
+import com.l.ausm.api.pipeline.pack.ShaderOptions;
+import com.l.ausm.api.pipeline.pack.ShaderRenderTargetSettings;
+import com.l.ausm.api.pipeline.pack.ShaderTextureScale;
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
+import com.l.ausm.impl.MainMod;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;

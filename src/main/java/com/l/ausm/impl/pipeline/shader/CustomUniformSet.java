@@ -1,14 +1,6 @@
 package com.l.ausm.impl.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.MainMod;
-import org.lwjgl.BufferUtils;
-import org.lwjgl.opengl.GL20;
-
-import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -30,7 +22,6 @@ import java.util.regex.Pattern;
  */
 public final class CustomUniformSet {
     private static final float[] EMPTY_VALUES = new float[0];
-    private static final FloatBuffer MATRIX_BUFFER = BufferUtils.createFloatBuffer(16);
     private static final Pattern EXPRESSION_IDENTIFIER = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*");
     private static final Set<String> EXPRESSION_FUNCTIONS = Set.of(
             "if", "ifb", "and", "or", "not", "min", "max", "clamp", "in", "between", "equals", "smooth",
@@ -83,7 +74,9 @@ public final class CustomUniformSet {
         return expressions.isEmpty();
     }
 
-    /** Builtins needed to evaluate this pack's declared custom expressions. */
+    /**
+     * Builtins needed to evaluate this pack's declared custom expressions.
+     */
     public Set<String> builtinDependencies() {
         return builtinDependencies;
     }
@@ -97,7 +90,7 @@ public final class CustomUniformSet {
         Map<String, String> variables = new LinkedHashMap<>();
         Map<String, CompiledExpression> compiledVariables = new LinkedHashMap<>();
         expressions.forEach((key, expression) -> {
-            ParsedKey parsed = ParsedKey.parse(key);
+            CustomUniformKey parsed = CustomUniformKey.parse(key);
             if (parsed == null) {
                 return;
             }
@@ -107,7 +100,8 @@ public final class CustomUniformSet {
                 return;
             }
             if (parsed.uniform()) {
-                rawUniforms.add(new RawUniform(parsed.type(), parsed.name(), expression, expectedValues(parsed.type()), compiled));
+                rawUniforms.add(new RawUniform(parsed.type(), parsed.name(), expression,
+                        CustomUniformUploader.expectedValues(parsed.type()), compiled));
             } else {
                 variables.put(parsed.name(), expression);
                 compiledVariables.put(parsed.name(), compiled);
@@ -130,7 +124,7 @@ public final class CustomUniformSet {
         Map<String, float[]> valuesByName = uniformValuesForFrame(builtins);
         for (RawUniform rawUniform : rawUniforms) {
             float[] values = valuesByName.getOrDefault(rawUniform.name(), EMPTY_VALUES);
-            uploadUniform(program, rawUniform, values);
+            CustomUniformUploader.upload(program, rawUniform, values);
         }
     }
 
@@ -159,41 +153,13 @@ public final class CustomUniformSet {
         return uniformValueScratch;
     }
 
-    private record RawUniform(
+    record RawUniform(
             String type,
             String name,
             String expression,
             int expectedValues,
             CompiledExpression compiledExpression
     ) {
-    }
-
-    private record ParsedKey(boolean uniform, String type, String name) {
-        private static ParsedKey parse(String key) {
-            String prefix;
-            boolean uniform;
-            if (key.startsWith("uniform.")) {
-                prefix = "uniform.";
-                uniform = true;
-            } else if (key.startsWith("variable.")) {
-                prefix = "variable.";
-                uniform = false;
-            } else {
-                return null;
-            }
-
-            String suffix = key.substring(prefix.length());
-            int separator = suffix.indexOf('.');
-            if (separator <= 0 || separator >= suffix.length() - 1) {
-                MainMod.LOGGER.warn("[CustomUniforms] Ignoring malformed custom uniform key: {}", key);
-                return null;
-            }
-            return new ParsedKey(
-                    uniform,
-                    suffix.substring(0, separator).toLowerCase(Locale.ROOT),
-                    suffix.substring(separator + 1)
-            );
-        }
     }
 
     private static void resolveVariablesInto(
@@ -276,69 +242,6 @@ public final class CustomUniformSet {
         }
     }
 
-    private static void uploadUniform(ShaderProgram program, RawUniform rawUniform, float[] values) {
-        if (values.length == 0) {
-            return;
-        }
-        int expected = rawUniform.expectedValues();
-        if (expected > 0 && values.length < expected) {
-            MainMod.LOGGER.warn("[CustomUniforms] Ignoring custom uniform '{}' with too few values: {}",
-                    rawUniform.name(),
-                    rawUniform.expression());
-            return;
-        }
-
-        int location = program.getUniformLocation(rawUniform.name());
-        if (location == -1) {
-            return;
-        }
-
-        switch (rawUniform.type()) {
-            case "bool", "int" -> GL20.glUniform1i(location, (int) values[0]);
-            case "float" -> GL20.glUniform1f(location, values[0]);
-            case "vec2" -> GL20.glUniform2f(location, values[0], values[1]);
-            case "vec3" -> GL20.glUniform3f(location, values[0], values[1], values[2]);
-            case "vec4" -> GL20.glUniform4f(location, values[0], values[1], values[2], values[3]);
-            case "ivec2" -> GL20.glUniform2i(location, (int) values[0], (int) values[1]);
-            case "ivec3" -> GL20.glUniform3i(location, (int) values[0], (int) values[1], (int) values[2]);
-            case "ivec4" -> GL20.glUniform4i(location, (int) values[0], (int) values[1], (int) values[2], (int) values[3]);
-            case "bvec2" -> GL20.glUniform2i(location, truthy(values[0]) ? 1 : 0, truthy(values[1]) ? 1 : 0);
-            case "bvec3" -> GL20.glUniform3i(location, truthy(values[0]) ? 1 : 0, truthy(values[1]) ? 1 : 0, truthy(values[2]) ? 1 : 0);
-            case "bvec4" -> GL20.glUniform4i(location, truthy(values[0]) ? 1 : 0, truthy(values[1]) ? 1 : 0, truthy(values[2]) ? 1 : 0, truthy(values[3]) ? 1 : 0);
-            case "mat2" -> uploadMatrix(location, values, 4, 2);
-            case "mat3" -> uploadMatrix(location, values, 9, 3);
-            case "mat4" -> uploadMatrix(location, values, 16, 4);
-            default -> {
-            }
-        }
-    }
-
-    private static void uploadMatrix(int location, float[] values, int count, int dimension) {
-        MATRIX_BUFFER.clear();
-        MATRIX_BUFFER.put(values, 0, count);
-        MATRIX_BUFFER.flip();
-        switch (dimension) {
-            case 2 -> GL20.glUniformMatrix2(location, false, MATRIX_BUFFER);
-            case 3 -> GL20.glUniformMatrix3(location, false, MATRIX_BUFFER);
-            case 4 -> GL20.glUniformMatrix4(location, false, MATRIX_BUFFER);
-            default -> {
-            }
-        }
-    }
-
-    private static int expectedValues(String type) {
-        return switch (type) {
-            case "bool", "int", "float" -> 1;
-            case "vec2", "ivec2", "bvec2" -> 2;
-            case "vec3", "ivec3", "bvec3" -> 3;
-            case "vec4", "ivec4", "bvec4" -> 4;
-            case "mat2" -> 4;
-            case "mat3" -> 9;
-            case "mat4" -> 16;
-            default -> -1;
-        };
-    }
-
     public record CustomUniform(String type, String name, float[] values) {
     }
 
@@ -350,13 +253,7 @@ public final class CustomUniformSet {
         float[] evaluate(int expectedValues, Map<String, float[]> variables, Map<Integer, SmoothState> smoothStates);
     }
 
-    private static final class DirectVariableExpression implements CompiledExpression {
-        private final String name;
-
-        private DirectVariableExpression(String name) {
-            this.name = name;
-        }
-
+    private record DirectVariableExpression(String name) implements CompiledExpression {
         @Override
         public float[] evaluate(int expectedValues, Map<String, float[]> variables, Map<Integer, SmoothState> smoothStates) {
             float[] value = variables.get(name);
@@ -367,13 +264,7 @@ public final class CustomUniformSet {
         }
     }
 
-    private static final class ScalarExpression implements CompiledExpression {
-        private final ScalarNode node;
-
-        private ScalarExpression(ScalarNode node) {
-            this.node = node;
-        }
-
+    private record ScalarExpression(ScalarNode node) implements CompiledExpression {
         @Override
         public float[] evaluate(int expectedValues, Map<String, float[]> variables, Map<Integer, SmoothState> smoothStates) {
             float value = node.evaluate(new EvalContext(variables, smoothStates));
@@ -381,13 +272,7 @@ public final class CustomUniformSet {
         }
     }
 
-    private static final class VectorExpression implements CompiledExpression {
-        private final List<ScalarNode> nodes;
-
-        private VectorExpression(List<ScalarNode> nodes) {
-            this.nodes = nodes;
-        }
-
+    private record VectorExpression(List<ScalarNode> nodes) implements CompiledExpression {
         @Override
         public float[] evaluate(int expectedValues, Map<String, float[]> variables, Map<Integer, SmoothState> smoothStates) {
             if (expectedValues > 0 && nodes.size() < expectedValues) {
@@ -425,10 +310,7 @@ public final class CustomUniformSet {
                 String body = constructorName == null ? null : constructorBody(trimmed, constructorName);
                 List<String> parts = body != null ? splitTopLevel(body) : splitTopLevel(trimmed);
                 if (body != null || parts.size() > 1) {
-                    int expectedComponents = constructorExpectedComponents(constructorName);
-                    if (body == null && parts.size() <= 1) {
-                        return null;
-                    }
+                    int expectedComponents = body != null ? constructorExpectedComponents(constructorName) : -1;
                     List<ScalarNode> nodes = new ArrayList<>(parts.size());
                     for (String part : parts) {
                         nodes.add(new ScalarExpressionParser(part).parse());
@@ -488,7 +370,7 @@ public final class CustomUniformSet {
                 return null;
             }
 
-            ScalarNode scalar = nodes.get(0);
+            ScalarNode scalar = nodes.getFirst();
             if (!constructorName.startsWith("mat")) {
                 List<ScalarNode> expanded = new ArrayList<>(expectedComponents);
                 for (int i = 0; i < expectedComponents; i++) {
@@ -503,7 +385,7 @@ public final class CustomUniformSet {
                 case "mat4" -> 4;
                 default -> 0;
             };
-            if (dimension <= 0) {
+            if (dimension == 0) {
                 return null;
             }
             List<ScalarNode> expanded = new ArrayList<>(expectedComponents);
@@ -661,11 +543,14 @@ public final class CustomUniformSet {
                 case "not" -> values.length == 1 ? (truthy(values[0]) ? 0.0f : 1.0f) : Float.NaN;
                 case "min" -> evaluateMin(values);
                 case "max" -> evaluateMax(values);
-                case "clamp" -> values.length == 3 ? Math.max(values[1], Math.min(values[2], values[0])) : Float.NaN;
+                case "clamp" -> values.length == 3
+                        ? values[1] <= values[2] ? Math.clamp(values[0], values[1], values[2]) : values[1]
+                        : Float.NaN;
                 case "in" -> evaluateIn(values);
                 case "between" -> values.length == 3 ? between(values[0], values[1], values[2]) : Float.NaN;
                 case "equals" -> evaluateEquals(values);
-                case "smooth" -> values.length == 4 ? context.smooth(values[0], values[1], values[2], values[3]) : Float.NaN;
+                case "smooth" ->
+                        values.length == 4 ? context.smooth(values[0], values[1], values[2], values[3]) : Float.NaN;
                 case "fmod", "mod" -> values.length == 2 ? values[0] % values[1] : Float.NaN;
                 case "abs" -> values.length == 1 ? Math.abs(values[0]) : Float.NaN;
                 case "sqrt" -> values.length == 1 ? (float) Math.sqrt(values[0]) : Float.NaN;
@@ -679,7 +564,8 @@ public final class CustomUniformSet {
                 case "log" -> values.length == 1 ? (float) Math.log(values[0]) : Float.NaN;
                 case "asin" -> values.length == 1 ? (float) Math.asin(values[0]) : Float.NaN;
                 case "acos" -> values.length == 1 ? (float) Math.acos(values[0]) : Float.NaN;
-                case "atan" -> values.length == 1 ? (float) Math.atan(values[0]) : values.length == 2 ? (float) Math.atan2(values[0], values[1]) : Float.NaN;
+                case "atan" ->
+                        values.length == 1 ? (float) Math.atan(values[0]) : values.length == 2 ? (float) Math.atan2(values[0], values[1]) : Float.NaN;
                 case "atan2" -> values.length == 2 ? (float) Math.atan2(values[0], values[1]) : Float.NaN;
                 case "sin" -> values.length == 1 ? (float) Math.sin(values[0]) : Float.NaN;
                 case "cos" -> values.length == 1 ? (float) Math.cos(values[0]) : Float.NaN;
@@ -704,7 +590,7 @@ public final class CustomUniformSet {
                     return arguments.get(i + 1).evaluate(context);
                 }
             }
-            return arguments.get(arguments.size() - 1).evaluate(context);
+            return arguments.getLast().evaluate(context);
         }
 
         private float evaluateAndLazy(EvalContext context) {
@@ -793,7 +679,7 @@ public final class CustomUniformSet {
             if (Math.abs(denominator) <= 0.000001f) {
                 return value < edge0 ? 0.0f : 1.0f;
             }
-            float t = Math.max(0.0f, Math.min(1.0f, (value - edge0) / denominator));
+            float t = Math.clamp((value - edge0) / denominator, 0.0F, 1.0F);
             return t * t * (3.0f - 2.0f * t);
         }
     }

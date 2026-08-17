@@ -1,9 +1,5 @@
 package com.l.ausm.api.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 /**
  * Parsed identity for an Iris-style compute shader source.
  */

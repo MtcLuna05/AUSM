@@ -1,12 +1,11 @@
 package com.l.ausm.impl.pipeline.compat;
 
-import net.minecraft.tileentity.TileEntity;
-
 import java.lang.reflect.Array;
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.tileentity.TileEntity;
 
 public final class ProjectRedIlluminationCompat {
     private static final String TILE_LAMP = "mrtjp.projectred.illumination.TileLamp";

@@ -1,5 +1,9 @@
 package com.l.ausm.impl.core;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import org.junit.jupiter.api.Test;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
@@ -10,14 +14,9 @@ import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.jar.JarEntry;
-import java.util.jar.JarFile;
-
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 final class DraconicRenderedEmissionTransformerTest {
     private static final String ENERGY_TARGET =
@@ -37,16 +36,16 @@ final class DraconicRenderedEmissionTransformerTest {
                 .transform(ENERGY_TARGET, ENERGY_TARGET, energyRendererStub());
 
         assertEquals(List.of(
-                        BRIDGE + ".beginEmission()V",
-                        "com/brandon3055/brandonscore/utils/ModelUtils.renderQuadsRGB(Ljava/util/List;FFF)V",
-                        BRIDGE + ".endEmission()V",
-                        BRIDGE + ".beginEmission()V",
-                        "com/brandon3055/brandonscore/utils/ModelUtils.renderQuadsRGB(Ljava/util/List;FFF)V",
-                        BRIDGE + ".endEmission()V",
-                        BRIDGE + ".beginEmission()V",
-                        "com/brandon3055/brandonscore/utils/ModelUtils.renderQuadsRGB(Ljava/util/List;FFF)V",
-                        BRIDGE + ".endEmission()V"
-                ), callsIn(transformed, "render", ENERGY_RENDER_DESC));
+                BRIDGE + ".beginEmission()V",
+                "com/brandon3055/brandonscore/utils/ModelUtils.renderQuadsRGB(Ljava/util/List;FFF)V",
+                BRIDGE + ".endEmission()V",
+                BRIDGE + ".beginEmission()V",
+                "com/brandon3055/brandonscore/utils/ModelUtils.renderQuadsRGB(Ljava/util/List;FFF)V",
+                BRIDGE + ".endEmission()V",
+                BRIDGE + ".beginEmission()V",
+                "com/brandon3055/brandonscore/utils/ModelUtils.renderQuadsRGB(Ljava/util/List;FFF)V",
+                BRIDGE + ".endEmission()V"
+        ), callsIn(transformed, "render", ENERGY_RENDER_DESC));
     }
 
     @Test
@@ -55,12 +54,12 @@ final class DraconicRenderedEmissionTransformerTest {
                 .transform(REACTOR_TARGET, REACTOR_TARGET, reactorRendererStub());
 
         assertEquals(List.of(
-                        BRIDGE + ".useDraconicReactorShader(Z)Z",
-                        BRIDGE + ".beginEmission()V",
-                        "com/brandon3055/draconicevolution/client/render/tile/RenderTileReactorCore.renderCore(DDDFFFDZ)V",
-                        BRIDGE + ".endEmission()V",
-                        "com/brandon3055/draconicevolution/client/render/tile/RenderTileReactorCore.renderShield(DDDFFFDZ)V"
-                ), callsIn(transformed, "render", REACTOR_RENDER_DESC));
+                BRIDGE + ".useDraconicReactorShader(Z)Z",
+                BRIDGE + ".beginEmission()V",
+                "com/brandon3055/draconicevolution/client/render/tile/RenderTileReactorCore.renderCore(DDDFFFDZ)V",
+                BRIDGE + ".endEmission()V",
+                "com/brandon3055/draconicevolution/client/render/tile/RenderTileReactorCore.renderShield(DDDFFFDZ)V"
+        ), callsIn(transformed, "render", REACTOR_RENDER_DESC));
     }
 
     @Test

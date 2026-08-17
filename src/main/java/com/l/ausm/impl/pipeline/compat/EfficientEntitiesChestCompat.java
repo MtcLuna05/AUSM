@@ -1,15 +1,16 @@
 package com.l.ausm.impl.pipeline.compat;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.Locale;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.tileentity.TileEntityChest;
 import net.minecraft.tileentity.TileEntityEnderChest;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.Locale;
-
-/** Replaces Efficient Entities' per-model stack-trace chest detection with a
- * render-dispatch context established once per tile entity. */
+/**
+ * Replaces Efficient Entities' per-model stack-trace chest detection with a
+ * render-dispatch context established once per tile entity.
+ */
 public final class EfficientEntitiesChestCompat {
     private static final ThreadLocal<Deque<Boolean>> CHEST_RENDER_STACK =
             ThreadLocal.withInitial(ArrayDeque::new);

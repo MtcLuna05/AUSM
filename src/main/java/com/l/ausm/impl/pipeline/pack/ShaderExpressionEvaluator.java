@@ -1,7 +1,6 @@
 package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.pack.ShaderOptions;
-
 import java.util.Map;
 
 public final class ShaderExpressionEvaluator {

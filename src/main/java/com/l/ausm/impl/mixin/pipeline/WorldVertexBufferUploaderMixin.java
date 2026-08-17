@@ -1,26 +1,19 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.nio.ByteBuffer;
 import net.minecraft.client.renderer.BufferBuilder;
-import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.WorldVertexBufferUploader;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL15;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.nio.ByteBuffer;
 
 @Mixin(WorldVertexBufferUploader.class)
 public class WorldVertexBufferUploaderMixin {
@@ -44,7 +37,7 @@ public class WorldVertexBufferUploaderMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GlStateManager;glDrawArrays(III)V", shift = At.Shift.BEFORE)
     )
     private void ausm$enablePipelineAttributes(BufferBuilder bufferBuilder, CallbackInfo ci) {
-        VertexFormat format = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder);
+        VertexFormat format = MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder);
         if (ExtendedVertexFormats.isPipelineEntity(format)) {
             ausm$enablePipelineEntityAttributes(bufferBuilder, format);
             return;
@@ -53,7 +46,7 @@ public class WorldVertexBufferUploaderMixin {
             return;
         }
 
-        ByteBuffer byteBuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferByteBuffer(bufferBuilder);
+        ByteBuffer byteBuffer = MinecraftReflectionCompat.bufferByteBuffer(bufferBuilder);
         if (byteBuffer == null) {
             return;
         }
@@ -111,7 +104,7 @@ public class WorldVertexBufferUploaderMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GlStateManager;glDrawArrays(III)V", shift = At.Shift.AFTER)
     )
     private void ausm$disablePipelineAttributes(BufferBuilder bufferBuilder, CallbackInfo ci) {
-        if (ExtendedVertexFormats.isPipelineBlock(com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder)) || ExtendedVertexFormats.isPipelineEntity(com.l.ausm.impl.util.MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder))) {
+        if (ExtendedVertexFormats.isPipelineBlock(MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder)) || ExtendedVertexFormats.isPipelineEntity(MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder))) {
             GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
@@ -121,7 +114,7 @@ public class WorldVertexBufferUploaderMixin {
     }
 
     private void ausm$enablePipelineEntityAttributes(BufferBuilder bufferBuilder, VertexFormat format) {
-        ByteBuffer byteBuffer = com.l.ausm.impl.util.MinecraftReflectionCompat.bufferByteBuffer(bufferBuilder);
+        ByteBuffer byteBuffer = MinecraftReflectionCompat.bufferByteBuffer(bufferBuilder);
         if (byteBuffer == null) {
             return;
         }

@@ -1,9 +1,5 @@
 package com.l.ausm.impl.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.function.BiConsumer;

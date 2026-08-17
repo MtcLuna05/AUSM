@@ -1,20 +1,21 @@
 package com.l.ausm.impl.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import com.l.ausm.api.pipeline.pack.ShaderComputeDirectives;
+import com.l.ausm.api.pipeline.shader.ComputeProgramSource;
+import com.l.ausm.api.pipeline.shader.ProgramArrayId;
+import com.l.ausm.api.pipeline.shader.ProgramId;
+import com.l.ausm.api.pipeline.shader.ProgramSourceSet;
+import com.l.ausm.api.pipeline.shader.ShaderProgramSource;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.pack.AusmOfficialSkyDomeTransformStage;
 import com.l.ausm.impl.pipeline.pack.ShaderDimensionContext;
 import com.l.ausm.impl.pipeline.pack.ShaderPack;
 import com.l.ausm.impl.pipeline.pack.ShaderPackLayout;
-import com.l.ausm.api.pipeline.pack.ShaderComputeDirectives;
 import com.l.ausm.impl.pipeline.pack.ShaderProperties;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -163,7 +164,7 @@ public final class ShaderProgramSet {
             ShaderProperties properties,
             ProgramArrayId arrayId
     ) {
-        java.util.ArrayList<ShaderProgramSource> sources = new java.util.ArrayList<>(arrayId.programCount());
+        ArrayList<ShaderProgramSource> sources = new ArrayList<>(arrayId.programCount());
         for (int index = 0; index < arrayId.programCount(); index++) {
             String name = arrayId.sourcePrefix() + (index == 0 ? "" : Integer.toString(index));
             String vertexPath = resolveProgramArrayStage(pack, layout, name, ".vsh");
@@ -237,7 +238,7 @@ public final class ShaderProgramSet {
             ProgramArrayId arrayId,
             String prefix
     ) {
-        java.util.ArrayList<ComputeProgramSource> sources = new java.util.ArrayList<>();
+        ArrayList<ComputeProgramSource> sources = new ArrayList<>();
         if (arrayId == null) {
             addComputeFamily(pack, layout, properties, null, sources, prefix, 0);
             return List.copyOf(sources);

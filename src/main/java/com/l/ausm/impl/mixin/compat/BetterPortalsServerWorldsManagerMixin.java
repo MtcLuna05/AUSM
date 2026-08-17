@@ -2,6 +2,11 @@ package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.world.WorldServer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -9,12 +14,6 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
 
 @Mixin(targets = "de.johni0702.minecraft.view.impl.server.ServerWorldsManagerImpl", remap = false)
 public abstract class BetterPortalsServerWorldsManagerMixin {
@@ -36,7 +35,7 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
     @Inject(method = "updateActiveViews", at = @At("HEAD"))
     private void ausm$repairMissedDimensionTransfer(CallbackInfo ci) {
         EntityPlayerMP player = getPlayer();
-        if (player == null || com.l.ausm.impl.util.MinecraftReflectionCompat.playerIsSpectator(player)) {
+        if (player == null || MinecraftReflectionCompat.playerIsSpectator(player)) {
             return;
         }
 
@@ -50,7 +49,7 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
             worldManagers.put(playerWorld, ausm$createWorldManager(playerWorld, player));
             MainMod.LOGGER.warn("[BetterPortalsCompat] Repaired missed Better Portals server view transfer for player={} world={}",
                     MinecraftReflectionCompat.entityName(player),
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(playerWorld) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(playerWorld)) : "null");
+                    MinecraftReflectionCompat.worldProvider(playerWorld) != null ? MinecraftReflectionCompat.providerDimension(MinecraftReflectionCompat.worldProvider(playerWorld)) : "null");
         } catch (RuntimeException e) {
             MainMod.LOGGER.warn("[BetterPortalsCompat] Failed to repair missed Better Portals server view transfer", e);
         }
@@ -95,8 +94,8 @@ public abstract class BetterPortalsServerWorldsManagerMixin {
                     removed,
                     reason,
                     MinecraftReflectionCompat.entityName(player),
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(currentWorld) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(currentWorld)) : "null",
-                    destination != null && com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(destination) != null ? com.l.ausm.impl.util.MinecraftReflectionCompat.providerDimension(com.l.ausm.impl.util.MinecraftReflectionCompat.worldProvider(destination)) : "null",
+                    MinecraftReflectionCompat.worldProvider(currentWorld) != null ? MinecraftReflectionCompat.providerDimension(MinecraftReflectionCompat.worldProvider(currentWorld)) : "null",
+                    destination != null && MinecraftReflectionCompat.worldProvider(destination) != null ? MinecraftReflectionCompat.providerDimension(MinecraftReflectionCompat.worldProvider(destination)) : "null",
                     worldManagers.size());
         }
     }

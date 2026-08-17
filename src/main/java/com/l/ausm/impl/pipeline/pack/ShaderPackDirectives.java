@@ -1,12 +1,17 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import com.l.ausm.api.pipeline.pack.ShaderComputeDirectives;
+import com.l.ausm.api.pipeline.pack.ShaderCustomTextureBinding;
+import com.l.ausm.api.pipeline.pack.ShaderFeatureSet;
+import com.l.ausm.api.pipeline.pack.ShaderImageDirective;
+import com.l.ausm.api.pipeline.pack.ShaderProgramDirectives;
+import com.l.ausm.api.pipeline.pack.ShaderRenderSettings;
+import com.l.ausm.api.pipeline.pack.ShaderRenderTargetSettings;
+import com.l.ausm.api.pipeline.pack.ShaderStorageBufferDirective;
+import com.l.ausm.api.pipeline.pack.ShaderTextureDirectives;
 import com.l.ausm.api.pipeline.shader.ProgramId;
 import com.l.ausm.impl.pipeline.shader.CustomUniformSet;
-
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -17,8 +22,8 @@ public record ShaderPackDirectives(
         ShaderRenderSettings renderSettings,
         ShaderTextureDirectives textureDirectives,
         ShaderComputeDirectives computeDirectives,
-        java.util.List<ShaderImageDirective> images,
-        java.util.Map<Integer, ShaderStorageBufferDirective> storageBuffers,
+        List<ShaderImageDirective> images,
+        Map<Integer, ShaderStorageBufferDirective> storageBuffers,
         ShaderFeatureSet features,
         int noiseTextureResolution,
         ShaderCustomTextureBinding noiseTexture,

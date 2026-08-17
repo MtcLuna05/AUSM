@@ -1,11 +1,12 @@
 package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Keeps AUSM's shader-owned procedural sky stable under camera motion. */
+/**
+ * Keeps AUSM's shader-owned procedural sky stable under camera motion.
+ */
 public final class OwnedSkyStabilityTransformStage implements ShaderTransformStage {
     private static final String MARKER = "AUSM_OWNED_SKY_STABILITY_TRANSFORM";
     private static final Pattern VERSION_LINE = Pattern.compile("(?m)^\\s*#version\\b.*\\R");
@@ -60,8 +61,8 @@ public final class OwnedSkyStabilityTransformStage implements ShaderTransformSta
     private static String insertPreamble(String source) {
         String preamble = "// " + MARKER + "\n"
                 + (source.contains("uniform int ausmSimpleVoidWorld;")
-                    ? ""
-                    : "uniform int ausmSimpleVoidWorld;\n");
+                ? ""
+                : "uniform int ausmSimpleVoidWorld;\n");
         Matcher version = VERSION_LINE.matcher(source);
         if (version.find()) {
             return source.substring(0, version.end()) + preamble + source.substring(version.end());

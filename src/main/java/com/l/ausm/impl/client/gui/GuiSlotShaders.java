@@ -2,10 +2,9 @@ package com.l.ausm.impl.client.gui;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.List;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.input.Mouse;
-
-import java.util.List;
 
 public class GuiSlotShaders {
 
@@ -141,7 +140,7 @@ public class GuiSlotShaders {
             return false;
         }
 
-        int next = selectedIndex < 0 ? 0 : Math.max(0, Math.min(shaderPacks.size() - 1, selectedIndex + delta));
+        int next = selectedIndex < 0 ? 0 : Math.clamp(selectedIndex + delta, 0, shaderPacks.size() - 1);
         return selectIndex(next);
     }
 
@@ -186,7 +185,7 @@ public class GuiSlotShaders {
     private void clampScroll() {
         int visibleRows = Math.max(1, (bottom - top) / slotHeight);
         int maxScroll = Math.max(0, shaderPacks.size() - visibleRows);
-        scrollOffset = Math.max(0, Math.min(maxScroll, scrollOffset));
+        scrollOffset = Math.clamp(scrollOffset, 0, maxScroll);
     }
 
     private void drawScrollbar(int visibleRows) {
@@ -207,6 +206,6 @@ public class GuiSlotShaders {
     }
 
     private void drawRect(int left, int top, int right, int bottom, int color) {
-        com.l.ausm.impl.util.MinecraftReflectionCompat.guiDrawRect(left, top, right, bottom, color);
+        MinecraftReflectionCompat.guiDrawRect(left, top, right, bottom, color);
     }
 }

@@ -2,13 +2,12 @@ package com.l.ausm.impl.pipeline.pack;
 
 import com.l.ausm.impl.pipeline.fbo.ShadowFramebuffer;
 import com.l.ausm.impl.pipeline.shader.ShaderBindingLayout;
+import java.util.Arrays;
+import java.util.Locale;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GLContext;
-
-import java.util.Arrays;
-import java.util.Locale;
 
 /**
  * Iris feature flags with AUSM's current support boundary.

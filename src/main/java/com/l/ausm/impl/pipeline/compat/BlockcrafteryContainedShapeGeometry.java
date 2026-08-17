@@ -1,25 +1,51 @@
 package com.l.ausm.impl.pipeline.compat;
 
 import com.l.ausm.impl.MainMod;
-import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
 import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import com.l.ausm.impl.pipeline.vertex.IrisVertexMath;
-import com.l.ausm.impl.pipeline.vertex.BlockRenderContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.util.concurrent.atomic.AtomicInteger;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.area;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.bytes;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.bytesFloat;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.bytesInt;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.closestQuad;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.component;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.connectedFacePriority;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.copyOrientedQuad;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.difference;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.dominantAxis;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.faceGroup;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.integers;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.lightingValues;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.normal;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.point;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.position;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.positionBounds;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.quadPoints;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.read;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.replaceByte;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.squaredDistance;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.uvBounds;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.uvBoundsValues;
+import static com.l.ausm.impl.pipeline.compat.BlockcrafteryGeometryMath.vector;
 
 /**
  * Combines two independently rendered spans of the same filled frame:
  * Blockcraftery's span contributes only positions (the actual frame shape),
  * while the contained block's span supplies every other vertex attribute.
- *
+ * <p>
  * A shaped host normally emits all six quads, whereas the contained block has
  * already culled the faces hidden by neighbours.  Therefore these spans are
  * not expected to have equal vertex counts.  Each host quad instead takes the
@@ -45,13 +71,13 @@ public final class BlockcrafteryContainedShapeGeometry {
     }
 
     public static boolean replaceWithContainedVisuals(BufferBuilder buffer, int start,
-                                                       int containedEnd, int hostEnd,
-                                                       boolean preserveHostSeparateAo,
-                                                       boolean preserveHostLightmap,
-                                                       boolean preserveEnderIoConnectedQuads,
-                                                       boolean markFramedEmission,
-                                                       boolean liftBloomOverlay,
-                                                       IBlockState containedState) {
+                                                      int containedEnd, int hostEnd,
+                                                      boolean preserveHostSeparateAo,
+                                                      boolean preserveHostLightmap,
+                                                      boolean preserveEnderIoConnectedQuads,
+                                                      boolean markFramedEmission,
+                                                      boolean liftBloomOverlay,
+                                                      IBlockState containedState) {
         if (!(buffer instanceof IBufferBuilderExtension extension)
                 || start < 0 || containedEnd <= start || hostEnd <= containedEnd) {
             return false;
@@ -162,8 +188,8 @@ public final class BlockcrafteryContainedShapeGeometry {
     }
 
     private static void normaliseEnderIoUvsToBaseSprite(int[] visuals, int[] selectedContainedQuads,
-                                                         byte[] contained, int stride, int intsPerVertex,
-                                                         ByteOrder order, IBlockState containedState) {
+                                                        byte[] contained, int stride, int intsPerVertex,
+                                                        ByteOrder order, IBlockState containedState) {
         String stateName = String.valueOf(containedState);
         String spriteName = stateName.contains("fused_quartz")
                 ? "enderio:blocks/block_fused_quartz" : "enderio:blocks/block_fused_glass";
@@ -196,23 +222,6 @@ public final class BlockcrafteryContainedShapeGeometry {
         }
     }
 
-    private static float[] uvBoundsValues(byte[] data, int offset, int stride, ByteOrder order) {
-        float minU = Float.POSITIVE_INFINITY;
-        float maxU = Float.NEGATIVE_INFINITY;
-        float minV = Float.POSITIVE_INFINITY;
-        float maxV = Float.NEGATIVE_INFINITY;
-        for (int vertex = 0; vertex < 4; vertex++) {
-            int vertexOffset = offset + vertex * stride;
-            float u = bytesFloat(data, vertexOffset + 16, order);
-            float v = bytesFloat(data, vertexOffset + 20, order);
-            minU = Math.min(minU, u);
-            maxU = Math.max(maxU, u);
-            minV = Math.min(minV, v);
-            maxV = Math.max(maxV, v);
-        }
-        return new float[] {minU, maxU, minV, maxV};
-    }
-
     /**
      * EnderIO's connected renderer constructs a face from many small quads.
      * Selecting one and stretching its UVs loses the actual material (and
@@ -222,13 +231,13 @@ public final class BlockcrafteryContainedShapeGeometry {
      * AUSM does not calculate any CTM neighbours itself.
      */
     private static boolean replaceWithEnderIoConnectedVisuals(IBufferBuilderExtension extension,
-                                                               int[] containedVisuals, byte[] contained,
-                                                               byte[] host, int start,
-                                                               int containedVertices, int hostVertices,
-                                                               int stride, int intsPerVertex,
-                                                               VertexFormat format, ByteOrder order,
-                                                               boolean markFramedEmission,
-                                                               boolean liftBloomOverlay) {
+                                                              int[] containedVisuals, byte[] contained,
+                                                              byte[] host, int start,
+                                                              int containedVertices, int hostVertices,
+                                                              int stride, int intsPerVertex,
+                                                              VertexFormat format, ByteOrder order,
+                                                              boolean markFramedEmission,
+                                                              boolean liftBloomOverlay) {
         int containedQuads = containedVertices / 4;
         int hostQuads = hostVertices / 4;
         int[] hostForContained = assignConnectedFaces(contained, host, containedQuads, hostQuads, stride, order);
@@ -254,7 +263,7 @@ public final class BlockcrafteryContainedShapeGeometry {
         logEnderIoFaceAssignment(hostForContained, containedQuads, mappedQuads);
         extension.ausm$truncateVertexCount(start);
         int mappedVertices = mappedQuads * 4;
-        if (extension.ausm$appendRawVertexData(java.util.Arrays.copyOf(projectedVisuals,
+        if (extension.ausm$appendRawVertexData(Arrays.copyOf(projectedVisuals,
                 mappedVertices * intsPerVertex)) != mappedVertices) {
             return false;
         }
@@ -276,7 +285,7 @@ public final class BlockcrafteryContainedShapeGeometry {
      * direct contained block.
      */
     private static void markFramedEmission(ByteBuffer destination, long startByte, int vertices,
-                                            int stride, VertexFormat format, boolean enabled) {
+                                           int stride, VertexFormat format, boolean enabled) {
         if (!enabled || !ExtendedVertexFormats.isPipelineBlock(format)) {
             return;
         }
@@ -317,8 +326,8 @@ public final class BlockcrafteryContainedShapeGeometry {
     }
 
     private static void logFramedBloomMappingProbe(byte[] contained, ByteBuffer destination, long startByte,
-                                                    int containedVertices, int mappedVertices, int stride,
-                                                    VertexFormat format, ByteOrder order, boolean bloomOverlay) {
+                                                   int containedVertices, int mappedVertices, int stride,
+                                                   VertexFormat format, ByteOrder order, boolean bloomOverlay) {
         if (!bloomOverlay || !ExtendedVertexFormats.isPipelineBlock(format)) {
             return;
         }
@@ -415,13 +424,13 @@ public final class BlockcrafteryContainedShapeGeometry {
         }
         int[] working = new int[groupCount];
         int[] best = new int[groupCount];
-        java.util.Arrays.fill(working, -1);
-        java.util.Arrays.fill(best, -1);
+        Arrays.fill(working, -1);
+        Arrays.fill(best, -1);
         boolean[] used = new boolean[hostQuads];
-        float[] bestScore = new float[] { -Float.MAX_VALUE };
+        float[] bestScore = new float[]{-Float.MAX_VALUE};
         assignConnectedFaces(groups, 0, groupNormals, hostNormals, used, working, best, 0.0F, bestScore);
         int[] hostForGroup = new int[6];
-        java.util.Arrays.fill(hostForGroup, -1);
+        Arrays.fill(hostForGroup, -1);
         for (int index = 0; index < groups.length; index++) {
             hostForGroup[groups[index]] = best[index];
         }
@@ -468,34 +477,18 @@ public final class BlockcrafteryContainedShapeGeometry {
         }
     }
 
-    private static float connectedFacePriority(float[] normal) {
-        // When a wedge face is equally aligned with its original top and
-        // side, its top material is visually continuous with the host slope.
-        // The epsilon only resolves that exact tie; normals still decide the
-        // actual assignment.
-        return normal[1] > 0.5F ? 0.0001F : 0.0F;
-    }
-
     private static void logEnderIoFaceAssignment(int[] hostForContained, int containedQuads, int mappedQuads) {
         int call = ENDER_IO_FACE_ASSIGNMENT_PROBE_COUNT.incrementAndGet();
         if (call > 8) {
             return;
         }
         MainMod.LOGGER.info("[AUSMEnderIoFaceAssignmentProbe] call={} mappedQuads={}/{} hostForQuad={}",
-                call, mappedQuads, containedQuads, java.util.Arrays.toString(hostForContained));
-    }
-
-    private static int faceGroup(float[] normal) {
-        int axis = dominantAxis(normal);
-        if (axis < 0) {
-            return -1;
-        }
-        return axis * 2 + (normal[axis] < 0.0F ? 0 : 1);
+                call, mappedQuads, containedQuads, Arrays.toString(hostForContained));
     }
 
     private static boolean mapConnectedQuadPositions(int[] destination, byte[] source, byte[] host,
-                                                      int sourceQuad, int destinationQuad, int hostQuad, int stride,
-                                                      int intsPerVertex, ByteOrder order) {
+                                                     int sourceQuad, int destinationQuad, int hostQuad, int stride,
+                                                     int intsPerVertex, ByteOrder order) {
         int sourceOffset = sourceQuad * 4 * stride;
         int hostOffset = hostQuad * 4 * stride;
         float[] sourceNormal = normal(source, sourceOffset, stride, order);
@@ -533,8 +526,8 @@ public final class BlockcrafteryContainedShapeGeometry {
         float maxU = Float.NEGATIVE_INFINITY;
         float minV = Float.POSITIVE_INFINITY;
         float maxV = Float.NEGATIVE_INFINITY;
-        float[] outputMin = new float[] {Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY};
-        float[] outputMax = new float[] {Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY};
+        float[] outputMin = new float[]{Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY};
+        float[] outputMax = new float[]{Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY};
         for (int vertex = 0; vertex < 4; vertex++) {
             int sourceByteOffset = sourceOffset + vertex * stride;
             int output = destinationIntOffset + vertex * intsPerVertex;
@@ -547,8 +540,8 @@ public final class BlockcrafteryContainedShapeGeometry {
             // absolute coordinates into the frame face transform was the
             // source of the 12-block EnderIO projection displacement seen in
             // the probe.  Use the source block-local coordinate instead.
-            float a = clamp(component(sourcePosition, axisA) - sourceBlockA, 0.0F, 1.0F);
-            float b = clamp(component(sourcePosition, axisB) - sourceBlockB, 0.0F, 1.0F);
+            float a = Math.clamp(component(sourcePosition, axisA) - sourceBlockA, 0.0F, 1.0F);
+            float b = Math.clamp(component(sourcePosition, axisB) - sourceBlockB, 0.0F, 1.0F);
             float[] uv = transform.apply(a, b);
             float u = uv[0];
             float v = uv[1];
@@ -560,11 +553,16 @@ public final class BlockcrafteryContainedShapeGeometry {
             destination[output + 1] = Float.floatToRawIntBits(projectedY);
             destination[output + 2] = Float.floatToRawIntBits(projectedZ);
             copyConnectedHostShading(destination, output, host, hostOffset, stride, intsPerVertex, order, u, v);
-            minU = Math.min(minU, u); maxU = Math.max(maxU, u);
-            minV = Math.min(minV, v); maxV = Math.max(maxV, v);
-            outputMin[0] = Math.min(outputMin[0], projectedX); outputMax[0] = Math.max(outputMax[0], projectedX);
-            outputMin[1] = Math.min(outputMin[1], projectedY); outputMax[1] = Math.max(outputMax[1], projectedY);
-            outputMin[2] = Math.min(outputMin[2], projectedZ); outputMax[2] = Math.max(outputMax[2], projectedZ);
+            minU = Math.min(minU, u);
+            maxU = Math.max(maxU, u);
+            minV = Math.min(minV, v);
+            maxV = Math.max(maxV, v);
+            outputMin[0] = Math.min(outputMin[0], projectedX);
+            outputMax[0] = Math.max(outputMax[0], projectedX);
+            outputMin[1] = Math.min(outputMin[1], projectedY);
+            outputMax[1] = Math.max(outputMax[1], projectedY);
+            outputMin[2] = Math.min(outputMin[2], projectedZ);
+            outputMax[2] = Math.max(outputMax[2], projectedZ);
         }
         int probe = ENDER_IO_FACE_PROJECTION_PROBE_COUNT.incrementAndGet();
         if (probe <= 48) {
@@ -577,8 +575,8 @@ public final class BlockcrafteryContainedShapeGeometry {
     }
 
     private static void logEnderIoProjectionFailure(int sourceQuad, int hostQuad, String reason,
-                                                     byte[] source, byte[] host, int sourceOffset,
-                                                     int hostOffset, int stride, ByteOrder order) {
+                                                    byte[] source, byte[] host, int sourceOffset,
+                                                    int hostOffset, int stride, ByteOrder order) {
         int call = ENDER_IO_PROJECTION_FAILURE_PROBE_COUNT.incrementAndGet();
         if (call > 24) {
             return;
@@ -588,18 +586,8 @@ public final class BlockcrafteryContainedShapeGeometry {
                 quadPoints(host, hostOffset, stride, order));
     }
 
-    private static String quadPoints(byte[] data, int offset, int stride, ByteOrder order) {
-        return point(position(data, offset, order)) + '|' + point(position(data, offset + stride, order))
-                + '|' + point(position(data, offset + 2 * stride, order))
-                + '|' + point(position(data, offset + 3 * stride, order));
-    }
-
-    private static String point(float[] value) {
-        return String.format(java.util.Locale.ROOT, "%.3f,%.3f,%.3f", value[0], value[1], value[2]);
-    }
-
     private static void copyConnectedHostShading(int[] destination, int output, byte[] host, int hostOffset,
-                                                  int stride, int intsPerVertex, ByteOrder order, float u, float v) {
+                                                 int stride, int intsPerVertex, ByteOrder order, float u, float v) {
         int colorOffset = 3;
         int lightOffset = 6;
         if (intsPerVertex <= lightOffset) {
@@ -620,16 +608,6 @@ public final class BlockcrafteryContainedShapeGeometry {
         float second = (data[quadOffset + 3 * stride + attributeOffset] & 0xFF) * (1.0F - u)
                 + (data[quadOffset + 2 * stride + attributeOffset] & 0xFF) * u;
         return Math.round(first * (1.0F - v) + second * v);
-    }
-
-    private static int replaceByte(int value, int byteIndex, int replacement, ByteOrder order) {
-        int shift = order == ByteOrder.BIG_ENDIAN ? (3 - byteIndex) * Byte.SIZE : byteIndex * Byte.SIZE;
-        int mask = 0xFF << shift;
-        return (value & ~mask) | ((replacement & 0xFF) << shift);
-    }
-
-    private static float clamp(float value, float minimum, float maximum) {
-        return Math.max(minimum, Math.min(maximum, value));
     }
 
     private static float sourceFaceMinimum(byte[] source, int sourceOffset, int stride,
@@ -660,8 +638,8 @@ public final class BlockcrafteryContainedShapeGeometry {
                     for (int vertex = 0; vertex < 3; vertex++) {
                         float[] position = position(source, sourceOffset + vertex * stride, order);
                         float[] uv = candidate.apply(
-                                clamp(component(position, axisA) - blockA, 0.0F, 1.0F),
-                                clamp(component(position, axisB) - blockB, 0.0F, 1.0F));
+                                Math.clamp(component(position, axisA) - blockA, 0.0F, 1.0F),
+                                Math.clamp(component(position, axisB) - blockB, 0.0F, 1.0F));
                         projected[vertex] = hostBasis.project(uv[0], uv[1]);
                     }
                     float[] normal = normal(projected[0], projected[1], projected[2]);
@@ -679,16 +657,6 @@ public final class BlockcrafteryContainedShapeGeometry {
         return bestDot > 0.5F ? best : null;
     }
 
-    private static float[] normal(float[] first, float[] second, float[] third) {
-        float[] firstEdge = difference(second, first);
-        float[] secondEdge = difference(third, first);
-        float x = firstEdge[1] * secondEdge[2] - firstEdge[2] * secondEdge[1];
-        float y = firstEdge[2] * secondEdge[0] - firstEdge[0] * secondEdge[2];
-        float z = firstEdge[0] * secondEdge[1] - firstEdge[1] * secondEdge[0];
-        float length = (float) Math.sqrt(x * x + y * y + z * z);
-        return length < 0.0001F ? null : new float[] { x / length, y / length, z / length };
-    }
-
     private static final class FaceTransform {
         private final boolean swapped;
         private final boolean flipU;
@@ -703,7 +671,7 @@ public final class BlockcrafteryContainedShapeGeometry {
         private float[] apply(float a, float b) {
             float u = swapped ? b : a;
             float v = swapped ? a : b;
-            return new float[] { flipU ? 1.0F - u : u, flipV ? 1.0F - v : v };
+            return new float[]{flipU ? 1.0F - u : u, flipV ? 1.0F - v : v};
         }
 
         @Override
@@ -730,7 +698,7 @@ public final class BlockcrafteryContainedShapeGeometry {
         for (int left = 1; left < 4; left++) {
             for (int right = left + 1; right < 4; right++) {
                 int opposite = 6 - left - right;
-                float[] expected = new float[] {
+                float[] expected = new float[]{
                         points[left][0] + points[right][0] - points[0][0],
                         points[left][1] + points[right][1] - points[0][1],
                         points[left][2] + points[right][2] - points[0][2]
@@ -787,13 +755,6 @@ public final class BlockcrafteryContainedShapeGeometry {
         return new HostFaceBasis(points[0], edgeOne, edgeTwo, first, second, triangle);
     }
 
-    private static float squaredDistance(float[] first, float[] second) {
-        float x = first[0] - second[0];
-        float y = first[1] - second[1];
-        float z = first[2] - second[2];
-        return x * x + y * y + z * z;
-    }
-
     private static final class HostFaceBasis {
         private final float[] origin;
         private final float[] edgeOne;
@@ -820,7 +781,7 @@ public final class BlockcrafteryContainedShapeGeometry {
             // EnderIO texture fragment on the visible half-plane.
             float mappedU = u;
             float mappedV = triangle ? v * (1.0F - u) : v;
-            return new float[] {
+            return new float[]{
                     origin[0] + mappedU * edgeOne[0] + mappedV * edgeTwo[0],
                     origin[1] + mappedU * edgeOne[1] + mappedV * edgeTwo[1],
                     origin[2] + mappedU * edgeOne[2] + mappedV * edgeTwo[2]
@@ -835,8 +796,8 @@ public final class BlockcrafteryContainedShapeGeometry {
     }
 
     private static void logContainedLightingProbe(byte[] host, int[] mappedVisuals, int hostVertices,
-                                                   int stride, int intsPerVertex, VertexFormat format,
-                                                   ByteOrder order) {
+                                                  int stride, int intsPerVertex, VertexFormat format,
+                                                  ByteOrder order) {
         int call = CONTAINED_LIGHTING_PROBE_COUNT.incrementAndGet();
         if (call > 24) {
             return;
@@ -859,52 +820,6 @@ public final class BlockcrafteryContainedShapeGeometry {
                     .append(lightingValues(mapped, offset, stride, colorOffset, lightmapOffset));
         }
         MainMod.LOGGER.info("[AUSMContainedLightingProbe] call={} values={}", call, summary);
-    }
-
-    private static String lightingValues(byte[] data, int offset, int stride, int colorOffset, int lightmapOffset) {
-        StringBuilder result = new StringBuilder();
-        for (int vertex = 0; vertex < 4; vertex++) {
-            if (vertex > 0) {
-                result.append(',');
-            }
-            int base = offset + vertex * stride;
-            int r = data[base + colorOffset] & 0xFF;
-            int g = data[base + colorOffset + 1] & 0xFF;
-            int b = data[base + colorOffset + 2] & 0xFF;
-            int a = data[base + colorOffset + 3] & 0xFF;
-            int light = (data[base + lightmapOffset] & 0xFF)
-                    | ((data[base + lightmapOffset + 1] & 0xFF) << 8)
-                    | ((data[base + lightmapOffset + 2] & 0xFF) << 16)
-                    | ((data[base + lightmapOffset + 3] & 0xFF) << 24);
-            result.append(String.format(java.util.Locale.ROOT, "%02x%02x%02x/%02x@%08x", r, g, b, a, light));
-        }
-        return result.toString();
-    }
-
-    private static int dominantAxis(float[] vector) {
-        if (vector == null) {
-            return -1;
-        }
-        float x = Math.abs(vector[0]);
-        float y = Math.abs(vector[1]);
-        float z = Math.abs(vector[2]);
-        return x >= y && x >= z ? 0 : y >= z ? 1 : 2;
-    }
-
-    private static float component(float[] vector, int axis) {
-        return vector[axis];
-    }
-
-    private static float[] position(byte[] data, int offset, ByteOrder order) {
-        return new float[] {bytesFloat(data, offset, order), bytesFloat(data, offset + 4, order), bytesFloat(data, offset + 8, order)};
-    }
-
-    private static float[] difference(float[] end, float[] start) {
-        return new float[] {end[0] - start[0], end[1] - start[1], end[2] - start[2]};
-    }
-
-    private static float[] scaled(float[] vector, float scalar) {
-        return new float[] {vector[0] * scalar, vector[1] * scalar, vector[2] * scalar};
     }
 
     /**
@@ -977,11 +892,11 @@ public final class BlockcrafteryContainedShapeGeometry {
     }
 
     private static int[] mapContainedVisualsToHost(int[] containedVisuals, byte[] contained,
-                                                    byte[] host, int containedVertices,
-                                                    int hostVertices, int stride,
-                                                    int intsPerVertex, ByteOrder order,
-                                                    boolean preferLargestMatchingFace,
-                                                    int[] selectedContainedQuads) {
+                                                   byte[] host, int containedVertices,
+                                                   int hostVertices, int stride,
+                                                   int intsPerVertex, ByteOrder order,
+                                                   boolean preferLargestMatchingFace,
+                                                   int[] selectedContainedQuads) {
         int containedQuads = containedVertices / 4;
         int hostQuads = hostVertices / 4;
         int[] result = new int[hostVertices * intsPerVertex];
@@ -1006,8 +921,8 @@ public final class BlockcrafteryContainedShapeGeometry {
     }
 
     private static void logEnderIoMappingProbe(byte[] contained, byte[] host, int containedVertices,
-                                                int hostVertices, int stride, ByteOrder order,
-                                                int[] selectedContainedQuads) {
+                                               int hostVertices, int stride, ByteOrder order,
+                                               int[] selectedContainedQuads) {
         int call = ENDER_IO_MAPPING_PROBE_COUNT.incrementAndGet();
         if (call > 8) {
             return;
@@ -1021,7 +936,7 @@ public final class BlockcrafteryContainedShapeGeometry {
             int containedOffset = containedQuad * 4 * stride;
             int hostOffset = hostQuad * 4 * stride;
             result.append("host").append(hostQuad).append("->payload").append(containedQuad)
-                    .append(" area=").append(String.format(java.util.Locale.ROOT, "%.4f",
+                    .append(" area=").append(String.format(Locale.ROOT, "%.4f",
                             area(contained, containedOffset, stride, order)))
                     .append(" payloadUV=").append(uvBounds(contained, containedOffset, stride, order))
                     .append(" hostNormal=").append(vector(normal(host, hostOffset, stride, order)));
@@ -1038,8 +953,8 @@ public final class BlockcrafteryContainedShapeGeometry {
      * allowed to replace the visible fallback again.
      */
     private static void logEnderIoProjectionProbe(int[] containedVisuals, byte[] contained, byte[] host,
-                                                   int containedVertices, int hostVertices, int stride,
-                                                   int intsPerVertex, ByteOrder order) {
+                                                  int containedVertices, int hostVertices, int stride,
+                                                  int intsPerVertex, ByteOrder order) {
         int call = ENDER_IO_PROJECTION_PROBE_COUNT.incrementAndGet();
         if (call > 8) {
             return;
@@ -1067,239 +982,4 @@ public final class BlockcrafteryContainedShapeGeometry {
                 positionBounds(host, 0, hostVertices, stride, order));
     }
 
-    private static String positionBounds(byte[] data, int startVertex, int vertices, int stride, ByteOrder order) {
-        float[] bounds = new float[] {Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY,
-                Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY};
-        for (int vertex = startVertex; vertex < startVertex + vertices; vertex++) {
-            int offset = vertex * stride;
-            includeBounds(bounds, bytesFloat(data, offset, order), bytesFloat(data, offset + 4, order),
-                    bytesFloat(data, offset + 8, order));
-        }
-        return bounds(bounds);
-    }
-
-    private static String positionBounds(int[] data, int startVertex, int vertices, int intsPerVertex) {
-        float[] bounds = new float[] {Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY,
-                Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY};
-        for (int vertex = startVertex; vertex < startVertex + vertices; vertex++) {
-            int offset = vertex * intsPerVertex;
-            includeBounds(bounds, Float.intBitsToFloat(data[offset]), Float.intBitsToFloat(data[offset + 1]),
-                    Float.intBitsToFloat(data[offset + 2]));
-        }
-        return bounds(bounds);
-    }
-
-    private static void includeBounds(float[] bounds, float x, float y, float z) {
-        bounds[0] = Math.min(bounds[0], x); bounds[1] = Math.max(bounds[1], x);
-        bounds[2] = Math.min(bounds[2], y); bounds[3] = Math.max(bounds[3], y);
-        bounds[4] = Math.min(bounds[4], z); bounds[5] = Math.max(bounds[5], z);
-    }
-
-    private static String bounds(float[] values) {
-        return String.format(java.util.Locale.ROOT, "%.3f..%.3f,%.3f..%.3f,%.3f..%.3f",
-                values[0], values[1], values[2], values[3], values[4], values[5]);
-    }
-
-    private static String uvBounds(byte[] data, int offset, int stride, ByteOrder order) {
-        float minU = Float.POSITIVE_INFINITY;
-        float maxU = Float.NEGATIVE_INFINITY;
-        float minV = Float.POSITIVE_INFINITY;
-        float maxV = Float.NEGATIVE_INFINITY;
-        for (int vertex = 0; vertex < 4; vertex++) {
-            int vertexOffset = offset + vertex * stride;
-            float u = bytesFloat(data, vertexOffset + 16, order);
-            float v = bytesFloat(data, vertexOffset + 20, order);
-            minU = Math.min(minU, u);
-            maxU = Math.max(maxU, u);
-            minV = Math.min(minV, v);
-            maxV = Math.max(maxV, v);
-        }
-        return String.format(java.util.Locale.ROOT, "%.5f..%.5f,%.5f..%.5f", minU, maxU, minV, maxV);
-    }
-
-    private static String vector(float[] normal) {
-        if (normal == null) {
-            return "null";
-        }
-        return String.format(java.util.Locale.ROOT, "%.1f,%.1f,%.1f", normal[0], normal[1], normal[2]);
-    }
-
-    /**
-     * Baked models may start an otherwise identical face at a different
-     * corner, or traverse it in the opposite direction.  Copying an entire
-     * source quad verbatim therefore applies its UV/alpha corners to the
-     * wrong host vertices and corrupts translucent overlays.  Preserve the
-     * source payload per vertex after finding the matching winding instead.
-     */
-    private static void copyOrientedQuad(int[] containedVisuals, byte[] contained, byte[] host,
-                                         int containedQuad, int hostQuad, int[] result,
-                                         int stride, int intsPerVertex, ByteOrder order) {
-        int[] sourceForHost = orientedSourceVertices(contained, host, containedQuad, hostQuad, stride, order);
-        int sourceQuad = containedQuad * 4 * intsPerVertex;
-        int destinationQuad = hostQuad * 4 * intsPerVertex;
-        for (int hostVertex = 0; hostVertex < 4; hostVertex++) {
-            int source = sourceQuad + sourceForHost[hostVertex] * intsPerVertex;
-            int destination = destinationQuad + hostVertex * intsPerVertex;
-            System.arraycopy(containedVisuals, source, result, destination, intsPerVertex);
-        }
-    }
-
-    private static int[] orientedSourceVertices(byte[] contained, byte[] host, int containedQuad,
-                                                int hostQuad, int stride, ByteOrder order) {
-        int containedBase = containedQuad * 4 * stride;
-        int hostBase = hostQuad * 4 * stride;
-        int[] best = new int[] {0, 1, 2, 3};
-        float bestScore = -Float.MAX_VALUE;
-        for (int reversed = 0; reversed <= 1; reversed++) {
-            for (int rotation = 0; rotation < 4; rotation++) {
-                float score = 0.0F;
-                for (int vertex = 0; vertex < 4; vertex++) {
-                    int next = (vertex + 1) & 3;
-                    int sourceVertex = sourceVertex(vertex, rotation, reversed != 0);
-                    int sourceNext = sourceVertex(next, rotation, reversed != 0);
-                    score += directionDot(host, hostBase + vertex * stride, hostBase + next * stride,
-                            contained, containedBase + sourceVertex * stride,
-                            containedBase + sourceNext * stride, order);
-                }
-                if (score > bestScore) {
-                    bestScore = score;
-                    for (int vertex = 0; vertex < 4; vertex++) {
-                        best[vertex] = sourceVertex(vertex, rotation, reversed != 0);
-                    }
-                }
-            }
-        }
-        return best;
-    }
-
-    private static int sourceVertex(int hostVertex, int rotation, boolean reversed) {
-        return reversed ? (rotation - hostVertex + 4) & 3 : (rotation + hostVertex) & 3;
-    }
-
-    private static float directionDot(byte[] first, int firstStart, int firstEnd,
-                                      byte[] second, int secondStart, int secondEnd, ByteOrder order) {
-        float firstX = bytesFloat(first, firstEnd, order) - bytesFloat(first, firstStart, order);
-        float firstY = bytesFloat(first, firstEnd + 4, order) - bytesFloat(first, firstStart + 4, order);
-        float firstZ = bytesFloat(first, firstEnd + 8, order) - bytesFloat(first, firstStart + 8, order);
-        float secondX = bytesFloat(second, secondEnd, order) - bytesFloat(second, secondStart, order);
-        float secondY = bytesFloat(second, secondEnd + 4, order) - bytesFloat(second, secondStart + 4, order);
-        float secondZ = bytesFloat(second, secondEnd + 8, order) - bytesFloat(second, secondStart + 8, order);
-        float firstLength = (float) Math.sqrt(firstX * firstX + firstY * firstY + firstZ * firstZ);
-        float secondLength = (float) Math.sqrt(secondX * secondX + secondY * secondY + secondZ * secondZ);
-        if (firstLength < 0.0001F || secondLength < 0.0001F) {
-            return 0.0F;
-        }
-        return (firstX * secondX + firstY * secondY + firstZ * secondZ) / (firstLength * secondLength);
-    }
-
-    private static int closestQuad(float[] hostNormal, float[][] containedNormals, float[] containedAreas,
-                                   int hostQuad, boolean preferLargestMatchingFace) {
-        int fallback = hostQuad % containedNormals.length;
-        if (hostNormal == null) {
-            return fallback;
-        }
-        int best = fallback;
-        float bestDot = -Float.MAX_VALUE;
-        float bestArea = -Float.MAX_VALUE;
-        for (int quad = 0; quad < containedNormals.length; quad++) {
-            float[] candidate = containedNormals[quad];
-            if (candidate == null) {
-                continue;
-            }
-            float dot = hostNormal[0] * candidate[0]
-                    + hostNormal[1] * candidate[1]
-                    + hostNormal[2] * candidate[2];
-            float area = containedAreas != null ? containedAreas[quad] : 0.0F;
-            if (dot > bestDot + 0.0001F
-                    || (preferLargestMatchingFace && Math.abs(dot - bestDot) <= 0.0001F && area > bestArea)) {
-                bestDot = dot;
-                bestArea = area;
-                best = quad;
-            }
-        }
-        return best;
-    }
-
-    private static float area(byte[] data, int offset, int stride, ByteOrder order) {
-        float ax = bytesFloat(data, offset, order);
-        float ay = bytesFloat(data, offset + 4, order);
-        float az = bytesFloat(data, offset + 8, order);
-        float bx = bytesFloat(data, offset + stride, order);
-        float by = bytesFloat(data, offset + stride + 4, order);
-        float bz = bytesFloat(data, offset + stride + 8, order);
-        float cx = bytesFloat(data, offset + stride * 2, order);
-        float cy = bytesFloat(data, offset + stride * 2 + 4, order);
-        float cz = bytesFloat(data, offset + stride * 2 + 8, order);
-        float ux = bx - ax;
-        float uy = by - ay;
-        float uz = bz - az;
-        float vx = cx - ax;
-        float vy = cy - ay;
-        float vz = cz - az;
-        return (float) Math.sqrt((uy * vz - uz * vy) * (uy * vz - uz * vy)
-                + (uz * vx - ux * vz) * (uz * vx - ux * vz)
-                + (ux * vy - uy * vx) * (ux * vy - uy * vx));
-    }
-
-    private static float[] normal(byte[] data, int offset, int stride, ByteOrder order) {
-        float ax = bytesFloat(data, offset, order);
-        float ay = bytesFloat(data, offset + 4, order);
-        float az = bytesFloat(data, offset + 8, order);
-        float bx = bytesFloat(data, offset + stride, order);
-        float by = bytesFloat(data, offset + stride + 4, order);
-        float bz = bytesFloat(data, offset + stride + 8, order);
-        float cx = bytesFloat(data, offset + stride * 2, order);
-        float cy = bytesFloat(data, offset + stride * 2 + 4, order);
-        float cz = bytesFloat(data, offset + stride * 2 + 8, order);
-        float ux = bx - ax;
-        float uy = by - ay;
-        float uz = bz - az;
-        float vx = cx - ax;
-        float vy = cy - ay;
-        float vz = cz - az;
-        float nx = uy * vz - uz * vy;
-        float ny = uz * vx - ux * vz;
-        float nz = ux * vy - uy * vx;
-        float length = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
-        if (length < 0.0001F) {
-            return null;
-        }
-        return new float[]{nx / length, ny / length, nz / length};
-    }
-
-    private static byte[] read(ByteBuffer source, int offset, int length) {
-        byte[] bytes = new byte[length];
-        ByteBuffer copy = source.duplicate();
-        copy.position(offset);
-        copy.get(bytes);
-        return bytes;
-    }
-
-    private static int[] integers(byte[] bytes, ByteOrder order) {
-        if (bytes.length % Integer.BYTES != 0) {
-            return new int[0];
-        }
-        ByteBuffer buffer = ByteBuffer.wrap(bytes).order(order);
-        int[] result = new int[bytes.length / Integer.BYTES];
-        for (int index = 0; index < result.length; index++) {
-            result[index] = buffer.getInt();
-        }
-        return result;
-    }
-
-    private static byte[] bytes(int[] values, ByteOrder order) {
-        ByteBuffer buffer = ByteBuffer.allocate(values.length * Integer.BYTES).order(order);
-        for (int value : values) {
-            buffer.putInt(value);
-        }
-        return buffer.array();
-    }
-
-    private static float bytesFloat(byte[] bytes, int offset, ByteOrder order) {
-        return ByteBuffer.wrap(bytes, offset, Float.BYTES).order(order).getFloat();
-    }
-
-    private static int bytesInt(byte[] bytes, int offset, ByteOrder order) {
-        return ByteBuffer.wrap(bytes, offset, Integer.BYTES).order(order).getInt();
-    }
 }

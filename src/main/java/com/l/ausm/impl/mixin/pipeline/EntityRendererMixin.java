@@ -1,24 +1,16 @@
 package com.l.ausm.impl.mixin.pipeline;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
-import com.l.ausm.impl.pipeline.compat.BetterPortalsCompat;
+import com.l.ausm.impl.pipeline.compat.GlobalFacadesTerrainBridge;
 import com.l.ausm.impl.pipeline.matrix.MatrixState;
 import com.l.ausm.impl.pipeline.render.FixedFunctionGlState;
-import com.l.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiIngame;
 import net.minecraft.client.particle.ParticleManager;
 import net.minecraft.client.renderer.BufferBuilder;
-import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.EntityRenderer;
-import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.client.renderer.culling.ICamera;
@@ -27,11 +19,8 @@ import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraft.util.math.RayTraceResult;
 import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL15;
-import org.lwjgl.opengl.GL30;
-import org.lwjgl.opengl.GLContext;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -44,8 +33,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(EntityRenderer.class)
 public class EntityRendererMixin {
-    private static final int AUSM_WEATHER_RENDER_RADIUS = Math.max(5, Math.min(10,
-            Integer.getInteger("ausm.weatherRenderRadius", 7)));
+    private static final int AUSM_WEATHER_RENDER_RADIUS = Math.clamp(
+            Integer.getInteger("ausm.weatherRenderRadius", 7), 5, 10);
     private static boolean ausm$loggedSelectionBoxStateRepair;
     private static boolean ausm$loggedEntityStateRepair;
     private static boolean ausm$loggedEntityBufferRepair;
@@ -177,41 +166,41 @@ public class EntityRendererMixin {
     }
 
     private void ausm$prepareNoWorldCustomMainMenu() {
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) != null || !ausm$isCustomMainMenu(minecraft)) {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || MinecraftReflectionCompat.world(minecraft) != null || !ausm$isCustomMainMenu(minecraft)) {
             return;
         }
 
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(minecraft) != null) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.bindFramebuffer(com.l.ausm.impl.util.MinecraftReflectionCompat.minecraftFramebuffer(minecraft), false);
-            com.l.ausm.impl.util.MinecraftReflectionCompat.glStateViewport(0, 0, com.l.ausm.impl.util.MinecraftReflectionCompat.displayWidth(minecraft), com.l.ausm.impl.util.MinecraftReflectionCompat.displayHeight(minecraft));
+        if (MinecraftReflectionCompat.minecraftFramebuffer(minecraft) != null) {
+            MinecraftReflectionCompat.bindFramebuffer(MinecraftReflectionCompat.minecraftFramebuffer(minecraft), false);
+            MinecraftReflectionCompat.glStateViewport(0, 0, MinecraftReflectionCompat.displayWidth(minecraft), MinecraftReflectionCompat.displayHeight(minecraft));
         }
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glUseProgram(0);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateSetActiveTexture(com.l.ausm.impl.util.MinecraftReflectionCompat.defaultTexUnit());
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateBindTexture(0);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableTexture2D();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableAlpha();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateEnableBlend();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+        MinecraftReflectionCompat.glUseProgram(0);
+        MinecraftReflectionCompat.glStateSetActiveTexture(MinecraftReflectionCompat.defaultTexUnit());
+        MinecraftReflectionCompat.glStateBindTexture(0);
+        MinecraftReflectionCompat.glStateEnableTexture2D();
+        MinecraftReflectionCompat.glStateEnableAlpha();
+        MinecraftReflectionCompat.glStateEnableBlend();
+        MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                 GL11.GL_SRC_ALPHA,
                 GL11.GL_ONE_MINUS_SRC_ALPHA,
                 GL11.GL_ONE,
                 GL11.GL_ZERO
         );
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateDepthMask(true);
-        com.l.ausm.impl.util.MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
+        MinecraftReflectionCompat.glStateDepthMask(true);
+        MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     private boolean ausm$isCustomMainMenu(Minecraft minecraft) {
-        return com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft) != null
-                && "lumien.custommainmenu.gui.GuiCustom".equals(com.l.ausm.impl.util.MinecraftReflectionCompat.currentScreen(minecraft).getClass().getName());
+        return MinecraftReflectionCompat.currentScreen(minecraft) != null
+                && "lumien.custommainmenu.gui.GuiCustom".equals(MinecraftReflectionCompat.currentScreen(minecraft).getClass().getName());
     }
 
     @Inject(method = "func_175068_a", at = @At("HEAD"), cancellable = true)
     private void onRenderWorldPassHead(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.world(minecraft) == null || com.l.ausm.impl.util.MinecraftReflectionCompat.renderViewEntity(minecraft) == null) {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || MinecraftReflectionCompat.world(minecraft) == null || MinecraftReflectionCompat.renderViewEntity(minecraft) == null) {
             ci.cancel();
             return;
         }
@@ -292,7 +281,7 @@ public class EntityRendererMixin {
         if (!context.shouldSkipAllMainGbufferRendering()) {
             ausm$repairEntityTessellatorState();
             ausm$repairEntityClientArrayState();
-            com.l.ausm.impl.util.MinecraftReflectionCompat.renderEntities(renderGlobal, renderViewEntity, camera, partialTicks);
+            MinecraftReflectionCompat.renderEntities(renderGlobal, renderViewEntity, camera, partialTicks);
         }
     }
 
@@ -408,7 +397,7 @@ public class EntityRendererMixin {
         // translucent-terrain bridge remains the shader-pipeline route; the
         // facade renderer's per-frame guard prevents a duplicate submission.
         if (!context.isActive()) {
-            com.l.ausm.impl.pipeline.compat.GlobalFacadesTerrainBridge.render(partialTicks);
+            GlobalFacadesTerrainBridge.render(partialTicks);
         }
         if (context.shouldBypassWorldPassRendering()) {
             return;
@@ -558,7 +547,7 @@ public class EntityRendererMixin {
     private void ausm$renderLitParticlesIfGbufferRenderingEnabled(ParticleManager particleManager, Entity entity, float partialTicks) {
         PipelineContext.getInstance().logSpecialLayerProbe("lit-particles-redirect");
         if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.renderLitParticles(particleManager, entity, partialTicks);
+            MinecraftReflectionCompat.renderLitParticles(particleManager, entity, partialTicks);
         }
     }
 
@@ -569,7 +558,7 @@ public class EntityRendererMixin {
     private void ausm$renderParticlesIfGbufferRenderingEnabled(ParticleManager particleManager, Entity entity, float partialTicks) {
         PipelineContext.getInstance().logSpecialLayerProbe("particles-redirect");
         if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.renderParticles(particleManager, entity, partialTicks);
+            MinecraftReflectionCompat.renderParticles(particleManager, entity, partialTicks);
         }
     }
 
@@ -613,7 +602,7 @@ public class EntityRendererMixin {
     )
     private void ausm$drawBlockDamageIfGbufferRenderingEnabled(RenderGlobal renderGlobal, Tessellator tessellator, BufferBuilder bufferBuilder, Entity entity, float partialTicks) {
         if (!PipelineContext.getInstance().shouldSkipAllMainGbufferRendering()) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.drawBlockDamageTexture(renderGlobal, tessellator, bufferBuilder, entity, partialTicks);
+            MinecraftReflectionCompat.drawBlockDamageTexture(renderGlobal, tessellator, bufferBuilder, entity, partialTicks);
         }
     }
 
@@ -623,7 +612,7 @@ public class EntityRendererMixin {
     )
     private void ausm$drawSelectionBoxWithRepairedGlState(RenderGlobal renderGlobal, EntityPlayer player, RayTraceResult target, int execute, float partialTicks) {
         ausm$repairSelectionBoxClientArrayState();
-        com.l.ausm.impl.util.MinecraftReflectionCompat.drawSelectionBox(renderGlobal, player, target, execute, partialTicks);
+        MinecraftReflectionCompat.drawSelectionBox(renderGlobal, player, target, execute, partialTicks);
     }
 
     private static void ausm$repairSelectionBoxClientArrayState() {
@@ -762,7 +751,7 @@ public class EntityRendererMixin {
         PipelineContext context = PipelineContext.getInstance();
         if (context.prepareRenderGlobalChunkUpdates(renderGlobal)) {
             try {
-                com.l.ausm.impl.util.MinecraftReflectionCompat.updateChunks(renderGlobal, finishTimeNano);
+                MinecraftReflectionCompat.updateChunks(renderGlobal, finishTimeNano);
             } catch (NullPointerException e) {
                 if (!context.handleBetterPortalsChunkUpdateFailure(renderGlobal, e)) {
                     throw e;
@@ -821,7 +810,7 @@ public class EntityRendererMixin {
         // shader and framebuffer. Its old AFTER injection ran only once this
         // pass had been closed, forcing a fixed-function fallback that could
         // be overwritten by later presentation work.
-        com.l.ausm.impl.pipeline.compat.GlobalFacadesTerrainBridge.render(partialTicks);
+        GlobalFacadesTerrainBridge.render(partialTicks);
         context.endPass();
         context.restoreTerrainCulling();
         context.restoreWaterRenderState();

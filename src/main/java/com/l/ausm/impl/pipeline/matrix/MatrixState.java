@@ -1,13 +1,8 @@
 package com.l.ausm.impl.pipeline.matrix;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import java.nio.FloatBuffer;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
-
-import java.nio.FloatBuffer;
 
 public final class MatrixState {
     private static final int MATRIX_SIZE = 16;

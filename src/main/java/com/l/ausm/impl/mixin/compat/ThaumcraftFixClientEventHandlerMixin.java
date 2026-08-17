@@ -13,9 +13,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class ThaumcraftFixClientEventHandlerMixin {
     @Inject(method = "onClientWorldUnload", at = @At("HEAD"), cancellable = true, require = 0)
     private static void ausm$skipServerWorldParticleCleanup(WorldEvent.Unload event, CallbackInfo ci) {
-        Object value = com.l.ausm.impl.util.MinecraftReflectionCompat.invoke(event, new String[] {"getWorld"}, new Class<?>[0]);
+        Object value = MinecraftReflectionCompat.invoke(event, new String[]{"getWorld"}, new Class<?>[0]);
         World world = value instanceof World ? (World) value : null;
-        if (world != null && (!com.l.ausm.impl.util.MinecraftReflectionCompat.fieldBoolean((world), false, "field_72995_K", "isRemote") || !ThaumcraftParticleBridge.isParticleEngineAvailable())) {
+        if (world != null && (!MinecraftReflectionCompat.fieldBoolean(world, false, "field_72995_K", "isRemote") || !ThaumcraftParticleBridge.isParticleEngineAvailable())) {
             ci.cancel();
         }
     }

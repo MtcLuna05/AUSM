@@ -2,14 +2,13 @@ package com.l.ausm.impl.pipeline.compat;
 
 import com.l.ausm.impl.pipeline.PipelineContext;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.util.Collections;
+import java.util.Map;
+import java.util.WeakHashMap;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.IBlockAccess;
-
-import java.util.Collections;
-import java.util.Map;
-import java.util.WeakHashMap;
 
 public final class AppliedEnergisticsFacadeQuadMetadata {
     private static final Map<BakedQuad, Metadata> METADATA =
@@ -38,7 +37,7 @@ public final class AppliedEnergisticsFacadeQuadMetadata {
         }
         METADATA.put(quad, new Metadata(
                 blockEntityId,
-                (short) com.l.ausm.impl.util.MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState),
+                (short) MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState),
                 pipeline.blockMetadata(state, null, null),
                 emission,
                 null

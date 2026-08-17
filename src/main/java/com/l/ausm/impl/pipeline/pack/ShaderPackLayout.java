@@ -1,18 +1,13 @@
 package com.l.ausm.impl.pipeline.pack;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
 import com.l.ausm.api.pipeline.shader.ProgramId;
 import com.l.ausm.api.pipeline.shader.RenderPass;
-
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 
@@ -219,7 +214,7 @@ public final class ShaderPackLayout {
     }
 
     private static Integer dimensionIdForToken(String token) {
-        String normalized = token.trim().toLowerCase(java.util.Locale.ROOT);
+        String normalized = token.trim().toLowerCase(Locale.ROOT);
         if (normalized.startsWith("world") && normalized.length() > "world".length()) {
             normalized = normalized.substring("world".length());
         }

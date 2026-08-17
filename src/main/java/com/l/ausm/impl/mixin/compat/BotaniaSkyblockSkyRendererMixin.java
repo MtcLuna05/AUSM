@@ -10,18 +10,13 @@ import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.renderer.vertex.VertexBuffer;
 import net.minecraft.util.ResourceLocation;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL14;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.lwjgl.BufferUtils;
-import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL14;
-import org.lwjgl.opengl.GL20;
-import org.lwjgl.opengl.GL30;
-
-import java.nio.FloatBuffer;
 
 @Mixin(targets = "vazkii.botania.client.render.world.SkyblockSkyRenderer", remap = false)
 public class BotaniaSkyblockSkyRendererMixin {
@@ -66,7 +61,7 @@ public class BotaniaSkyblockSkyRendererMixin {
     private void ausm$enableRealBotaniaBlend() {
         MinecraftReflectionCompat.invoke(
                 GlStateManager.class,
-                new String[] {"func_179147_l", "enableBlend"},
+                new String[]{"func_179147_l", "enableBlend"},
                 MinecraftReflectionCompat.NO_PARAMETERS);
         GL11.glEnable(GL11.GL_BLEND);
     }
@@ -114,8 +109,8 @@ public class BotaniaSkyblockSkyRendererMixin {
                                                int sourceFactorAlpha, int destFactorAlpha) {
         MinecraftReflectionCompat.invoke(
                 GlStateManager.class,
-                new String[] {"func_179120_a", "tryBlendFuncSeparate"},
-                new Class<?>[] {int.class, int.class, int.class, int.class},
+                new String[]{"func_179120_a", "tryBlendFuncSeparate"},
+                new Class<?>[]{int.class, int.class, int.class, int.class},
                 sourceFactor, destFactor, sourceFactorAlpha, destFactorAlpha);
         ausm$forceRealBlend(sourceFactor, destFactor, sourceFactorAlpha, destFactorAlpha);
     }
@@ -157,8 +152,8 @@ public class BotaniaSkyblockSkyRendererMixin {
         }
         MinecraftReflectionCompat.invoke(
                 vertexBuffer,
-                new String[] {"func_177358_a", "drawArrays"},
-                new Class<?>[] {int.class},
+                new String[]{"func_177358_a", "drawArrays"},
+                new Class<?>[]{int.class},
                 mode);
     }
 
@@ -178,8 +173,8 @@ public class BotaniaSkyblockSkyRendererMixin {
         }
         MinecraftReflectionCompat.invoke(
                 GlStateManager.class,
-                new String[] {"func_179148_o", "callList"},
-                new Class<?>[] {int.class},
+                new String[]{"func_179148_o", "callList"},
+                new Class<?>[]{int.class},
                 displayList);
     }
 

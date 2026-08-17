@@ -1,9 +1,6 @@
 package com.l.ausm.impl.pipeline.shader;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import com.l.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.l.ausm.impl.pipeline.PipelineContext;
 
 /**
@@ -31,7 +28,8 @@ public final class ShaderOverrides {
 
     public static boolean isSky(WorldRenderingPhase phase) {
         return switch (phase) {
-            case CUSTOM_SKY, SKY, SUNSET, SUN, STARS, VOID, MOON, SKY_TEXTURED, ASTRAL_STARS, ASTRAL_SOLAR_ECLIPSE, SKY_GROUND -> true;
+            case CUSTOM_SKY, SKY, SUNSET, SUN, STARS, VOID, MOON, SKY_TEXTURED, ASTRAL_STARS, ASTRAL_SOLAR_ECLIPSE,
+                 SKY_GROUND -> true;
             default -> false;
         };
     }

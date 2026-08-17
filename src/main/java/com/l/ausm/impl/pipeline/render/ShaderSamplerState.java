@@ -1,13 +1,15 @@
 package com.l.ausm.impl.pipeline.render;
 
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.lang.reflect.Field;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.opengl.EXTTextureFilterAnisotropic;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GLContext;
 
-import java.lang.reflect.Field;
-
-/** Global shaderpack sampler state that has to affect vanilla-owned textures too. */
+/**
+ * Global shaderpack sampler state that has to affect vanilla-owned textures too.
+ */
 public final class ShaderSamplerState {
     private static boolean breaksAnisotropy;
     private static Field optifineAnisotropyField;
@@ -52,8 +54,8 @@ public final class ShaderSamplerState {
     }
 
     private static int optifineAnisotropyLevel() {
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft) == null) {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || MinecraftReflectionCompat.gameSettings(minecraft) == null) {
             return 0;
         }
 
@@ -63,15 +65,15 @@ public final class ShaderSamplerState {
         }
 
         try {
-            return Math.max(0, field.getInt(com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft)));
+            return Math.max(0, field.getInt(MinecraftReflectionCompat.gameSettings(minecraft)));
         } catch (IllegalAccessException | IllegalArgumentException ignored) {
             return 0;
         }
     }
 
     private static Field optifineAnisotropyField() {
-        Minecraft minecraft = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (minecraft == null || com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft) == null) {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        if (minecraft == null || MinecraftReflectionCompat.gameSettings(minecraft) == null) {
             return null;
         }
         if (optifineAnisotropyFieldResolved) {
@@ -80,8 +82,8 @@ public final class ShaderSamplerState {
 
         optifineAnisotropyFieldResolved = true;
         try {
-            Field field = com.l.ausm.impl.util.MinecraftReflectionCompat.findField(
-                    com.l.ausm.impl.util.MinecraftReflectionCompat.gameSettings(minecraft).getClass(),
+            Field field = MinecraftReflectionCompat.findField(
+                    MinecraftReflectionCompat.gameSettings(minecraft).getClass(),
                     "ofAfLevel"
             );
             if (field == null) {

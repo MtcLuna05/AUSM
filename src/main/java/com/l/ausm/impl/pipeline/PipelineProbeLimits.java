@@ -110,6 +110,7 @@ final class PipelineProbeLimits {
     static final int MAX_SOFT_VANILLA_LAYER_TIMING_LOGS = 0;
     static final int MAX_SOFT_VANILLA_SPECIAL_BLOCK_PROBE_LOGS = 0;
     static final int MAX_SOFT_VANILLA_FRAME_TIMING_LOGS = 0;
+
     private PipelineProbeLimits() {
     }
 }

@@ -2,10 +2,6 @@ package com.l.ausm.impl.client.dynamic;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.util.MinecraftReflectionCompat;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.util.ResourceLocation;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -15,6 +11,9 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
+import net.minecraft.util.ResourceLocation;
 
 public final class DynamicLightConfig {
     private static final String ENABLED_KEY = "enabled";
@@ -101,18 +100,18 @@ public final class DynamicLightConfig {
     }
 
     public int configuredLight(ItemStack stack) {
-        Item item = com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackItem(stack);
-        if (com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackIsEmpty(stack) || item == null) {
+        Item item = MinecraftReflectionCompat.itemStackItem(stack);
+        if (MinecraftReflectionCompat.itemStackIsEmpty(stack) || item == null) {
             return 0;
         }
 
-        ResourceLocation name = com.l.ausm.impl.util.MinecraftReflectionCompat.call((item), net.minecraft.util.ResourceLocation.class, null, new String[] {"getRegistryName"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS);
+        ResourceLocation name = MinecraftReflectionCompat.call(item, ResourceLocation.class, null, new String[]{"getRegistryName"}, MinecraftReflectionCompat.NO_PARAMETERS);
         if (name == null) {
             return 0;
         }
 
         String id = normalizeId(name.toString());
-        Integer exact = itemLights.get(id + "@" + com.l.ausm.impl.util.MinecraftReflectionCompat.itemStackMetadata(stack));
+        Integer exact = itemLights.get(id + "@" + MinecraftReflectionCompat.itemStackMetadata(stack));
         if (exact != null) {
             return exact;
         }
@@ -191,7 +190,7 @@ public final class DynamicLightConfig {
     }
 
     private static double clampLightMultiplier(double value) {
-        return Math.max(0.0D, Math.min(4.0D, value));
+        return Math.clamp(value, 0.0D, 4.0D);
     }
 
     private static void parseItemsProperty(String raw, Map<String, Integer> values) {
@@ -261,7 +260,7 @@ public final class DynamicLightConfig {
             if (value < 0 || value > 15) {
                 MainMod.LOGGER.warn("[DynamicLights] Clamping light value for '{}' to 0..15", entry);
             }
-            return Math.max(0, Math.min(15, value));
+            return Math.clamp(value, 0, 15);
         } catch (NumberFormatException e) {
             MainMod.LOGGER.warn("[DynamicLights] Ignoring item light entry with invalid light '{}'", entry);
             return 0;

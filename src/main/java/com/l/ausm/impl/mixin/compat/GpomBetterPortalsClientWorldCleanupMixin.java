@@ -2,14 +2,14 @@ package com.l.ausm.impl.mixin.compat;
 
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.PipelineContext;
+import com.l.ausm.impl.util.MinecraftReflectionCompat;
+import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.lang.reflect.Method;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 @Mixin(targets = "com.l.gpom.compat.betterportals.BetterPortalsClientWorldCleanup", remap = false)
 public class GpomBetterPortalsClientWorldCleanupMixin {
@@ -18,8 +18,8 @@ public class GpomBetterPortalsClientWorldCleanupMixin {
 
     @Inject(method = "cleanup", at = @At("HEAD"), cancellable = true, remap = false)
     private static void ausm$scheduleCleanupOnClientThread(String reason, CallbackInfo ci) {
-        Minecraft mc = com.l.ausm.impl.util.MinecraftReflectionCompat.minecraft();
-        if (mc != null && com.l.ausm.impl.util.MinecraftReflectionCompat.callBoolean((mc), new String[] {"func_152345_ab", "isCallingFromMinecraftThread"}, com.l.ausm.impl.util.MinecraftReflectionCompat.NO_PARAMETERS, false)) {
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
+        if (mc != null && MinecraftReflectionCompat.callBoolean(mc, new String[]{"func_152345_ab", "isCallingFromMinecraftThread"}, MinecraftReflectionCompat.NO_PARAMETERS, false)) {
             PipelineContext.getInstance().clearClientParticles("gpom-better-portals-cleanup:" + reason);
             return;
         }
@@ -31,7 +31,7 @@ public class GpomBetterPortalsClientWorldCleanupMixin {
         }
 
         if (AUSM_CLEANUP_SCHEDULED.compareAndSet(false, true)) {
-            com.l.ausm.impl.util.MinecraftReflectionCompat.addScheduledTask(mc, () -> ausm$invokeCleanup(reason));
+            MinecraftReflectionCompat.addScheduledTask(mc, () -> ausm$invokeCleanup(reason));
             MainMod.LOGGER.info("[BetterPortalsCompat] Scheduled GPOM BetterPortals cleanup on client thread: {}", reason);
         }
     }

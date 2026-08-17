@@ -1,11 +1,19 @@
 package com.l.ausm.impl.pipeline.render;
 
-import com.l.ausm.api.pipeline.fbo.*;
-import com.l.ausm.api.pipeline.shader.*;
-import com.l.ausm.api.pipeline.pack.*;
-
+import com.l.ausm.api.pipeline.pack.ShaderImageTarget;
+import com.l.ausm.api.pipeline.pack.ShaderRawTextureDirective;
 import com.l.ausm.impl.MainMod;
 import com.l.ausm.impl.pipeline.pack.ShaderPack;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Random;
+import javax.imageio.ImageIO;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
@@ -14,16 +22,6 @@ import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL33;
-
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Random;
 
 public final class ShaderTextureLoader {
     private ShaderTextureLoader() {
@@ -180,7 +178,7 @@ public final class ShaderTextureLoader {
     }
 
     public static int createNoiseTexture(int requestedResolution) {
-        int resolution = Math.max(1, Math.min(4096, requestedResolution));
+        int resolution = Math.clamp(requestedResolution, 1, 4096);
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         int previousTexture = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
 
@@ -276,7 +274,7 @@ public final class ShaderTextureLoader {
         if (maxValue <= 0) {
             return 0;
         }
-        return Math.max(0, Math.min(255, value * 255 / maxValue));
+        return Math.clamp(value * 255 / maxValue, 0, 255);
     }
 
     public static int textureTarget(ShaderImageTarget target) {
@@ -408,7 +406,7 @@ public final class ShaderTextureLoader {
     }
 
     private static String normalize(String value) {
-        return value == null ? "" : value.trim().toUpperCase(java.util.Locale.ROOT);
+        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
     }
 
     private static void logGlError(String operation, String resourcePath) {
