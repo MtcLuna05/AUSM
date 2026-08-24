@@ -1,6 +1,6 @@
 {
   "required": true,
-  "package": "com.l.ausm.impl.mixin",
+  "package": "com.luna.ausm.impl.mixin",
   "compatibilityLevel": "JAVA_21",
   "target": "@env(DEFAULT)",
   "client": [

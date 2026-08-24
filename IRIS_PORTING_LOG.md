@@ -10,7 +10,7 @@ Reference source used: local checkout at `/tmp/iris-ausm-ref`.
 ## 2026-05-30
 
 - Added an Iris-style world rendering phase model in
-  `src/main/java/com/l/ausm/pipeline/shader/WorldRenderingPhase.java`.
+  `src/main/java/com/luna/ausm/pipeline/shader/WorldRenderingPhase.java`.
   - The standard phase names and ordering are aligned with Iris'
     `net.irisshaders.iris.pipeline.WorldRenderingPhase` so shader-facing
     `renderStage` values match Iris ordinals where possible.

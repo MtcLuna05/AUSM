@@ -5,6 +5,7 @@ key.ausm.reload=重载光影
 key.ausm.toggle=切换光影
 key.ausm.force_light_recalculation=强制重新计算光照
 key.ausm.toggle_dynamic_lights=切换动态光源
+key.ausm.capture_frame_layers=捕获光影帧图层
 
 tooltip.ausm.reloadedShader=光影已重载
 tooltip.ausm.toggledShader=光影已切换

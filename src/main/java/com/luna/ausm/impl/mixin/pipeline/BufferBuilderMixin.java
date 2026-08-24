@@ -1,0 +1,954 @@
+package com.luna.ausm.impl.mixin.pipeline;
+
+import com.luna.ausm.impl.pipeline.vertex.BufferVertexDataAdapter;
+import com.luna.ausm.impl.MainMod;
+import com.luna.ausm.impl.pipeline.PipelineContext;
+import com.luna.ausm.impl.pipeline.bloom.AusmBloomLayer;
+import com.luna.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
+import com.luna.ausm.impl.pipeline.vertex.BlockRenderContext;
+import com.luna.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
+import com.luna.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
+import com.luna.ausm.impl.pipeline.vertex.PipelineVertexAttributeWriter;
+import com.luna.ausm.impl.pipeline.vertex.SeparateAoColorWriter;
+import com.luna.ausm.impl.util.MinecraftReflectionCompat;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.IntBuffer;
+import java.util.concurrent.atomic.AtomicInteger;
+import net.minecraft.client.renderer.BufferBuilder;
+import net.minecraft.client.renderer.vertex.VertexFormat;
+import net.minecraft.client.renderer.vertex.VertexFormatElement;
+import net.minecraft.util.BlockRenderLayer;
+import org.lwjgl.opengl.GL11;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+@Mixin(BufferBuilder.class)
+public class BufferBuilderMixin implements IBufferBuilderExtension {
+    @Unique
+    private int ausm$capturedTranslucentAlpha = -1;
+
+    @Unique
+    private int ausm$capturedTranslucentAlphaOffset = -1;
+
+    @Unique
+    private boolean ausm$shaderlessBloomMetadata;
+
+    @Unique
+    private static final boolean AUSM$LITTLE_ENDIAN = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
+
+    @Unique
+    private static final AtomicInteger AUSM$LIQUID_PAYLOAD_PROBES = new AtomicInteger();
+
+    @Shadow(remap = false)
+    private ByteBuffer field_179001_a;
+
+    @Shadow(remap = false)
+    private IntBuffer field_178999_b;
+
+    @Shadow(remap = false)
+    private int field_178997_d;
+
+    @Shadow(remap = false)
+    private int field_179006_k;
+
+    @Shadow(remap = false)
+    private VertexFormatElement field_181677_f;
+
+    @Shadow(remap = false)
+    private int field_181678_g;
+
+    @Shadow(remap = false)
+    private VertexFormat field_179011_q;
+
+    @Shadow(remap = false)
+    private boolean field_179010_r;
+
+    @Shadow(remap = false)
+    public native int func_78909_a(int vertexIndex);
+
+    @Shadow(remap = false)
+    private native void func_181670_b(int size);
+
+    @Shadow(remap = false)
+    private native int func_181664_j();
+
+    @Shadow(remap = false)
+    public native void func_178965_a();
+
+    @Shadow(remap = false)
+    public native void func_178981_a(int[] vertexData);
+
+    @Shadow(remap = false)
+    public native void func_178978_a(float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex);
+
+    @Override
+    public void ausm$forceResetDrawingState() {
+        field_179010_r = false;
+        func_178965_a();
+    }
+
+    @Override
+    public boolean ausm$isDrawing() {
+        return field_179010_r;
+    }
+
+    @Override
+    public void ausm$truncateVertexCount(int vertexCount) {
+        field_178997_d = Math.clamp(field_178997_d, 0, vertexCount);
+    }
+
+    @Override
+    public void ausm$resetShaderlessBloomMetadata() {
+        ausm$shaderlessBloomMetadata = false;
+    }
+
+    @Override
+    public void ausm$markShaderlessBloomMetadata() {
+        ausm$shaderlessBloomMetadata = true;
+    }
+
+    @Override
+    public boolean ausm$hasShaderlessBloomMetadata() {
+        return ausm$shaderlessBloomMetadata;
+    }
+
+    @Override
+    public VertexFormat ausm$vertexFormat() {
+        return field_179011_q;
+    }
+
+    @Override
+    public ByteBuffer ausm$byteBuffer() {
+        return field_179001_a;
+    }
+
+    @Override
+    public int ausm$vertexCount() {
+        return field_178997_d;
+    }
+
+    @Override
+    public void ausm$addVertexData(int[] vertexData) {
+        func_178981_a(vertexData);
+    }
+
+    @Override
+    public int ausm$appendRawVertexData(int[] vertexData) {
+        if (vertexData == null || vertexData.length == 0 || field_179011_q == null) {
+            return 0;
+        }
+        int integerStride = ExtendedVertexFormats.integerSize(field_179011_q);
+        if (integerStride <= 0 || vertexData.length % integerStride != 0) {
+            return 0;
+        }
+        int vertices = vertexData.length / integerStride;
+        int bytes = vertexData.length * Integer.BYTES;
+        func_181670_b(bytes + ExtendedVertexFormats.size(field_179011_q));
+        field_178999_b.position(func_181664_j());
+        field_178999_b.put(vertexData);
+        field_178997_d += vertices;
+        return vertices;
+    }
+
+    @Override
+    public void ausm$putColorMultiplier(float redMultiplier, float greenMultiplier,
+                                        float blueMultiplier, int vertexIndex) {
+        func_178978_a(redMultiplier, greenMultiplier, blueMultiplier, vertexIndex);
+    }
+
+    @ModifyVariable(method = "func_181668_a", at = @At("HEAD"), argsOnly = true)
+    private VertexFormat ausm$usePipelineEntityFormat(VertexFormat original) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return original;
+        }
+        if (ausm$isCodeChickenBakingBuffer()) {
+            return original;
+        }
+        if (ausm$isVanillaItemVertexFormat(original) && PipelineContext.getInstance().shouldUsePipelineEntityFormat()) {
+            return ExtendedVertexFormats.PIPELINE_ENTITY;
+        }
+        return original;
+    }
+
+    @Unique
+    private boolean ausm$isVanillaItemVertexFormat(VertexFormat format) {
+        return format != null
+                && ExtendedVertexFormats.size(format) == 28
+                && ExtendedVertexFormats.elementCount(format) == 4
+                && ExtendedVertexFormats.hasColor(format)
+                && ExtendedVertexFormats.hasNormal(format)
+                && ExtendedVertexFormats.hasUvOffset(format, 0)
+                && !ExtendedVertexFormats.hasUvOffset(format, 1);
+    }
+
+    @Unique
+    private boolean ausm$isCodeChickenBakingBuffer() {
+        return "codechicken.lib.render.buffer.BakingVertexBuffer".equals(((Object) this).getClass().getName());
+    }
+
+    @Inject(method = "putBulkData", at = @At("HEAD"), cancellable = true)
+    private void ausm$expandBulkVanillaVertexData(ByteBuffer sourceBuffer, CallbackInfo ci) {
+        if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q) || sourceBuffer == null) {
+            ausm$rewriteVanillaEmissiveBulkData(sourceBuffer, ci);
+            return;
+        }
+
+        ByteBuffer source = sourceBuffer.slice();
+        source.order(field_179001_a.order());
+        int sourceBytes = source.remaining();
+        int targetStride = ExtendedVertexFormats.size(field_179011_q);
+        int sourceStride = BufferVertexDataAdapter.pipelineBlockBulkStride(source, sourceBytes, targetStride);
+        if (sourceStride < 0) {
+            return;
+        }
+
+        int vertexBase = field_178997_d;
+        int vertexTotal = sourceBytes / sourceStride;
+        int targetIntStride = ExtendedVertexFormats.integerSize(field_179011_q);
+        int sourceIntStride = sourceStride / Integer.BYTES;
+        int[] scratch = BufferVertexDataAdapter.vertexScratch(targetIntStride);
+        boolean compatibilityEmissiveBoost = ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost();
+        long packedEntityData = BlockRenderContext.packedEntityData();
+        int packedEntity = (int) packedEntityData;
+        int packedEntityHigh = (int) (packedEntityData >>> 32);
+        boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
+        int customLiquidTint = BlockRenderContext.customLiquidTint();
+        int vanillaLightmapEmission = compatibilityEmissiveBoost ? BlockRenderContext.vanillaLightmapEmission() : 0;
+        boolean agricraftCrop = BlockRenderContext.isAgricraftCrop();
+        int agricraftPackedLight = agricraftCrop ? BlockRenderContext.packedLightmap() : 0;
+        ausm$probeLiquidPayload("bulk", packedEntityData, targetStride, vertexTotal);
+        ausm$logVertexExpandProbe("bulk-in", sourceBytes, sourceStride, targetStride, vertexBase, vertexTotal, -1, compatibilityEmissiveBoost);
+        func_181670_b(vertexTotal * targetStride + targetStride);
+        field_178999_b.position(func_181664_j());
+        for (int vertex = 0; vertex < vertexTotal; vertex++) {
+            for (int sourceInt = 0; sourceInt < sourceIntStride; sourceInt++) {
+                scratch[sourceInt] = source.getInt();
+            }
+            BufferVertexDataAdapter.clearVertexScratchTail(scratch, sourceIntStride, targetIntStride);
+            BufferVertexDataAdapter.sanitizeAgricraftCropVertex(
+                    scratch, 0, sourceIntStride, agricraftCrop, agricraftPackedLight);
+            ausm$applyBloomMaskVertexData(scratch, 0, bloomMaskFallback);
+            ausm$applyCustomLiquidTintVertexData(scratch, 0, bloomMaskFallback, customLiquidTint);
+            ausm$applyEmissiveLightmap(scratch, 0, vanillaLightmapEmission);
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity;
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh;
+            // The complete polygon pass below writes the final mid-block value for every vertex.
+            field_178999_b.put(scratch, 0, targetIntStride);
+        }
+
+        field_178997_d += vertexTotal;
+        ausm$logVertexExpandProbe("bulk-out", sourceBytes, sourceStride, targetStride, vertexBase, vertexTotal, field_178997_d, compatibilityEmissiveBoost);
+
+        for (int vertex = 0; vertex + 3 < vertexTotal; vertex += 4) {
+            PipelineVertexAttributeWriter.writeBlockPolygon(field_179001_a, field_179011_q, vertexBase + vertex, 4);
+        }
+
+        ausm$markCurrentContextShaderlessBloomMetadata();
+        ausm$resetPipelineVertexCursor();
+        ci.cancel();
+    }
+
+    @Inject(method = "func_178981_a", at = @At("HEAD"), cancellable = true)
+    private void ausm$expandVanillaQuadData(int[] vertexData, CallbackInfo ci) {
+        if (vertexData == null) {
+            return;
+        }
+
+        if (ausm$rewriteVanillaEmissiveVertexData(vertexData, ci)) {
+            return;
+        }
+
+        if (ExtendedVertexFormats.isPipelineEntity(field_179011_q)) {
+            ausm$expandPipelineEntityVertexData(vertexData, ci);
+            return;
+        }
+
+        if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)) {
+            return;
+        }
+
+        int targetStride = ExtendedVertexFormats.integerSize(field_179011_q);
+        int sourceStride = BufferVertexDataAdapter.pipelineBlockVertexStride(vertexData, targetStride);
+        if (sourceStride < 0) {
+            return;
+        }
+
+        int vertexBase = field_178997_d;
+        int vertexTotal = vertexData.length / sourceStride;
+        int[] scratch = BufferVertexDataAdapter.vertexScratch(targetStride);
+        boolean compatibilityEmissiveBoost = ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost();
+        long packedEntityData = BlockRenderContext.packedEntityData();
+        int packedEntity = (int) packedEntityData;
+        int packedEntityHigh = (int) (packedEntityData >>> 32);
+        ausm$probeLiquidPayload("quad", packedEntityData,
+                ExtendedVertexFormats.size(field_179011_q), vertexTotal);
+        boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
+        int customLiquidTint = BlockRenderContext.customLiquidTint();
+        int vanillaLightmapEmission = compatibilityEmissiveBoost ? BlockRenderContext.vanillaLightmapEmission() : 0;
+        boolean agricraftCrop = BlockRenderContext.isAgricraftCrop();
+        int agricraftPackedLight = agricraftCrop ? BlockRenderContext.packedLightmap() : 0;
+        ausm$logVertexExpandProbe("quad-in", vertexData.length, sourceStride, targetStride, vertexBase, vertexTotal, -1, compatibilityEmissiveBoost);
+        func_181670_b(vertexTotal * ExtendedVertexFormats.size(field_179011_q) + ExtendedVertexFormats.size(field_179011_q));
+        field_178999_b.position(func_181664_j());
+        for (int vertex = 0; vertex < vertexTotal; vertex++) {
+            int source = vertex * sourceStride;
+            int copyInts = Math.min(sourceStride, targetStride);
+            System.arraycopy(vertexData, source, scratch, 0, copyInts);
+            BufferVertexDataAdapter.clearVertexScratchTail(scratch, copyInts, targetStride);
+            BufferVertexDataAdapter.sanitizeAgricraftCropVertex(
+                    scratch, 0, sourceStride, agricraftCrop, agricraftPackedLight);
+            ausm$applyBloomMaskVertexData(scratch, 0, bloomMaskFallback);
+            ausm$applyCustomLiquidTintVertexData(scratch, 0, bloomMaskFallback, customLiquidTint);
+            ausm$applyEmissiveLightmap(scratch, 0, vanillaLightmapEmission);
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES] = packedEntity;
+            scratch[ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET / Integer.BYTES + 1] = packedEntityHigh;
+            // The complete polygon pass below writes the final mid-block value for every vertex.
+            field_178999_b.put(scratch, 0, targetStride);
+        }
+
+        field_178997_d += vertexTotal;
+        ausm$logVertexExpandProbe("quad-out", vertexData.length, sourceStride, targetStride, vertexBase, vertexTotal, field_178997_d, compatibilityEmissiveBoost);
+
+        for (int vertex = 0; vertex + 3 < vertexTotal; vertex += 4) {
+            PipelineVertexAttributeWriter.writeBlockPolygon(field_179001_a, field_179011_q, vertexBase + vertex, 4);
+        }
+
+        ausm$markCurrentContextShaderlessBloomMetadata();
+        ausm$resetPipelineVertexCursor();
+        ci.cancel();
+    }
+
+    @Unique
+    private void ausm$logVertexExpandProbe(String stage, int sourceSize, int sourceStride, int targetStride,
+                                           int vertexBase, int vertexTotal, int vertexEnd,
+                                           boolean compatibilityEmissiveBoost) {
+        // Probe permanently disabled. Keeping the call site lets HotSpot
+        // eliminate it from Nothirium's worker-thread vertex path.
+    }
+
+    @Unique
+    private static boolean ausm$hasUsefulVertexProbeContext(PipelineContext pipeline) {
+        if (pipeline.isPipelineActive()
+                || BlockRenderContext.renderType() >= 0
+                || BlockRenderContext.blockEntityId() != 0
+                || BlockRenderContext.blockEmission() != 0
+                || BlockRenderContext.packedLightmap() != 0
+                || BlockRenderContext.blockX() != 0
+                || BlockRenderContext.blockY() != 0
+                || BlockRenderContext.blockZ() != 0) {
+            return true;
+        }
+        String thread = Thread.currentThread().getName();
+        return thread != null && thread.contains("Chunk");
+    }
+
+    private boolean ausm$rewriteVanillaEmissiveVertexData(int[] vertexData, CallbackInfo ci) {
+        if (!ausm$canRewriteVanillaEmissiveData() || vertexData == null) {
+            return false;
+        }
+        if (!ausm$shouldMutateVanillaEmissiveData()) {
+            ausm$markCurrentContextShaderlessBloomMetadata();
+            return false;
+        }
+
+        int targetStride = ExtendedVertexFormats.integerSize(field_179011_q);
+        if (targetStride <= 0 || vertexData.length <= 0 || vertexData.length % targetStride != 0) {
+            return false;
+        }
+
+        int vertexTotal = vertexData.length / targetStride;
+        int[] scratch = BufferVertexDataAdapter.vertexScratch(targetStride);
+        boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
+        int customLiquidTint = BlockRenderContext.customLiquidTint();
+        int blockAlpha = BlockRenderContext.blockAlpha();
+        int colorOffset = ExtendedVertexFormats.colorOffset(field_179011_q) / Integer.BYTES;
+        int targetBytes = targetStride * Integer.BYTES;
+        func_181670_b(vertexData.length * Integer.BYTES + targetBytes);
+        field_178999_b.position(func_181664_j());
+        for (int vertex = 0; vertex < vertexTotal; vertex++) {
+            int source = vertex * targetStride;
+            System.arraycopy(vertexData, source, scratch, 0, targetStride);
+            ausm$applyVanillaEmissiveAttributes(scratch, 0, bloomMaskFallback, customLiquidTint, blockAlpha,
+                    colorOffset);
+            field_178999_b.put(scratch, 0, targetStride);
+        }
+
+        field_178997_d += vertexTotal;
+        ausm$markCurrentContextShaderlessBloomMetadata();
+        ci.cancel();
+        return true;
+    }
+
+    private boolean ausm$rewriteVanillaEmissiveBulkData(ByteBuffer sourceBuffer, CallbackInfo ci) {
+        if (!ausm$canRewriteVanillaEmissiveData() || sourceBuffer == null) {
+            return false;
+        }
+        if (!ausm$shouldMutateVanillaEmissiveData()) {
+            ausm$markCurrentContextShaderlessBloomMetadata();
+            return false;
+        }
+
+        ByteBuffer source = sourceBuffer.slice();
+        source.order(field_179001_a.order());
+        int targetStride = ExtendedVertexFormats.integerSize(field_179011_q);
+        int sourceBytes = source.remaining();
+        if (targetStride <= 0 || sourceBytes <= 0 || sourceBytes % (targetStride * Integer.BYTES) != 0) {
+            return false;
+        }
+
+        int vertexTotal = sourceBytes / (targetStride * Integer.BYTES);
+        int[] scratch = BufferVertexDataAdapter.vertexScratch(targetStride);
+        boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
+        int customLiquidTint = BlockRenderContext.customLiquidTint();
+        int blockAlpha = BlockRenderContext.blockAlpha();
+        int colorOffset = ExtendedVertexFormats.colorOffset(field_179011_q) / Integer.BYTES;
+        int targetBytes = targetStride * Integer.BYTES;
+        func_181670_b(sourceBytes + targetBytes);
+        field_178999_b.position(func_181664_j());
+        for (int vertex = 0; vertex < vertexTotal; vertex++) {
+            for (int index = 0; index < targetStride; index++) {
+                scratch[index] = source.getInt();
+            }
+            ausm$applyVanillaEmissiveAttributes(scratch, 0, bloomMaskFallback, customLiquidTint, blockAlpha,
+                    colorOffset);
+            field_178999_b.put(scratch, 0, targetStride);
+        }
+
+        field_178997_d += vertexTotal;
+        ausm$markCurrentContextShaderlessBloomMetadata();
+        ci.cancel();
+        return true;
+    }
+
+    private boolean ausm$canRewriteVanillaEmissiveData() {
+        return (BlockRenderContext.blockEmission() > 0
+                || BlockRenderContext.bloomMaskFallback()
+                || BlockRenderContext.customLiquidTint() >= 0
+                || BlockRenderContext.blockAlpha() >= 0)
+                && field_179011_q != null
+                && !ExtendedVertexFormats.isPipelineBlock(field_179011_q)
+                && !ExtendedVertexFormats.isPipelineEntity(field_179011_q)
+                && ExtendedVertexFormats.hasColor(field_179011_q)
+                && ExtendedVertexFormats.hasUvOffset(field_179011_q, 1)
+                && ExtendedVertexFormats.colorOffset(field_179011_q) % Integer.BYTES == 0
+                && ExtendedVertexFormats.uvOffsetById(field_179011_q, 1) % Integer.BYTES == 0;
+    }
+
+    @Unique
+    private static boolean ausm$shouldMutateVanillaEmissiveData() {
+        return BlockRenderContext.bloomMaskFallback()
+                || BlockRenderContext.customLiquidTint() >= 0
+                || BlockRenderContext.blockAlpha() >= 0;
+    }
+
+    @Unique
+    private void ausm$markCurrentContextShaderlessBloomMetadata() {
+        if (BlockRenderContext.blockEmission() <= 0 && !BlockRenderContext.bloomMaskFallback()) {
+            return;
+        }
+        ausm$markShaderlessBloomMetadata();
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
+    }
+
+    @Unique
+    private boolean ausm$shouldApplyCompatibilityEmissiveBoost() {
+        return !ExtendedVertexFormats.isPipelineBlock(field_179011_q)
+                || ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost();
+    }
+
+    @Unique
+    private static boolean ausm$shouldApplyPipelineBlockCompatibilityEmissiveBoost() {
+        return !PipelineContext.getInstance().isPipelineActive();
+    }
+
+    private void ausm$applyVanillaEmissiveAttributes(int[] vertexData, int vertexBase) {
+        ausm$applyVanillaEmissiveAttributes(vertexData, vertexBase, BlockRenderContext.bloomMaskFallback(),
+                BlockRenderContext.customLiquidTint(), BlockRenderContext.blockAlpha(),
+                ExtendedVertexFormats.colorOffset(field_179011_q) / Integer.BYTES);
+    }
+
+    private void ausm$applyVanillaEmissiveAttributes(int[] vertexData, int vertexBase, boolean bloomMaskFallback,
+                                                     int customLiquidTint, int blockAlpha, int colorOffset) {
+        ausm$applyBloomMaskVertexData(vertexData, vertexBase, bloomMaskFallback);
+        if (bloomMaskFallback || vertexData == null || vertexBase < 0) {
+            return;
+        }
+
+        int colorIndex = vertexBase + colorOffset;
+        if (colorIndex >= 0 && colorIndex < vertexData.length) {
+            int before = vertexData[colorIndex];
+            int color = ausm$applyCustomLiquidTintColor(vertexData[colorIndex], customLiquidTint);
+            vertexData[colorIndex] = ausm$applyBlockAlpha(color, blockAlpha);
+            PipelineContext pipeline = PipelineContext.getInstance();
+            if (pipeline.currentProblemProbesEnabled()) {
+                pipeline.logCurrentRenderContextProbe("buffer-vanilla-data-color",
+                        "vertexBase=" + vertexBase
+                                + ", before=0x" + Integer.toHexString(before)
+                                + ", after=0x" + Integer.toHexString(vertexData[colorIndex])
+                                + ", colorIndex=" + colorIndex
+                                + ", format=" + field_179011_q);
+            }
+        }
+    }
+
+    @Inject(method = "func_181675_d", at = @At("HEAD"))
+    private void ausm$applyEmissiveLightmap(CallbackInfo ci) {
+        BlockRenderContext.State blockState = BlockRenderContext.currentState();
+        ausm$sanitizeCurrentAgricraftCropVertex(blockState);
+        ausm$applyBloomMaskCurrentVertex(blockState);
+        ausm$applyCustomLiquidTintCurrentVertex(blockState);
+        ausm$recordPipelineEmissionBloomMetadata(blockState);
+
+        int blockEmission = ausm$shouldApplyCompatibilityEmissiveBoost()
+                ? blockState.vanillaLightmapEmission()
+                : 0;
+        if (blockEmission <= 0 || field_179011_q == null || !ExtendedVertexFormats.hasUvOffset(field_179011_q, 1)) {
+            return;
+        }
+
+        int offset = field_178997_d * ExtendedVertexFormats.size(field_179011_q) + ExtendedVertexFormats.uvOffsetById(field_179011_q, 1);
+        if (offset < 0 || offset + 4 > field_179001_a.capacity()) {
+            return;
+        }
+
+        int packed = field_179001_a.getShort(offset) & 0xFFFF;
+        packed |= (field_179001_a.getShort(offset + 2) & 0xFFFF) << 16;
+        packed = ausm$emissiveLightmap(packed, blockEmission);
+        field_179001_a.putShort(offset, (short) (packed & 0xFFFF));
+        field_179001_a.putShort(offset + 2, (short) ((packed >>> 16) & 0xFFFF));
+    }
+
+    @Unique
+    private void ausm$recordPipelineEmissionBloomMetadata(BlockRenderContext.State blockState) {
+        if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)
+                || blockState.blockEmission() <= 0) {
+            return;
+        }
+        ausm$markCurrentContextShaderlessBloomMetadata();
+    }
+
+    private void ausm$sanitizeCurrentAgricraftCropVertex(BlockRenderContext.State blockState) {
+        if (!blockState.isAgricraftCrop()
+                || !ExtendedVertexFormats.isPipelineBlock(field_179011_q)
+                || !ExtendedVertexFormats.hasUvOffset(field_179011_q, 1)) {
+            return;
+        }
+
+        int offset = field_178997_d * ExtendedVertexFormats.size(field_179011_q) + ExtendedVertexFormats.uvOffsetById(field_179011_q, 1);
+        if (offset < 0 || offset + 4 > field_179001_a.capacity()) {
+            return;
+        }
+        int packedLightmap = blockState.packedLightmap();
+        field_179001_a.putShort(offset, (short) (packedLightmap & 0xFFFF));
+        field_179001_a.putShort(offset + 2, (short) ((packedLightmap >>> 16) & 0xFFFF));
+    }
+
+    @Inject(method = "func_181675_d", at = @At("HEAD"))
+    private void ausm$writeBlockEntityAttribute(CallbackInfo ci) {
+        if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q) && !ExtendedVertexFormats.isPipelineEntity(field_179011_q)) {
+            return;
+        }
+
+        int entityOffset = ExtendedVertexFormats.isPipelineEntity(field_179011_q)
+                ? ExtendedVertexFormats.PIPELINE_ENTITY_MC_ENTITY_OFFSET
+                : ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET;
+        int offset = field_178997_d * ExtendedVertexFormats.size(field_179011_q) + entityOffset;
+        if (offset < 0 || offset + 8 > field_179001_a.capacity()) {
+            return;
+        }
+
+        short entityId = (short) (ExtendedVertexFormats.isPipelineEntity(field_179011_q)
+                ? PipelineContext.getInstance().currentEntityId()
+                : BlockRenderContext.blockEntityId());
+        field_179001_a.putShort(offset, entityId);
+        field_179001_a.putShort(offset + 2, BlockRenderContext.renderType());
+        field_179001_a.putShort(offset + 4, ExtendedVertexFormats.isPipelineEntity(field_179011_q) ? (short) 0 : BlockRenderContext.metadata());
+        field_179001_a.putShort(offset + 6, (short) (BlockRenderContext.framedBloomBoost()
+                ? BlockRenderContext.FRAMED_BLOOM_BOOST_MARKER : 0));
+    }
+
+    @Inject(method = "func_181675_d", at = @At("RETURN"))
+    private void ausm$writeDerivedBlockAttributes(CallbackInfo ci) {
+        if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)) {
+            return;
+        }
+
+        if (field_179006_k == GL11.GL_QUADS && field_178997_d >= 4 && field_178997_d % 4 == 0) {
+            PipelineVertexAttributeWriter.writeBlockPolygon(field_179001_a, field_179011_q, field_178997_d - 4, 4);
+            ausm$resetPipelineVertexCursor();
+        } else if (field_179006_k == GL11.GL_TRIANGLES && field_178997_d >= 3 && field_178997_d % 3 == 0) {
+            PipelineVertexAttributeWriter.writeBlockPolygon(field_179001_a, field_179011_q, field_178997_d - 3, 3);
+            ausm$resetPipelineVertexCursor();
+        }
+    }
+
+    @Inject(method = "func_181675_d", at = @At("RETURN"))
+    private void ausm$writeDerivedEntityAttributes(CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return;
+        }
+        if (!ExtendedVertexFormats.isPipelineEntity(field_179011_q)) {
+            return;
+        }
+
+        if (field_179006_k == GL11.GL_QUADS && field_178997_d >= 4 && field_178997_d % 4 == 0) {
+            PipelineVertexAttributeWriter.writeEntityPolygon(field_179001_a, field_179011_q, field_178997_d - 4, 4);
+            ausm$resetPipelineVertexCursor();
+        } else if (field_179006_k == GL11.GL_TRIANGLES && field_178997_d >= 3 && field_178997_d % 3 == 0) {
+            PipelineVertexAttributeWriter.writeEntityPolygon(field_179001_a, field_179011_q, field_178997_d - 3, 3);
+            ausm$resetPipelineVertexCursor();
+        }
+    }
+
+    @Inject(method = "func_181675_d", at = @At("RETURN"))
+    private void ausm$resetPipelineVertexCursorAfterNonQuad(CallbackInfo ci) {
+        if (ExtendedVertexFormats.isPipelineBlock(field_179011_q)
+                && !((field_179006_k == GL11.GL_QUADS && field_178997_d % 4 == 0)
+                || (field_179006_k == GL11.GL_TRIANGLES && field_178997_d % 3 == 0))) {
+            ausm$resetPipelineVertexCursor();
+        }
+    }
+
+    @Inject(method = "func_178987_a", at = @At("RETURN"))
+    private void ausm$refreshMidBlockAfterRawQuadTranslation(double x, double y, double z, CallbackInfo ci) {
+        if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q) || field_178997_d < 4) {
+            return;
+        }
+
+        int stride = ExtendedVertexFormats.size(field_179011_q);
+        int base = (field_178997_d - 4) * stride;
+        if (base < 0 || base + 3 * stride + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET + 4 > field_179001_a.capacity()) {
+            return;
+        }
+
+        int packedLocalPosition = BlockRenderContext.packedLocalPosition();
+        int midBlockEmission = BlockRenderContext.midBlockEmission();
+        for (int vertex = 0; vertex < 4; vertex++) {
+            int vertexBase = base + vertex * stride;
+            field_179001_a.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET, BlockRenderContext.midBlock(
+                    field_179001_a.getFloat(vertexBase),
+                    field_179001_a.getFloat(vertexBase + 4),
+                    field_179001_a.getFloat(vertexBase + 8),
+                    packedLocalPosition,
+                    midBlockEmission
+            ));
+        }
+    }
+
+    private void ausm$resetPipelineVertexCursor() {
+        field_181678_g = 0;
+        field_181677_f = ExtendedVertexFormats.element(field_179011_q, 0);
+    }
+
+    private void ausm$expandPipelineEntityVertexData(int[] vertexData, CallbackInfo ci) {
+        int targetStride = ExtendedVertexFormats.integerSize(field_179011_q);
+        int sourceStride;
+        if (vertexData.length % targetStride == 0) {
+            sourceStride = targetStride;
+        } else if (vertexData.length % 7 == 0) {
+            sourceStride = 7;
+        } else {
+            return;
+        }
+
+        int vertexBase = field_178997_d;
+        int vertexTotal = vertexData.length / sourceStride;
+        int[] expandedData = new int[vertexTotal * targetStride];
+        for (int vertex = 0; vertex < vertexTotal; vertex++) {
+            int source = vertex * sourceStride;
+            int target = vertex * targetStride;
+            if (sourceStride == targetStride) {
+                System.arraycopy(vertexData, source, expandedData, target, targetStride);
+            } else {
+                BufferVertexDataAdapter.copyVanillaEntityVertex(vertexData, source, expandedData, target);
+            }
+            expandedData[target + ExtendedVertexFormats.PIPELINE_ENTITY_MC_ENTITY_OFFSET / Integer.BYTES] =
+                    PipelineContext.getInstance().currentEntityId() & 0xFFFF;
+            expandedData[target + ExtendedVertexFormats.PIPELINE_ENTITY_MC_ENTITY_OFFSET / Integer.BYTES + 1] = 0;
+        }
+
+        func_181670_b(expandedData.length * Integer.BYTES + ExtendedVertexFormats.size(field_179011_q));
+        field_178999_b.position(func_181664_j());
+        field_178999_b.put(expandedData);
+        field_178997_d += vertexTotal;
+
+        for (int vertex = 0; vertex + 3 < vertexTotal; vertex += 4) {
+            PipelineVertexAttributeWriter.writeEntityPolygon(field_179001_a, field_179011_q, vertexBase + vertex, 4);
+        }
+
+        ausm$resetPipelineVertexCursor();
+        ci.cancel();
+    }
+
+    private static void ausm$applyEmissiveLightmap(int[] vertexData, int vertexBase, boolean compatibilityBoost) {
+        if (!compatibilityBoost) {
+            return;
+        }
+        int blockEmission = BlockRenderContext.vanillaLightmapEmission();
+        ausm$applyEmissiveLightmap(vertexData, vertexBase, blockEmission);
+        if (blockEmission > 0) {
+            PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
+        }
+    }
+
+    @Unique
+    private static void ausm$applyEmissiveLightmap(int[] vertexData, int vertexBase, int blockEmission) {
+        if (blockEmission <= 0 || vertexData == null || vertexBase < 0 || vertexBase + 6 >= vertexData.length) {
+            return;
+        }
+        vertexData[vertexBase + 6] = ausm$emissiveLightmap(vertexData[vertexBase + 6], blockEmission);
+    }
+
+    private static int ausm$emissiveLightmap(int packedLightmap, int blockEmission) {
+        int emissiveLevel = 240;
+        int block = Math.max(packedLightmap & 0xFFFF, emissiveLevel);
+        int sky = Math.max((packedLightmap >>> 16) & 0xFFFF, emissiveLevel);
+        return (sky << 16) | block;
+    }
+
+
+    @Inject(method = "func_178978_a", at = @At("HEAD"))
+    private void ausm$captureTranslucentAlpha(float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex, CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            ausm$capturedTranslucentAlpha = -1;
+            ausm$capturedTranslucentAlphaOffset = -1;
+            return;
+        }
+        ausm$capturedTranslucentAlpha = -1;
+        ausm$capturedTranslucentAlphaOffset = -1;
+        BlockRenderLayer layer = MinecraftReflectionCompat.currentRenderLayer();
+        if ((layer != BlockRenderLayer.TRANSLUCENT && !AusmBloomLayer.isBloomLayer(layer))
+                || vertexIndex <= 0
+                || vertexIndex > field_178997_d
+                || field_179011_q == null
+                || !ExtendedVertexFormats.hasColor(field_179011_q)) {
+            return;
+        }
+
+        int colorOffset = func_78909_a(vertexIndex) * Integer.BYTES;
+        if (colorOffset < 0 || colorOffset + Integer.BYTES > field_179001_a.capacity()) {
+            return;
+        }
+
+        int alpha = field_179001_a.get(colorOffset + 3) & 0xFF;
+        if (alpha > 0 && alpha < 255) {
+            ausm$capturedTranslucentAlpha = alpha;
+            ausm$capturedTranslucentAlphaOffset = colorOffset + 3;
+            PipelineContext pipeline = PipelineContext.getInstance();
+            if (pipeline.currentProblemProbesEnabled()) {
+                pipeline.logCurrentRenderContextProbe("buffer-alpha-capture",
+                        "vertexIndex=" + vertexIndex
+                                + ", alpha=" + alpha
+                                + ", color=0x" + Integer.toHexString(field_179001_a.getInt(colorOffset))
+                                + ", colorOffset=" + colorOffset
+                                + ", format=" + field_179011_q);
+            }
+        }
+    }
+
+    @Inject(method = "func_178978_a", at = @At("RETURN"))
+    private void ausm$separateAmbientOcclusion(float redMultiplier, float greenMultiplier, float blueMultiplier, int vertexIndex, CallbackInfo ci) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() != null) {
+            return;
+        }
+        if (vertexIndex <= 0 || vertexIndex > field_178997_d) {
+            return;
+        }
+        if (ausm$capturedTranslucentAlpha >= 0
+                && ausm$capturedTranslucentAlphaOffset >= 0
+                && ausm$capturedTranslucentAlphaOffset < field_179001_a.capacity()) {
+            field_179001_a.put(ausm$capturedTranslucentAlphaOffset, (byte) ausm$capturedTranslucentAlpha);
+        }
+        if (BlockRenderContext.bloomMaskFallback()) {
+            ausm$applyBloomMaskExistingVertex(vertexIndex);
+        }
+        int aoColorOffset = func_78909_a(vertexIndex) * Integer.BYTES;
+        SeparateAoColorWriter.rewriteExistingColor(field_179011_q, field_179001_a, aoColorOffset,
+                redMultiplier, greenMultiplier, blueMultiplier, vertexIndex);
+        ausm$applyCustomLiquidTintExistingVertex(vertexIndex);
+        if (BlockRenderContext.bloomMaskFallback()) {
+            ausm$applyBloomMaskExistingVertex(vertexIndex);
+        }
+    }
+
+    @Unique
+    private static void ausm$applyBloomMaskVertexData(int[] vertexData, int vertexBase) {
+        boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
+        ausm$applyBloomMaskVertexData(vertexData, vertexBase, bloomMaskFallback);
+        if (bloomMaskFallback) {
+            PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
+        }
+    }
+
+    @Unique
+    private static void ausm$applyBloomMaskVertexData(int[] vertexData, int vertexBase, boolean bloomMaskFallback) {
+        if (!bloomMaskFallback || vertexData == null || vertexBase < 0 || vertexBase + 6 >= vertexData.length) {
+            return;
+        }
+        vertexData[vertexBase + 6] = ausm$emissiveLightmap(vertexData[vertexBase + 6], 15);
+    }
+
+    @Unique
+    private static void ausm$applyCustomLiquidTintVertexData(int[] vertexData, int vertexBase) {
+        ausm$applyCustomLiquidTintVertexData(vertexData, vertexBase, BlockRenderContext.bloomMaskFallback(),
+                BlockRenderContext.customLiquidTint());
+    }
+
+    @Unique
+    private static void ausm$applyCustomLiquidTintVertexData(int[] vertexData, int vertexBase,
+                                                             boolean bloomMaskFallback, int customLiquidTint) {
+        if (bloomMaskFallback || customLiquidTint < 0 || vertexData == null || vertexBase < 0
+                || vertexBase + 3 >= vertexData.length) {
+            return;
+        }
+        vertexData[vertexBase + 3] = ausm$applyCustomLiquidTintColor(vertexData[vertexBase + 3], customLiquidTint);
+    }
+
+    @Unique
+    private void ausm$applyCustomLiquidTintCurrentVertex(BlockRenderContext.State blockState) {
+        int customLiquidTint = blockState.customLiquidTint();
+        if (blockState.bloomMaskFallback()
+                || customLiquidTint < 0
+                || field_179011_q == null
+                || !ExtendedVertexFormats.hasColor(field_179011_q)) {
+            return;
+        }
+        int colorOffset = field_178997_d * ExtendedVertexFormats.size(field_179011_q) + ExtendedVertexFormats.colorOffset(field_179011_q);
+        if (colorOffset < 0 || colorOffset + Integer.BYTES > field_179001_a.capacity()) {
+            return;
+        }
+        field_179001_a.putInt(colorOffset,
+                ausm$applyCustomLiquidTintColor(field_179001_a.getInt(colorOffset), customLiquidTint));
+        ausm$writeBlockAlpha(colorOffset, blockState.blockAlpha());
+    }
+
+    @Unique
+    private void ausm$applyCustomLiquidTintExistingVertex(int vertexIndex) {
+        if (BlockRenderContext.bloomMaskFallback()
+                || BlockRenderContext.customLiquidTint() < 0
+                || field_179011_q == null
+                || !ExtendedVertexFormats.hasColor(field_179011_q)
+                || vertexIndex <= 0
+                || vertexIndex > field_178997_d) {
+            return;
+        }
+        int colorOffset = func_78909_a(vertexIndex) * Integer.BYTES;
+        if (colorOffset < 0 || colorOffset + Integer.BYTES > field_179001_a.capacity()) {
+            return;
+        }
+        field_179001_a.putInt(colorOffset, ausm$applyCustomLiquidTintColor(field_179001_a.getInt(colorOffset)));
+        ausm$writeBlockAlpha(colorOffset);
+    }
+
+    @Unique
+    private void ausm$applyBloomMaskCurrentVertex(BlockRenderContext.State blockState) {
+        if (!blockState.bloomMaskFallback() || field_179011_q == null) {
+            return;
+        }
+        int vertexOffset = field_178997_d * ExtendedVertexFormats.size(field_179011_q);
+        if (vertexOffset < 0 || vertexOffset + 12 > field_179001_a.capacity()) {
+            return;
+        }
+        if (ExtendedVertexFormats.hasUvOffset(field_179011_q, 1)) {
+            int lightOffset = vertexOffset + ExtendedVertexFormats.uvOffsetById(field_179011_q, 1);
+            if (lightOffset >= 0 && lightOffset + 4 <= field_179001_a.capacity()) {
+                field_179001_a.putShort(lightOffset, (short) 240);
+                field_179001_a.putShort(lightOffset + 2, (short) 240);
+            }
+        }
+        ausm$markShaderlessBloomMetadata();
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
+    }
+
+    @Unique
+    private void ausm$applyBloomMaskExistingVertex(int vertexIndex) {
+        if (field_179011_q == null || vertexIndex <= 0 || vertexIndex > field_178997_d) {
+            return;
+        }
+        int vertexOffset = (vertexIndex - 1) * ExtendedVertexFormats.size(field_179011_q);
+        if (vertexOffset < 0 || vertexOffset + 12 > field_179001_a.capacity()) {
+            return;
+        }
+        if (ExtendedVertexFormats.hasUvOffset(field_179011_q, 1)) {
+            int lightOffset = vertexOffset + ExtendedVertexFormats.uvOffsetById(field_179011_q, 1);
+            if (lightOffset >= 0 && lightOffset + 4 <= field_179001_a.capacity()) {
+                field_179001_a.putShort(lightOffset, (short) 240);
+                field_179001_a.putShort(lightOffset + 2, (short) 240);
+            }
+        }
+        ausm$markShaderlessBloomMetadata();
+        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
+    }
+
+    @Unique
+    private static int ausm$applyBlockAlpha(int color) {
+        return ausm$applyBlockAlpha(color, BlockRenderContext.blockAlpha());
+    }
+
+    @Unique
+    private static int ausm$applyBlockAlpha(int color, int alpha) {
+        if (alpha < 0) {
+            return color;
+        }
+        return AUSM$LITTLE_ENDIAN
+                ? (color & 0x00FFFFFF) | (alpha << 24)
+                : (color & 0xFFFFFF00) | alpha;
+    }
+
+    @Unique
+    private static int ausm$applyCustomLiquidTintColor(int color) {
+        return ausm$applyCustomLiquidTintColor(color, BlockRenderContext.customLiquidTint());
+    }
+
+    @Unique
+    private static int ausm$applyCustomLiquidTintColor(int color, int tint) {
+        if (tint < 0) {
+            return color;
+        }
+        return AUSM$LITTLE_ENDIAN
+                ? (color & 0xFF000000) | (tint & 0x00FFFFFF)
+                : (tint & 0xFFFFFF00) | (color & 0x000000FF);
+    }
+
+    @Unique
+    private static void ausm$probeLiquidPayload(String source, long packedEntityData,
+                                                int stride, int vertexTotal) {
+        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() == null) {
+            return;
+        }
+        int call = AUSM$LIQUID_PAYLOAD_PROBES.incrementAndGet();
+        if (call > 64) {
+            return;
+        }
+        MainMod.LOGGER.info(
+                "[AUSMLiquidVertexPayloadProbe] call={} source={} id={} renderType={} metadata={} emission={} stride={} vertices={} layer={}",
+                call,
+                source,
+                (int) packedEntityData & 0xFFFF,
+                (int) (packedEntityData >>> 16) & 0xFFFF,
+                (int) (packedEntityData >>> 32) & 0xFFFF,
+                BlockRenderContext.midBlockEmission(),
+                stride,
+                vertexTotal,
+                MinecraftReflectionCompat.currentRenderLayer()
+        );
+    }
+
+    @Unique
+    private void ausm$writeBlockAlpha(int colorOffset) {
+        ausm$writeBlockAlpha(colorOffset, BlockRenderContext.blockAlpha());
+    }
+
+    @Unique
+    private void ausm$writeBlockAlpha(int colorOffset, int alpha) {
+        if (alpha >= 0 && colorOffset >= 0 && colorOffset + 3 < field_179001_a.capacity()) {
+            field_179001_a.put(colorOffset + 3, (byte) alpha);
+        }
+    }
+}

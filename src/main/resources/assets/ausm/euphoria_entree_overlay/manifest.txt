@@ -1,5 +1,6 @@
 shaders/lang/en_US.lang
 shaders/lib/atmospherics/ausmOwnedSky.glsl
+shaders/lib/ausm/distantLod.glsl
 shaders/lib/colors/skyColors.glsl
 shaders/lib/common.glsl
 shaders/lib/lighting/reflectiveCaustics.glsl
@@ -7,6 +8,7 @@ shaders/lib/materials/materialHandling/terrainMaterials.glsl
 shaders/lib/materials/materialHandling/translucentMaterials.glsl
 shaders/lib/materials/materialMethods/ausmModdedFluidCheck.glsl
 shaders/lib/materials/specificMaterials/translucents/coloredFluid.glsl
+shaders/lib/misc/pixelation.glsl
 shaders/lib/textures/ausm-botania/planet0.png
 shaders/lib/textures/ausm-botania/planet1.png
 shaders/lib/textures/ausm-botania/planet2.png

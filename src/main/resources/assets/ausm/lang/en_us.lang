@@ -5,6 +5,7 @@ key.ausm.reload=Reload Shaders
 key.ausm.toggle=Toggle Shaders
 key.ausm.force_light_recalculation=Force Light Recalculation
 key.ausm.toggle_dynamic_lights=Toggle Dynamic Lights
+key.ausm.capture_frame_layers=Capture Shader Frame Layers
 
 tooltip.ausm.reloadedShader=Reloaded Shaders
 tooltip.ausm.toggledShader=Toggled Shaders

@@ -10,6 +10,9 @@ plugins {
 
 import org.jetbrains.gradle.ext.Gradle
 import groovy.json.JsonOutput
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 apply from: 'gradle/scripts/helpers.gradle'
 
@@ -190,17 +193,6 @@ unimined.minecraft {
     }
 }
 
-tasks.named('runClient').configure {
-    if (propertyBool('enable_hotswap_helper') && rootProject.ext.preferredJavaIsJbr) {
-        jvmArgs += [
-                '-XX:+AllowEnhancedClassRedefinition',
-                '-XX:HotswapAgent=core'
-        ]
-    } else if (propertyBool('enable_hotswap_helper')) {
-        logger.lifecycle("HotSwap helper is enabled, but the selected runClient Java is not JBR; skipping JBR-only VM flags.")
-    }
-}
-
 dependencies {
     if (propertyBool('use_asset_mover')) {
         implementation "com.cleanroommc:assetmover:${propertyString('asset_mover_version')}"
@@ -342,6 +334,327 @@ tasks.named(remapTaskName).configure {
     }
     doLast {
         logging.captureStandardOutput LogLevel.QUIET
+    }
+}
+
+def meatballMinecraftDirectory = {
+    String configuredDirectory = project.findProperty('meatball_minecraft_dir')?.toString()
+    if (configuredDirectory == null || configuredDirectory.trim().isEmpty()) {
+        configuredDirectory = System.getenv('MEATBALL_MINECRAFT_DIR')
+    }
+    if (configuredDirectory == null || configuredDirectory.trim().isEmpty()) {
+        configuredDirectory = new File(
+                System.getProperty('user.home'),
+                '.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/MeatballCraft, Dimensional Ascension/minecraft'
+        ).absolutePath
+    }
+    return file(configuredDirectory)
+}
+
+def meatballRtxGpuEnvironment = [
+        'DRI_PRIME'                    : '1',
+        '__NV_PRIME_RENDER_OFFLOAD'    : '1',
+        '__GLX_VENDOR_LIBRARY_NAME'    : 'nvidia',
+        '__VK_LAYER_NV_optimus'        : 'NVIDIA_only'
+]
+
+tasks.register('installMbcJar') {
+    group = 'development'
+    description = 'Builds the remapped AUSM JAR and atomically installs it as the sole AUSM archive in MeatballCraft.'
+    dependsOn(tasks.named(remapTaskName))
+    doLast {
+        File minecraftDirectory = meatballMinecraftDirectory()
+        File modsDirectory = new File(minecraftDirectory, 'mods')
+        File sourceArchive = tasks.named(remapTaskName).get().archiveFile.get().asFile
+        if (!sourceArchive.isFile()) {
+            throw new GradleException("Missing remapped AUSM archive: ${sourceArchive}")
+        }
+        new java.util.zip.ZipFile(sourceArchive).close()
+        Files.createDirectories(modsDirectory.toPath())
+
+        File targetArchive = new File(modsDirectory, sourceArchive.name)
+        java.nio.file.Path stagedArchive = Files.createTempFile(modsDirectory.toPath(), '.ausm-install-', '.jar')
+        try {
+            Files.copy(sourceArchive.toPath(), stagedArchive, StandardCopyOption.REPLACE_EXISTING)
+            new java.util.zip.ZipFile(stagedArchive.toFile()).close()
+            try {
+                Files.move(stagedArchive, targetArchive.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(stagedArchive, targetArchive.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+
+            List<File> staleAusmArchives = (modsDirectory.listFiles() ?: []).findAll { archive ->
+                archive.isFile() && archive.name ==~ /(?i)AUSM.*\.jar/ && archive != targetArchive
+            }
+            staleAusmArchives.each { archive ->
+                Files.delete(archive.toPath())
+            }
+
+            List<File> installedAusmArchives = (modsDirectory.listFiles() ?: []).findAll { archive ->
+                archive.isFile() && archive.name ==~ /(?i)AUSM.*\.jar/
+            }
+            if (installedAusmArchives.size() != 1 || installedAusmArchives.first().canonicalFile != targetArchive.canonicalFile) {
+                throw new GradleException("Expected exactly one installed AUSM archive, found: ${installedAusmArchives}")
+            }
+            logger.lifecycle("Installed AUSM archive: ${targetArchive}")
+        } catch (Exception error) {
+            Files.deleteIfExists(stagedArchive)
+            throw error
+        }
+    }
+}
+
+tasks.register('prepareMbcRtxGpu') {
+    group = 'development'
+    description = 'Prepares the MeatballCraft Prism profile to use the NVIDIA RTX GPU on its next launch.'
+    doLast {
+        File instanceConfig = new File(meatballMinecraftDirectory().parentFile, 'instance.cfg')
+        if (!instanceConfig.isFile()) {
+            throw new GradleException("Missing MeatballCraft instance configuration: ${instanceConfig}")
+        }
+
+        String instanceSettings = instanceConfig.getText('UTF-8')
+        String wrapperCommand = '"env '.concat(
+                meatballRtxGpuEnvironment.collect { name, value -> "${name}=${value}" }.join(' ')
+        ).concat('"')
+        Map<String, String> requiredGpuSettings = [
+                'UseDiscreteGpu': 'true',
+                'WrapperCommand' : wrapperCommand
+        ]
+        String preparedSettings = requiredGpuSettings.inject(instanceSettings) { settings, name, value ->
+            settings.replaceAll('(?m)^' + java.util.regex.Pattern.quote(name) + '=.*(?:\\R|$)', '')
+        }
+        String gpuSettings = requiredGpuSettings.collect { name, value -> "${name}=${value}" }.join('\n') + '\n'
+        int uiSectionIndex = preparedSettings.indexOf('\n[UI]')
+        if (uiSectionIndex >= 0) {
+            String settingsBeforeUi = preparedSettings.substring(0, uiSectionIndex)
+            String uiAndFollowingSettings = preparedSettings.substring(uiSectionIndex + 1)
+            preparedSettings = settingsBeforeUi.concat(settingsBeforeUi.endsWith('\n') ? '' : '\n')
+                    .concat(gpuSettings)
+                    .concat(uiAndFollowingSettings)
+        } else {
+            preparedSettings += (preparedSettings.endsWith('\n') ? '' : '\n') + gpuSettings
+        }
+        if (preparedSettings != instanceSettings) {
+            Files.writeString(instanceConfig.toPath(), preparedSettings, java.nio.charset.StandardCharsets.UTF_8)
+            logger.lifecycle("Prepared MeatballCraft profile for the NVIDIA RTX GPU: ${instanceConfig}")
+        }
+    }
+}
+
+tasks.register('prepareMbcSafeHotSwap') {
+    group = 'development'
+    description = 'Configures MeatballCraft debug launches to use only the AUSM class watcher, never JBR enhanced redefine or Mixin hot swap.'
+    dependsOn(tasks.named('hotswapAgentJar'))
+    doLast {
+        File instanceConfig = new File(meatballMinecraftDirectory().parentFile, 'instance.cfg')
+        if (!instanceConfig.isFile()) {
+            throw new GradleException("Missing MeatballCraft instance configuration: ${instanceConfig}")
+        }
+        String settings = instanceConfig.getText('UTF-8')
+        def matcher = (settings =~ /(?m)^JvmArgs=(.*)$/)
+        if (!matcher.find()) {
+            throw new GradleException("Missing JvmArgs setting: ${instanceConfig}")
+        }
+        String rawArgs = matcher.group(1).trim()
+        String jvmArgs = rawArgs.startsWith('"') && rawArgs.endsWith('"')
+                ? rawArgs.substring(1, rawArgs.length() - 1)
+                : rawArgs
+        jvmArgs = jvmArgs
+                .replaceAll(/(?<!\S)-XX:\+AllowEnhancedClassRedefinition(?=\s|$)/, '')
+                .replaceAll(/(?<!\S)-XX:HotswapAgent=\S+/, '')
+                .replaceAll(/(?<!\S)-Dmixin\.hotSwap=true(?=\s|$)/, '')
+                .replaceAll(/\s+/, ' ')
+                .trim()
+        List<String> requiredArgs = [
+                '-javaagent:' + tasks.named('hotswapAgentJar').get().archiveFile.get().asFile.absolutePath,
+                '-Dausm.hotswap.dir=' + layout.buildDirectory.dir('hotswap/classes').get().asFile.absolutePath,
+                '-Dmixin.hotSwap=false',
+                '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005'
+        ]
+        requiredArgs.each { argument ->
+            if (!jvmArgs.contains(argument)) {
+                jvmArgs = (jvmArgs + ' ' + argument).trim()
+            }
+        }
+        String preparedSettings = settings.replaceFirst(/(?m)^JvmArgs=.*$/, 'JvmArgs="' + jvmArgs + '"')
+        if (preparedSettings != settings) {
+            Files.writeString(instanceConfig.toPath(), preparedSettings, java.nio.charset.StandardCharsets.UTF_8)
+            logger.lifecycle("Prepared MeatballCraft safe AUSM hot swap profile: ${instanceConfig}")
+        }
+    }
+}
+
+tasks.named('installMbcJar').configure {
+    mustRunAfter(tasks.named('prepareMbcRtxGpu'))
+}
+
+tasks.register('launchMbcDebug', Exec) {
+    group = 'development'
+    description = 'Builds, installs, and launches MeatballCraft through Prism with JDWP on the NVIDIA RTX GPU.'
+    dependsOn(tasks.named('prepareMbcRtxGpu'), tasks.named('prepareMbcSafeHotSwap'), tasks.named('installMbcJar'))
+    workingDir(projectDir)
+    environment(meatballRtxGpuEnvironment)
+    List<String> prismCommand = ['flatpak', 'run']
+    meatballRtxGpuEnvironment.each { name, value ->
+        prismCommand.add("--env=${name}=${value}")
+    }
+    prismCommand.addAll([
+            '--command=prismlauncher',
+            'org.prismlauncher.PrismLauncher',
+            '--show-window',
+            '--launch',
+            'MeatballCraft, Dimensional Ascension'
+    ])
+    commandLine(*prismCommand)
+    doFirst {
+        File instanceConfig = new File(meatballMinecraftDirectory().parentFile, 'instance.cfg')
+        if (!instanceConfig.isFile()) {
+            throw new GradleException("Missing MeatballCraft instance configuration: ${instanceConfig}")
+        }
+        String instanceSettings = instanceConfig.getText('UTF-8')
+        List<String> requiredSettings = [
+                'OverrideJavaArgs=true',
+                '-javaagent:' + tasks.named('hotswapAgentJar').get().archiveFile.get().asFile.absolutePath,
+                '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005',
+                'UseDiscreteGpu=true'
+        ]
+        requiredSettings.addAll(meatballRtxGpuEnvironment.collect { name, value -> "${name}=${value}" })
+        List<String> missingSettings = requiredSettings.findAll { setting -> !instanceSettings.contains(setting) }
+        if (!missingSettings.isEmpty()) {
+            throw new GradleException("MeatballCraft debug launch is missing required instance settings ${missingSettings}: ${instanceConfig}")
+        }
+    }
+}
+
+tasks.register('stageHotSwapClasses') {
+    group = 'development'
+    description = 'Builds and stages production-remapped AUSM classes for the live class watcher.'
+    dependsOn(tasks.named(remapTaskName))
+    doLast {
+        Set<String> requestedClassFiles = providers.gradleProperty('hotswapClasses')
+                .getOrElse('')
+                .split(',')
+                .collect { it.trim() }
+                .findAll { !it.isEmpty() }
+                .collect { it.replace('.', '/') + '.class' }
+                .toSet()
+        boolean includeMixins = providers.gradleProperty('hotswapIncludeMixins')
+                .map { Boolean.parseBoolean(it) }
+                .getOrElse(false)
+        File destinationRoot = layout.buildDirectory.dir('hotswap/classes').get().asFile
+        Files.createDirectories(destinationRoot.toPath())
+        File archive = tasks.named(remapTaskName).get().archiveFile.get().asFile
+        zipTree(archive).matching {
+            include 'com/luna/ausm/**/*.class'
+            exclude 'com/luna/ausm/impl/hotswap/**'
+        }.visit { details ->
+            if (details.directory) {
+                return
+            }
+            String classFile = details.relativePath.pathString
+            if (!requestedClassFiles.isEmpty() && !requestedClassFiles.contains(classFile)) {
+                return
+            }
+            // MixinAgent retransforms target classes, so an unrelated pending
+            // mixin can destabilize a perfectly ordinary renderer reload.
+            // Keep mixin reapplication explicit instead of bundling it into
+            // every broad staging run.
+            if (!includeMixins && classFile.contains('/mixin/')) {
+                return
+            }
+            File destination = new File(destinationRoot, details.relativePath.pathString)
+            byte[] bytecode = Files.readAllBytes(details.file.toPath())
+            if (destination.isFile() && java.util.Arrays.equals(bytecode, Files.readAllBytes(destination.toPath()))) {
+                return
+            }
+            Files.createDirectories(destination.parentFile.toPath())
+            File temporary = new File(destination.parentFile, ".${destination.name}.ausm-stage")
+            Files.write(temporary.toPath(), bytecode)
+            try {
+                Files.move(temporary.toPath(), destination.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+    }
+}
+
+tasks.register('safeMbcHotSwap') {
+    group = 'development'
+    description = 'Compiles, remaps, and stages changed AUSM classes for the running MeatballCraft custom class watcher. Do not use IntelliJ Reload Changed Classes.'
+    dependsOn(tasks.named('stageHotSwapClasses'))
+}
+
+tasks.register('hotswapAgentJar', Jar) {
+    group = 'development'
+    description = 'Builds the isolated premain agent without exposing AUSM mod classes to the system class loader.'
+    dependsOn(tasks.named('classes'))
+    archiveClassifier = 'hotswap-agent'
+    from(sourceSets.main.output) {
+        include 'com/luna/ausm/impl/hotswap/**'
+    }
+    manifest {
+        attributes(
+                'Premain-Class': 'com.luna.ausm.impl.hotswap.AusmHotSwapAgent',
+                'Agent-Class': 'com.luna.ausm.impl.hotswap.DirectClassRedefinitionAgent',
+                'Can-Redefine-Classes': true
+        )
+    }
+}
+
+tasks.register('injectHotSwapClass', JavaExec) {
+    group = 'development'
+    description = 'Attaches the AUSM agent and directly redefines named staged game classes.'
+    dependsOn(tasks.named('hotswapAgentJar'))
+    mainClass = 'com.luna.ausm.impl.hotswap.DynamicAgentAttacher'
+    classpath = files(tasks.named('hotswapAgentJar').flatMap { it.archiveFile })
+    jvmArgs '--add-modules', 'jdk.attach'
+    doFirst {
+        String targetPid = providers.gradleProperty('hotswapPid').getOrElse('').trim()
+        String targetClasses = providers.gradleProperty('hotswapClass').getOrElse('').trim()
+        if (targetPid.isEmpty() || targetClasses.isEmpty()) {
+            throw new GradleException('Pass -PhotswapPid=<pid> and -PhotswapClass=<binary-name[,binary-name...]>')
+        }
+        File agentArchive = tasks.named('hotswapAgentJar').get().archiveFile.get().asFile
+        setArgs([targetPid, agentArchive.absolutePath, targetClasses])
+    }
+}
+
+tasks.register('injectHotSwapNewClass', JavaExec) {
+    group = 'development'
+    description = 'Attaches the AUSM agent and defines staged support classes in every active AUSM class loader.'
+    dependsOn(tasks.named('hotswapAgentJar'))
+    mainClass = 'com.luna.ausm.impl.hotswap.DynamicAgentAttacher'
+    classpath = files(tasks.named('hotswapAgentJar').flatMap { it.archiveFile })
+    jvmArgs '--add-modules', 'jdk.attach'
+    doFirst {
+        String targetPid = providers.gradleProperty('hotswapPid').getOrElse('').trim()
+        String targetClasses = providers.gradleProperty('hotswapClass').getOrElse('').trim()
+        if (targetPid.isEmpty() || targetClasses.isEmpty()) {
+            throw new GradleException('Pass -PhotswapPid=<pid> and -PhotswapClass=<binary-name[,binary-name...]>')
+        }
+        File agentArchive = tasks.named('hotswapAgentJar').get().archiveFile.get().asFile
+        setArgs([targetPid, agentArchive.absolutePath, '@inject:' + targetClasses])
+    }
+}
+
+tasks.register('rollbackHotSwap', JavaExec) {
+    group = 'development'
+    description = 'Attaches to the running JVM and restores the bytecode preceding the last live batch.'
+    dependsOn(tasks.named('hotswapAgentJar'))
+    mainClass = 'com.luna.ausm.impl.hotswap.DynamicAgentAttacher'
+    classpath = files(tasks.named('hotswapAgentJar').flatMap { it.archiveFile })
+    jvmArgs '--add-modules', 'jdk.attach'
+    doFirst {
+        String targetPid = providers.gradleProperty('hotswapPid').getOrElse('').trim()
+        if (targetPid.isEmpty()) {
+            throw new GradleException('Pass -PhotswapPid=<pid>')
+        }
+        File agentArchive = tasks.named('hotswapAgentJar').get().archiveFile.get().asFile
+        setArgs([targetPid, agentArchive.absolutePath, '@rollback'])
     }
 }
 

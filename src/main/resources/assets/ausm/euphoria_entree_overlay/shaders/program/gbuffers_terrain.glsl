@@ -361,7 +361,7 @@ void main() {
     }
     #endif
 
-    if (ausmFramedLuminousBase > 149.0) {
+    if (abs(ausmFramedLuminousBase - 150.0) < 0.5) {
         noSmoothLighting = true;
         noDirectionalShading = true;
         noVanillaAO = true;
@@ -391,7 +391,7 @@ void main() {
     #endif
 
     #if defined COATED_TEXTURES && defined IPBR
-        if (ausmFramedLuminousBase <= 149.0 && emission <= 0.00001) {
+        if (abs(ausmFramedLuminousBase - 150.0) >= 0.5 && emission <= 0.00001) {
             CoatTextures(color.rgb, noiseFactor, playerPos, doTileRandomisation);
         }
     #endif
