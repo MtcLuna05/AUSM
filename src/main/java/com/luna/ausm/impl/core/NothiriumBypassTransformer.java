@@ -4,6 +4,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -253,7 +254,8 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
             }
             AbstractInsnNode start = null;
             AbstractInsnNode end = null;
-            for (AbstractInsnNode instruction : method.instructions) {
+            for (Iterator<AbstractInsnNode> iterator = method.instructions.iterator(); iterator.hasNext();) {
+                AbstractInsnNode instruction = iterator.next();
                 if (instruction instanceof TypeInsnNode typeInsn
                         && instruction.getOpcode() == Opcodes.CHECKCAST
                         && "zone/rong/loliasm/client/sprite/ondemand/IBufferPrimerConfigurator".equals(typeInsn.desc)) {

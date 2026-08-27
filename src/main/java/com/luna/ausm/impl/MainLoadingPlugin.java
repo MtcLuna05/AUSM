@@ -3,15 +3,18 @@ package com.luna.ausm.impl;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
+import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.jar.JarFile;
 import net.minecraft.launchwrapper.Launch;
 import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin;
 import org.jetbrains.annotations.Nullable;
+import zone.rong.mixinbooter.IEarlyMixinLoader;
 
-public class MainLoadingPlugin implements IFMLLoadingPlugin {
+public class MainLoadingPlugin implements IFMLLoadingPlugin, IEarlyMixinLoader {
     private static final String[] EARLY_OPTIONAL_COMPAT_TARGETS = {
             "mrtjp/projectred/core/RenderHalo$.class",
             "mrtjp/projectred/illumination/LampRenderer$.class",
@@ -36,6 +39,11 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin {
             "vazkii/botania/client/render/world/SkyblockSkyRenderer.class"
     };
     private static final Set<String> EXPOSED_COMPAT_JARS = new HashSet<>();
+
+    @Override
+    public List<String> getMixinConfigs() {
+        return Arrays.asList("ausm.default.mixin.json", "ausm.mod.mixin.json");
+    }
 
     @Override
     public @Nullable String[] getASMTransformerClass() {

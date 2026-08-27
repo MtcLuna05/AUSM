@@ -21,11 +21,8 @@ import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
-import org.lwjgl.glfw.GLFW;
-import org.lwjgl.glfw.GLFWDropCallback;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
-import org.lwjgl.opengl.Display;
 
 public class GuiShaders extends MappingSafeGuiScreen {
     private static final int ID_DONE = 200;
@@ -51,8 +48,6 @@ public class GuiShaders extends MappingSafeGuiScreen {
     private boolean previewHidden;
     private String notificationText;
     private int notificationTicks;
-    private GLFWDropCallback dropCallback;
-    private GLFWDropCallback previousDropCallback;
     private int focusedControl = -1;
     private int lastMouseX;
     private int lastMouseY;
@@ -753,41 +748,12 @@ public class GuiShaders extends MappingSafeGuiScreen {
     }
 
     private void installDropCallback() {
-        if (dropCallback != null) {
-            return;
-        }
-
-        long window = Display.getWindow();
-        if (window == 0L) {
-            MainMod.LOGGER.debug("Skipping shaderpack drop callback because no GLFW window handle is available.");
-            return;
-        }
-
-        dropCallback = GLFWDropCallback.create((droppedWindow, count, names) -> {
-            List<Path> paths = new ArrayList<>();
-            for (int i = 0; i < count; i++) {
-                String name = GLFWDropCallback.getName(names, i);
-                if (name != null && !name.isBlank()) {
-                    paths.add(Paths.get(name));
-                }
-            }
-            MinecraftReflectionCompat.addScheduledTask(this.mc, () -> handleDroppedFiles(paths));
-        });
-        previousDropCallback = GLFW.glfwSetDropCallback(window, dropCallback);
+        // Forge 1.12 runs on LWJGL 2, which has no GLFW window or file-drop API.
+        // Shader packs can still be installed through the Open Folder button.
     }
 
     private void restoreDropCallback() {
-        if (dropCallback == null) {
-            return;
-        }
-
-        long window = Display.getWindow();
-        if (window != 0L) {
-            GLFW.glfwSetDropCallback(window, previousDropCallback);
-        }
-        dropCallback.free();
-        dropCallback = null;
-        previousDropCallback = null;
+        // See installDropCallback().
     }
 
     private void handleDroppedFiles(List<Path> paths) {

@@ -4,7 +4,7 @@ package com.luna.ausm.api.shader;
  * Loader-neutral view of the currently selected shader pack.
  *
  * <p>This class intentionally stays Java 8 compatible so it can move into a
- * standalone API jar later without constraining the Cleanroom implementation.</p>
+ * standalone API jar later without constraining the Forge implementation.</p>
  */
 public final class ShaderPackInfo {
     private final String name;

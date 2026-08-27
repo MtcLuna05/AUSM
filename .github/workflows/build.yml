@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n 's/^mod_version[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
-          jar_name="AUSM-${version}-Java25.jar"
+          jar_name="AUSM-${version}-Java8.jar"
           jar_path="build/libs/${jar_name}"
           mkdir -p dist
           if [[ ! -f "${jar_path}" ]]; then
@@ -80,7 +80,7 @@ jobs:
           test -f dist/AUSM-latest.jar
           version="$(sed -n 's/^mod_version[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
           short_sha="${GITHUB_SHA::7}"
-          versioned_jar="dist/AUSM-${version}-Java25.jar"
+          versioned_jar="dist/AUSM-${version}-Java8.jar"
           if [[ ! -f "${versioned_jar}" ]]; then
             echo "Expected release AUSM jar not found: ${versioned_jar}" >&2
             find dist -maxdepth 1 -type f -print >&2 || true

@@ -11,7 +11,7 @@ import net.minecraft.client.gui.GuiScreen;
 import org.lwjgl.input.Mouse;
 
 /**
- * Bridges Cleanroom's SRG GUI dispatch to AUSM-owned lifecycle hooks.
+ * Bridges Forge's SRG GUI dispatch to AUSM-owned lifecycle hooks.
  */
 abstract class MappingSafeGuiScreen extends GuiScreen {
     protected Minecraft mc;

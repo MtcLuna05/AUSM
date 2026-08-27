@@ -1,7 +1,7 @@
 package com.luna.ausm.impl.hotswap;
 
 import java.lang.instrument.Instrumentation;
-import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -19,11 +19,11 @@ final class DynamicClassDefinitionSupport {
 
     static List<Class<?>> tryDefineAll(Instrumentation instrumentation, String className, byte[] bytecode) {
         if (instrumentation == null || className == null || bytecode == null) {
-            return List.of();
+            return Collections.emptyList();
         }
         int packageEnd = className.lastIndexOf('.');
         if (packageEnd <= 0) {
-            return List.of();
+            return Collections.emptyList();
         }
         String packageName = className.substring(0, packageEnd);
         Set<ClassLoader> attemptedLoaders = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -31,7 +31,8 @@ final class DynamicClassDefinitionSupport {
         for (Class<?> anchor : instrumentation.getAllLoadedClasses()) {
             ClassLoader loader = anchor.getClassLoader();
             if (loader == null
-                    || !packageName.equals(anchor.getPackageName())
+                    || anchor.getPackage() == null
+                    || !packageName.equals(anchor.getPackage().getName())
                     || !attemptedLoaders.add(loader)) {
                 continue;
             }
@@ -41,13 +42,13 @@ final class DynamicClassDefinitionSupport {
                 continue;
             }
             try {
-                Class<?> defined = MethodHandles.privateLookupIn(anchor, MethodHandles.lookup()).defineClass(bytecode);
+                Class<?> defined = defineClass(anchor, loader, className, bytecode);
                 if (!className.equals(defined.getName())) {
                     throw new LinkageError("Staged class name mismatch: expected " + className
                             + " but defined " + defined.getName());
                 }
                 definitions.add(defined);
-            } catch (IllegalAccessException | IllegalArgumentException | LinkageError failure) {
+            } catch (ReflectiveOperationException | IllegalArgumentException | LinkageError failure) {
                 Class<?> raced = loadedClass(instrumentation, className, loader);
                 if (raced != null) {
                     definitions.add(raced);
@@ -57,7 +58,7 @@ final class DynamicClassDefinitionSupport {
                         + " beside " + anchor.getName() + ": " + failure);
             }
         }
-        return List.copyOf(definitions);
+        return Collections.unmodifiableList(new ArrayList<>(definitions));
     }
 
     static Class<?> loadedClass(Instrumentation instrumentation, String className) {
@@ -76,5 +77,24 @@ final class DynamicClassDefinitionSupport {
             }
         }
         return null;
+    }
+
+    private static Class<?> defineClass(Class<?> anchor, ClassLoader loader, String className, byte[] bytecode)
+            throws ReflectiveOperationException {
+        try {
+            Class<?> methodHandles = Class.forName("java.lang.invoke.MethodHandles");
+            Class<?> lookupClass = Class.forName("java.lang.invoke.MethodHandles$Lookup");
+            Method lookup = methodHandles.getMethod("lookup");
+            Method privateLookupIn = methodHandles.getMethod("privateLookupIn", Class.class, lookupClass);
+            Object privateLookup = privateLookupIn.invoke(null, anchor, lookup.invoke(null));
+            Method defineClass = lookupClass.getMethod("defineClass", byte[].class);
+            return (Class<?>) defineClass.invoke(privateLookup, bytecode);
+        } catch (NoSuchMethodException ignored) {
+            // Java 8 has no Lookup#defineClass; use its accessible class-loader route instead.
+        }
+        Method defineClass = ClassLoader.class.getDeclaredMethod(
+                "defineClass", String.class, byte[].class, int.class, int.class);
+        defineClass.setAccessible(true);
+        return (Class<?>) defineClass.invoke(loader, className, bytecode, 0, bytecode.length);
     }
 }

@@ -41,7 +41,7 @@ final class FoundationMixinAgentClassLoaderTransformer implements ClassFileTrans
         ClassReader reader = new ClassReader(original);
         ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
         AtomicBoolean injected = new AtomicBoolean();
-        reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
+        reader.accept(new ClassVisitor(Opcodes.ASM5, writer) {
             @Override
             public MethodVisitor visitMethod(int access,
                                              String name,
@@ -52,7 +52,7 @@ final class FoundationMixinAgentClassLoaderTransformer implements ClassFileTrans
                 if (!"<init>".equals(name) || !CONSTRUCTOR_DESCRIPTOR.equals(descriptor)) {
                     return delegate;
                 }
-                return new MethodVisitor(Opcodes.ASM9, delegate) {
+                return new MethodVisitor(Opcodes.ASM5, delegate) {
                     private boolean sawAsmPackage;
 
                     @Override

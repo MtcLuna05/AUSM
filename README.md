@@ -1,6 +1,6 @@
 # Actually Usable Shader Mod
 
-AUSM is an experimental shader pipeline for Minecraft 1.12.2 on Cleanroom. It aims to make modern shader-pack behavior usable on the 1.12 rendering stack by combining OptiFine-style shader-pack compatibility with an Iris-inspired pipeline model.
+AUSM is an experimental shader pipeline for Minecraft 1.12.2 on Forge. It aims to make modern shader-pack behavior usable on the 1.12 rendering stack by combining OptiFine-style shader-pack compatibility with an Iris-inspired pipeline model.
 
 The project is not a finished OptiFine replacement yet. Shader-pack compatibility is improving, but visual parity depends on the pack and on the parts of the Iris/OptiFine feature surface that have already been ported.
 
@@ -18,15 +18,15 @@ The project is not a finished OptiFine replacement yet. Shader-pack compatibilit
 ## Requirements
 
 - Minecraft 1.12.2
-- Cleanroom Loader, currently developed against `0.5.12-alpha`
-- A Java runtime compatible with the target modpack and Cleanroom setup
-- For development builds: JDK 25 is used by the Gradle toolchain, with Java 21 bytecode targeting in the current build scripts
+- Forge `14.23.5.2860`
+- Java 8 at runtime
+- For development builds: JDK 25 is used by Gradle; the release pipeline downgrades and shades production classes for Java 8
 
 AUSM is not designed to be installed alongside OptiFine. Both mods target the same shader/rendering surface, so running both together should be treated as unsupported unless you are intentionally debugging a conflict.
 
 ## Installation
 
-1. Download the newest `AUSM-<version>-Java25.jar` from the GitHub releases page.
+1. Download the newest `AUSM-<version>-Java8.jar` from the GitHub releases page.
 2. Put the jar in the instance `mods/` folder.
 3. Start the game once so AUSM can create `shaderpacks/` and `config/ausm/` if they do not already exist.
 4. Put shader-pack zip files or folders in `shaderpacks/`.
@@ -63,7 +63,7 @@ Build the mod with:
 ./gradlew --no-daemon build
 ```
 
-The distributable remapped jar is written to `build/libs/AUSM-<version>-Java25.jar`. The development jar is also produced and uses the `-dev` classifier.
+The distributable Java 8 jar is written to `build/libs/AUSM-<version>-Java8.jar`. Intermediate development and remapped jars are also produced for debugging.
 
 Useful Gradle tasks:
 
@@ -74,7 +74,7 @@ Useful Gradle tasks:
 | `runServer` | Launch a development server |
 | `genSources` | Generate Minecraft sources for IDE navigation |
 
-The repository uses GitHub Actions to build every push to `master`, upload an `AUSM-latest` artifact, and publish an immutable prerelease tagged as `v<mod_version>+<short_sha>` with `AUSM-<mod_version>-Java25.jar` attached.
+The repository uses GitHub Actions to build every push to `master`, upload an `AUSM-latest` artifact, and publish an immutable prerelease tagged as `v<mod_version>+<short_sha>` with `AUSM-<mod_version>-Java8.jar` attached.
 
 ## Repository Hygiene
 
