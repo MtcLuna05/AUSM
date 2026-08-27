@@ -22,7 +22,7 @@ final class PipelineContextCompatibilityTest {
 
         MethodNode factory = context.methods.stream()
                 .filter(method -> "getInstance".equals(method.name))
-                .filter(method -> "()Lcom/l/ausm/impl/pipeline/PipelineContext;".equals(method.desc))
+                .filter(method -> "()Lcom/luna/ausm/impl/pipeline/PipelineContext;".equals(method.desc))
                 .findFirst()
                 .orElse(null);
 

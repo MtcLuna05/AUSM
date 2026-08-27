@@ -335,9 +335,10 @@ public final class EuphoriaEntreePackGenerator {
     }
 
     /**
-     * Euphoria creates its patched directories, while plain Unbound is a
-     * direct source. In both cases AUSM needs a second, 1.12.2-specific
-     * derivative so a fresh instance does not depend on a preexisting pack.
+     * Euphoria creates its patched directories, while plain Complementary
+     * Unbound and Reimagined packs are direct sources. In every case AUSM
+     * needs a second, 1.12.2-specific derivative so a fresh instance does
+     * not depend on a preexisting pack.
      */
     private static void generateAUSM112PatchPacks(Path shaderpacks) throws IOException {
         if (!Files.isDirectory(shaderpacks)) {
@@ -378,10 +379,12 @@ public final class EuphoriaEntreePackGenerator {
         }
     }
 
-    private static boolean isAUSM112PatchSource(String name) {
+    static boolean isAUSM112PatchSource(String name) {
         String packName = withoutZipExtension(name);
         return !packName.endsWith(AUSM_112_PATCH_SUFFIX)
-                && (packName.endsWith(EUPHORIA_PATCH_SUFFIX) || packName.startsWith("ComplementaryUnbound"));
+                && (packName.endsWith(EUPHORIA_PATCH_SUFFIX)
+                || packName.startsWith("ComplementaryUnbound")
+                || packName.startsWith("ComplementaryReimagined"));
     }
 
     private static String withoutZipExtension(String name) {
