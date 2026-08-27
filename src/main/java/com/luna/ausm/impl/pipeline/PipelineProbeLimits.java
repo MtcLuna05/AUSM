@@ -8,9 +8,9 @@ final class PipelineProbeLimits {
     static final int MAX_GUI_MODEL_STATE_PROBE_LOGS = 0;
     static final int MAX_GUI_ENTITY_STATE_PROBE_LOGS = 0;
     static final int MAX_GUI_ITEM_MODEL_PROBE_LOGS = 0;
-    static final int MAX_WATER_ROUTING_PROBE_LOGS = 0;
+    static final int MAX_WATER_ROUTING_PROBE_LOGS = 12;
     static final int MAX_WATER_DUPLICATE_PROBE_LOGS = 0;
-    static final int MAX_WATER_ATTACHMENT_DELTA_PROBE_LOGS = 0;
+    static final int MAX_WATER_ATTACHMENT_DELTA_PROBE_LOGS = 2;
     static final int MAX_EXTERNAL_OVERLAY_LOGS = 0;
     static final int MAX_TEMPORAL_HISTORY_RESET_LOGS = 0;
     static final int MAX_TERRAIN_HISTORY_CLEAR_LOGS = 0;
@@ -27,7 +27,8 @@ final class PipelineProbeLimits {
     static final int MAX_GUI_RECOVERED_BACKGROUND_LOGS = 0;
     static final int MAX_PRE_FINAL_DIRECT_PRESENT_LOGS = 0;
     static final int MAX_PRESENTATION_BOUNDARY_LOGS = 0;
-    static final int MAX_FULLSCREEN_SAMPLER_PROBE_LOGS = 0;
+    static final int MAX_FULLSCREEN_SAMPLER_PROBE_LOGS = 12;
+    static final int MAX_LIGHT_SHAFT_INPUT_PROBE_LOGS = 4;
     static final int MAX_FLUID_MATERIAL_PROBE_LOGS = 0;
     static final int MAX_LILY_PAD_ROUTE_PROBE_LOGS = 0;
     static final int MAX_FLAT_FOLIAGE_HIGHLIGHT_PROBE_LOGS = 0;
@@ -55,7 +56,7 @@ final class PipelineProbeLimits {
     static final int MAX_HAND_GBUFFER_PROBE_LOGS = 0;
     static final int MAX_FORENSIC_TRACE_EVENTS = 0;
     static final int MAX_HAND_PASS_BIND_LOGS = 0;
-    static final int MAX_SPECIAL_LAYER_PROBE_LOGS = 0;
+    static final int MAX_SPECIAL_LAYER_PROBE_LOGS = 16;
     static final int MAX_PIPELINE_PASS_PROBE_LOGS = 0;
     static final int MAX_LAYER_OUTPUT_PROBE_LOGS = 0;
     static final int MAX_SHADERLESS_LIGHT_STATE_PROBE_LOGS = 0;
@@ -110,6 +111,11 @@ final class PipelineProbeLimits {
     static final int MAX_SOFT_VANILLA_LAYER_TIMING_LOGS = 0;
     static final int MAX_SOFT_VANILLA_SPECIAL_BLOCK_PROBE_LOGS = 0;
     static final int MAX_SOFT_VANILLA_FRAME_TIMING_LOGS = 0;
+    static final int MAX_CAUSTIC_RUNTIME_PROBE_LOGS = 12;
+    static final int MAX_ENTITY_BLEND_PROBE_LOGS = 24;
+    static final int MAX_LOCAL_PLAYER_ENTITY_PROBE_LOGS = 8;
+    static final int MAX_OPENBLOCKS_SKY_CAPTURE_PROBE_LOGS = 12;
+    static final int MAX_OPENBLOCKS_SKY_PROJECTION_PROBE_LOGS = 16;
 
     private PipelineProbeLimits() {
     }

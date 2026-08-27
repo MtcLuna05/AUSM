@@ -60,6 +60,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
     private String selectedPropertiesPack;
     private int leftPanelRight;
     private int detailsScrollOffset;
+    private boolean pendingShadersEnabled;
 
     public GuiShaders(GuiScreen parentScreen) {
         this.parentScreen = parentScreen;
@@ -74,6 +75,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
     protected void ausm$initGui() {
         installDropCallback();
         this.buttonList.clear();
+        this.pendingShadersEnabled = MainMod.getShaderPackManager().areShadersEnabled();
         this.leftPanelRight = computeLeftPanelRight();
         this.shaderList = new GuiSlotShaders(this, this.mc, leftPanelRight, 80, contentBottom(), 24);
         this.detailsScrollOffset = Math.clamp(this.detailsScrollOffset, 0, maxDetailsScroll());
@@ -179,9 +181,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
                 openSelectedPackOptions();
                 break;
             case ID_TOGGLE_ENABLED:
-                boolean enabled = !MainMod.getShaderPackManager().areShadersEnabled();
-                MainMod.getShaderPackManager().setShadersEnabled(enabled);
-                updateEnabledButton();
+                toggleShadersEnabledPending();
                 break;
             case ID_SETTINGS:
                 GuiScreen settingsScreen = new GuiDynamicLights(this);
@@ -244,7 +244,8 @@ public class GuiShaders extends MappingSafeGuiScreen {
             if (currentPack == null || currentPack.equals("(internal)")) currentPack = "OFF";
 
             MinecraftReflectionCompat.setGuiButtonEnabled(this.applyButton,
-                    selectedPack != null && !selectedPack.equals(currentPack));
+                    selectedPack != null && (!selectedPack.equals(currentPack)
+                            || pendingShadersEnabled != MainMod.getShaderPackManager().areShadersEnabled()));
         }
         if (this.optionsButton != null) {
             MinecraftReflectionCompat.setGuiButtonEnabled(this.optionsButton,
@@ -261,8 +262,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
         }
 
         if (selectedPack.equalsIgnoreCase("OFF")) {
-            boolean enabled = !MainMod.getShaderPackManager().areShadersEnabled();
-            MainMod.getShaderPackManager().setShadersEnabled(enabled);
+            MainMod.getShaderPackManager().setShadersEnabled(pendingShadersEnabled);
             if (this.applyButton != null) {
                 MinecraftReflectionCompat.setGuiButtonEnabled(this.applyButton, false);
             }
@@ -272,6 +272,9 @@ public class GuiShaders extends MappingSafeGuiScreen {
         }
 
         MainMod.getShaderPackManager().loadPack(selectedPack);
+        if (pendingShadersEnabled != MainMod.getShaderPackManager().areShadersEnabled()) {
+            MainMod.getShaderPackManager().setShadersEnabled(pendingShadersEnabled);
+        }
         if (this.applyButton != null) {
             MinecraftReflectionCompat.setGuiButtonEnabled(this.applyButton, false);
         }
@@ -647,9 +650,18 @@ public class GuiShaders extends MappingSafeGuiScreen {
             return;
         }
         MinecraftReflectionCompat.setGuiButtonText(toggleEnabledButton,
-                MainMod.getShaderPackManager().areShadersEnabled() ? "Disable" : "Enable");
+                pendingShadersEnabled ? "Disable" : "Enable");
         MinecraftReflectionCompat.setGuiButtonEnabled(toggleEnabledButton,
                 canConfigure(MainMod.getShaderPackManager().getSelectedPackName()));
+    }
+
+    public boolean shadersEnabledForDisplay() {
+        return pendingShadersEnabled;
+    }
+
+    public void toggleShadersEnabledPending() {
+        pendingShadersEnabled = !pendingShadersEnabled;
+        onSelectionChanged();
     }
 
     private void updateSettingsButton() {

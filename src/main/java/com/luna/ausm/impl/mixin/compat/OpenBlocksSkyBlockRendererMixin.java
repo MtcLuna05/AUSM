@@ -7,10 +7,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * OpenBlocks' sky block normally copies Minecraft's framebuffer before world
- * rendering, then uses a stencil-masked fullscreen draw in its tile renderer.
- * Neither operation is valid while AUSM owns the G-buffer.  Returning false
- * retains OpenBlocks' ordinary baked-model fallback without the foreign pass.
+ * OpenBlocks' stencil-masked projection is incompatible with AUSM's shader
+ * MRT ownership. Preserve the renderer's baked-model fallback while shaders
+ * are active instead.
  */
 @Mixin(targets = "openblocks.client.renderer.SkyBlockRenderer", remap = false)
 public class OpenBlocksSkyBlockRendererMixin {

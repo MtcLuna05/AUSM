@@ -32,6 +32,7 @@ import org.lwjgl.opengl.GL30;
 
 import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.DEBUG_PROBES_ENABLED;
 import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_FULLSCREEN_SAMPLER_PROBE_LOGS;
+import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_LIGHT_SHAFT_INPUT_PROBE_LOGS;
 import static com.luna.ausm.impl.pipeline.PipelineTerrainConstants.ENABLE_SAFE_TERRAIN_FALLBACKS;
 
 abstract class PipelineFullscreenPassRendering extends PipelineWorldFramebufferFinalization {
@@ -73,6 +74,63 @@ abstract class PipelineFullscreenPassRendering extends PipelineWorldFramebufferF
                 GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
                 drawBuffersProbeSummary()
         );
+    }
+
+    /**
+     * Light shafts and reflective caustics both consume the shadow samplers
+     * in COMPOSITE1. Record the resolved bindings here, after all program
+     * resources have been uploaded, to distinguish a bad shadow map from a
+     * stale sampler binding.
+     */
+    protected void logLightShaftInputProbe(PipelineProgram program, ShaderProgram shaderProgram) {
+        if (program == null || shaderProgram == null || program.pass() != RenderPass.COMPOSITE1 || !shadowMapUsable
+                || lightShaftInputProbeLogs >= MAX_LIGHT_SHAFT_INPUT_PROBE_LOGS) {
+            return;
+        }
+
+        int shadowColorUnit = samplerUnit(shaderProgram, "shadowcolor0");
+        int shadowTex0Unit = samplerUnit(shaderProgram, "shadowtex0");
+        int shadowTex1Unit = samplerUnit(shaderProgram, "shadowtex1");
+        lightShaftInputProbeLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMLightShaftInputs] call={} program={} usable={} sparse={} color0=unit:{},bound:{},expected:{} shadow0=unit:{},bound:{},expected:{} shadow1=unit:{},bound:{},expected:{}",
+                lightShaftInputProbeLogs,
+                shaderProgram.getId(),
+                shadowMapUsable,
+                shadowMapSparseForSampling,
+                shadowColorUnit,
+                textureBoundAtUnit(shadowColorUnit),
+                shadowFramebuffer == null ? -1 : shadowFramebuffer.colorTextureId(0),
+                shadowTex0Unit,
+                textureBoundAtUnit(shadowTex0Unit),
+                shadowFramebuffer == null ? -1 : shadowFramebuffer.rawDepthTextureId(),
+                shadowTex1Unit,
+                textureBoundAtUnit(shadowTex1Unit),
+                shadowFramebuffer == null ? -1 : shadowFramebuffer.depthSnapshotTextureId()
+        );
+    }
+
+    private static int samplerUnit(ShaderProgram shaderProgram, String name) {
+        int location = shaderProgram.getUniformLocation(name);
+        if (location < 0) {
+            return -1;
+        }
+        IntBuffer value = BufferUtils.createIntBuffer(1);
+        GL20.glGetUniform(shaderProgram.getId(), location, value);
+        return value.get(0);
+    }
+
+    private static int textureBoundAtUnit(int unit) {
+        if (unit < 0) {
+            return -1;
+        }
+        int previousActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        try {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
+            return GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        } finally {
+            GL13.glActiveTexture(previousActiveTexture);
+        }
     }
 
     protected void applyViewportScale(PipelineProgram program, int width, int height) {

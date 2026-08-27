@@ -16,28 +16,58 @@ public final class HandWaterRefractionCompatibilityTransformStage implements Sha
 
     @Override
     public String apply(String source, ShaderTransformParameters parameters) {
-        if (!parameters.fragmentShader()
-                || parameters.pass() != RenderPass.COMPOSITE1
-                || source.contains(MARKER)) {
+        if (parameters.pass() == RenderPass.GBUFFERS_WATER
+                && !source.contains("AUSM_CONTINUOUS_WATER_WAVES")) {
+            return source.replace(
+                    "    #if defined NO_WAVING_INDOORS && !defined WAVE_EVERYTHING\n"
+                            + "        wave *= clamp(lmCoord.y - 0.87, 0.0, 0.1);\n"
+                            + "    #else\n"
+                            + "        wave *= 0.1;\n"
+                            + "    #endif\n"
+                            + "\n"
+                            + "    wave = wave * 0.125 - 0.05;",
+                    "    // AUSM_CONTINUOUS_WATER_WAVES: skylight is not a stable\n"
+                            + "    // enclosure signal for water vertices, so do not split\n"
+                            + "    // the surface where local light changes.\n"
+                            + "    wave *= 0.1;\n"
+                            + "\n"
+                            + "    wave = wave * 0.125 - 0.05;");
+        }
+        if (!parameters.fragmentShader()) {
+            return source;
+        }
+        if (parameters.pass() != RenderPass.COMPOSITE1 || source.contains(MARKER)) {
             return source;
         }
         return transformFragment(source);
     }
 
     static String transformFragment(String source) {
-        if (source.contains(MARKER)
-                || !source.contains("texelFetch(colortex6")
-                || !source.contains("!= 241")) {
-            return source;
+        String transformed = source;
+        if (!transformed.contains(MARKER)
+                && transformed.contains("texelFetch(colortex6")
+                && transformed.contains("!= 241")) {
+            Matcher body = REFRACTION_BODY.matcher(transformed);
+            if (body.find()) {
+                String indent = leadingWhitespace(body.group(1)) + "    ";
+                String guard = indent + "// " + MARKER + "\n"
+                        + indent + "if (z0 <= 0.56) return texCoord.xy;\n";
+                transformed = transformed.substring(0, body.end()) + guard + transformed.substring(body.end());
+            }
         }
-        Matcher body = REFRACTION_BODY.matcher(source);
-        if (!body.find()) {
-            return source;
+        if (!transformed.contains("AUSM_HAND_LIGHT_SHAFT_EXCLUSION") && transformed.contains("GetVolumetricLight")) {
+            Matcher call = Pattern.compile("(?m)^(\\s*)(volumetricEffect\\s*=\\s*GetVolumetricLight\\([^\\r\\n]+\\);)\\s*$")
+                    .matcher(transformed);
+            if (call.find()) {
+                String indent = call.group(1);
+                String replacement = indent + "// AUSM_HAND_LIGHT_SHAFT_EXCLUSION\n"
+                        + indent + "if (z0 > 0.56) {\n"
+                        + indent + "    " + call.group(2) + "\n"
+                        + indent + "}";
+                transformed = call.replaceFirst(Matcher.quoteReplacement(replacement));
+            }
         }
-        String indent = leadingWhitespace(body.group(1)) + "    ";
-        String guard = indent + "// " + MARKER + "\n"
-                + indent + "if (z0 <= 0.56) return texCoord.xy;\n";
-        return source.substring(0, body.end()) + guard + source.substring(body.end());
+        return transformed;
     }
 
     private static String leadingWhitespace(String line) {

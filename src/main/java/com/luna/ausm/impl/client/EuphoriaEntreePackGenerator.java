@@ -44,6 +44,7 @@ public final class EuphoriaEntreePackGenerator {
     public static final String TARGET_PACK = "Complimentary Entree + EuphoriaPatches_1.9.3";
 
     private static final String EUPHORIA_PACK = "ComplementaryUnbound_r5.8.1 + EuphoriaPatches_1.9.3";
+    private static final String EUPHORIA_PATCH_SUFFIX = " + EuphoriaPatches_1.9.3";
     private static final String ENTREE_PACK = "Complimentary Entree";
     private static final String OVERLAY_ROOT = "/assets/ausm/euphoria_entree_overlay/";
     private static final String MANIFEST = OVERLAY_ROOT + "manifest.txt";
@@ -57,6 +58,8 @@ public final class EuphoriaEntreePackGenerator {
     private static final String PREVIOUS_NAME = ".ausm-entree-euphoria-previous";
     private static final String WORK_NAME = ".ausm-entree-euphoria-work";
     private static final String AUSM_112_PATCH_SUFFIX = " + AUSM 1.12.2 Patches";
+    private static final String AUSM_112_PATCH_MARKER = ".ausm-1.12.2-patches-version";
+    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v1";
     private static final String LOD_API_PROPERTY = "ausm.lod.api=1";
     private static final String LOD_HELPER = "shaders/lib/ausm/distantLod.glsl";
     private static final String LOD_HELPER_INCLUDE = "#include \"/lib/ausm/distantLod.glsl\"";
@@ -113,6 +116,7 @@ public final class EuphoriaEntreePackGenerator {
         Path gameDir = MinecraftReflectionCompat.gameDir(minecraft).toPath().toAbsolutePath().normalize();
         Path shaderpacks = gameDir.resolve("shaderpacks").normalize();
         try {
+            generateAUSM112PatchPacks(shaderpacks);
             injectAUSM112LodSupport(shaderpacks);
         } catch (IOException | RuntimeException failure) {
             if (failureLogs++ < 4) {
@@ -328,6 +332,48 @@ public final class EuphoriaEntreePackGenerator {
         }
         for (Path patchPack : patchPacks) {
             injectAUSM112LodSupportInto(patchPack);
+        }
+    }
+
+    /**
+     * Euphoria creates its patched directories, but does not know that AUSM
+     * needs a second, 1.12.2-specific derivative. Create that derivative here
+     * so a fresh instance receives it instead of only repairing a preexisting
+     * directory from an older AUSM install.
+     */
+    private static void generateAUSM112PatchPacks(Path shaderpacks) throws IOException {
+        if (!Files.isDirectory(shaderpacks)) {
+            return;
+        }
+        List<Path> euphoriaPacks;
+        try (Stream<Path> entries = Files.list(shaderpacks)) {
+            euphoriaPacks = entries
+                    .filter(Files::isDirectory)
+                    .filter(path -> path.getFileName().toString().endsWith(EUPHORIA_PATCH_SUFFIX))
+                    .toList();
+        }
+        for (Path euphoriaPack : euphoriaPacks) {
+            String sourceName = euphoriaPack.getFileName().toString();
+            Path target = safeDirectChild(shaderpacks, sourceName + AUSM_112_PATCH_SUFFIX);
+            String token = AUSM_112_PATCH_VERSION + "\n" + fingerprint(euphoriaPack.resolve("shaders/shaders.properties")) + "\n";
+            if (Files.isDirectory(target)) {
+                Path marker = target.resolve(AUSM_112_PATCH_MARKER);
+                if (!Files.isRegularFile(marker)) {
+                    MainMod.LOGGER.warn("[AUSM112] Leaving non-AUSM shaderpack '{}' untouched", target.getFileName());
+                    continue;
+                }
+                if (token.equals(readStringIfPresent(marker))) {
+                    continue;
+                }
+            }
+
+            Path staging = safeDirectChild(shaderpacks, STAGING_NAME);
+            deleteTree(staging);
+            copyTree(euphoriaPack, staging);
+            injectAUSM112LodSupportInto(staging);
+            Files.writeString(staging.resolve(AUSM_112_PATCH_MARKER), token, StandardCharsets.UTF_8);
+            publish(shaderpacks, staging, target);
+            MainMod.LOGGER.info("[AUSM112] Generated shaderpack '{}' from '{}'", target.getFileName(), sourceName);
         }
     }
 

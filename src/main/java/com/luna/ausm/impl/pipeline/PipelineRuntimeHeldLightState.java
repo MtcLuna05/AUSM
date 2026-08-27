@@ -32,6 +32,7 @@ import org.lwjgl.opengl.GL20;
 
 import static com.luna.ausm.impl.pipeline.PipelineGlState.resetIndexedBlendState;
 import static com.luna.ausm.impl.pipeline.PipelineGlState.setIndexedBlend;
+import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_LOCAL_PLAYER_ENTITY_PROBE_LOGS;
 import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_PIPELINE_PASS_PROBE_LOGS;
 import static com.luna.ausm.impl.pipeline.PipelineTerrainConstants.CHUNK_FADE_DURATION_SECONDS;
 import static com.luna.ausm.impl.pipeline.PipelineTerrainConstants.CHUNK_FADE_STALE_FRAMES;
@@ -194,7 +195,26 @@ abstract class PipelineRuntimeDiagnosticsState6 extends PipelineRuntimeDiagnosti
         currentEntityKey = MinecraftReflectionCompat.entityKey(entity);
         currentEntityId = playerAwareEntityId(entity, currentEntityKey);
         currentEntityColor = self().entityColor(entity);
+        logLocalPlayerEntityBinding(entity);
         self().uploadEntityUniforms();
+    }
+
+    private void logLocalPlayerEntityBinding(Entity entity) {
+        if (!(entity instanceof EntityPlayer) || localPlayerEntityProbeLogs >= MAX_LOCAL_PLAYER_ENTITY_PROBE_LOGS) {
+            return;
+        }
+        localPlayerEntityProbeLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMLocalPlayerProbe] probe={} frame={} phase={} entityKey={} entityId={} vanillaId={} type={} color={}",
+                localPlayerEntityProbeLogs,
+                pipelineFrameId,
+                self().getPhase(),
+                currentEntityKey,
+                currentEntityId,
+                entity.getEntityId(),
+                entity.getClass().getName(),
+                currentEntityColor
+        );
     }
 
     private int playerAwareEntityId(Entity entity, ResourceLocation entityKey) {

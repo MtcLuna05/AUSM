@@ -372,11 +372,18 @@ abstract class AusmBloomRendererBase {
         boolean resolved;
         boolean loggedFailure;
         Method preDraw;
-        Method draw;
         Method postDraw;
         Method effectContextGetInstance;
         Method effectContextUpdate;
         Field bloomRenders;
+        Method ticketCheckValidity;
+        Method ticketIsValid;
+        Method ticketRenderSetup;
+        Method renderShouldDraw;
+        Method renderDraw;
+        Method setupPreDraw;
+        Method setupPostDraw;
+        Field ticketRender;
 
         int draw(Entity entity, float partialTicks) {
             if (!resolve()) {
@@ -397,8 +404,7 @@ abstract class AusmBloomRendererBase {
                 Collection<?> ticketLists = bloomRenderMap.values();
                 for (Object ticketList : ticketLists) {
                     if (ticketList instanceof List<?>) {
-                        draw.invoke(null, buffer, context, ticketList);
-                        rendered++;
+                        rendered += drawDepthTested(buffer, context, (List<?>) ticketList);
                     }
                 }
                 return rendered;
@@ -415,7 +421,7 @@ abstract class AusmBloomRendererBase {
 
         boolean resolve() {
             if (resolved) {
-                return draw != null;
+                return renderDraw != null;
             }
             resolved = true;
 
@@ -423,12 +429,22 @@ abstract class AusmBloomRendererBase {
                 ClassLoader loader = LumenizedTicketBridge.class.getClassLoader();
                 Class<?> bloomUtil = Class.forName(BLOOM_EFFECT_UTIL, false, loader);
                 Class<?> context = Class.forName(EFFECT_RENDER_CONTEXT, false, loader);
+                Class<?> ticket = Class.forName("gregtech.client.utils.BloomEffectUtil$BloomRenderTicket", false, loader);
+                Class<?> render = Class.forName("gregtech.client.utils.IBloomEffect", false, loader);
+                Class<?> setup = Class.forName("gregtech.client.renderer.IRenderSetup", false, loader);
                 preDraw = accessible(bloomUtil.getDeclaredMethod("preDraw"));
                 postDraw = accessible(bloomUtil.getDeclaredMethod("postDraw"));
-                draw = accessible(bloomUtil.getDeclaredMethod("draw", BufferBuilder.class, context, List.class));
                 bloomRenders = accessible(bloomUtil.getDeclaredField("BLOOM_RENDERS"));
                 effectContextGetInstance = context.getMethod("getInstance");
                 effectContextUpdate = context.getMethod("update", Entity.class, float.class);
+                ticketCheckValidity = accessible(ticket.getDeclaredMethod("checkValidity"));
+                ticketIsValid = ticket.getMethod("isValid");
+                ticketRenderSetup = ticket.getMethod("getRenderSetup");
+                ticketRender = accessible(ticket.getDeclaredField("render"));
+                renderShouldDraw = render.getMethod("shouldRenderBloomEffect", context);
+                renderDraw = render.getMethod("renderBloomEffect", BufferBuilder.class, context);
+                setupPreDraw = setup.getMethod("preDraw", BufferBuilder.class);
+                setupPostDraw = setup.getMethod("postDraw", BufferBuilder.class);
                 return true;
             } catch (ClassNotFoundException ignored) {
                 return false;
@@ -436,6 +452,38 @@ abstract class AusmBloomRendererBase {
                 logFailure("Failed to resolve Lumenized custom bloom ticket bridge", error);
                 return false;
             }
+        }
+
+        int drawDepthTested(BufferBuilder buffer, Object context, List<?> tickets) throws ReflectiveOperationException {
+            Object activeSetup = null;
+            int rendered = 0;
+            for (Object ticket : tickets) {
+                ticketCheckValidity.invoke(ticket);
+                if (!(Boolean) ticketIsValid.invoke(ticket)) {
+                    continue;
+                }
+                Object effect = ticketRender.get(ticket);
+                if (!(Boolean) renderShouldDraw.invoke(effect, context)) {
+                    continue;
+                }
+                if (activeSetup == null) {
+                    activeSetup = ticketRenderSetup.invoke(ticket);
+                    if (activeSetup != null) {
+                        setupPreDraw.invoke(activeSetup, buffer);
+                    }
+                    // Lumenized setups may disable depth for their own FBO. AUSM
+                    // draws into a scene-depth-backed target, so enforce occlusion.
+                    GL11.glEnable(GL11.GL_DEPTH_TEST);
+                    GL11.glDepthFunc(GL11.GL_LEQUAL);
+                    GL11.glDepthMask(false);
+                }
+                renderDraw.invoke(effect, buffer, context);
+                rendered++;
+            }
+            if (activeSetup != null) {
+                setupPostDraw.invoke(activeSetup, buffer);
+            }
+            return rendered;
         }
 
         void logFailure(String message, Throwable throwable) {

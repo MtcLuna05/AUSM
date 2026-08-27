@@ -467,15 +467,6 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
         if (ready >= SPARSE_SHADOW_MIN_TERRAIN_DRAWS) {
             return false;
         }
-        if (shadowMapCoverageRegressionLogs < 8) {
-            shadowMapCoverageRegressionLogs++;
-            MainMod.LOGGER.info(
-                    "[ShadowHealth] Keeping previous shadow map; sparse candidate rejected before clear. terrainDraws={} minTerrainDraws={} frame={}",
-                    ready,
-                    SPARSE_SHADOW_MIN_TERRAIN_DRAWS,
-                    pipelineFrameId
-            );
-        }
         return true;
     }
 }

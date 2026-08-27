@@ -128,6 +128,7 @@ public final class PipelineFrameLayerCapture {
                 return;
             }
             captureRequested = false;
+            activeCapture = createSession(frameId);
         }
         Minecraft minecraft = MinecraftReflectionCompat.minecraft();
         World world = minecraft != null ? MinecraftReflectionCompat.world(minecraft) : null;
@@ -303,6 +304,18 @@ public final class PipelineFrameLayerCapture {
                 framebuffer.getHeight(),
                 session.directory.resolve(prefix + "-depthtex0.png")
         );
+        if (phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT || phase == WorldRenderingPhase.HAND_SOLID) {
+            for (Attachment attachment : Attachment.values()) {
+                if (attachment != Attachment.COLOR) {
+                    captureTexture(
+                            framebuffer.getReadTexture(attachment),
+                            framebuffer.getAttachmentWidth(attachment),
+                            framebuffer.getAttachmentHeight(attachment),
+                            session.directory.resolve(prefix + "-colortex" + attachment.getIndex() + ".png")
+                    );
+                }
+            }
+        }
     }
 
     /** Starts an F7 capture at the shaderless sky's live framebuffer. */

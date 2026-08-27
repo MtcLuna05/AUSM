@@ -560,7 +560,16 @@ abstract class AusmBloomFramebufferProcessing extends AusmBloomRenderPasses {
             return;
         }
         if (pipelineDepthSource != null) {
-            pipelineDepthSource.blitDepthTo(MinecraftReflectionCompat.framebufferObject(destination), width, height);
+            // The live pipeline depth attachment is cleared before the native
+            // bloom hook runs. depthtex1 is the opaque-scene snapshot taken at
+            // the translucent boundary, and is therefore the depth buffer that
+            // corresponds to shaderless Minecraft world occlusion.
+            pipelineDepthSource.blitDepthSnapshotTo(
+                    DeferredFramebuffer.DEPTHTEX1_SNAPSHOT,
+                    MinecraftReflectionCompat.framebufferObject(destination),
+                    width,
+                    height
+            );
             return;
         }
         if (minecraftDepthSource == null || MinecraftReflectionCompat.fieldInt(minecraftDepthSource, 0, "field_147624_h", "depthBuffer") <= 0) {

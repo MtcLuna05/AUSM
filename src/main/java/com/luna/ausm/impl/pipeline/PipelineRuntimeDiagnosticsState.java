@@ -148,6 +148,22 @@ abstract class PipelineRuntimeDiagnosticsState extends PipelineRuntimeStateBase 
 
     protected long guiTargetContentFrame = Long.MIN_VALUE;
 
+    protected int causticRuntimeProbeLogs = 0;
+
+    protected int lightShaftInputProbeLogs = 0;
+
+    protected String lastCausticRuntimeProbe = "";
+
+    protected int entityBlendProbeLogs = 0;
+
+    protected String lastEntityBlendProbe = "";
+
+    protected int localPlayerEntityProbeLogs = 0;
+
+    protected int openBlocksSkyCaptureProbeLogs = 0;
+
+    protected int openBlocksSkyProjectionProbeLogs = 0;
+
     protected boolean shadowMapPopulated = false;
 
     protected boolean shadowMapUsable = false;
@@ -257,6 +273,8 @@ abstract class PipelineRuntimeDiagnosticsState extends PipelineRuntimeStateBase 
     protected final int[] waterAttachmentProbeWidths = new int[2];
 
     protected final int[] waterAttachmentProbeHeights = new int[2];
+
+    protected final int[] waterAttachmentProbeIndices = new int[2];
 
     protected boolean waterAttachmentDeltaProbeActive = false;
 

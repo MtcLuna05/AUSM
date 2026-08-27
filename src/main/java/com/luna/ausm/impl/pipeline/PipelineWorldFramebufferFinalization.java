@@ -566,6 +566,7 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
         TextureBinder.bindDeferredTextures();
         TextureBinder.bindShadowTextures(program.pass());
         self().logFullscreenSamplerProbe(program, shaderProgram);
+        self().logLightShaftInputProbe(program, shaderProgram);
         return true;
     }
 }

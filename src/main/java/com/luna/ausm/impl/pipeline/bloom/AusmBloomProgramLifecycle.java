@@ -6,6 +6,7 @@ import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.shader.Framebuffer;
+import net.minecraft.entity.Entity;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL20;
@@ -269,6 +270,19 @@ abstract class AusmBloomProgramLifecycle extends AusmBloomFramebufferProcessing 
             lumenizedTickets = new LumenizedTicketBridge();
         }
         return lumenizedTickets;
+    }
+
+    /**
+     * Renders GregTech/Lumenized custom bloom effects into AUSM's bloom source
+     * target. Their callbacks establish their own render state, so they must
+     * not be submitted through the terrain BLOOM layer's vertex program.
+     */
+    protected int renderLumenizedBloomTickets(Entity entity, float partialTicks) {
+        if (entity == null) {
+            return 0;
+        }
+        MinecraftReflectionCompat.glUseProgram(0);
+        return lumenizedTickets().draw(entity, partialTicks);
     }
 
     protected void logProgramFailure(String message) {

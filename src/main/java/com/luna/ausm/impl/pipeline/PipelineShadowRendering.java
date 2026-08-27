@@ -121,14 +121,6 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
             shadowMapUsable = false;
             shadowMapSparseForSampling = true;
             shadowMapCoverageStableFrames = 0;
-            if (shadowMapSuppressedLogs < 16) {
-                shadowMapSuppressedLogs++;
-                MainMod.LOGGER.info(
-                        "[ShadowHealth] Skipping shadow terrain setup while hardware-safe terrain fallback is active. reason={} frame={}",
-                        hardwareSafeVanillaTerrainReason,
-                        pipelineFrameId
-                );
-            }
             return;
         }
         Minecraft mc = MinecraftReflectionCompat.minecraft();
@@ -192,24 +184,10 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
             // Treat the active shadow program as an explicit terrain request;
             // stale/pack-local shadowTerrain=false must not silently produce a
             // permanently clear shadow map.
-            boolean shadowTerrainCandidates = shadowHealthLogAttempts < 4
-                    && self().hasShadowTerrainCandidates(mc, viewEntity, partialTicks);
             // The candidate scan only sees vanilla RenderChunk layer buffers.
             // Celeritas/Nothirium can own those buffers while the active world
             // pass still has visible terrain, so it cannot gate shadow terrain.
             boolean renderShadowTerrain = self().hasActiveShadowProgram();
-            if (shadowHealthLogAttempts < 4) {
-                MainMod.LOGGER.info(
-                        "[ShadowHealth] setup frame={} terrainRequested={} terrainCandidates={} nothirium={} fbo={} depthTex={} snapshotTex={}",
-                        pipelineFrameId,
-                        renderShadowTerrain,
-                        shadowTerrainCandidates,
-                        useNothiriumShadowBridge,
-                        shadowFramebuffer.framebufferId(),
-                        shadowFramebuffer.depthTextureId(),
-                        shadowFramebuffer.depthSnapshotTextureId()
-                );
-            }
             if (useNothiriumShadowBridge) {
                 nothiriumShadowRenderer.drainUploads();
                 nothiriumShadowRenderer.beginShadowSelection(

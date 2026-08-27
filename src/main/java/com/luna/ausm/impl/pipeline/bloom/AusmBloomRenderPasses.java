@@ -107,6 +107,7 @@ abstract class AusmBloomRenderPasses extends AusmBloomRendererBase {
             self().bindLayerTargetForGeometry();
             rendered = self().renderBloomGeometry(renderGlobal, bloomLayer, partialTicks, pass, entity,
                     !sharedMinecraftDepth, true);
+            rendered += self().renderLumenizedBloomTickets(entity, (float) partialTicks);
             rendered += self().renderGlobalFacadesBloomGeometry();
             if (rendered > 0) {
                 if (sharedMinecraftDepth) {
@@ -121,6 +122,7 @@ abstract class AusmBloomRenderPasses extends AusmBloomRendererBase {
                     GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
                     self().copyDepth(pipelineDepthSource, minecraftDepthSource);
                     self().renderBloomGeometry(renderGlobal, bloomLayer, partialTicks, pass, entity, true, false);
+                    self().renderLumenizedBloomTickets(entity, (float) partialTicks);
                 }
                 self().copyDepthTexture(bloomLayerTarget, true);
                 // Nothirium's translucent replay walks the complete visible

@@ -2,6 +2,7 @@ package com.luna.ausm.impl.pipeline;
 
 import com.luna.ausm.api.pipeline.fbo.Attachment;
 import com.luna.ausm.api.pipeline.shader.ProgramArrayId;
+import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.client.ThaumcraftParticleBridge;
 import com.luna.ausm.impl.pipeline.compat.BetterPortalsCompat;
@@ -20,9 +21,13 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 
 import static com.luna.ausm.impl.pipeline.PipelineGlState.disablePipelineVertexAttributes;
+import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_CAUSTIC_RUNTIME_PROBE_LOGS;
+import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_OPENBLOCKS_SKY_CAPTURE_PROBE_LOGS;
+import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_OPENBLOCKS_SKY_PROJECTION_PROBE_LOGS;
 import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_TEMPORAL_HISTORY_RESET_LOGS;
 import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_TERRAIN_HISTORY_CLEAR_LOGS;
 import static com.luna.ausm.impl.pipeline.PipelineRenderConstants.TEMPORAL_HISTORY_ACCUMULATED_PITCH_RESET;
@@ -88,6 +93,7 @@ abstract class PipelineFrameLifecycle extends PipelineWorldRenderScopeBase {
         clearShaderedNothiriumGlobalBypassState(false);
         self().updateCameraPosition(mc);
         logHeldColoredLightProbe(mc);
+        logCausticRuntimeProbe();
         self().refreshHardwareSafeVanillaTerrainForCamera(mc);
         boolean resetTemporalHistory = self().shouldResetTemporalHistory(mc, betterPortalsExternalTarget);
         if (betterPortalsExternalTarget) {
@@ -116,6 +122,197 @@ abstract class PipelineFrameLifecycle extends PipelineWorldRenderScopeBase {
         );
         currentWorldFrameReadyNanos = System.nanoTime();
         self().logBetterPortalsPipeline("begin-frame:ready");
+    }
+
+    /**
+     * Copies OpenBlocks' pre-world sky source without giving its framebuffer
+     * blitter a chance to leave AUSM's deferred targets bound. This runs before
+     * the new G-buffer frame begins, so the source is the last composed world
+     * image that OpenBlocks normally projects through its sky block.
+     *
+     * @return {@code true} when the shader-safe copy was performed
+     */
+    public boolean captureOpenBlocksSkyTexture(Framebuffer source, Framebuffer destination) {
+        if (!isPipelineActive || source == null || destination == null) {
+            return false;
+        }
+        int sourceFramebuffer = MinecraftReflectionCompat.framebufferObject(source);
+        int destinationFramebuffer = MinecraftReflectionCompat.framebufferObject(destination);
+        int sourceWidth = MinecraftReflectionCompat.framebufferWidth(source);
+        int sourceHeight = MinecraftReflectionCompat.framebufferHeight(source);
+        int destinationWidth = MinecraftReflectionCompat.framebufferWidth(destination);
+        int destinationHeight = MinecraftReflectionCompat.framebufferHeight(destination);
+        if (sourceFramebuffer < 0 || destinationFramebuffer < 0
+                || sourceWidth <= 0 || sourceHeight <= 0
+                || destinationWidth <= 0 || destinationHeight <= 0) {
+            return false;
+        }
+
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
+        int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
+        boolean copied = false;
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, sourceFramebuffer);
+            GL11.glReadBuffer(sourceFramebuffer == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, destinationFramebuffer);
+            GL11.glDrawBuffer(destinationFramebuffer == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
+            GL30.glBlitFramebuffer(
+                    0, 0, sourceWidth, sourceHeight,
+                    0, 0, destinationWidth, destinationHeight,
+                    GL11.GL_COLOR_BUFFER_BIT,
+                    GL11.GL_NEAREST
+            );
+            copied = true;
+            return true;
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            GL11.glReadBuffer(previousReadBuffer);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+            GL11.glDrawBuffer(previousDrawBuffer);
+            logOpenBlocksSkyCaptureProbe(
+                    copied,
+                    sourceFramebuffer,
+                    destinationFramebuffer,
+                    sourceWidth,
+                    sourceHeight,
+                    destinationWidth,
+                    destinationHeight,
+                    previousReadFramebuffer,
+                    previousDrawFramebuffer,
+                    previousReadBuffer,
+                    previousDrawBuffer
+            );
+        }
+    }
+
+    /**
+     * OpenBlocks binds the vanilla source framebuffer immediately after its
+     * capture runnable finishes. Restore the current deferred target only
+     * while a world pipeline frame owns rendering.
+     */
+    public void restorePipelineTargetAfterOpenBlocksSkyCapture() {
+        if (isPipelineActive && worldFrameActive) {
+            self().bindWorldFramebuffer();
+        }
+    }
+
+    /**
+     * Routes OpenBlocks' stencil-masked sky projection through the shaderpack
+     * sky program while retaining the enclosing block-entity render scope.
+     */
+    public boolean beginOpenBlocksSkyTexturePhase() {
+        if (!isPipelineActive || !worldFrameActive || renderingShadowMap || self().renderingGuiScreen()) {
+            return false;
+        }
+        self().beginPhase(WorldRenderingPhase.SKY_TEXTURED);
+        return true;
+    }
+
+    public void endOpenBlocksSkyTexturePhase() {
+        self().endPass();
+    }
+
+    public void logOpenBlocksSkyProjectionProbe(String stage) {
+        if (openBlocksSkyProjectionProbeLogs >= MAX_OPENBLOCKS_SKY_PROJECTION_PROBE_LOGS) {
+            return;
+        }
+        openBlocksSkyProjectionProbeLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMOpenBlocksSkyProjection] probe={} stage={} frame={} phase={} activePass={} program={} drawFbo={} readFbo={} drawBuffer={} texture0={} stencil={} stencilFunc={} stencilRef={} stencilValueMask={} stencilWriteMask={} blend={} depth={} depthMask={}",
+                openBlocksSkyProjectionProbeLogs,
+                stage,
+                pipelineFrameId,
+                self().getPhase(),
+                activePass,
+                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
+                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL11.GL_DRAW_BUFFER),
+                GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D),
+                GL11.glIsEnabled(GL11.GL_STENCIL_TEST),
+                GL11.glGetInteger(GL11.GL_STENCIL_FUNC),
+                GL11.glGetInteger(GL11.GL_STENCIL_REF),
+                GL11.glGetInteger(GL11.GL_STENCIL_VALUE_MASK),
+                GL11.glGetInteger(GL11.GL_STENCIL_WRITEMASK),
+                GL11.glIsEnabled(GL11.GL_BLEND),
+                GL11.glIsEnabled(GL11.GL_DEPTH_TEST),
+                GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK)
+        );
+    }
+
+    private void logCausticRuntimeProbe() {
+        if (shaderProperties == null || causticRuntimeProbeLogs >= MAX_CAUSTIC_RUNTIME_PROBE_LOGS) {
+            return;
+        }
+        String blocklight = shaderOptionValue("BLOCKLIGHT_CAUSTICS");
+        String reflective = shaderOptionValue("REFLECTIVE_CAUSTICS");
+        String waterStyle = shaderOptionValue("WATER_CAUSTIC_STYLE_DEFINE");
+        String lightShaftBehaviour = shaderOptionValue("LIGHTSHAFT_BEHAVIOUR");
+        String lightShaftQuality = shaderOptionValue("LIGHTSHAFT_QUALI_DEFINE");
+        String shadowQuality = shaderOptionValue("SHADOW_QUALITY");
+        String key = blocklight + '|' + reflective + '|' + waterStyle + '|'
+                + lightShaftBehaviour + '|' + lightShaftQuality + '|' + shadowQuality + '|'
+                + shadowMapUsable + '|' + shadowMapPopulated + '|' + shadowMapSparseForSampling;
+        if (key.equals(lastCausticRuntimeProbe)) {
+            return;
+        }
+        lastCausticRuntimeProbe = key;
+        causticRuntimeProbeLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMCausticsProbe] probe={} frame={} blocklight={} reflective={} waterStyle={} lightShaftBehaviour={} lightShaftQuality={} shadowQuality={} shadowUsable={} shadowPopulated={} shadowSparse={}",
+                causticRuntimeProbeLogs,
+                pipelineFrameId,
+                blocklight,
+                reflective,
+                waterStyle,
+                lightShaftBehaviour,
+                lightShaftQuality,
+                shadowQuality,
+                shadowMapUsable,
+                shadowMapPopulated,
+                shadowMapSparseForSampling
+        );
+    }
+
+    private String shaderOptionValue(String name) {
+        var option = shaderProperties.options().get(name);
+        return option == null ? "<missing>" : option.value();
+    }
+
+    private void logOpenBlocksSkyCaptureProbe(
+            boolean copied,
+            int sourceFramebuffer,
+            int destinationFramebuffer,
+            int sourceWidth,
+            int sourceHeight,
+            int destinationWidth,
+            int destinationHeight,
+            int previousReadFramebuffer,
+            int previousDrawFramebuffer,
+            int previousReadBuffer,
+            int previousDrawBuffer
+    ) {
+        if (openBlocksSkyCaptureProbeLogs >= MAX_OPENBLOCKS_SKY_CAPTURE_PROBE_LOGS) {
+            return;
+        }
+        openBlocksSkyCaptureProbeLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMOpenBlocksSkyCapture] probe={} copied={} source={}@{}x{} destination={}@{}x{} restoredReadFbo={} restoredDrawFbo={} restoredReadBuffer={} restoredDrawBuffer={}",
+                openBlocksSkyCaptureProbeLogs,
+                copied,
+                sourceFramebuffer,
+                sourceWidth,
+                sourceHeight,
+                destinationFramebuffer,
+                destinationWidth,
+                destinationHeight,
+                previousReadFramebuffer,
+                previousDrawFramebuffer,
+                previousReadBuffer,
+                previousDrawBuffer
+        );
     }
 
     public void beginClientRenderFrame(long frameNanos) {

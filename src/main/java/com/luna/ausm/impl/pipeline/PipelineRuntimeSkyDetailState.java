@@ -2,6 +2,7 @@ package com.luna.ausm.impl.pipeline;
 
 import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.MainMod;
+import com.luna.ausm.impl.pipeline.pack.ShaderEnvironmentDefines;
 import com.luna.ausm.impl.pipeline.render.TextureBinder;
 import com.luna.ausm.impl.pipeline.shader.ShaderProgram;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
@@ -223,6 +224,10 @@ abstract class PipelineRuntimeDiagnosticsState7 extends PipelineRuntimeDiagnosti
                 && (self().getPhase() == WorldRenderingPhase.HAND_SOLID
                 || self().getPhase() == WorldRenderingPhase.HAND_TRANSLUCENT)) {
             self().bindPass(activePass);
+            // The hand redirect repairs vanilla client state after beginHand()
+            // established MC_HAND_DEPTH.  Reapply the reserved range here,
+            // immediately before EntityRenderer draws the held model.
+            GL11.glDepthRange(0.0D, ShaderEnvironmentDefines.HAND_DEPTH);
         }
     }
 

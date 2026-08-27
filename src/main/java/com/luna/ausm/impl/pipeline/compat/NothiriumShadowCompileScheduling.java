@@ -1,6 +1,7 @@
 package com.luna.ausm.impl.pipeline.compat;
 
 import com.luna.ausm.impl.MainMod;
+import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.pipeline.PipelineContext;
 import com.luna.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import java.nio.FloatBuffer;
@@ -146,6 +147,7 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
                 && chunks == activeSelection.chunks
                 && maxDistance == activeSelection.maxDistance;
         PipelineContext context = PipelineContext.getInstance();
+        boolean waterAttachmentProbe = false;
         boolean disableCullForMainTerrain = context.shouldDisableNothiriumChunkCulling(layer);
         // Shadered shadow terrain never uses the shaderless bloom metadata.
         // Avoid an extra context dispatch and metadata lookup for every
@@ -275,6 +277,10 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
                 // Chunk fading is disabled by the production pipeline. The
                 // finalizer below resets the uniform once, so do not issue a
                 // redundant uniform reset for every shadow section.
+                if (!waterAttachmentProbe && layer == BlockRenderLayer.TRANSLUCENT) {
+                    context.beginWaterAttachmentDeltaProbe(layer);
+                    waterAttachmentProbe = true;
+                }
                 if (useChunkOffsetUniform) {
                     GL20.glUniform3f(activeChunkOffsetUniform,
                             (float) (chunkX - cameraX),
@@ -324,6 +330,9 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
             ExtendedVertexFormats.disableAttribute(NOTHIRIUM_OFFSET_ATTRIBUTE);
             PipelineContext.getInstance().resetChunkFadeUniform();
+            if (waterAttachmentProbe) {
+                context.finishWaterAttachmentDeltaProbe();
+            }
         }
 
         return stats;
@@ -351,6 +360,7 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
         boolean useChunkOffsetUniform = activeChunkOffsetUniform >= 0;
         int activeDrawMode = context.drawModeForActiveProgram(GL11.GL_QUADS);
         int previousMatrixMode = -1;
+        boolean waterAttachmentProbe = false;
 
         try {
             if (GLContext.getCapabilities().OpenGL30) {
@@ -404,6 +414,10 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
                 int chunkY = access.ausm$blockY();
                 int chunkZ = access.ausm$blockZ();
                 int first = part.getFirst();
+                if (!waterAttachmentProbe && context.getPhase() == WorldRenderingPhase.TERRAIN_TRANSLUCENT) {
+                    context.beginWaterAttachmentDeltaProbe(BlockRenderLayer.TRANSLUCENT);
+                    waterAttachmentProbe = true;
+                }
                 if (useChunkOffsetUniform) {
                     GL20.glUniform3f(activeChunkOffsetUniform,
                             (float) (chunkX - cameraX),
@@ -443,6 +457,9 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
             ExtendedVertexFormats.disableAttribute(NOTHIRIUM_OFFSET_ATTRIBUTE);
             context.resetChunkFadeUniform();
+            if (waterAttachmentProbe) {
+                context.finishWaterAttachmentDeltaProbe();
+            }
         }
         return stats;
     }

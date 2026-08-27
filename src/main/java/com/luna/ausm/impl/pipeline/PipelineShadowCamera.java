@@ -67,19 +67,6 @@ abstract class PipelineShadowCamera extends PipelineLightVoxelInjection {
             if (!drawPopulated || !currentCoverageReady) {
                 shadowMapUsable = false;
                 shadowMapCoverageStableFrames = 0;
-                if (shadowMapCoverageRegressionLogs < 8) {
-                    shadowMapCoverageRegressionLogs++;
-                    MainMod.LOGGER.info(
-                            "[ShadowHealth] Rejecting sparse replacement shadow map; binding neutral textures. terrainDraws={} minTerrainDraws={} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
-                            terrainDrawCount,
-                            SPARSE_SHADOW_MIN_TERRAIN_DRAWS,
-                            solidCount,
-                            cutoutMippedCount,
-                            cutoutCount,
-                            translucentCount,
-                            blockEntityCount
-                    );
-                }
             }
             return;
         }
@@ -114,14 +101,6 @@ abstract class PipelineShadowCamera extends PipelineLightVoxelInjection {
             if (invalidShadowTerrainFrames >= 2) {
                 invalidShadowTerrainFrames = 0;
                 invalidShadowTerrainSuppressedFrames = Math.max(invalidShadowTerrainSuppressedFrames, 120);
-                if (invalidShadowTerrainSuppressionLogs < 4) {
-                    invalidShadowTerrainSuppressionLogs++;
-                    MainMod.LOGGER.info(
-                            "[ShadowHealth] Throttling clear shadow terrain retries. nonClear={}/{} terrainDraws={} suppressFrames={} dim={}",
-                            stats.nonClear(), stats.total(), terrainDrawCount,
-                            invalidShadowTerrainSuppressedFrames, dimensionId
-                    );
-                }
             }
         } else {
             invalidShadowTerrainFrames = 0;
@@ -135,18 +114,6 @@ abstract class PipelineShadowCamera extends PipelineLightVoxelInjection {
             if (nothiriumShadowInvalidFrames >= NOTHIRIUM_SHADOW_SUPPRESS_AFTER_INVALID_FRAMES) {
                 nothiriumShadowInvalidFrames = 0;
                 nothiriumShadowSuppressedFrames = Math.max(nothiriumShadowSuppressedFrames, NOTHIRIUM_SHADOW_SUPPRESS_FRAMES);
-                if (nothiriumShadowSuppressionLogs < 4) {
-                    nothiriumShadowSuppressionLogs++;
-                    MainMod.LOGGER.info(
-                            "[ShadowHealth] Suppressing Nothirium shadow terrain after repeated invalid output. nonClear={}/{} terrainDraws={} blockEntities={} suppressFrames={} dim={}",
-                            stats.nonClear(),
-                            stats.total(),
-                            terrainDrawCount,
-                            blockEntityCount,
-                            nothiriumShadowSuppressedFrames,
-                            dimensionId
-                    );
-                }
             }
         } else {
             nothiriumShadowInvalidFrames = 0;
@@ -155,69 +122,6 @@ abstract class PipelineShadowCamera extends PipelineLightVoxelInjection {
             }
         }
 
-        if (!shadowHealthLogged && shadowHealthLogAttempts < 4) {
-            shadowHealthLogAttempts++;
-            shadowHealthLogged = populated && shadowMapUsable;
-            MainMod.LOGGER.info(
-                    "[ShadowHealth] depth center={} min={} max={} nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} terrainDraws={} minTerrainDraws={} minNonClear={} stableFrames={}/{} blockEntities={} dim={} sparseNothirium={} verticalDelta={} usable={}",
-                    stats.center(),
-                    stats.min(),
-                    stats.max(),
-                    stats.nonClear(),
-                    stats.total(),
-                    solidCount,
-                    cutoutMippedCount,
-                    cutoutCount,
-                    translucentCount,
-                    terrainDrawCount,
-                    SPARSE_SHADOW_MIN_TERRAIN_DRAWS,
-                    SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES,
-                    shadowMapCoverageStableFrames,
-                    SPARSE_SHADOW_STABLE_FRAMES,
-                    blockEntityCount,
-                    dimensionId,
-                    sparseNothiriumShadow,
-                    verticalDelta,
-                    shadowMapUsable
-            );
-        }
-        if (stats.nonClear() > 0
-                && (sparseNothiriumShadow || unstableSparseShadow)
-                && shadowMapSuppressedLogs < 4) {
-            shadowMapSuppressedLogs++;
-            MainMod.LOGGER.info(
-                    "[ShadowHealth] Sparse Nothirium shadow map observed; binding neutral shadow textures. reason={} dim={} nonClear={}/{} minNonClear={} terrainDraws={} minTerrainDraws={} stableFrames={}/{} verticalDelta={} upwardThreshold={} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
-                    nothiriumTerrainCoverageReady ? "warming-up" : (unstableSparseShadow ? "sparse-terrain-upward-camera-motion" : "sparse-terrain"),
-                    dimensionId,
-                    stats.nonClear(),
-                    stats.total(),
-                    SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES,
-                    terrainDrawCount,
-                    SPARSE_SHADOW_MIN_TERRAIN_DRAWS,
-                    shadowMapCoverageStableFrames,
-                    SPARSE_SHADOW_STABLE_FRAMES,
-                    verticalDelta,
-                    SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION,
-                    solidCount,
-                    cutoutMippedCount,
-                    cutoutCount,
-                    translucentCount,
-                    blockEntityCount
-            );
-        }
-        if (drawPopulated && !shadowMapUsable && shadowMapInvalidLogs < 4) {
-            shadowMapInvalidLogs++;
-            MainMod.LOGGER.info(
-                    "[ShadowHealth] Shadow map draw produced clear/sparse depth; binding neutral shadow textures. nonClear={}/{} terrainCounts solid={} cutoutMipped={} cutout={} translucent={} blockEntities={}",
-                    stats.nonClear(),
-                    stats.total(),
-                    solidCount,
-                    cutoutMippedCount,
-                    cutoutCount,
-                    translucentCount,
-                    blockEntityCount
-            );
-        }
     }
 
     protected int renderShadowBlockLayerFromViewFrustum(Minecraft mc, BlockRenderLayer layer, float partialTicks, Entity viewEntity) {

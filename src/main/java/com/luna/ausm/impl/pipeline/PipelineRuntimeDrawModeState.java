@@ -7,6 +7,7 @@ import com.luna.ausm.api.pipeline.pack.ShaderOitSettings;
 import com.luna.ausm.api.pipeline.shader.ProgramStage;
 import com.luna.ausm.api.pipeline.shader.RenderPass;
 import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
+import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.pipeline.render.ShaderSamplerState;
 import com.luna.ausm.impl.pipeline.render.TextureBinder;
 import com.luna.ausm.impl.pipeline.shader.PipelineProgram;
@@ -31,6 +32,7 @@ import static com.luna.ausm.impl.pipeline.PipelineGlState.markShaderStorageBuffe
 import static com.luna.ausm.impl.pipeline.PipelineGlState.maxDrawBuffers;
 import static com.luna.ausm.impl.pipeline.PipelineGlState.resetIndexedBlendState;
 import static com.luna.ausm.impl.pipeline.PipelineGlState.setIndexedBlend;
+import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_ENTITY_BLEND_PROBE_LOGS;
 import static com.luna.ausm.impl.pipeline.PipelineRenderConstants.BLOCK_ENTITY_TRANSLUCENT_BLEND;
 import static com.luna.ausm.impl.pipeline.PipelineRenderConstants.OIT_COEFFICIENT_BLEND;
 import static com.luna.ausm.impl.pipeline.PipelineRenderConstants.WATER_BLEND_MODE;
@@ -305,7 +307,9 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
     }
 
     protected void applyBlendMode(RenderPass pass, List<Attachment> drawBuffers) {
+        logEntityBlendProbe(pass, drawBuffers);
         if (self().applyOitBlendMode(pass, drawBuffers)) {
+            disableColortex6MetadataBlending(pass, drawBuffers);
             return;
         }
 
@@ -314,22 +318,26 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
         Map<Attachment, ShaderBlendMode> attachmentModes = self().attachmentBlendModesFor(pass);
         if (pass == RenderPass.GBUFFERS_WATER || pass == RenderPass.DH_WATER) {
             self().applyWaterBlendMode(drawBuffers, blendMode == null ? WATER_BLEND_MODE : blendMode, attachmentModes);
+            disableColortex6MetadataBlending(pass, drawBuffers);
             return;
         }
         if (pass == RenderPass.GBUFFERS_BLOCK_TRANSLUCENT) {
             self().applyWaterBlendMode(drawBuffers, blendMode == null ? BLOCK_ENTITY_TRANSLUCENT_BLEND : blendMode, attachmentModes);
+            disableColortex6MetadataBlending(pass, drawBuffers);
             return;
         }
         if (blendMode == null) {
             blendMode = PipelineRuntimeState.defaultBlendMode(pass);
         }
         if (blendMode == null && attachmentModes.isEmpty()) {
+            disableColortex6MetadataBlending(pass, drawBuffers);
             return;
         }
 
         if (blendMode != null && !blendMode.enabled()) {
             MinecraftReflectionCompat.glStateDisableBlend();
             resetIndexedBlendState();
+            disableColortex6MetadataBlending(pass, drawBuffers);
             return;
         }
 
@@ -343,6 +351,7 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
             );
         }
         if (attachmentModes.isEmpty()) {
+            disableColortex6MetadataBlending(pass, drawBuffers);
             return;
         }
 
@@ -353,6 +362,52 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
                 self().applyIndexedBlendMode(drawBufferIndex, attachmentMode);
             }
         }
+        disableColortex6MetadataBlending(pass, drawBuffers);
+    }
+
+    /**
+     * Complementary stores material and skylight metadata in colortex6. Its
+     * own shader properties disable blending for that target on modern
+     * pipeline backends; AUSM must apply the same rule on 1.12. Otherwise the
+     * low lightmap alpha of dark entity and water pixels blends metadata with
+     * the previous frame, which light-shaft compositing then exposes.
+     */
+    private void disableColortex6MetadataBlending(RenderPass pass, List<Attachment> drawBuffers) {
+        if (pass == null || pass.stage() != ProgramStage.GBUFFERS) {
+            return;
+        }
+        for (int drawBufferIndex = 0; drawBufferIndex < drawBuffers.size(); drawBufferIndex++) {
+            if (drawBuffers.get(drawBufferIndex) == Attachment.AUX3) {
+                setIndexedBlend(drawBufferIndex, false);
+            }
+        }
+    }
+
+    private void logEntityBlendProbe(RenderPass pass, List<Attachment> drawBuffers) {
+        if ((pass != RenderPass.GBUFFERS_ENTITIES && pass != RenderPass.GBUFFERS_ENTITIES_TRANSLUCENT)
+                || currentEntityKey == null
+                || entityBlendProbeLogs >= MAX_ENTITY_BLEND_PROBE_LOGS) {
+            return;
+        }
+        boolean oit = self().isOitGbufferPass(pass);
+        String key = pass + "|" + self().getPhase() + "|" + currentEntityKey + "|" + currentEntityId + "|" + oit + "|" + drawBuffers;
+        if (key.equals(lastEntityBlendProbe)) {
+            return;
+        }
+        lastEntityBlendProbe = key;
+        entityBlendProbeLogs++;
+        MainMod.LOGGER.info(
+                "[AUSMEntityBlendProbe] probe={} frame={} pass={} phase={} entityKey={} entityId={} oit={} alphaRef={} drawBuffers={}",
+                entityBlendProbeLogs,
+                pipelineFrameId,
+                pass,
+                self().getPhase(),
+                currentEntityKey,
+                currentEntityId,
+                oit,
+                currentAlphaTestReference,
+                drawBuffers
+        );
     }
 
     protected void applyWaterBlendMode(List<Attachment> drawBuffers, ShaderBlendMode blendMode, Map<Attachment, ShaderBlendMode> attachmentModes) {

@@ -1,6 +1,7 @@
 package com.luna.ausm.impl.mixin.pipeline;
 
 import com.luna.ausm.impl.pipeline.PipelineContext;
+import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.luna.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.luna.ausm.impl.pipeline.vertex.IPipelineRenderChunk;
@@ -14,6 +15,7 @@ import net.minecraft.util.BlockRenderLayer;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL30;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -25,7 +27,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(VboRenderList.class)
 public class VboRenderListMixin {
     @Unique
-    private static final int AUSM_TRANSLUCENT_VBO_LOG_LIMIT = 0;
+    private static final int AUSM_TRANSLUCENT_VBO_LOG_LIMIT = 16;
 
     @Unique
     private static final int AUSM_ARRAY_POINTER_MODE_UNKNOWN = 0;
@@ -246,7 +248,34 @@ public class VboRenderListMixin {
 
     @Unique
     private static void ausm$logTranslucentVboState(String stage, BlockRenderLayer layer, boolean pipelineFormat) {
-        // Probe disabled.
+        if (layer != BlockRenderLayer.TRANSLUCENT
+                || !PipelineContext.getInstance().isActive()
+                || ausm$translucentVboLogs >= AUSM_TRANSLUCENT_VBO_LOG_LIMIT) {
+            return;
+        }
+        ausm$translucentVboLogs++;
+        StringBuilder drawBuffers = new StringBuilder();
+        for (int slot = 0; slot < 6; slot++) {
+            if (slot > 0) {
+                drawBuffers.append(';');
+            }
+            drawBuffers.append(slot).append('=').append(GL11.glGetInteger(GL20.GL_DRAW_BUFFER0 + slot));
+        }
+        MainMod.LOGGER.info(
+                "[AUSMWaterVbo] call={} stage={} phase={} drawFbo={} program={} drawBuffers={} blend={} depth={} depthMask={} depthFunc={} pipelineFormat={}",
+                ausm$translucentVboLogs,
+                stage,
+                PipelineContext.getInstance().getPhase(),
+                GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING),
+                GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM),
+                drawBuffers,
+                GL11.glIsEnabled(GL11.GL_BLEND),
+                GL11.glIsEnabled(GL11.GL_DEPTH_TEST),
+                GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK),
+                GL11.glGetInteger(GL11.GL_DEPTH_FUNC),
+                pipelineFormat
+        );
+        PipelineContext.getInstance().logSpecialLayerProbe("water-vbo-" + stage);
     }
 
     @Unique

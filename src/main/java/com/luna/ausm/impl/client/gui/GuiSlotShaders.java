@@ -65,6 +65,11 @@ public class GuiSlotShaders {
             parent.onSelectionChanged();
         }
 
+        if (mouseButton == 0 && "OFF".equalsIgnoreCase(shaderPacks.get(index))) {
+            parent.toggleShadersEnabledPending();
+            return;
+        }
+
         if (mouseButton == 1) {
             parent.openSelectedPackOptions();
             return;
@@ -92,7 +97,7 @@ public class GuiSlotShaders {
             int y = top + (index - first) * slotHeight;
             String packName = shaderPacks.get(index);
             String label = "OFF".equalsIgnoreCase(packName)
-                    ? "Shaders: " + (MainMod.getShaderPackManager().areShadersEnabled() ? "ON" : "OFF")
+                    ? "Shaders: " + (parent.shadersEnabledForDisplay() ? "ON" : "OFF")
                     : packName;
             boolean selected = index == selectedIndex;
             boolean hovered = hoveredIndex == index;

@@ -50,6 +50,7 @@ final class OptionalMixinTargets {
             target("ReachFixUtilMixin", "meldexun/reachfix/util/ReachFixUtil.class", true),
             target("OpenBlocksSkyBlockRendererMixin", "openblocks/client/renderer/SkyBlockRenderer.class", true),
             target("OpenBlocksSkyCaptureMixin", "openblocks/client/renderer/SkyBlockRenderer$SkyCapture.class", true),
+            target("OpenBlocksSkyTextureRendererMixin", "openblocks/client/renderer/tileentity/TileEntitySkyRenderer.class", true),
             target("BewitchmentSyncExtendedPlayerHandlerMixin", "com/bewitchment/api/message/SyncExtendedPlayer$Handler.class", true));
 
     private OptionalMixinTargets() {

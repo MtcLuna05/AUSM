@@ -125,7 +125,7 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
         );
     }
 
-    protected void beginWaterAttachmentDeltaProbe(BlockRenderLayer layer) {
+    public void beginWaterAttachmentDeltaProbe(BlockRenderLayer layer) {
         waterAttachmentDeltaProbeActive = false;
         if (layer != BlockRenderLayer.TRANSLUCENT
                 || activePass != RenderPass.GBUFFERS_WATER
@@ -143,6 +143,7 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
         for (int slot = count; slot < waterAttachmentBefore.length; slot++) {
             waterAttachmentProbeWidths[slot] = 0;
             waterAttachmentProbeHeights[slot] = 0;
+            waterAttachmentProbeIndices[slot] = -1;
         }
         int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
         try {
@@ -158,7 +159,8 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
                 }
                 buffer.clear();
                 buffer.limit(bytes);
-                GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0 + slot);
+                waterAttachmentProbeIndices[slot] = attachment.getIndex();
+                GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0 + attachment.getIndex());
                 GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer);
                 waterAttachmentProbeWidths[slot] = width;
                 waterAttachmentProbeHeights[slot] = height;
@@ -169,7 +171,7 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
         }
     }
 
-    protected void finishWaterAttachmentDeltaProbe() {
+    public void finishWaterAttachmentDeltaProbe() {
         if (!waterAttachmentDeltaProbeActive) {
             return;
         }
@@ -192,7 +194,7 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
                 }
                 after.clear();
                 after.limit(bytes);
-                GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0 + slot);
+                GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0 + waterAttachmentProbeIndices[slot]);
                 GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, after);
                 long changedPixels = 0L;
                 long totalDelta = 0L;
@@ -216,6 +218,7 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
                     result.append(';');
                 }
                 result.append("slot").append(slot)
+                        .append("/colortex").append(waterAttachmentProbeIndices[slot])
                         .append('=').append(width).append('x').append(height)
                         .append(",changedPixels=").append(changedPixels)
                         .append(",totalDelta=").append(totalDelta)

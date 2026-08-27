@@ -37,6 +37,7 @@
     "compat.NetherPortalLayerMixin",
     "compat.OpenBlocksSkyBlockRendererMixin",
     "compat.OpenBlocksSkyCaptureMixin",
+    "compat.OpenBlocksSkyTextureRendererMixin",
     "compat.NothiriumChunkRendererDynamicVboMixin",
     "compat.NothiriumChunkRendererGL15Mixin",
     "compat.NothiriumChunkRendererGL20Mixin",
