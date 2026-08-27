@@ -113,12 +113,14 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
                                                                          double cameraX, double cameraY, double cameraZ, double maxDistance, boolean collectState,
                                                                          int fallbackBlockEntityId, short fallbackRenderType, boolean requirePipelineStride)
             throws ReflectiveOperationException {
-        boolean externalTranslucentState = layer == BlockRenderLayer.TRANSLUCENT
-                && PipelineContext.getInstance().isBloomTranslucentAttenuationPass();
+        PipelineContext pipeline = PipelineContext.getInstance();
+        boolean shadowWaterPass = layer == BlockRenderLayer.TRANSLUCENT && pipeline.isShadowPassActive();
+        boolean externalTranslucentState = shadowWaterPass
+                || layer == BlockRenderLayer.TRANSLUCENT && pipeline.isBloomTranslucentAttenuationPass();
         NothiriumShadowRenderer.LayerGlState layerState = externalTranslucentState ? null : NothiriumShadowRenderer.LayerGlState.prepare(layer);
         try {
             if (layer == BlockRenderLayer.TRANSLUCENT && !externalTranslucentState) {
-                PipelineContext.getInstance().restoreActiveGbufferRenderState();
+                pipeline.restoreActiveGbufferRenderState();
             }
             return self().drawChunks(layer, reflection, pass, chunks, cameraX, cameraY, cameraZ, maxDistance, collectState,
                     fallbackBlockEntityId, fallbackRenderType, requirePipelineStride);

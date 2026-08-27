@@ -52,14 +52,14 @@ public final class EuphoriaEntreePackGenerator {
     private static final String NATIVE_ENTREE_TAR_SHA256 = "1025144fba3cebec88e39bc15231d17bb16430a4ddfbc6975c93c5140415a065";
     private static final String NATIVE_EUPHORIA_TAR_SHA256 = "bfb06adddad37b81f90101c3a5203f40742c375a22d94f5d85c3070820ee7c8c";
     private static final String EUPHORIA_MARKER = "// Euphoria Patches 1.9.3";
-    private static final String GENERATOR_VERSION = "ausm-entree-euphoria-v9";
+    private static final String GENERATOR_VERSION = "ausm-entree-euphoria-v10";
     private static final String MARKER_FILE = ".ausm-euphoria-entree-version";
     private static final String STAGING_NAME = ".ausm-entree-euphoria-staging";
     private static final String PREVIOUS_NAME = ".ausm-entree-euphoria-previous";
     private static final String WORK_NAME = ".ausm-entree-euphoria-work";
     private static final String AUSM_112_PATCH_SUFFIX = " + AUSM 1.12.2 Patches";
     private static final String AUSM_112_PATCH_MARKER = ".ausm-1.12.2-patches-version";
-    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v1";
+    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v3";
     private static final String LOD_API_PROPERTY = "ausm.lod.api=1";
     private static final String LOD_HELPER = "shaders/lib/ausm/distantLod.glsl";
     private static final String LOD_HELPER_INCLUDE = "#include \"/lib/ausm/distantLod.glsl\"";
@@ -336,26 +336,27 @@ public final class EuphoriaEntreePackGenerator {
     }
 
     /**
-     * Euphoria creates its patched directories, but does not know that AUSM
-     * needs a second, 1.12.2-specific derivative. Create that derivative here
-     * so a fresh instance receives it instead of only repairing a preexisting
-     * directory from an older AUSM install.
+     * Euphoria creates its patched directories, while plain Unbound is a
+     * direct source. In both cases AUSM needs a second, 1.12.2-specific
+     * derivative so a fresh instance does not depend on a preexisting pack.
      */
     private static void generateAUSM112PatchPacks(Path shaderpacks) throws IOException {
         if (!Files.isDirectory(shaderpacks)) {
             return;
         }
-        List<Path> euphoriaPacks;
+        List<Path> sourcePacks;
         try (Stream<Path> entries = Files.list(shaderpacks)) {
-            euphoriaPacks = entries
-                    .filter(Files::isDirectory)
-                    .filter(path -> path.getFileName().toString().endsWith(EUPHORIA_PATCH_SUFFIX))
+            sourcePacks = entries
+                    .filter(path -> Files.isDirectory(path)
+                            || (Files.isRegularFile(path) && path.getFileName().toString().endsWith(".zip")))
+                    .filter(path -> isAUSM112PatchSource(path.getFileName().toString()))
                     .toList();
         }
-        for (Path euphoriaPack : euphoriaPacks) {
-            String sourceName = euphoriaPack.getFileName().toString();
-            Path target = safeDirectChild(shaderpacks, sourceName + AUSM_112_PATCH_SUFFIX);
-            String token = AUSM_112_PATCH_VERSION + "\n" + fingerprint(euphoriaPack.resolve("shaders/shaders.properties")) + "\n";
+        for (Path sourcePack : sourcePacks) {
+            String sourceName = sourcePack.getFileName().toString();
+            String sourcePackName = withoutZipExtension(sourceName);
+            Path target = safeDirectChild(shaderpacks, sourcePackName + AUSM_112_PATCH_SUFFIX);
+            String token = AUSM_112_PATCH_VERSION + "\n" + fingerprintPack(sourcePack) + "\n";
             if (Files.isDirectory(target)) {
                 Path marker = target.resolve(AUSM_112_PATCH_MARKER);
                 if (!Files.isRegularFile(marker)) {
@@ -369,7 +370,11 @@ public final class EuphoriaEntreePackGenerator {
 
             Path staging = safeDirectChild(shaderpacks, STAGING_NAME);
             deleteTree(staging);
-            copyTree(euphoriaPack, staging);
+            materializePack(sourcePack, staging);
+            if (isEuphoriaPatchedPack(staging)) {
+                overlayBundledFiles(staging);
+                patchReflectiveCaustics(staging);
+            }
             injectAUSM112LodSupportInto(staging);
             Files.writeString(staging.resolve(AUSM_112_PATCH_MARKER), token, StandardCharsets.UTF_8);
             publish(shaderpacks, staging, target);
@@ -377,8 +382,26 @@ public final class EuphoriaEntreePackGenerator {
         }
     }
 
+    private static boolean isAUSM112PatchSource(String name) {
+        String packName = withoutZipExtension(name);
+        return !packName.endsWith(AUSM_112_PATCH_SUFFIX)
+                && (packName.endsWith(EUPHORIA_PATCH_SUFFIX) || packName.startsWith("ComplementaryUnbound"));
+    }
+
+    private static String withoutZipExtension(String name) {
+        return name.endsWith(".zip") ? name.substring(0, name.length() - 4) : name;
+    }
+
+    private static boolean isEuphoriaPatchedPack(Path pack) throws IOException {
+        Path properties = pack.resolve("shaders/shaders.properties");
+        return Files.isRegularFile(properties)
+                && Files.readString(properties, StandardCharsets.UTF_8).startsWith(EUPHORIA_MARKER);
+    }
+
     private static void injectAUSM112LodSupportInto(Path patchPack) throws IOException {
-        ensureLodApiDeclaration(patchPack.resolve("shaders/shaders.properties"));
+        Path properties = patchPack.resolve("shaders/shaders.properties");
+        ensureLodApiDeclaration(properties);
+        ensureAUSMOptionsCategory(properties, patchPack.resolve("shaders/lang/en_US.lang"));
         ensureBundledLodHelper(patchPack.resolve(LOD_HELPER));
         ensureStablePixelationLibrary(patchPack.resolve(PIXELATION_LIBRARY));
         ensureDriverSafeFxaaLibrary(patchPack.resolve(FXAA_LIBRARY));
@@ -398,6 +421,48 @@ public final class EuphoriaEntreePackGenerator {
         String declaration = "# AUSM shader LOD API; generated patches opt in even when the upstream pack does not.\n"
                 + LOD_API_PROPERTY + "\n\n";
         Files.writeString(properties, declaration + source, StandardCharsets.UTF_8);
+    }
+
+    private static void ensureAUSMOptionsCategory(Path properties, Path languageFile) throws IOException {
+        if (!Files.isRegularFile(properties)) {
+            return;
+        }
+        String source = Files.readString(properties, StandardCharsets.UTF_8);
+        if (!source.contains("screen.AUSM_SETTINGS=")) {
+            source = source.replaceFirst(
+                    "(?m)^(\\s*screen=.*?)(\\R)",
+                    "$1 [AUSM_SETTINGS]$2"
+            );
+            source += "\n# AUSM-generated compatibility options\n"
+                    + "screen.AUSM_SETTINGS=<empty> <empty> [AUSM_LOD_SETTINGS]\n"
+                    + "screen.AUSM_LOD_SETTINGS=<empty> <empty> AUSM_LOD_FALLBACK\n";
+        } else if (!source.contains("screen.AUSM_LOD_SETTINGS=")) {
+            source = source.replace(
+                    "screen.AUSM_SETTINGS=<empty> <empty> [AUSM_MODDED_DIMENSIONS]",
+                    "screen.AUSM_SETTINGS=<empty> <empty> [AUSM_MODDED_DIMENSIONS] [AUSM_LOD_SETTINGS]"
+            );
+            source += "\nscreen.AUSM_LOD_SETTINGS=<empty> <empty> AUSM_LOD_FALLBACK\n";
+        }
+        if (!source.contains("screen.AUSM_LOD_SETTINGS=")) {
+            return;
+        }
+        Files.writeString(properties, source, StandardCharsets.UTF_8);
+        if (!Files.isRegularFile(languageFile)) {
+            return;
+        }
+        String language = Files.readString(languageFile, StandardCharsets.UTF_8);
+        if (!language.contains("screen.AUSM_LOD_SETTINGS=")) {
+            String labels = "\n# AUSM-generated compatibility options\n";
+            if (!language.contains("screen.AUSM_SETTINGS=")) {
+                labels += "screen.AUSM_SETTINGS=§bAUSM Patches§r\n"
+                        + "screen.AUSM_SETTINGS.comment=Compatibility options generated by AUSM.\n";
+            }
+            Files.writeString(languageFile, language + labels
+                    + "screen.AUSM_LOD_SETTINGS=AUSM LOD\n"
+                    + "option.AUSM_LOD_FALLBACK=Distance LOD fallback\n"
+                    + "option.AUSM_LOD_FALLBACK.comment=Adjust distant terrain and water detail for AUSM's LOD ranges.\n",
+                    StandardCharsets.UTF_8);
+        }
     }
 
     private static void ensureBundledLodHelper(Path helper) throws IOException {

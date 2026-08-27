@@ -1,6 +1,8 @@
 #ifndef AUSM_ENTREE_DISTANT_LOD
 #define AUSM_ENTREE_DISTANT_LOD
 
+#define AUSM_LOD_FALLBACK 1 // [0 1]
+
 // Euphoria expands this include before the regular uniform header in several
 // 1.12.2 terrain and water stages, so it must carry every symbol it uses.
 uniform int ausmLodFallbackEnabled;
@@ -14,7 +16,7 @@ float ausmLodTransition(float playerDistance) {
 }
 
 float ausmEntreeDetailWeight(vec3 playerPosition) {
-    return ausmLodFallbackEnabled > 0
+    return AUSM_LOD_FALLBACK == 1 && ausmLodFallbackEnabled > 0
             ? 1.0 - ausmLodTransition(length(playerPosition))
             : 1.0;
 }
@@ -26,7 +28,7 @@ float ausmEntreeWaterDetailWeight(vec3 playerPosition) {
 // Foliage is the first feature that becomes unstable at distance. Keep it
 // fully enabled through LOD 1, then disable it exactly at the LOD 2 boundary.
 float ausmEntreeFoliageWaveWeight(vec3 playerPosition) {
-    return ausmLodFallbackEnabled > 0 && length(playerPosition) < ausmLod2RadiusBlocks
+    return AUSM_LOD_FALLBACK == 1 && ausmLodFallbackEnabled > 0 && length(playerPosition) < ausmLod2RadiusBlocks
             ? 1.0
             : 0.0;
 }
@@ -35,7 +37,7 @@ float ausmEntreeFoliageWaveWeight(vec3 playerPosition) {
 // distant-LOD boundary. The scale is 1x, 2x, 4x, and 8x before features fade
 // out beyond the final tier.
 float ausmEntreeLodResolutionScale(float playerDistance) {
-    if (ausmLodFallbackEnabled <= 0) {
+    if (AUSM_LOD_FALLBACK == 0 || ausmLodFallbackEnabled <= 0) {
         return 1.0;
     }
     float lodLevel = 0.0;
@@ -46,7 +48,7 @@ float ausmEntreeLodResolutionScale(float playerDistance) {
 }
 
 float ausmEntreeLodFeatureWeight(float playerDistance) {
-    return ausmLodFallbackEnabled > 0
+    return AUSM_LOD_FALLBACK == 1 && ausmLodFallbackEnabled > 0
             ? 1.0 - smoothstep(ausmLod4RadiusBlocks, ausmLod4RadiusBlocks + 48.0, playerDistance)
             : 1.0;
 }

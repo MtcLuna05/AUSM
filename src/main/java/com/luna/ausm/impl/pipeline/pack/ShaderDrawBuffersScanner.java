@@ -91,6 +91,7 @@ public final class ShaderDrawBuffersScanner {
         scanResolvedStage(pack, layout, dimensionId, programId, ".vsh", values, options);
         scanResolvedStage(pack, layout, dimensionId, programId, ".gsh", values, options);
         scanResolvedStage(pack, layout, dimensionId, programId, ".fsh", values, options);
+        scanResolvedStage(pack, layout, dimensionId, programId, ".glsl", values, options);
         return values;
     }
 
@@ -240,6 +241,10 @@ public final class ShaderDrawBuffersScanner {
         private ScanState(ShaderOptions options) {
             this.options = options;
             seedEnvironmentDefines();
+            // Draw-buffer directives describe fragment outputs. Treat every
+            // scanned source as its fragment stage, including combined .glsl
+            // sources that guard those directives with FRAGMENT_SHADER.
+            defines.put("FRAGMENT_SHADER", "1");
             for (ShaderOption option : options.all().values()) {
                 if (!option.changed()) {
                     continue;

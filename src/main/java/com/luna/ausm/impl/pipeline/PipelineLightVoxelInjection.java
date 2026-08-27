@@ -8,6 +8,7 @@ import com.luna.ausm.impl.pipeline.fbo.ShadowFramebuffer;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderGlobal;
@@ -19,6 +20,8 @@ import net.minecraft.util.BlockRenderLayer;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
+import net.minecraftforge.fluids.Fluid;
+import net.minecraftforge.fluids.FluidRegistry;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL30;
 
@@ -331,6 +334,23 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
         }
         try {
             int count = self().renderShadowBlockLayer(mc, layer, partialTicks, viewEntity);
+            if (phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT && shadowTargetProbeLogs < 1) {
+                shadowTargetProbeLogs++;
+                MainMod.LOGGER.info(
+                        "[AUSMShadowWaterDepthProbe] call={} count={} depthMask={} depthFunc={} blend={} drawFbo={}",
+                        shadowTargetProbeLogs, count, GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK),
+                        GL11.glGetInteger(GL11.GL_DEPTH_FUNC), GL11.glIsEnabled(GL11.GL_BLEND),
+                        GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING));
+                for (Fluid fluid : new TreeMap<>(FluidRegistry.getRegisteredFluids()).values()) {
+                    if (fluid.getBlock() == null || fluid.isGaseous()) {
+                        continue;
+                    }
+                    MainMod.LOGGER.info(
+                            "[AUSMWorldFluid] name={} block={} still={} flowing={} density={} viscosity={} luminosity={}",
+                            fluid.getName(), fluid.getBlock().getRegistryName(), fluid.getStill(), fluid.getFlowing(),
+                            fluid.getDensity(), fluid.getViscosity(), fluid.getLuminosity());
+                }
+            }
             return count;
         } finally {
             GL11.glDepthFunc(previousDepthFunc);

@@ -117,6 +117,12 @@ value.SHADER_STYLE.1=§bReimagined
 value.SHADER_STYLE.4=§dUnbound
 
 #Screens
+screen.AUSM_SETTINGS=§bAUSM Settings§r
+screen.AUSM_SETTINGS.comment=Settings provided by AUSM's generated compatibility patches.
+screen.AUSM_LOD_SETTINGS=AUSM LOD
+option.AUSM_LOD_FALLBACK=Distance LOD fallback
+option.AUSM_LOD_FALLBACK.comment=Adjust distant terrain and water detail for AUSM's LOD ranges.
+
 screen.PERFORMANCE_SETTINGS=§ePerformance Settings§r
 screen.PERFORMANCE_SETTINGS.comment=Settings that directly relate to the performance, and get changed by the different shader profiles.
 

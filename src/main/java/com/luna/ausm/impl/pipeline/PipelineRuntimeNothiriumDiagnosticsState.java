@@ -462,11 +462,7 @@ abstract class PipelineRuntimeDiagnosticsState3 extends PipelineRuntimeDiagnosti
         if (!isPipelineActive) {
             return false;
         }
-        WorldRenderingPhase phase = self().getPhase();
-        return phase == WorldRenderingPhase.TERRAIN_SOLID
-                || phase == WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED
-                || phase == WorldRenderingPhase.TERRAIN_CUTOUT
-                || phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT;
+        return self().shouldDisableCullForPhase(self().getPhase());
     }
 
     protected boolean shouldDisableCullForPhase(WorldRenderingPhase phase) {
