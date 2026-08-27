@@ -54,8 +54,7 @@ jobs:
           curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
 
           files: |
-            build/libs/!(*-@(dev|sources|javadoc)).jar
-            build/libs/*-@(dev|sources|javadoc).jar
+            build/libs/AUSM-*-Java25.jar
           loaders: forge
           game-versions: 1.12.2
           java: |

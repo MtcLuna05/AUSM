@@ -38,22 +38,15 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n 's/^mod_version[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
-          mod_id="$(sed -n 's/^mod_id[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
-          short_sha="${GITHUB_SHA::7}"
+          jar_name="AUSM-${version}-Java25.jar"
+          jar_path="build/libs/${jar_name}"
           mkdir -p dist
-          jar_path="$(find build/libs -maxdepth 1 -type f -name 'AUSM-*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
-          if [[ -z "${jar_path}" && -n "${mod_id}" ]]; then
-            jar_path="$(find build/libs -maxdepth 1 -type f -name "${mod_id}-*.jar" ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
-          fi
-          if [[ -z "${jar_path}" ]]; then
-            jar_path="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name '*-dev.jar' | sort | tail -n 1)"
-          fi
-          if [[ -z "${jar_path}" ]]; then
-            echo "No distributable AUSM jar found in build/libs" >&2
+          if [[ ! -f "${jar_path}" ]]; then
+            echo "Expected distributable AUSM jar not found: ${jar_path}" >&2
             find build/libs -maxdepth 1 -type f -print >&2 || true
             exit 1
           fi
-          cp "${jar_path}" "dist/AUSM-${version}+${short_sha}.jar"
+          cp "${jar_path}" "dist/${jar_name}"
           cp "${jar_path}" "dist/AUSM-latest.jar"
 
       - name: Upload jar artifact
@@ -85,16 +78,14 @@ jobs:
         run: |
           set -euo pipefail
           test -f dist/AUSM-latest.jar
+          version="$(sed -n 's/^mod_version[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
           short_sha="${GITHUB_SHA::7}"
-          versioned_jar="$(find dist -maxdepth 1 -type f -name "AUSM-*+${short_sha}.jar" | sort | tail -n 1)"
-          if [[ -z "${versioned_jar}" ]]; then
-            echo "No versioned AUSM jar found in dist" >&2
+          versioned_jar="dist/AUSM-${version}-Java25.jar"
+          if [[ ! -f "${versioned_jar}" ]]; then
+            echo "Expected release AUSM jar not found: ${versioned_jar}" >&2
             find dist -maxdepth 1 -type f -print >&2 || true
             exit 1
           fi
-          version="$(basename "${versioned_jar}")"
-          version="${version#AUSM-}"
-          version="${version%+${short_sha}.jar}"
           release_tag="v${version}+${short_sha}"
           if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "${release_tag}" "${versioned_jar}" --repo "${GITHUB_REPOSITORY}" --clobber

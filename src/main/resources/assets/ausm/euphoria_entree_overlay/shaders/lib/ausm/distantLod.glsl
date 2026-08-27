@@ -28,9 +28,10 @@ float ausmEntreeWaterDetailWeight(vec3 playerPosition) {
 // Foliage is the first feature that becomes unstable at distance. Keep it
 // fully enabled through LOD 1, then disable it exactly at the LOD 2 boundary.
 float ausmEntreeFoliageWaveWeight(vec3 playerPosition) {
-    return AUSM_LOD_FALLBACK == 1 && ausmLodFallbackEnabled > 0 && length(playerPosition) < ausmLod2RadiusBlocks
-            ? 1.0
-            : 0.0;
+    if (AUSM_LOD_FALLBACK == 0 || ausmLodFallbackEnabled <= 0) {
+        return 1.0;
+    }
+    return length(playerPosition) < ausmLod2RadiusBlocks ? 1.0 : 0.0;
 }
 
 // Detail is gradually made coarser instead of being removed at the first

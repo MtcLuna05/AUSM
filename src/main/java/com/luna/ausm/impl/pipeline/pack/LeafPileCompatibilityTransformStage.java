@@ -114,7 +114,7 @@ public final class LeafPileCompatibilityTransformStage implements ShaderTransfor
         }
 
         String replacement = "// " + WAVE_MARKER + "\n"
-                + "        if (mat != 10489 && mat != " + ShaderBlockIdMap.BOP_LEAF_PILE_MATERIAL_ID + ") "
+                + "        if (mat != " + ShaderBlockIdMap.BOP_LEAF_PILE_MATERIAL_ID + ") "
                 + "DoWave(" + matcher.group(1).trim() + ", mat);";
         return matcher.replaceFirst(Matcher.quoteReplacement(replacement));
     }

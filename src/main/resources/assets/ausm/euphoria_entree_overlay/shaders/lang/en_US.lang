@@ -119,7 +119,7 @@ value.SHADER_STYLE.4=§dUnbound
 #Screens
 screen.AUSM_SETTINGS=§bAUSM Settings§r
 screen.AUSM_SETTINGS.comment=Settings provided by AUSM's generated compatibility patches.
-screen.AUSM_LOD_SETTINGS=AUSM LOD
+screen.AUSM_LOD_SETTINGS=Distance LOD
 option.AUSM_LOD_FALLBACK=Distance LOD fallback
 option.AUSM_LOD_FALLBACK.comment=Adjust distant terrain and water detail for AUSM's LOD ranges.
 
@@ -2745,8 +2745,6 @@ option.ENTITIES_ARE_LIGHT=Entities Are Light
 option.WATER_CAUSTIC_STRENGTH=Water Caustic Strength
 option.WATER_CAUSTIC_STRENGTH.comment=Change the strength of the caustic effect in water.
 
-option.REFLECTIVE_CAUSTICS=Reflective Caustics
-option.REFLECTIVE_CAUSTICS.comment=Projects sunlight reflected by water onto nearby walls and ceilings. Uses additional shadow-map samples.
 
 option.ROUGHNESS_MULTIPLIER=Roughness Mask
 option.ROUGHNESS_MULTIPLIER.comment=Change where materials are rough.
@@ -3009,10 +3007,8 @@ value.PIXELATED_SHADOWS_MODE.32=Manual 32x
 value.PIXELATED_SHADOWS_MODE.64=Manual 64x
 value.PIXELATED_SHADOWS_MODE.128=Manual 128x
 
-screen.AUSM_MODDED_DIMENSIONS=AUSM Dimension Settings
+screen.AUSM_MODDED_DIMENSIONS=Dimension Settings
 screen.AUSM_MODDED_DIMENSIONS.comment=Shader-owned sky settings for AUSM-controlled dimensions.
-screen.AUSM_OVERWORLD_SETTINGS=Overworld
-screen.AUSM_OVERWORLD_SETTINGS.comment=Overworld sky integration settings.
 screen.AUSM_SIMPLE_VOID_SETTINGS=Shader-Owned Skies
 screen.AUSM_SIMPLE_VOID_SETTINGS.comment=Entree controls the full sky in the Overworld, Twilight Forest, Simple Void World, and Aether.
 screen.AUSM_NETHER_SETTINGS=Nether

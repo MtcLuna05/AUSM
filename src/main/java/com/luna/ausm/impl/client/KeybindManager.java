@@ -26,6 +26,8 @@ import org.lwjgl.input.Keyboard;
 public class KeybindManager {
 
     private static final String CATEGORY = "key.categories.ausm";
+    private static final String DEBUG_KEYBINDS_ENVIRONMENT = "AUSM_DEBUG_KEYBINDS";
+    private static final boolean DEBUG_KEYBINDS_ENABLED = isDebugKeybindsEnabled();
 
     public static KeyBinding openConfig;
     public static KeyBinding reloadShader;
@@ -42,16 +44,18 @@ public class KeybindManager {
         openConfig = new KeyBinding("key.ausm.config", Keyboard.KEY_O, CATEGORY);
         reloadShader = new KeyBinding("key.ausm.reload", Keyboard.KEY_R, CATEGORY);
         toggleShader = new KeyBinding("key.ausm.toggle", Keyboard.KEY_K, CATEGORY);
-        forceLightRecalculation = new KeyBinding("key.ausm.force_light_recalculation", Keyboard.KEY_F8, CATEGORY);
         toggleDynamicLights = new KeyBinding("key.ausm.toggle_dynamic_lights", Keyboard.KEY_F9, CATEGORY);
-        captureFrameLayers = new KeyBinding("key.ausm.capture_frame_layers", Keyboard.KEY_F7, CATEGORY);
 
         ClientRegistry.registerKeyBinding(openConfig);
         ClientRegistry.registerKeyBinding(reloadShader);
         ClientRegistry.registerKeyBinding(toggleShader);
-        ClientRegistry.registerKeyBinding(forceLightRecalculation);
         ClientRegistry.registerKeyBinding(toggleDynamicLights);
-        ClientRegistry.registerKeyBinding(captureFrameLayers);
+        if (DEBUG_KEYBINDS_ENABLED) {
+            forceLightRecalculation = new KeyBinding("key.ausm.force_light_recalculation", Keyboard.KEY_F8, CATEGORY);
+            captureFrameLayers = new KeyBinding("key.ausm.capture_frame_layers", Keyboard.KEY_F7, CATEGORY);
+            ClientRegistry.registerKeyBinding(forceLightRecalculation);
+            ClientRegistry.registerKeyBinding(captureFrameLayers);
+        }
     }
 
     /**
@@ -64,9 +68,7 @@ public class KeybindManager {
                 || openConfig == null
                 || reloadShader == null
                 || toggleShader == null
-                || forceLightRecalculation == null
-                || toggleDynamicLights == null
-                || captureFrameLayers == null) {
+                || toggleDynamicLights == null) {
             return;
         }
 
@@ -91,17 +93,19 @@ public class KeybindManager {
             sendActionBar(state + " shaders: " + displayPackName(manager.getSelectedPackName()));
         }
 
-        while (MinecraftReflectionCompat.keyBindingIsPressed(forceLightRecalculation)) {
-            MainMod.LOGGER.info("Forcing nearby light recalculation...");
-            PipelineContext context = PipelineContext.getInstance();
-            int[] result = context.forceLightRecalculation();
-            int chunks = result.length > 1 ? result[1] : 0;
-            int blockChecks = result.length > 2 ? result[2] : 0;
-            if (chunks > 0 || blockChecks > 0) {
-                context.scheduleBloomTerrainRefresh("manual-light-keybind");
-                sendActionBar("Forced light recalculation: " + blockChecks + " light checks, " + chunks + " chunks; bloom refresh queued");
-            } else {
-                sendActionBar("No loaded world light data to recalculate");
+        if (DEBUG_KEYBINDS_ENABLED) {
+            while (MinecraftReflectionCompat.keyBindingIsPressed(forceLightRecalculation)) {
+                MainMod.LOGGER.info("Forcing nearby light recalculation...");
+                PipelineContext context = PipelineContext.getInstance();
+                int[] result = context.forceLightRecalculation();
+                int chunks = result.length > 1 ? result[1] : 0;
+                int blockChecks = result.length > 2 ? result[2] : 0;
+                if (chunks > 0 || blockChecks > 0) {
+                    context.scheduleBloomTerrainRefresh("manual-light-keybind");
+                    sendActionBar("Forced light recalculation: " + blockChecks + " light checks, " + chunks + " chunks; bloom refresh queued");
+                } else {
+                    sendActionBar("No loaded world light data to recalculate");
+                }
             }
         }
 
@@ -109,10 +113,17 @@ public class KeybindManager {
             toggleDynamicLights();
         }
 
-        while (MinecraftReflectionCompat.keyBindingIsPressed(captureFrameLayers)) {
-            boolean queued = PipelineFrameLayerCapture.requestNextFrame();
-            sendActionBar(queued ? "AUSM visible-block dump queued" : "AUSM visible-block dump already pending");
+        if (DEBUG_KEYBINDS_ENABLED) {
+            while (MinecraftReflectionCompat.keyBindingIsPressed(captureFrameLayers)) {
+                boolean queued = PipelineFrameLayerCapture.requestNextFrame();
+                sendActionBar(queued ? "AUSM visible-block dump queued" : "AUSM visible-block dump already pending");
+            }
         }
+    }
+
+    private static boolean isDebugKeybindsEnabled() {
+        String value = System.getenv(DEBUG_KEYBINDS_ENVIRONMENT);
+        return "1".equals(value) || Boolean.parseBoolean(value);
     }
 
     private static void toggleDynamicLights() {

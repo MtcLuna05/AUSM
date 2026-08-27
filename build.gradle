@@ -321,6 +321,10 @@ jar {
     finalizedBy(tasks.named(remapTaskName).get())
 }
 
+tasks.named(remapTaskName) {
+    archiveFileName.set("AUSM-${project.version}-Java25.jar")
+}
+
 
 shadowJar {
     configurations = [project.configurations.shadow]
@@ -500,6 +504,7 @@ tasks.register('launchMbcDebug', Exec) {
     meatballRtxGpuEnvironment.each { name, value ->
         prismCommand.add("--env=${name}=${value}")
     }
+    prismCommand.add('--env=AUSM_DEBUG_KEYBINDS=1')
     prismCommand.addAll([
             '--command=prismlauncher',
             'org.prismlauncher.PrismLauncher',

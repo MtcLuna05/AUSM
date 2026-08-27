@@ -3,7 +3,6 @@ shaders/lib/atmospherics/ausmOwnedSky.glsl
 shaders/lib/ausm/distantLod.glsl
 shaders/lib/colors/skyColors.glsl
 shaders/lib/common.glsl
-shaders/lib/lighting/reflectiveCaustics.glsl
 shaders/lib/materials/materialHandling/terrainMaterials.glsl
 shaders/lib/materials/materialHandling/translucentMaterials.glsl
 shaders/lib/materials/materialMethods/ausmModdedFluidCheck.glsl

@@ -9,6 +9,7 @@ import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import net.minecraft.block.Block;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderGlobal;
@@ -334,7 +335,7 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
         }
         try {
             int count = self().renderShadowBlockLayer(mc, layer, partialTicks, viewEntity);
-            if (phase == WorldRenderingPhase.TERRAIN_TRANSLUCENT && shadowTargetProbeLogs < 1) {
+            if (phase == WorldRenderingPhase.TERRAIN_SOLID && shadowTargetProbeLogs < 2) {
                 shadowTargetProbeLogs++;
                 MainMod.LOGGER.info(
                         "[AUSMShadowWaterDepthProbe] call={} count={} depthMask={} depthFunc={} blend={} drawFbo={}",
@@ -346,8 +347,10 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
                         continue;
                     }
                     MainMod.LOGGER.info(
-                            "[AUSMWorldFluid] name={} block={} still={} flowing={} density={} viscosity={} luminosity={}",
-                            fluid.getName(), fluid.getBlock().getRegistryName(), fluid.getStill(), fluid.getFlowing(),
+                            "[AUSMWorldFluid] name={} block={} id={} meta={} still={} flowing={} density={} viscosity={} luminosity={}",
+                            fluid.getName(), fluid.getBlock().getRegistryName(),
+                            Block.getIdFromBlock(fluid.getBlock()), fluid.getBlock().getMetaFromState(fluid.getBlock().getDefaultState()),
+                            fluid.getStill(), fluid.getFlowing(),
                             fluid.getDensity(), fluid.getViscosity(), fluid.getLuminosity());
                 }
             }

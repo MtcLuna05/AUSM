@@ -136,6 +136,14 @@ public final class ShaderBlockIdMap {
     private static void addLilyPadCompatibilityAliases(Map<Block, Integer> blockIds, List<StateRule> stateRules) {
         if (blockIds.containsValue(10489)) {
             addBlockAlias(blockIds, "xreliquary", "fertile_lilypad", 10489);
+            // Biomes O' Plenty keeps its small, tiny, medium, and flowered
+            // lily pads as states of one waterlily block. State aliases keep
+            // every variant on the native lily-pad material even when a pack
+            // has no explicit BOP block.properties entry.
+            addStateAlias(stateRules, "biomesoplenty", "waterlily", "variant", "small", 10489);
+            addStateAlias(stateRules, "biomesoplenty", "waterlily", "variant", "tiny", 10489);
+            addStateAlias(stateRules, "biomesoplenty", "waterlily", "variant", "medium", 10489);
+            addStateAlias(stateRules, "biomesoplenty", "waterlily", "variant", "flower", 10489);
             // A leaf pile is a horizontal alpha card, but it is not a lily pad:
             // material 10489 runs a signed water-bob animation which makes the
             // card's lighting/shadow footprint sweep across the ground. Keep a

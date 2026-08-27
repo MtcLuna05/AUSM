@@ -738,7 +738,8 @@ void main() {
             position.y += doWorldCurvature(position.xz);
         #endif
         #ifdef WAVING_ANYTHING_TERRAIN
-            DoWave(position.xyz, mat);
+            // AUSM_THIN_CARD_NO_WATER_BOB
+            if (mat != 12284) DoWave(position.xyz, mat);
         #endif
         #ifdef INTERACTIVE_FOLIAGE
             if (mat == 10003 || mat == 10005 || mat == 10015 || mat == 10021 || mat == 10029 || mat == 10023 || mat == 10629 || mat == 10632 || mat == 10025 || mat == 10027 || mat == 10923 || mat == 10972) {

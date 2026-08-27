@@ -213,9 +213,10 @@ abstract class GuiShaderOptionsLayout extends GuiShaderOptionsBase {
         int x0 = panelLeft + (availableWidth - rowWidth) / 2;
         int y0 = OPTION_PANEL_TOP;
         int cellWidth = Math.max(100, (rowWidth - (columns - 1) * 8) / columns);
-        // Every page shares one stable width.  Measuring only the visible page
-        // made the grid jump whenever a long option existed off-screen.
-        int visibleButtonWidth = self().visibleEntryButtonWidth(properties.options(), 0, visibleEntries.size(), cellWidth);
+        // Use one localized width for every entry that can be reached in this pack.
+        // Measuring only the selected screen made the grid resize when navigating
+        // between categories with differently sized labels or values.
+        int visibleButtonWidth = self().optionGridButtonWidth(properties, cellWidth);
 
         for (int i = start; i < end; i++) {
             ShaderScreenEntry entry = visibleEntries.get(i);
@@ -230,10 +231,15 @@ abstract class GuiShaderOptionsLayout extends GuiShaderOptionsBase {
         }
     }
 
-    protected int visibleEntryButtonWidth(ShaderOptions options, int start, int end, int maxWidth) {
+    protected int optionGridButtonWidth(ShaderProperties properties, int maxWidth) {
         int width = 88;
-        for (int i = start; i < end; i++) {
-            width = Math.max(width, self().preferredEntryWidth(options, visibleEntries.get(i), maxWidth));
+        Set<ShaderScreenEntry> measuredEntries = new HashSet<>();
+        for (ShaderScreen screen : properties.screens().values()) {
+            for (ShaderScreenEntry entry : screen.entries()) {
+                if (entry.type() != ShaderScreenEntry.Type.EMPTY && measuredEntries.add(entry)) {
+                    width = Math.max(width, self().preferredEntryWidth(properties.options(), entry, maxWidth));
+                }
+            }
         }
         return Math.clamp(width, 1, Math.max(1, maxWidth));
     }

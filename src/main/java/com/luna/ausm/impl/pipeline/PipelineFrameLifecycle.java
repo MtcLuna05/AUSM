@@ -247,12 +247,11 @@ abstract class PipelineFrameLifecycle extends PipelineWorldRenderScopeBase {
             return;
         }
         String blocklight = shaderOptionValue("BLOCKLIGHT_CAUSTICS");
-        String reflective = shaderOptionValue("REFLECTIVE_CAUSTICS");
         String waterStyle = shaderOptionValue("WATER_CAUSTIC_STYLE_DEFINE");
         String lightShaftBehaviour = shaderOptionValue("LIGHTSHAFT_BEHAVIOUR");
         String lightShaftQuality = shaderOptionValue("LIGHTSHAFT_QUALI_DEFINE");
         String shadowQuality = shaderOptionValue("SHADOW_QUALITY");
-        String key = blocklight + '|' + reflective + '|' + waterStyle + '|'
+        String key = blocklight + '|' + waterStyle + '|'
                 + lightShaftBehaviour + '|' + lightShaftQuality + '|' + shadowQuality + '|'
                 + shadowMapUsable + '|' + shadowMapPopulated + '|' + shadowMapSparseForSampling;
         if (key.equals(lastCausticRuntimeProbe)) {
@@ -261,11 +260,10 @@ abstract class PipelineFrameLifecycle extends PipelineWorldRenderScopeBase {
         lastCausticRuntimeProbe = key;
         causticRuntimeProbeLogs++;
         MainMod.LOGGER.info(
-                "[AUSMCausticsProbe] probe={} frame={} blocklight={} reflective={} waterStyle={} lightShaftBehaviour={} lightShaftQuality={} shadowQuality={} shadowUsable={} shadowPopulated={} shadowSparse={}",
+                "[AUSMCausticsProbe] probe={} frame={} blocklight={} waterStyle={} lightShaftBehaviour={} lightShaftQuality={} shadowQuality={} shadowUsable={} shadowPopulated={} shadowSparse={}",
                 causticRuntimeProbeLogs,
                 pipelineFrameId,
                 blocklight,
-                reflective,
                 waterStyle,
                 lightShaftBehaviour,
                 lightShaftQuality,
