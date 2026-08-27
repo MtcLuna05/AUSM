@@ -433,13 +433,6 @@ public class TextureBinder {
         }
         shaderOnlyFixedFunctionTextureUnitsDirty = false;
         restoreDefaultTextureUnit();
-        MainMod.LOGGER.info(
-                "[AUSMShaderlessTextureUnitRepair] checked=2..{} enabledBefore={} enabledAfter={} active={} clientActive={}",
-                unitCount - 1,
-                enabledBefore.length() == 0 ? "none" : enabledBefore,
-                enabledAfter.length() == 0 ? "none" : enabledAfter,
-                GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE),
-                GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE));
     }
 
     public static void markShaderOnlyFixedFunctionTextureUnitsDirty() {

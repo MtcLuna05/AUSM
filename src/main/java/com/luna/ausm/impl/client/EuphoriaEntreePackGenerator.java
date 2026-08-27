@@ -378,10 +378,12 @@ public final class EuphoriaEntreePackGenerator {
         }
     }
 
-    private static boolean isAUSM112PatchSource(String name) {
+    static boolean isAUSM112PatchSource(String name) {
         String packName = withoutZipExtension(name);
         return !packName.endsWith(AUSM_112_PATCH_SUFFIX)
-                && (packName.endsWith(EUPHORIA_PATCH_SUFFIX) || packName.startsWith("ComplementaryUnbound"));
+                && (packName.endsWith(EUPHORIA_PATCH_SUFFIX)
+                || packName.startsWith("ComplementaryUnbound")
+                || packName.startsWith("ComplementaryReimagined"));
     }
 
     private static String withoutZipExtension(String name) {

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class EuphoriaEntreeLodPatchesTest {
@@ -86,5 +87,15 @@ final class EuphoriaEntreeLodPatchesTest {
         String patched = Files.readString(pixelationLibrary, StandardCharsets.UTF_8);
         assertTrue(patched.contains("float determinant ="));
         assertTrue(patched.contains("abs(determinant) < 1.0e-10"));
+    }
+
+    @Test
+    void generates112PatchesForBothComplementaryStylesAndEuphoriaOutputs() {
+        assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource("ComplementaryUnbound_r5.8.1.zip"));
+        assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource("ComplementaryReimagined_r5.8.1.zip"));
+        assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource(
+                "ComplementaryReimagined_r5.8.1 + EuphoriaPatches_1.9.3"));
+        assertFalse(EuphoriaEntreePackGenerator.isAUSM112PatchSource(
+                "ComplementaryReimagined_r5.8.1 + AUSM 1.12.2 Patches"));
     }
 }

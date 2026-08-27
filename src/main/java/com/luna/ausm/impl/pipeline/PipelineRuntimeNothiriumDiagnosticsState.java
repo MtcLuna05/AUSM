@@ -261,15 +261,7 @@ abstract class PipelineRuntimeDiagnosticsState3 extends PipelineRuntimeDiagnosti
     }
 
     protected void logShaderlessWorldFramebufferHandoff(String stage, String detail) {
-        if (shaderlessWorldFramebufferHandoffLogs++ >= 32) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMShaderlessWorldFramebufferHandoff] stage={} frame={} detail={} gl={}",
-                stage,
-                clientRenderFrameNanos,
-                detail,
-                PipelineRuntimeState.glStateSummary());
+        // Explicit frame-handoff diagnostics are disabled outside focused investigations.
     }
 
     protected String sampleFramebufferForHandoff(int framebuffer, int width, int height) {

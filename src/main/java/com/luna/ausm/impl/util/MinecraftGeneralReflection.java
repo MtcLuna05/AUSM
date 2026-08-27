@@ -309,11 +309,7 @@ abstract class MinecraftGeneralReflection extends MinecraftGlStateReflection {
     }
 
     protected static void logHotPathHandleFailure(String route, Throwable failure) {
-        if (FAILED_HOT_PATH_HANDLES.add(route)) {
-            MainMod.LOGGER.warn(
-                    "[AUSMPerformanceRouteProbe] route={} exact-handle invocation failed; using compatibility fallback: {}",
-                    route, failure.toString());
-        }
+        FAILED_HOT_PATH_HANDLES.add(route);
     }
 
     protected static MethodHandle staticMethodHandle(Class<?> owner, String[] names, Class<?>[] parameterTypes) {

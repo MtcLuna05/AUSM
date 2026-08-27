@@ -20,8 +20,6 @@ final class PipelineCompatConstants {
                         || Loader.isModLoaded(NAUGHTHIRIUM_MOD_ID);
                 cached = loaded ? 1 : 0;
                 nothiriumLoaded = cached;
-                MainMod.LOGGER.info(
-                        "[AUSMPerformanceRouteProbe] nothiriumPresence={} cached=true", loaded);
             }
         }
         return cached != 0;

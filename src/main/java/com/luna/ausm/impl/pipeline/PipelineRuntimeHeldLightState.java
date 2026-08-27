@@ -108,7 +108,7 @@ abstract class PipelineRuntimeDiagnosticsState6 extends PipelineRuntimeDiagnosti
     }
 
     protected void logHeldColoredLightProbe(Minecraft mc) {
-        if (heldColoredLightProbeLogs >= 16 || mc == null || shaderProperties == null) {
+        if (heldColoredLightProbeLogs >= 0 || mc == null || shaderProperties == null) {
             return;
         }
         ItemStack main = self().heldMainStack(mc);

@@ -153,14 +153,7 @@ abstract class MinecraftGlStateReflection extends MinecraftGuiRenderingReflectio
      * bounded fallback probe below.
      */
     public static void logPerformanceRouteProbe() {
-        MainMod.LOGGER.info(
-                "[AUSMPerformanceRouteProbe] renderTypeHandle={} blockHandle={} tileEntityHandle={} clientTextureHandle={} forgeRenderPassHandle={}",
-                STATE_RENDER_TYPE_HANDLE != null,
-                BLOCK_FROM_STATE_HANDLE != null,
-                BLOCK_ACCESS_TILE_ENTITY_HANDLE != null,
-                CLIENT_ACTIVE_TEXTURE_HANDLE != null,
-                FORGE_RENDER_PASS_HANDLE != null
-        );
+        // Startup capability probes are disabled outside focused investigations.
     }
 
     public static BlockRendererDispatcher blockRendererDispatcher(Minecraft minecraft) {

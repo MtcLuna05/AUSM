@@ -335,7 +335,7 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
         }
         try {
             int count = self().renderShadowBlockLayer(mc, layer, partialTicks, viewEntity);
-            if (phase == WorldRenderingPhase.TERRAIN_SOLID && shadowTargetProbeLogs < 2) {
+            if (phase == WorldRenderingPhase.TERRAIN_SOLID && shadowTargetProbeLogs < 0) {
                 shadowTargetProbeLogs++;
                 MainMod.LOGGER.info(
                         "[AUSMShadowWaterDepthProbe] call={} count={} depthMask={} depthFunc={} blend={} drawFbo={}",
