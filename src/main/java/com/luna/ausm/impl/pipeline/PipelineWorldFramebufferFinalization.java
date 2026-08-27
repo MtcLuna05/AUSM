@@ -502,6 +502,14 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
         Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
 
         PipelineFrameLayerCapture.beginIfRequested(pipelineFrameId, pingPongManager.getReadBuffer());
+        // Older Complementary-style packs use colortex2 for water auxiliary
+        // data during gbuffers_water, then use its alternate texture as TAA
+        // history in COMPOSITE5.  Keep the water data available to the earlier
+        // composite passes, but switch to the untouched history texture before
+        // COMPOSITE5 copies it forward for COMPOSITE6.
+        if (program.pass() == RenderPass.COMPOSITE5 && drawBuffers.contains(Attachment.NORMAL)) {
+            pingPongManager.flipWrittenTextures(Attachment.NORMAL);
+        }
         pingPongManager.copyReadToWrite(drawBufferArray);
         pingPongManager.bindForFullscreenWrite(drawBufferArray);
         self().generateReadMipmaps(program);
