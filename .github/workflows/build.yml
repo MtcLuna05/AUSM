@@ -65,6 +65,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout release metadata
+        uses: actions/checkout@v4
+
       - name: Download built jar
         uses: actions/download-artifact@v4
         with:
@@ -79,19 +82,18 @@ jobs:
           set -euo pipefail
           test -f dist/AUSM-latest.jar
           version="$(sed -n 's/^mod_version[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
-          short_sha="${GITHUB_SHA::7}"
           versioned_jar="dist/AUSM-${version}-Java8.jar"
           if [[ ! -f "${versioned_jar}" ]]; then
             echo "Expected release AUSM jar not found: ${versioned_jar}" >&2
             find dist -maxdepth 1 -type f -print >&2 || true
             exit 1
           fi
-          release_tag="v${version}+${short_sha}"
+          release_tag="AUSM-${version}-Java8"
           if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "${release_tag}" "${versioned_jar}" --repo "${GITHUB_REPOSITORY}" --clobber
           else
             gh release create "${release_tag}" "${versioned_jar}" --repo "${GITHUB_REPOSITORY}" \
-              --title "AUSM ${version} (${short_sha})" \
+              --title "AUSM ${version} Java 8" \
               --notes "Build from commit ${GITHUB_SHA}." \
               --prerelease \
               --target "${GITHUB_SHA}"
