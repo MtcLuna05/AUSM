@@ -1522,3 +1522,11 @@ Temporary local shaderpack test patches:
     ratios, return `-1` outside those modes, and `maxPlayerArmor` reports
     Iris' `50.0` baseline. This prevents shaderpack damage/oxygen/armor
     effects from being scaled against 1.12's raw HUD values.
+    Follow-up: extended AUSM's managed 1.12.2 shaderpack derivative generation
+    to plain Complementary Reimagined archives, alongside the existing
+    Complementary Unbound and Euphoria-derived inputs. A generated
+    `+ AUSM 1.12.2 Patches` directory is never selected as a source again, so
+    startup remains idempotent and users can retain the original archive. This
+    is AUSM packaging compatibility for the local 1.12.2 overlay rather than
+    an upstream Iris renderer port; the matching regression test covers
+    Unbound, Reimagined, Euphoria output, and derivative exclusion.

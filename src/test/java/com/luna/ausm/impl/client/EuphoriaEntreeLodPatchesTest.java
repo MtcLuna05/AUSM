@@ -86,7 +86,17 @@ final class EuphoriaEntreeLodPatchesTest {
 
         String patched = Files.readString(pixelationLibrary, StandardCharsets.UTF_8);
         assertTrue(patched.contains("float determinant ="));
-        assertTrue(patched.contains("abs(determinant) < 1.0e-10"));
+        assertTrue(patched.contains("abs(determinant) <= max(1.0e-8"));
+    }
+
+    @Test
+    void generates112PatchesForBothComplementaryStylesAndEuphoriaOutputs() {
+        assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource("ComplementaryUnbound_r5.8.1.zip"));
+        assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource("ComplementaryReimagined_r5.8.1.zip"));
+        assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource(
+                "ComplementaryReimagined_r5.8.1 + EuphoriaPatches_1.9.3"));
+        assertFalse(EuphoriaEntreePackGenerator.isAUSM112PatchSource(
+                "ComplementaryReimagined_r5.8.1 + AUSM 1.12.2 Patches"));
     }
 
     @Test

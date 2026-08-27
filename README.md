@@ -1,39 +1,72 @@
 # Actually Usable Shader Mod
 
-AUSM is an experimental shader pipeline for Minecraft 1.12.2 on Cleanroom. It aims to make modern shader-pack behavior usable on the 1.12 rendering stack by combining OptiFine-style shader-pack compatibility with an Iris-inspired pipeline model.
-
-The project is not a finished OptiFine replacement yet. Shader-pack compatibility is improving, but visual parity depends on the pack and on the parts of the Iris/OptiFine feature surface that have already been ported.
-
-## What It Does
-
-- Loads shader packs from the normal `shaderpacks/` folder as zip files or unpacked folders.
-- Provides an in-game shader-pack screen with apply, refresh, enable/disable, folder open, drag/drop import, preview hiding, and per-pack settings.
-- Saves the selected pack and enabled state in `config/ausm/shaders.properties`.
-- Saves per-pack option overrides in `config/ausm/shader-options/`.
-- Exposes keybinds for opening the shader UI, reloading shaders, and toggling shaders.
-- Backports an Iris-style render-stage model so shader-facing `renderStage` behavior can line up with modern packs where possible.
-- Parses and applies a growing set of OptiFine/Iris shader-pack metadata, including options, profiles, screens, draw buffers, alpha/blend directives, custom textures, render targets, compute metadata, image declarations, and SSBO declarations.
-- Keeps an auditable Iris migration trail in `IRIS_PORTING_LOG.md`.
+AUSM is a shader pipeline for Minecraft 1.12.2 for both Forge and Cleanroom. It aims to make modern shaderpacks usable on Minecraft 1.12.2 while retaining broad compatibility with OptiFine/Iris shaderpack syntax.
 
 ## Requirements
 
 - Minecraft 1.12.2
-- Cleanroom Loader, currently developed against `0.5.12-alpha`
-- A Java runtime compatible with the target modpack and Cleanroom setup
-- For development builds: JDK 25 is used by the Gradle toolchain, with Java 21 bytecode targeting in the current build scripts
+- Either Forge `14.23.5.2860` or Cleanroom `0.5.12-alpha`
+- Java 8 at runtime for Forge.
+- Java 25 at runtime for Cleanroom.
+- For development builds: JDK 25 is used by Gradle; the release pipeline downgrades and shades production classes for Java 8.
 
-AUSM is not designed to be installed alongside OptiFine. Both mods target the same shader/rendering surface, so running both together should be treated as unsupported unless you are intentionally debugging a conflict.
+## Mod Compatibility
+
+AUSM _cannot_ be installed with OptiFine. Both mods target the same shader/rendering surface, so running both together should be treated as unsupported unless you are intentionally debugging a conflict.
+
+You can however install mods such as (non-exhaustive list):
+
+- Celeritas
+- Nothirium
+- LoliASM
+- Naughtirium
+- Lumenized
+- Efficient Entities
+- Entity Culling
+- Render Lib
+- Better Portals
+
+When possible, AUSM will use their optimization paths. Keep in mind that support depends on the installed version of said mod.
+
+## Additional Features
+
+AUSM also comes with more than just a shader pipeline. It brings with it a fully custom shader list and shader option menu, made to prioritize player experience while leaving the same exact logic used by other mods to load settings.
+
+The mod doesn't stop at merely supporting existing shaders, it also brings some new API hooks including:
+
+- Fully functional LOD system, that dynamically turns off shader rendering on distant terrain. Shaderpack makers may also specify themselves what should happen at each LOD level.
+- Better sky handling, supporting both Astral Sorcery and Botania's void world skybox rendering, with full shader ability to override them.
+
+Some shaderpacks, namely Complementary Unbound / Reimagined, when installed alongside AUSM, will receive some patches to better integrate them with the 1.12.2 environment:
+
+- Custom Astral Sorcery constellation rendering, including a setting to render them using their ritual color. (so Aevitas would render green etc)
+- Colored light support for some mod specific blocks, such as Thaumcraft's Nitor or ProjectRed Illumination's blocks.
+- Colored dynamic light support, for both vanilla and modded blocks.
+
+If that's not enough to hook you in, the mod also features some improvements even when not having shaders on:
+
+- Dynamic light support, including in game editor. (shaderless only, shaderpacks may have their own dynamic lights logic)
+- Broad bloom support, using both automatic extraction through pixel luminosity but also through Lumenized-style packs. (Lumenized is not required, but it may bring performance improvements if it is)
+- A number of optimizations that may increase client performance.
 
 ## Installation
 
-1. Download the newest `AUSM-<version>-Java25.jar` from the GitHub releases page.
+1. Download the newest AUSM release:
+    - `AUSM-<version>-Java8.jar` for Forge.
+    - `AUSM-<version>-Java25.jar` for Cleanroom.
 2. Put the jar in the instance `mods/` folder.
 3. Start the game once so AUSM can create `shaderpacks/` and `config/ausm/` if they do not already exist.
-4. Put shader-pack zip files or folders in `shaderpacks/`.
-5. Open the AUSM shader screen in game and select a pack.
+4. Put shader-pack zip files or folders in `shaderpacks/`. You may also install shaderpacks through your launcher, if it supports downloading them in the folder by itself.
+5. Open the AUSM shader screen in game and select a pack. You may open it both through a keybind (see below) or by going in the Pause Screen > Options > Shader Settings.
 
 Builds:
 https://github.com/MtcLuna05/AUSM/releases
+
+## Compatibility Scope
+
+While in a perfect world this mod would be a de-facto port of Iris for 1.12.2 with additional features, the difference between this version and modern ones makes it impossible to achieve true parity.
+
+Even so, AUSM aims to make many modern shaderpacks usable on 1.12.2 with minimal visual compromises.
 
 ## Controls
 
@@ -47,14 +80,6 @@ Default keybinds are registered under the `AUSM Shaders` category:
 
 These can be changed from Minecraft's normal controls menu.
 
-## Shader Pack Notes
-
-AUSM accepts both folder shader packs and `.zip` shader packs. The selected pack name is persisted, and missing packs automatically fall back to `OFF` instead of leaving the renderer in a stale state.
-
-Per-pack settings are read from shader-pack metadata and stored separately from the pack itself. This keeps local overrides out of the shader-pack archive and allows the same pack to be reloaded with different option values.
-
-Compatibility is still under active development. If a pack fails to compile, AUSM reports shader compile failures in chat and logs the compile details. Some modern shader-pack features are parsed before they are fully wired into rendering, so a parsed directive does not always imply complete visual support yet.
-
 ## Development
 
 Build the mod with:
@@ -63,19 +88,4 @@ Build the mod with:
 ./gradlew --no-daemon build
 ```
 
-The distributable remapped jar is written to `build/libs/AUSM-<version>-Java25.jar`. The development jar is also produced and uses the `-dev` classifier.
-
-Useful Gradle tasks:
-
-| Task | Purpose |
-| --- | --- |
-| `build` | Compile, remap, test, and assemble jars |
-| `runClient` | Launch a development client |
-| `runServer` | Launch a development server |
-| `genSources` | Generate Minecraft sources for IDE navigation |
-
-The repository uses GitHub Actions to build every push to `master`, upload an `AUSM-latest` artifact, and publish an immutable prerelease tagged as `v<mod_version>+<short_sha>` with `AUSM-<mod_version>-Java25.jar` attached.
-
-## Repository Hygiene
-
-This repository intentionally does not include decompiled OptiFine source or extracted OptiFine patch trees. Shader-pack compatibility work should be implemented as original AUSM code, documented porting notes, or narrow references that can be audited in `IRIS_PORTING_LOG.md`.
+The distributable Java X jar is written to `build/libs/AUSM-<version>-JavaX.jar`, where X is either 8 or 25 depending on which version of the mod is being targeted. Intermediate development and remapped jars are also produced for debugging.
