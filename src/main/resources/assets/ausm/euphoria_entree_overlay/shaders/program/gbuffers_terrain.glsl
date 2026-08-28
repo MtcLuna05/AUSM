@@ -30,7 +30,6 @@
 
 flat in int mat;
 flat in int blockLightEmission;
-flat in float ausmFramedLuminousBase;
 
 in vec2 texCoord;
 #ifdef GBUFFERS_COLORWHEEL
@@ -361,13 +360,6 @@ void main() {
     }
     #endif
 
-    if (abs(ausmFramedLuminousBase - 150.0) < 0.5) {
-        noSmoothLighting = true;
-        noDirectionalShading = true;
-        noVanillaAO = true;
-        emission = 2.5;
-    }
-
     #include "/lib/materials/materialHandling/terrainMaterials.glsl"
 
     #ifdef SNOWY_WORLD
@@ -391,7 +383,7 @@ void main() {
     #endif
 
     #if defined COATED_TEXTURES && defined IPBR
-        if (abs(ausmFramedLuminousBase - 150.0) >= 0.5 && emission <= 0.00001) {
+        if (emission <= 0.00001) {
             CoatTextures(color.rgb, noiseFactor, playerPos, doTileRandomisation);
         }
     #endif
@@ -598,7 +590,6 @@ void main() {
 
 flat out int mat;
 flat out int blockLightEmission;
-flat out float ausmFramedLuminousBase;
 
 out vec2 texCoord;
 #ifdef GBUFFERS_COLORWHEEL
@@ -704,7 +695,6 @@ void main() {
     // #endif
 
     mat = int(mc_Entity.x + 0.5);
-    ausmFramedLuminousBase = mc_Entity.w;
 
     #if !(defined GBUFFERS_COLORWHEEL || defined GBUFFERS_VOXELS)
         if ((mat == 10132 || mat == 10133)){ // Improve Patrix Resource pack extra grass block model

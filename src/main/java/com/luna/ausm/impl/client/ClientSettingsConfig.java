@@ -11,6 +11,7 @@ import java.util.Properties;
 public final class ClientSettingsConfig {
     private static final String PORTAL_SHADERS_KEY = "portalShaders";
     private static final String AUTOMATIC_SHADER_DISABLING_KEY = "automaticShaderDisabling";
+    private static final String UPDATE_CHECKER_KEY = "updateChecker";
     private static final String SHADERLESS_BLOOM_INTENSITY_KEY = "shaderlessBloomIntensity";
     private static final String SHADERED_LOD_1_RADIUS_BLOCKS_KEY = "shaderedLod1RadiusBlocks";
     private static final String SHADERED_LOD_2_RADIUS_BLOCKS_KEY = "shaderedLod2RadiusBlocks";
@@ -28,6 +29,7 @@ public final class ClientSettingsConfig {
     private final Path configFile;
     private volatile boolean portalShaders = true;
     private volatile boolean automaticShaderDisabling = true;
+    private volatile boolean updateChecker = true;
     private volatile float shaderlessBloomIntensity = DEFAULT_SHADERLESS_BLOOM_INTENSITY;
     private volatile int shaderedLod1RadiusBlocks = DEFAULT_LOD_1_RADIUS_BLOCKS;
     private volatile int shaderedLod2RadiusBlocks = DEFAULT_LOD_2_RADIUS_BLOCKS;
@@ -52,6 +54,7 @@ public final class ClientSettingsConfig {
 
         boolean shouldWriteMissingDefaults = !properties.containsKey(PORTAL_SHADERS_KEY)
                 || !properties.containsKey(AUTOMATIC_SHADER_DISABLING_KEY)
+                || !properties.containsKey(UPDATE_CHECKER_KEY)
                 || !properties.containsKey(SHADERLESS_BLOOM_INTENSITY_KEY)
                 || !properties.containsKey(SHADERED_LOD_1_RADIUS_BLOCKS_KEY)
                 || !properties.containsKey(SHADERED_LOD_2_RADIUS_BLOCKS_KEY)
@@ -62,6 +65,7 @@ public final class ClientSettingsConfig {
         automaticShaderDisabling = Boolean.parseBoolean(
                 properties.getProperty(AUTOMATIC_SHADER_DISABLING_KEY, "true").trim()
         );
+        updateChecker = Boolean.parseBoolean(properties.getProperty(UPDATE_CHECKER_KEY, "true").trim());
         shaderlessBloomIntensity = parseFloat(
                 properties,
                 SHADERLESS_BLOOM_INTENSITY_KEY,
@@ -75,9 +79,10 @@ public final class ClientSettingsConfig {
         shaderedLod4RadiusBlocks = parseLodRadius(properties, SHADERED_LOD_4_RADIUS_BLOCKS_KEY, DEFAULT_LOD_4_RADIUS_BLOCKS);
         normalizeLodRadii();
         MainMod.LOGGER.info(
-                "[ClientSettings] Loaded config: portalShaders={} automaticShaderDisabling={} shaderlessBloomIntensity={} shaderedLodRadii=[{}, {}, {}, {}]",
+                "[ClientSettings] Loaded config: portalShaders={} automaticShaderDisabling={} updateChecker={} shaderlessBloomIntensity={} shaderedLodRadii=[{}, {}, {}, {}]",
                 portalShaders,
                 automaticShaderDisabling,
+                updateChecker,
                 shaderlessBloomIntensity,
                 shaderedLod1RadiusBlocks,
                 shaderedLod2RadiusBlocks,
@@ -110,6 +115,18 @@ public final class ClientSettingsConfig {
             return;
         }
         automaticShaderDisabling = enabled;
+        save();
+    }
+
+    public boolean updateCheckerEnabled() {
+        return updateChecker;
+    }
+
+    public void setUpdateCheckerEnabled(boolean enabled) {
+        if (updateChecker == enabled) {
+            return;
+        }
+        updateChecker = enabled;
         save();
     }
 
@@ -166,6 +183,7 @@ public final class ClientSettingsConfig {
         Properties properties = new Properties();
         properties.setProperty(PORTAL_SHADERS_KEY, Boolean.toString(portalShaders));
         properties.setProperty(AUTOMATIC_SHADER_DISABLING_KEY, Boolean.toString(automaticShaderDisabling));
+        properties.setProperty(UPDATE_CHECKER_KEY, Boolean.toString(updateChecker));
         properties.setProperty(SHADERLESS_BLOOM_INTENSITY_KEY, Float.toString(shaderlessBloomIntensity));
         properties.setProperty(SHADERED_LOD_1_RADIUS_BLOCKS_KEY, Integer.toString(shaderedLod1RadiusBlocks));
         properties.setProperty(SHADERED_LOD_2_RADIUS_BLOCKS_KEY, Integer.toString(shaderedLod2RadiusBlocks));
@@ -191,6 +209,8 @@ public final class ClientSettingsConfig {
                     portalShaders=true
                     # If false, a shaderpack that was enabled on shutdown is restored on the next world load.
                     automaticShaderDisabling=true
+                    # Check GitHub releases after loading a world and notify only when a newer AUSM version exists.
+                    updateChecker=true
                     # Shaderless emissive bloom multiplier.
                     shaderlessBloomIntensity=0.85
                     # Shadered quality LOD boundaries in blocks. Foliage waving stops at LOD 2.

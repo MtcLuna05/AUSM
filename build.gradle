@@ -740,6 +740,14 @@ tasks.register('publishCurseForge') {
         }
         String changelog = curseForgeSetting('curseforge_changelog', 'CURSEFORGE_CHANGELOG')
         if (changelog.isEmpty()) {
+            ByteArrayOutputStream changelogOutput = new ByteArrayOutputStream()
+            exec {
+                commandLine 'bash', 'scripts/extract-changelog.sh', '--player'
+                standardOutput = changelogOutput
+            }
+            changelog = changelogOutput.toString('UTF-8').trim()
+        }
+        if (changelog.isEmpty()) {
             changelog = "Release ${project.version}"
         }
 

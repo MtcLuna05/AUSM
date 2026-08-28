@@ -527,7 +527,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     @Unique
     private void ausm$recordPipelineEmissionBloomMetadata(BlockRenderContext.State blockState) {
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)
-                || blockState.blockEmission() <= 0) {
+                || blockState.vanillaLightmapEmission() <= 0) {
             return;
         }
         ausm$markCurrentContextShaderlessBloomMetadata();

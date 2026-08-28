@@ -149,6 +149,7 @@ abstract class PipelineRuntimeUniformState extends PipelineRuntimeValueTypes {
         uniformRegistry.registerInt("moonPhase", () -> PipelineRuntimeState.renderWorld(mc) != null ? MinecraftReflectionCompat.callInt(PipelineRuntimeState.renderWorld(mc), new String[]{"func_72853_d", "getMoonPhase"}, MinecraftReflectionCompat.NO_PARAMETERS, 0) : 0);
         uniformRegistry.registerInt("frameCounter", () -> (int) (pipelineFrameId % 720720L));
         uniformRegistry.registerInt("frameMod", () -> (int) (pipelineFrameId & 15L));
+        uniformRegistry.registerFloat("framemod8", () -> (float) (pipelineFrameId & 7L));
         uniformRegistry.registerFloat("framemod2", () -> (float) (pipelineFrameId & 1L));
         // The generated 1.12.2 patch folders inject this opt-in helper into
         // terrain and water stages. It is harmless for packs that do not use it.
@@ -337,6 +338,7 @@ abstract class PipelineRuntimeUniformState extends PipelineRuntimeValueTypes {
         uniformRegistry.registerInt("colortex7", () -> TextureBinder.COLORTEX7_TEXTURE_UNIT);
         uniformRegistry.registerInt("colortex8", () -> TextureBinder.COLORTEX8_TEXTURE_UNIT);
         uniformRegistry.registerInt("colortex9", () -> TextureBinder.COLORTEX9_TEXTURE_UNIT);
+        uniformRegistry.registerInt("colortex10", () -> TextureBinder.COLORTEX10_TEXTURE_UNIT);
         uniformRegistry.registerInt("colortex16", () -> TextureBinder.COLORTEX16_TEXTURE_UNIT);
         self().registerAttachmentSizeUniforms();
 

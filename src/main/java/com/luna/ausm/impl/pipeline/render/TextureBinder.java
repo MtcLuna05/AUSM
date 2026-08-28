@@ -41,8 +41,9 @@ public class TextureBinder {
     public static final int NOISETEX_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT;
     public static final int COLORTEX8_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 1;
     public static final int COLORTEX9_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 2;
-    public static final int COLORTEX16_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 3;
-    public static final int CENTER_DEPTH_SMOOTH_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 4;
+    public static final int COLORTEX10_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 3;
+    public static final int COLORTEX16_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 4;
+    public static final int CENTER_DEPTH_SMOOTH_TEXTURE_UNIT = ShaderBindingLayout.NOISE_TEXTURE_UNIT + 5;
     /**
      * Spare gbuffers unit used only while masking item glint against the block/item atlas.
      */
@@ -103,6 +104,7 @@ public class TextureBinder {
         bindAttachment(readBuffer, Attachment.AUX4, COLORTEX7_TEXTURE_UNIT);
         bindAttachment(readBuffer, Attachment.AUX5, COLORTEX8_TEXTURE_UNIT);
         bindAttachment(readBuffer, Attachment.AUX6, COLORTEX9_TEXTURE_UNIT);
+        bindAttachment(readBuffer, Attachment.AUX7, COLORTEX10_TEXTURE_UNIT);
 
         bindRawTexture(DEPTHTEX0_TEXTURE_UNIT, readBuffer.getDepthTexture());
         bindDepthTexture(readBuffer, DeferredFramebuffer.DEPTHTEX1_SNAPSHOT, DEPTHTEX1_TEXTURE_UNIT);
@@ -251,6 +253,7 @@ public class TextureBinder {
             case AUX4 -> COLORTEX7_TEXTURE_UNIT;
             case AUX5 -> COLORTEX8_TEXTURE_UNIT;
             case AUX6 -> COLORTEX9_TEXTURE_UNIT;
+            case AUX7 -> COLORTEX10_TEXTURE_UNIT;
         };
     }
 
@@ -266,6 +269,7 @@ public class TextureBinder {
                     case 7 -> COLORTEX7_TEXTURE_UNIT;
                     case 8 -> COLORTEX8_TEXTURE_UNIT;
                     case 9 -> COLORTEX9_TEXTURE_UNIT;
+                    case 10 -> COLORTEX10_TEXTURE_UNIT;
                     case 16 -> COLORTEX16_TEXTURE_UNIT;
                     default -> -1;
                 };
@@ -433,13 +437,6 @@ public class TextureBinder {
         }
         shaderOnlyFixedFunctionTextureUnitsDirty = false;
         restoreDefaultTextureUnit();
-        MainMod.LOGGER.info(
-                "[AUSMShaderlessTextureUnitRepair] checked=2..{} enabledBefore={} enabledAfter={} active={} clientActive={}",
-                unitCount - 1,
-                enabledBefore.length() == 0 ? "none" : enabledBefore,
-                enabledAfter.length() == 0 ? "none" : enabledAfter,
-                GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE),
-                GL11.glGetInteger(GL13.GL_CLIENT_ACTIVE_TEXTURE));
     }
 
     public static void markShaderOnlyFixedFunctionTextureUnitsDirty() {

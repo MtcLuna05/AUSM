@@ -240,6 +240,18 @@ void main() {
         color.rgb = AusmApplyComplementaryCelestials(color.rgb, ausmStarlessSky, ausmViewPos.xyz, sunVec, upVec);
     }
 
+    // Dreadlands uses AUSM's fullscreen sky backing, which is deliberately
+    // depth-disabled.  Do not leave Complementary's sun/moon disc in that
+    // backing: it would otherwise appear through terrain.  Its red dome is
+    // authored here instead of relying on vanilla's absent sky vertices.
+    #if defined AUSM_DREADLANDS
+        float ausmDreadlandsHeight = smoothstep(-0.34, 0.78, VdotU);
+        vec3 ausmDreadlandsHorizon = vec3(0.17, 0.010, 0.012);
+        vec3 ausmDreadlandsZenith = vec3(0.52, 0.040, 0.018);
+        color.rgb = mix(ausmDreadlandsHorizon, ausmDreadlandsZenith, ausmDreadlandsHeight);
+        color.rgb *= 1.0 - rainFactor2 * 0.45;
+    #endif
+
     color.rgb *= 1.0 - maxBlindnessDarkness;
 
     #ifdef COLOR_CODED_PROGRAMS

@@ -9,6 +9,8 @@ import net.minecraftforge.fml.common.Loader;
 
 public final class ShaderEnvironmentDefines {
     private static final int SIMPLE_VOID_WORLD_DIMENSION_ID = 43;
+    private static final int ABYSSAL_WASTELAND_DIMENSION_ID = 50;
+    private static final int DREADLANDS_DIMENSION_ID = 51;
     public static final double HAND_DEPTH = 0.125D;
 
     private ShaderEnvironmentDefines() {
@@ -55,10 +57,10 @@ public final class ShaderEnvironmentDefines {
         if (dimensionId == SIMPLE_VOID_WORLD_DIMENSION_ID) {
             defines.put("AUSM_SIMPLE_VOID_WORLD", "1");
         }
-        if (dimensionId == 50) {
+        if (dimensionId == ABYSSAL_WASTELAND_DIMENSION_ID) {
             defines.put("AUSM_ABYSSAL_WASTELAND", "1");
         }
-        if (dimensionId == 51) {
+        if (dimensionId == DREADLANDS_DIMENSION_ID) {
             defines.put("AUSM_DREADLANDS", "1");
         }
 

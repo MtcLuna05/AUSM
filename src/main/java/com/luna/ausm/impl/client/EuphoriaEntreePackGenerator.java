@@ -59,7 +59,7 @@ public final class EuphoriaEntreePackGenerator {
     private static final String WORK_NAME = ".ausm-entree-euphoria-work";
     private static final String AUSM_112_PATCH_SUFFIX = " + AUSM 1.12.2 Patches";
     private static final String AUSM_112_PATCH_MARKER = ".ausm-1.12.2-patches-version";
-    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v11";
+    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v13";
     private static final String LOD_API_PROPERTY = "ausm.lod.api=1";
     private static final String LOD_HELPER = "shaders/lib/ausm/distantLod.glsl";
     private static final String LOD_HELPER_INCLUDE = "#include \"/lib/ausm/distantLod.glsl\"";
