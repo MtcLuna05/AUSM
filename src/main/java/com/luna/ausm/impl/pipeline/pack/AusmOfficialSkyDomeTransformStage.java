@@ -52,7 +52,6 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                 uniform sampler2D colortex0;
                 uniform sampler2D depthtex0;
                 uniform sampler2D depthtex1;
-                uniform sampler2D depthtex2;
                 uniform vec3 skyColor;
                 uniform float rainFactor;
                 uniform int worldTime;
@@ -176,13 +175,9 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                 float ausmOfficialSceneDepth(vec2 uv) {
                     float liveDepth = texture2D(depthtex0, uv).r;
                     float preTranslucentDepth = texture2D(depthtex1, uv).r;
-                    float postHandDepth = texture2D(depthtex2, uv).r;
                     float sceneDepth = liveDepth;
                     if (preTranslucentDepth > 0.0001 && preTranslucentDepth < 0.999) {
                         sceneDepth = min(sceneDepth, preTranslucentDepth);
-                    }
-                    if (postHandDepth > 0.0001 && postHandDepth < 0.999) {
-                        sceneDepth = min(sceneDepth, postHandDepth);
                     }
                     return sceneDepth;
                 }
@@ -211,7 +206,6 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
         appendUniformIfMissing(preamble, source, "sampler2D", "colortex0");
         appendUniformIfMissing(preamble, source, "sampler2D", "depthtex0");
         appendUniformIfMissing(preamble, source, "sampler2D", "depthtex1");
-        appendUniformIfMissing(preamble, source, "sampler2D", "depthtex2");
         appendUniformIfMissing(preamble, source, "vec3", "skyColor");
         appendUniformIfMissing(preamble, source, "float", "rainFactor");
         appendUniformIfMissing(preamble, source, "int", "worldTime");
@@ -226,7 +220,7 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
         appendUniformIfMissing(preamble, source, "vec3", "sunPosition");
         appendUniformIfMissing(preamble, source, "vec3", "upPosition");
         appendUniformIfMissing(preamble, source, "mat4", "gbufferProjectionInverse");
-        if (!OFFICIAL_FINAL_COLOR_DECLARATION.matcher(source).find()) {
+        if (!hasFinalColorDefinition(source)) {
             preamble.append("vec4 ausmOfficialFinalColor;\n");
         }
         if (preamble.length() == 0) {
@@ -242,10 +236,28 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
     }
 
     private static void appendUniformIfMissing(StringBuilder uniforms, String source, String type, String name) {
-        Pattern declaration = Pattern.compile("(?m)^\\s*uniform\\s+\\w+\\s+" + Pattern.quote(name) + "\\s*;");
-        if (!declaration.matcher(source).find()) {
+        if (!hasShaderDefinition(source, name)) {
             uniforms.append("uniform ").append(type).append(' ').append(name).append(";\n");
         }
+    }
+
+    private static boolean hasShaderDefinition(String source, String name) {
+        String identifier = "\\b" + Pattern.quote(name) + "\\b";
+        Pattern macro = Pattern.compile("(?m)^\\s*#\\s*define\\s+" + identifier);
+        if (macro.matcher(source).find()) {
+            return true;
+        }
+        Pattern declaration = Pattern.compile(
+                "(?ms)^\\s*(?:layout\\s*\\([^;]*?\\)\\s*)?uniform\\b[^;]*" + identifier
+                        + "(?:\\s*\\[[^]]*])?\\s*(?:,|;)");
+        return declaration.matcher(source).find();
+    }
+
+    private static boolean hasFinalColorDefinition(String source) {
+        if (hasShaderDefinition(source, "ausmOfficialFinalColor")) {
+            return true;
+        }
+        return OFFICIAL_FINAL_COLOR_DECLARATION.matcher(source).find();
     }
 
     private static String officialCelestialFunctionsSource() {
@@ -433,13 +445,9 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
                 float ausmOfficialSceneDepth(vec2 uv) {
                     float liveDepth = texture2D(depthtex0, uv).r;
                     float preTranslucentDepth = texture2D(depthtex1, uv).r;
-                    float postHandDepth = texture2D(depthtex2, uv).r;
                     float sceneDepth = liveDepth;
                     if (preTranslucentDepth > 0.0001 && preTranslucentDepth < 0.999) {
                         sceneDepth = min(sceneDepth, preTranslucentDepth);
-                    }
-                    if (postHandDepth > 0.0001 && postHandDepth < 0.999) {
-                        sceneDepth = min(sceneDepth, postHandDepth);
                     }
                     return sceneDepth;
                 }

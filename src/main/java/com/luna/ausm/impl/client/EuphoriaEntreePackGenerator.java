@@ -63,6 +63,7 @@ public final class EuphoriaEntreePackGenerator {
     private static final String LOD_API_PROPERTY = "ausm.lod.api=1";
     private static final String LOD_HELPER = "shaders/lib/ausm/distantLod.glsl";
     private static final String LOD_HELPER_INCLUDE = "#include \"/lib/ausm/distantLod.glsl\"";
+    private static final String VOLUMETRIC_LIGHT_LIBRARY = "shaders/lib/atmospherics/volumetricLight/volumetricLight.glsl";
     private static final String PIXELATION_LIBRARY = "shaders/lib/misc/pixelation.glsl";
     private static final String FXAA_LIBRARY = "shaders/lib/antialiasing/fxaa.glsl";
     private static final int RETRY_INTERVAL_TICKS = 20;
@@ -398,6 +399,7 @@ public final class EuphoriaEntreePackGenerator {
         ensureBundledLodHelper(patchPack.resolve(LOD_HELPER));
         ensureStablePixelationLibrary(patchPack.resolve(PIXELATION_LIBRARY));
         ensureDriverSafeFxaaLibrary(patchPack.resolve(FXAA_LIBRARY));
+        ensureClampedVolumetricLight(patchPack.resolve(VOLUMETRIC_LIGHT_LIBRARY));
         EuphoriaEntreeLodPatches.inject(patchPack);
         injectLodHelperIntoProgram(patchPack.resolve("shaders/program/gbuffers_terrain.glsl"));
         injectLodHelperIntoProgram(patchPack.resolve("shaders/program/gbuffers_water.glsl"));
@@ -513,11 +515,10 @@ public final class EuphoriaEntreePackGenerator {
             return;
         }
         String source = Files.readString(fxaaLibrary, StandardCharsets.UTF_8);
-        if (source.contains("FXAAClampPixel")) {
-            return;
-        }
         String helper = """
                 // AUSM: framebuffer reads outside its bounds are undefined. Clamp all FXAA samples.
+                // FXAA branches per pixel, so use explicit base-level sampling rather than
+                // implicit derivatives, which are undefined in divergent control flow.
                 ivec2 FXAAClampPixel(ivec2 pixel) {
                     return clamp(pixel, ivec2(0), ivec2(viewWidth - 1, viewHeight - 1));
                 }
@@ -532,7 +533,11 @@ public final class EuphoriaEntreePackGenerator {
                 }
 
                 """;
-        String patched = source.replace("void FXAA311(inout vec3 color) {", helper + "void FXAA311(inout vec3 color) {")
+        String patched = source;
+        if (!patched.contains("FXAAClampPixel")) {
+            patched = patched.replace("void FXAA311(inout vec3 color) {", helper + "void FXAA311(inout vec3 color) {");
+        }
+        patched = patched
                 .replace("texelFetch(colortex3, texelCoord + ivec2( 0, -1), 0).rgb", "texture2D(colortex3, FXAASafeTexelUv(texelCoord + ivec2( 0, -1))).rgb")
                 .replace("texelFetch(colortex3, texelCoord + ivec2( 0,  1), 0).rgb", "texture2D(colortex3, FXAASafeTexelUv(texelCoord + ivec2( 0,  1))).rgb")
                 .replace("texelFetch(colortex3, texelCoord + ivec2(-1,  0), 0).rgb", "texture2D(colortex3, FXAASafeTexelUv(texelCoord + ivec2(-1,  0))).rgb")
@@ -549,12 +554,51 @@ public final class EuphoriaEntreePackGenerator {
                 .replace("texelFetch(depthtex0, texelCoordM, 0).r", "texture2D(depthtex0, FXAASafeTexelUv(texelCoordM)).r")
                 .replace("texelFetch(depthtex1, texelCoordM, 0).r", "texture2D(depthtex1, FXAASafeTexelUv(texelCoordM)).r")
                 .replace("texelFetch(colortex2, texelCoord, 0).rgb", "texture2D(colortex2, FXAASafeTexelUv(texelCoord)).rgb");
+        String[] explicitLodSamples = {
+                "colortex3, FXAASafeTexelUv(texelCoord + ivec2( 0, -1))",
+                "colortex3, FXAASafeTexelUv(texelCoord + ivec2( 0,  1))",
+                "colortex3, FXAASafeTexelUv(texelCoord + ivec2(-1,  0))",
+                "colortex3, FXAASafeTexelUv(texelCoord + ivec2( 1,  0))",
+                "colortex3, FXAASafeTexelUv(texelCoord + ivec2(-1, -1))",
+                "colortex3, FXAASafeTexelUv(texelCoord + ivec2( 1,  1))",
+                "colortex3, FXAASafeTexelUv(texelCoord + ivec2(-1,  1))",
+                "colortex3, FXAASafeTexelUv(texelCoord + ivec2( 1, -1))",
+                "colortex3, FXAASafeUv(uv1)", "colortex3, FXAASafeUv(uv2)", "colortex3, FXAASafeUv(finalUv)",
+                "depthtex0, FXAASafeTexelUv(texelCoord)", "depthtex1, FXAASafeTexelUv(texelCoord)",
+                "depthtex0, FXAASafeTexelUv(texelCoordM)", "depthtex1, FXAASafeTexelUv(texelCoordM)",
+                "colortex2, FXAASafeTexelUv(texelCoord)"
+        };
+        for (String sample : explicitLodSamples) {
+            patched = patched.replace("texture2D(" + sample + ")", "texture2DLod(" + sample + ", 0.0)");
+        }
         if (!patched.contains("FXAAClampPixel")) {
             MainMod.LOGGER.warn("[AUSM] Could not apply the driver-safe FXAA patch; keeping the upstream shader");
             return;
         }
+        if (patched.equals(source)) {
+            return;
+        }
         Files.writeString(fxaaLibrary, patched, StandardCharsets.UTF_8);
-        MainMod.LOGGER.info("[AUSM] Applied clamped, driver-safe FXAA sampling");
+        MainMod.LOGGER.info("[AUSM] Applied clamped, explicit-LOD FXAA sampling");
+    }
+
+    private static void ensureClampedVolumetricLight(Path volumetricLightLibrary) throws IOException {
+        if (!Files.isRegularFile(volumetricLightLibrary)) {
+            return;
+        }
+        String source = Files.readString(volumetricLightLibrary, StandardCharsets.UTF_8);
+        if (source.contains("AUSM_CLAMPED_VOLUMETRIC_LIGHT")) {
+            return;
+        }
+        String anchor = "    volumetricLight.rgb *= vlMult;";
+        if (!source.contains(anchor)) {
+            return;
+        }
+        String patch = anchor + "\n\n"
+                + "    // AUSM_CLAMPED_VOLUMETRIC_LIGHT: malformed 1.12 shadow-color\n"
+                + "    // samples must not become unbounded in-scattering radiance.\n"
+                + "    volumetricLight.rgb = clamp(volumetricLight.rgb, vec3(0.0), vec3(1.0));";
+        Files.writeString(volumetricLightLibrary, source.replace(anchor, patch), StandardCharsets.UTF_8);
     }
 
     private static void injectLodHelperIntoProgram(Path program) throws IOException {

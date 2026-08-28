@@ -17,6 +17,16 @@
             vec3 skyColorTweaked = skyColor;
         #endif
 
+        // Keep the two AbyssalCraft dimensions in the same bleak sky family.
+        // Dreadlands uses the Wasteland's low-contrast base, then shifts only
+        // its hue toward the authored blood-red atmosphere.
+        #ifdef AUSM_ABYSSAL_WASTELAND
+            skyColorTweaked = mix(skyColorTweaked, vec3(0.035, 0.105, 0.145), 0.72);
+        #elif defined AUSM_DREADLANDS
+            vec3 ausmAbyssalBaseSky = mix(skyColorTweaked, vec3(0.035, 0.105, 0.145), 0.72);
+            skyColorTweaked = ausmAbyssalBaseSky * vec3(2.45, 0.28, 0.20);
+        #endif
+
         vec3 skyColorSqrt = sqrt(skyColorTweaked);
         // Doing these things because vanilla skyColor gets to 0 during a thunderstorm
         float invRainStrength2 = (1.0 - rainStrength) * (1.0 - rainStrength);

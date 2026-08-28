@@ -55,6 +55,12 @@ public final class ShaderEnvironmentDefines {
         if (dimensionId == SIMPLE_VOID_WORLD_DIMENSION_ID) {
             defines.put("AUSM_SIMPLE_VOID_WORLD", "1");
         }
+        if (dimensionId == 50) {
+            defines.put("AUSM_ABYSSAL_WASTELAND", "1");
+        }
+        if (dimensionId == 51) {
+            defines.put("AUSM_DREADLANDS", "1");
+        }
 
         switch (dimensionId) {
             case -1 -> defines.put("NETHER", "1");

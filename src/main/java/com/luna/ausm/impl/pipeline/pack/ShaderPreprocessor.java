@@ -532,11 +532,14 @@ public class ShaderPreprocessor {
         if (name.startsWith("GBUFFERS_") || name.startsWith("GBUFFER_")) {
             return true;
         }
-        return switch (name) {
-            case "PREPARE", "SHADOW", "DEFERRED", "COMPOSITE", "FINAL",
-                 "AUSM_SIMPLE_VOID_WORLD" -> true;
-            default -> false;
-        };
+        return "PREPARE".equals(name)
+                || "SHADOW".equals(name)
+                || "DEFERRED".equals(name)
+                || "COMPOSITE".equals(name)
+                || "FINAL".equals(name)
+                || "AUSM_SIMPLE_VOID_WORLD".equals(name)
+                || "AUSM_ABYSSAL_WASTELAND".equals(name)
+                || "AUSM_DREADLANDS".equals(name);
     }
 
     private static int parseGlslVersion(String versionLine) {
