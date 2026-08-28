@@ -110,58 +110,44 @@ vec3 AusmBotaniaRainbowTexture(vec3 worldRay, float visibility) {
     return rainbowSample.rgb * rainbowSample.a * visibility;
 }
 
-// Use four smooth, seeded segments around each ring.  This retains a calm
-// broad wave while avoiding the repeated high-energy sine crests.
-float AusmBotaniaLowEnergyWave(float angle, float phase) {
-    float segmentPosition = (angle - phase) * 0.63661977236758; // four per turn
-    float segment = mod(floor(segmentPosition) + 4.0, 4.0);
-    float blend = fract(segmentPosition);
-    blend = blend * blend * (3.0 - 2.0 * blend);
-    float low = AusmOwnedSkyHash(vec3(segment, 17.0, 41.0)) * 2.0 - 1.0;
-    float high = AusmOwnedSkyHash(vec3(mod(segment + 1.0, 4.0), 17.0, 41.0)) * 2.0 - 1.0;
-    return mix(low, high, blend);
-}
-
 // SkyblockSkyRenderer builds each ribbon from 90 finite quads around a
 // radius-20 ring (radius-10 for the rainbow).  Convert a canvas ray back to
-// that local ring and sample only where it intersects the authored strip;
-// this retains the original 256x32 assets without turning them into a dome.
+// that local ring and sample only where it intersects the authored strip.
+// The skybox rings use Botania's five-cycle sine wave and its y=-1 origin;
+// approximating either turns the finite bands into screen-spanning diagonals.
 vec3 AusmBotaniaStripUvMask(vec3 viewRay, mat3 transform, float radius, float height,
-                             float phaseDegrees, float waveAmplitude) {
+                             float waveCycles) {
     mat3 viewTransform = mat3(gbufferModelView) * transform;
     vec3 localRay = transpose(viewTransform) * viewRay;
     float horizontal = max(length(localRay.xz), 0.00001);
     float localY = localRay.y * radius / horizontal;
     float angle = atan(localRay.z, localRay.x);
-    float phase = radians(phaseDegrees);
-    float centerY = waveAmplitude * AusmBotaniaLowEnergyWave(angle, phase);
+    float centerY = waveCycles > 0.0 ? sin(angle * waveCycles) - 1.0 : 0.0;
     float v = (localY - centerY) / height;
     float mask = step(0.0, v) * step(v, 1.0);
-    float u = fract((angle - phase) * 0.1591549430919);
+    float u = fract(angle * 0.1591549430919);
     return vec3(u, v, mask);
 }
 
 vec3 AusmBotaniaFiniteSkybox(vec3 viewRay, float visibility) {
-    // Botania's tick unit runs at 20 Hz. Keep the calm low-energy path, but
-    // advance it fast enough for its broad motion to be visible in play.
-    float ticks = frameTimeCounter * 5.0;
+    float ticks = frameTimeCounter * 20.0;
     vec3 color = vec3(0.0);
 
-    // Botania rotates each complete strip ring in addition to advancing the
-    // strip phase. Without this second transform the texture travels forward
-    // while the ribbon itself has no lateral drift.
-    vec3 uvMask = AusmBotaniaStripUvMask(viewRay, AusmBotaniaRotX(220.0) * AusmBotaniaRotY(ticks * 0.12),
-                                         20.0, 2.0, ticks * 2.4, 0.90);
+    // Each iteration inherits every prior rotation in the original renderer.
+    // Keep those cumulative transforms instead of independently rotating three
+    // nominally parallel rings.
+    mat3 firstRing = AusmBotaniaRotX(220.0) * AusmBotaniaRotY(ticks * 0.10);
+    vec3 uvMask = AusmBotaniaStripUvMask(viewRay, firstRing, 20.0, 2.0, 5.0);
     vec4 strip = texture2D(ausmBotaniaSkybox, uvMask.xy);
     color += strip.rgb * strip.a * uvMask.z;
 
-    uvMask = AusmBotaniaStripUvMask(viewRay, AusmBotaniaRotX(240.0) * AusmBotaniaRotY(ticks * 0.024),
-                                    20.0, 2.0, ticks * 0.48, 0.65);
+    mat3 secondRing = firstRing * AusmBotaniaRotX(20.0) * AusmBotaniaRotY(ticks * 0.02);
+    uvMask = AusmBotaniaStripUvMask(viewRay, secondRing, 20.0, 2.0, 5.0);
     strip = texture2D(ausmBotaniaSkybox, uvMask.xy);
     color += strip.rgb * strip.a * uvMask.z * vec3(1.0, 0.4, 0.4);
 
-    uvMask = AusmBotaniaStripUvMask(viewRay, AusmBotaniaRotX(290.0) * AusmBotaniaRotY(ticks * 0.24),
-                                    20.0, 2.0, ticks * 4.8, 1.15);
+    mat3 thirdRing = secondRing * AusmBotaniaRotX(50.0) * AusmBotaniaRotY(ticks * 0.20);
+    uvMask = AusmBotaniaStripUvMask(viewRay, thirdRing, 20.0, 2.0, 5.0);
     strip = texture2D(ausmBotaniaSkybox, uvMask.xy);
     color += strip.rgb * strip.a * uvMask.z * vec3(0.4, 1.0, 0.7);
     return color * visibility;
@@ -170,7 +156,7 @@ vec3 AusmBotaniaFiniteSkybox(vec3 viewRay, float visibility) {
 vec3 AusmBotaniaFiniteRainbow(vec3 viewRay, float visibility) {
     mat3 rotation = AusmBotaniaRotY(ausmBotaniaRainbowRotation.x)
                   * AusmBotaniaRotZ(ausmBotaniaRainbowRotation.y);
-    vec3 uvMask = AusmBotaniaStripUvMask(viewRay, rotation, 10.0, 2.0, 0.0, 0.0);
+    vec3 uvMask = AusmBotaniaStripUvMask(viewRay, rotation, 10.0, 2.0, 0.0);
     vec4 rainbow = texture2D(ausmBotaniaRainbow, uvMask.xy);
     return rainbow.rgb * rainbow.a * uvMask.z * visibility;
 }
@@ -323,10 +309,12 @@ vec3 AusmOwnedSkyColor(vec3 viewRay, vec3 upVec, vec3 sunVec, out vec3 colorWith
                  * (1.0 - dayAmount) * rainFade * (AUSM_VOID_ASTRAL_STAR_BRIGHTNESS * 0.01);
     #endif
 
-    // These assets reproduce Botania's Void World renderer. AUSM owns the
-    // sky canvas in several dimensions, but Botania detail belongs only to
-    // the dedicated Void World route.
-    if (ausmSimpleVoidWorld > 0) {
+    // Botania's finite billboards and ribbon meshes rely on its native sky
+    // vertex transforms. They cannot be reconstructed from the fullscreen
+    // shader-owned canvas without stretching into the entire night sky.
+    // Keep the stable void atmosphere and stars above, but leave these native
+    // finite details to the non-shadered renderer.
+    if (false) {
         #if AUSM_VOID_PLANETS == 1
             float planetBrightness = AUSM_VOID_PLANET_BRIGHTNESS * 0.01;
             float planetVisibility = AusmBotaniaVisibility() * planetBrightness;
@@ -357,7 +345,7 @@ vec3 AusmOwnedSkyColor(vec3 viewRay, vec3 upVec, vec3 sunVec, out vec3 colorWith
         #endif
     }
 
-    if (ausmSimpleVoidWorld > 0) {
+    if (false) {
         #if AUSM_VOID_SKYBOX == 1
             float detailVisibility = AusmBotaniaVisibility() * (AUSM_VOID_SKYBOX_BRIGHTNESS * 0.01);
             color += AusmBotaniaFiniteSkybox(viewRay, detailVisibility);

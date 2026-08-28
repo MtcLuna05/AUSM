@@ -6,6 +6,9 @@
   "refmap": "ausm.refmap.json",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "compat.BetterPortalsServerWorldsManagerMixin"
+  ],
+  "client": [
     "compat.ActuallyAdditionsAssetUtilMixin",
     "compat.AppliedEnergisticsCableBusBakedModelMixin",
     "compat.AppliedEnergisticsFacadeBuilderMixin",
@@ -24,7 +27,6 @@
     "compat.BetterPortalsCreateWorldHandlerMixin",
     "compat.BetterPortalsPortalBlockChangeMixin",
     "compat.BetterPortalsPortalRendererMixin",
-    "compat.BetterPortalsServerWorldsManagerMixin",
     "compat.BetweenlandsMessageSyncChunkStorageMixin",
     "compat.BewitchmentSyncExtendedPlayerHandlerMixin",
     "compat.AbyssalCraftPortalLayerMixin",
@@ -88,9 +90,7 @@
     "pipeline.RenderChunkMixin",
     "pipeline.VertexBufferConsumerMixin",
     "pipeline.VboRenderListMixin",
-    "pipeline.WorldVertexBufferUploaderMixin"
-  ],
-  "client": [
+    "pipeline.WorldVertexBufferUploaderMixin",
     "compat.EfficientEntitiesModelRendererCompatMixin",
     "compat.EntityCullingQueryLatencyMixin",
     "compat.EuphoriaPatcherEntreeMixin",

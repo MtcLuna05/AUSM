@@ -1,7 +1,6 @@
 package com.luna.ausm.impl.mixin.pipeline;
 
 import com.luna.ausm.impl.pipeline.vertex.BufferVertexDataAdapter;
-import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.pipeline.PipelineContext;
 import com.luna.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.luna.ausm.impl.pipeline.compat.BlockRendererDispatcherHooks;
@@ -14,7 +13,6 @@ import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
-import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.client.renderer.vertex.VertexFormatElement;
@@ -41,9 +39,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
 
     @Unique
     private static final boolean AUSM$LITTLE_ENDIAN = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
-
-    @Unique
-    private static final AtomicInteger AUSM$LIQUID_PAYLOAD_PROBES = new AtomicInteger();
 
     @Shadow(remap = false)
     private ByteBuffer field_179001_a;
@@ -222,7 +217,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         int vanillaLightmapEmission = compatibilityEmissiveBoost ? BlockRenderContext.vanillaLightmapEmission() : 0;
         boolean agricraftCrop = BlockRenderContext.isAgricraftCrop();
         int agricraftPackedLight = agricraftCrop ? BlockRenderContext.packedLightmap() : 0;
-        ausm$probeLiquidPayload("bulk", packedEntityData, targetStride, vertexTotal);
         ausm$logVertexExpandProbe("bulk-in", sourceBytes, sourceStride, targetStride, vertexBase, vertexTotal, -1, compatibilityEmissiveBoost);
         func_181670_b(vertexTotal * targetStride + targetStride);
         field_178999_b.position(func_181664_j());
@@ -286,8 +280,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         long packedEntityData = BlockRenderContext.packedEntityData();
         int packedEntity = (int) packedEntityData;
         int packedEntityHigh = (int) (packedEntityData >>> 32);
-        ausm$probeLiquidPayload("quad", packedEntityData,
-                ExtendedVertexFormats.size(field_179011_q), vertexTotal);
         boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
         int customLiquidTint = BlockRenderContext.customLiquidTint();
         int vanillaLightmapEmission = compatibilityEmissiveBoost ? BlockRenderContext.vanillaLightmapEmission() : 0;
@@ -527,7 +519,7 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     @Unique
     private void ausm$recordPipelineEmissionBloomMetadata(BlockRenderContext.State blockState) {
         if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)
-                || blockState.blockEmission() <= 0) {
+                || blockState.vanillaLightmapEmission() <= 0) {
             return;
         }
         ausm$markCurrentContextShaderlessBloomMetadata();
@@ -914,30 +906,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         return AUSM$LITTLE_ENDIAN
                 ? (color & 0xFF000000) | (tint & 0x00FFFFFF)
                 : (tint & 0xFFFFFF00) | (color & 0x000000FF);
-    }
-
-    @Unique
-    private static void ausm$probeLiquidPayload(String source, long packedEntityData,
-                                                int stride, int vertexTotal) {
-        if (BlockRendererDispatcherHooks.LIQUID_RENDER.get() == null) {
-            return;
-        }
-        int call = AUSM$LIQUID_PAYLOAD_PROBES.incrementAndGet();
-        if (call > 64) {
-            return;
-        }
-        MainMod.LOGGER.info(
-                "[AUSMLiquidVertexPayloadProbe] call={} source={} id={} renderType={} metadata={} emission={} stride={} vertices={} layer={}",
-                call,
-                source,
-                (int) packedEntityData & 0xFFFF,
-                (int) (packedEntityData >>> 16) & 0xFFFF,
-                (int) (packedEntityData >>> 32) & 0xFFFF,
-                BlockRenderContext.midBlockEmission(),
-                stride,
-                vertexTotal,
-                MinecraftReflectionCompat.currentRenderLayer()
-        );
     }
 
     @Unique

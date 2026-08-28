@@ -65,7 +65,6 @@ public final class BlockcrafteryContainedShapeGeometry {
     private static final AtomicInteger ENDER_IO_FACE_ASSIGNMENT_PROBE_COUNT = new AtomicInteger();
     private static final AtomicInteger ENDER_IO_PROJECTION_FAILURE_PROBE_COUNT = new AtomicInteger();
     private static final AtomicInteger CONTAINED_LIGHTING_PROBE_COUNT = new AtomicInteger();
-    private static final AtomicInteger FRAMED_BLOOM_MAPPING_PROBE_COUNT = new AtomicInteger();
 
     private BlockcrafteryContainedShapeGeometry() {
     }
@@ -182,8 +181,6 @@ public final class BlockcrafteryContainedShapeGeometry {
         refreshDerivedPipelineAttributes(destination, host, startByte, hostVertices, stride, format, order);
         markFramedEmission(destination, startByte, hostVertices, stride, format, markFramedEmission);
         markFramedBloomOverlay(destination, startByte, hostVertices, stride, format, liftBloomOverlay);
-        logFramedBloomMappingProbe(contained, destination, startByte, containedVertices, hostVertices,
-                stride, format, order, liftBloomOverlay);
         return true;
     }
 
@@ -273,8 +270,6 @@ public final class BlockcrafteryContainedShapeGeometry {
                 stride, format, order);
         markFramedEmission(destination, (long) start * stride, mappedVertices, stride, format, markFramedEmission);
         markFramedBloomOverlay(destination, (long) start * stride, mappedVertices, stride, format, liftBloomOverlay);
-        logFramedBloomMappingProbe(contained, destination, (long) start * stride, containedVertices, mappedVertices,
-                stride, format, order, liftBloomOverlay);
         return true;
     }
 
@@ -323,40 +318,6 @@ public final class BlockcrafteryContainedShapeGeometry {
             }
             destination.putShort(offset, (short) BlockRenderContext.FRAMED_BLOOM_OVERLAY_PROBE_MARKER);
         }
-    }
-
-    private static void logFramedBloomMappingProbe(byte[] contained, ByteBuffer destination, long startByte,
-                                                   int containedVertices, int mappedVertices, int stride,
-                                                   VertexFormat format, ByteOrder order, boolean bloomOverlay) {
-        if (!bloomOverlay || !ExtendedVertexFormats.isPipelineBlock(format)) {
-            return;
-        }
-        int call = FRAMED_BLOOM_MAPPING_PROBE_COUNT.incrementAndGet();
-        if (call > 24 || containedVertices < 4 || mappedVertices < 4) {
-            return;
-        }
-        ByteBuffer source = ByteBuffer.wrap(contained).order(order);
-        MainMod.LOGGER.info(
-                "[AUSMFramedBloomMappingProbe] call={} containedVertices={} mappedVertices={} lift={} source={} mapped={}",
-                call, containedVertices, mappedVertices, BLOOM_OVERLAY_DEPTH_LIFT,
-                describePipelineVertex(source, 0, stride),
-                describePipelineVertex(destination, (int) startByte, stride));
-    }
-
-    private static String describePipelineVertex(ByteBuffer bytes, int offset, int stride) {
-        if (offset < 0 || offset + stride > bytes.capacity()) {
-            return "out-of-range";
-        }
-        int entityOffset = ExtendedVertexFormats.PIPELINE_BLOCK_MC_ENTITY_OFFSET;
-        return "p=" + bytes.getFloat(offset) + "/" + bytes.getFloat(offset + 4) + "/" + bytes.getFloat(offset + 8)
-                + ",c=" + Integer.toHexString(bytes.getInt(offset + 12))
-                + ",uv=" + bytes.getFloat(offset + 16) + "/" + bytes.getFloat(offset + 20)
-                + ",light=" + Integer.toHexString(bytes.getInt(offset + 24))
-                + ",entity=" + bytes.getShort(offset + entityOffset) + "/"
-                + bytes.getShort(offset + entityOffset + 2) + "/"
-                + bytes.getShort(offset + entityOffset + 4) + "/"
-                + bytes.getShort(offset + entityOffset + 6)
-                + ",midBlock=" + Integer.toHexString(bytes.getInt(offset + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET));
     }
 
     private static void liftBloomOverlay(ByteBuffer destination, long startByte, int vertices,

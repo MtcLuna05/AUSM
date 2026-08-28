@@ -139,6 +139,11 @@ public final class ShaderBufferFormatScanner {
         scanFile(pack, options, pass, basePath + ".vsh", settings, new HashSet<>(), new HashMap<>(), new ArrayDeque<>());
         scanFile(pack, options, pass, basePath + ".fsh", settings, new HashSet<>(), new HashMap<>(), new ArrayDeque<>());
         scanFile(pack, options, pass, basePath + ".gsh", settings, new HashSet<>(), new HashMap<>(), new ArrayDeque<>());
+        // Modern packs such as Complementary place shared program declarations
+        // (including colortexNClear persistence flags) in program/<name>.glsl.
+        // Missing those flags makes a temporal buffer get cleared and then sampled
+        // as unrelated current-frame data by TAA.
+        scanFile(pack, options, pass, basePath + ".glsl", settings, new HashSet<>(), new HashMap<>(), new ArrayDeque<>());
     }
 
     private static void scanFile(

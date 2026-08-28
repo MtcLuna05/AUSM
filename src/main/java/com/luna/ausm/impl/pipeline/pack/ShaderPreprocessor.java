@@ -534,7 +534,7 @@ public class ShaderPreprocessor {
         }
         return switch (name) {
             case "PREPARE", "SHADOW", "DEFERRED", "COMPOSITE", "FINAL",
-                 "AUSM_SIMPLE_VOID_WORLD" -> true;
+                 "AUSM_SIMPLE_VOID_WORLD", "AUSM_ABYSSAL_WASTELAND", "AUSM_DREADLANDS" -> true;
             default -> false;
         };
     }

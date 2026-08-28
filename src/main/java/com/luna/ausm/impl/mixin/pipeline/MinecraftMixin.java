@@ -1,6 +1,7 @@
 package com.luna.ausm.impl.mixin.pipeline;
 
 import com.luna.ausm.impl.MainMod;
+import com.luna.ausm.impl.client.AusmUpdateChecker;
 import com.luna.ausm.impl.pipeline.PipelineContext;
 import com.luna.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.luna.ausm.impl.pipeline.pack.ShaderPackManager;
@@ -106,6 +107,7 @@ public class MinecraftMixin {
             context.clearScheduledWorldTerrainRefresh();
             return;
         }
+        AusmUpdateChecker.checkAfterWorldLoad();
         PipelineContext context = PipelineContext.getInstance();
         context.invalidateWorldLoadPresentationState();
         context.clearPendingShaderChunkRefreshes();

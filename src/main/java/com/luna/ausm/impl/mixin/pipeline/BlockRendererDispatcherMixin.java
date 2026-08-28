@@ -107,24 +107,6 @@ public class BlockRendererDispatcherMixin {
                     BlockRendererDispatcherHooks.LIQUID_RENDER.remove();
                     return;
                 }
-                int liquidProbe = BlockRendererDispatcherHooks.LIQUID_DISPATCH_PROBE_COUNT.incrementAndGet();
-                int liquidStart = bufferBuilder != null
-                        ? MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : -1;
-                if (liquidProbe <= 96 && ausm$isAstralLiquid(state)) {
-                    MainMod.LOGGER.info(
-                            "[AUSMAstralLiquidDispatchProbe] call={} stage=enter thread={} layer={} state={} pos={} buffer={} start={} format={} pipelineFormat={} access={}",
-                            liquidProbe,
-                            Thread.currentThread().getName(),
-                            MinecraftReflectionCompat.currentRenderLayer(),
-                            state,
-                            pos,
-                            bufferBuilder,
-                            liquidStart,
-                            bufferBuilder != null ? MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder) : null,
-                            bufferBuilder != null && ExtendedVertexFormats.isPipelineBlock(
-                                    MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder)),
-                            blockAccess != null ? blockAccess.getClass().getName() : "null");
-                }
                 // Fluid rendering is already complete vanilla geometry. Do
                 // not attach AUSM metadata writes to CCL/Nothirium's liquid
                 // buffer; those buffers are also consumed by native GL draw
@@ -159,21 +141,6 @@ public class BlockRendererDispatcherMixin {
                 // whether the translucent layer contains geometry.
                 if (!rendered && bufferBuilder != null && startVertices >= 0) {
                     rendered = MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) > startVertices;
-                }
-                if (liquidProbe <= 96 && ausm$isAstralLiquid(state)) {
-                    int liquidEnd = bufferBuilder != null
-                            ? MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : -1;
-                    MainMod.LOGGER.info(
-                            "[AUSMAstralLiquidDispatchProbe] call={} stage=return rendered={} start={} end={} delta={} layer={} format={} pipelineFormat={}",
-                            liquidProbe,
-                            rendered,
-                            liquidStart,
-                            liquidEnd,
-                            liquidStart >= 0 && liquidEnd >= 0 ? liquidEnd - liquidStart : -1,
-                            MinecraftReflectionCompat.currentRenderLayer(),
-                            bufferBuilder != null ? MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder) : null,
-                            bufferBuilder != null && ExtendedVertexFormats.isPipelineBlock(
-                                    MinecraftReflectionCompat.bufferVertexFormat(bufferBuilder)));
                 }
                 cir.setReturnValue(rendered);
                 return;
@@ -430,16 +397,11 @@ public class BlockRendererDispatcherMixin {
         // corner interpolates a cube sample into an unrelated shaped face.
         boolean preserveHostLightmap = !containedFrameBloom
                 && pipeline.blockRenderEmission(contained, blockAccess, pos) <= 0;
-        // The shape mapper retains the contained visual payload, including
-        // mc_Entity.  Mark the remapped base payload here, rather than the
-        // temporary host draw, so Complimentary sees the same contained
-        // emissive material after the host positions replace the cube.
-        // RandomThings luminous blocks declare their brightness through a
-        // native BLOOM model layer, not vanilla light emission.  Their
-        // block-light query is therefore zero even though the native overlay
-        // is present.  Use the exact shared frame-bloom predicate for both
-        // inherited base emission and copied-overlay depth separation.
-        boolean markFramedEmission = !AusmBloomLayer.isBloomLayer(layer) && containedFrameBloom;
+        // A native BLOOM layer is an overlay, not a full-bright replacement
+        // for the contained block's base material.  Its copied overlay needs
+        // depth separation below, but marking the remapped base as luminous
+        // made a framed block substantially brighter than the direct block.
+        boolean markFramedEmission = false;
         boolean liftBloomOverlay = AusmBloomLayer.isBloomLayer(layer) && containedFrameBloom;
         boolean shaped = BlockcrafteryContainedShapeGeometry
                 .replaceWithContainedVisuals(bufferBuilder, start, containedEnd, hostEnd,
@@ -507,11 +469,6 @@ public class BlockRendererDispatcherMixin {
         return selected;
     }
 
-
-    @Unique
-    private static boolean ausm$isAstralLiquid(IBlockState state) {
-        return state != null && state.toString().toLowerCase(Locale.ROOT).contains("liquidstarlight");
-    }
 
     @Unique
     private static void ausm$logTerrainDispatchProbe(String stage, IBlockState state, IBlockState contextState,

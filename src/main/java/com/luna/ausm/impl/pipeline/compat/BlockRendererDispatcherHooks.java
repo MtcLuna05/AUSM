@@ -14,8 +14,6 @@ public final class BlockRendererDispatcherHooks {
     public static final ThreadLocal<Boolean> BLOOM_FALLBACK_RENDER = new ThreadLocal<>();
     public static final ThreadLocal<Boolean> LIQUID_RENDER = new ThreadLocal<>();
     public static final AtomicInteger PROBE_LOG_COUNT = new AtomicInteger();
-    public static final AtomicInteger LIQUID_DISPATCH_PROBE_COUNT = new AtomicInteger();
-    public static final AtomicInteger LIQUID_RENDERER_PROBE_COUNT = new AtomicInteger();
     public static final AtomicInteger FRAMED_PIPE_FAILURE_COUNT = new AtomicInteger();
     public static final AtomicInteger EMISSIVE_DISPATCHER_FALLBACK_LOG_COUNT = new AtomicInteger();
     public static final AtomicInteger EMISSIVE_DISPATCHER_FALLBACK_SKIP_LOG_COUNT = new AtomicInteger();

@@ -13,6 +13,7 @@ public final class ShaderTransformPipeline {
             new FinalDitherNeutralizeTransformStage(),
             new AusmOfficialSkyDomeTransformStage(),
             new OwnedSkyStabilityTransformStage(),
+            new AbyssalDimensionLightingTransformStage(),
             new LegacySamplerAliasTransformStage(),
             new GbuffersBuiltinTransformStage(),
             new ItemAlphaCoverageTransformStage(),

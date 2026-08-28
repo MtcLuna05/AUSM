@@ -3,15 +3,9 @@ package com.luna.ausm.impl;
 import com.luna.ausm.api.shader.ShaderPackController;
 import com.luna.ausm.impl.client.ClientSettingsConfig;
 import com.luna.ausm.impl.client.dynamic.DynamicLightConfig;
-import com.luna.ausm.impl.pipeline.bloom.AusmBloomLayer;
-import com.luna.ausm.impl.pipeline.compat.CeleritasCompat;
 import com.luna.ausm.impl.pipeline.pack.ShaderPackManager;
-import com.luna.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.luna.ausm.impl.proxy.IProxy;
-import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import com.luna.ausm.impl.util.NoOpLogger;
-import java.nio.file.Path;
-import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.SidedProxy;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
@@ -33,12 +27,24 @@ public class MainMod {
         return shaderPackManager;
     }
 
+    public static void setShaderPackManager(ShaderPackManager shaderPackManager) {
+        MainMod.shaderPackManager = shaderPackManager;
+    }
+
     public static DynamicLightConfig getDynamicLightConfig() {
         return dynamicLightConfig;
     }
 
+    public static void setDynamicLightConfig(DynamicLightConfig dynamicLightConfig) {
+        MainMod.dynamicLightConfig = dynamicLightConfig;
+    }
+
     public static ClientSettingsConfig getClientSettingsConfig() {
         return clientSettingsConfig;
+    }
+
+    public static void setClientSettingsConfig(ClientSettingsConfig clientSettingsConfig) {
+        MainMod.clientSettingsConfig = clientSettingsConfig;
     }
 
     public static ShaderPackController getShaderApi() {
@@ -48,28 +54,7 @@ public class MainMod {
     @Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
         LOGGER.info("Initializing Ausm Pipeline...");
-
-        AusmBloomLayer.initialize();
-
-        // Initialize custom vertex formats for the shaders
-        ExtendedVertexFormats.initialize();
-
-        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
-        Path gameDir = MinecraftReflectionCompat.gameDir(minecraft).toPath();
-
-        dynamicLightConfig = new DynamicLightConfig(gameDir);
-        dynamicLightConfig.load();
-
-        clientSettingsConfig = new ClientSettingsConfig(gameDir);
-        clientSettingsConfig.load();
-
-        shaderPackManager = new ShaderPackManager(gameDir);
-
-        shaderPackManager.loadSavedConfiguration();
-
-        CeleritasCompat.logDiagnostics();
-
-        LOGGER.info("Available Shader Packs: {}", shaderPackManager.getAvailablePacks());
+        proxy.preInit(event);
     }
 
     @Mod.EventHandler

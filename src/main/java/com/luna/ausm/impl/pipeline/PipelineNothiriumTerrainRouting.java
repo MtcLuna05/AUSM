@@ -414,10 +414,13 @@ abstract class PipelineFrameLifecycle2 extends PipelineFrameLifecycle1 {
         if (!isPipelineActive || !pingPongManager.isInitialized()) {
             return;
         }
-        if (!preTranslucentDepthCopiedThisFrame) {
-            pingPongManager.copyPreTranslucentDepth();
-            preTranslucentDepthCopiedThisFrame = true;
-        }
+        // The first copy follows opaque terrain so shadows can consume it. A
+        // second call at the translucent boundary must refresh the snapshot:
+        // block entities and regular entities are rendered between those two
+        // points, and light shafts need their depth rather than the terrain
+        // behind them.
+        pingPongManager.copyPreTranslucentDepth();
+        preTranslucentDepthCopiedThisFrame = true;
     }
 
     protected abstract void applyShaderImageTextureBarrier();

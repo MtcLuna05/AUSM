@@ -92,9 +92,10 @@ jobs:
           if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "${release_tag}" "${versioned_jar}" --repo "${GITHUB_REPOSITORY}" --clobber
           else
+            bash scripts/extract-changelog.sh --full > release-notes.md
             gh release create "${release_tag}" "${versioned_jar}" --repo "${GITHUB_REPOSITORY}" \
               --title "AUSM ${version} Java 25" \
-              --notes "Build from commit ${GITHUB_SHA}." \
+              --notes-file release-notes.md \
               --prerelease \
               --target "${GITHUB_SHA}"
           fi

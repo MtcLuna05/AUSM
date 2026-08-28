@@ -30,7 +30,7 @@ final class PipelineRenderPassRules {
     static boolean isOitPhase(WorldRenderingPhase phase) {
         return switch (phase) {
             case TRIPWIRE, ENTITIES_TRANSLUCENT, BLOCK_ENTITIES_TRANSLUCENT, PARTICLES_TRANSLUCENT, RAIN_SNOW, CLOUDS,
-                 LIGHTNING, BEACON_BEAM -> true;
+                 LIGHTNING -> true;
             default -> false;
         };
     }

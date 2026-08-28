@@ -30,6 +30,7 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
     private static final int ID_CATEGORY_SHADERED = 303;
     private static final int ID_PORTAL_SHADERS = 310;
     private static final int ID_AUTOMATIC_SHADER_DISABLING = 311;
+    private static final int ID_UPDATE_CHECKER = 312;
     private static final int ID_BLOOM_SLIDER = 320;
     private static final int ID_DYNAMIC_LIGHTS = 330;
     private static final int ID_LIGHT_MULTIPLIER_SLIDER = 331;
@@ -77,8 +78,9 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
             this.buttonList.add(new GuiFlatButton(ID_PORTAL_SHADERS, x, 74, buttonWidth, 20, portalShaderLabel()));
             this.buttonList.add(new GuiFlatButton(ID_AUTOMATIC_SHADER_DISABLING, x, 100, buttonWidth, 20,
                     automaticShaderDisablingLabel()));
-            this.buttonList.add(new GuiFlatButton(ID_RELOAD_CLIENT_SETTINGS, x, 142, (buttonWidth - 4) / 2, 20, "Reload Settings"));
-            this.buttonList.add(new GuiFlatButton(ID_OPEN_CLIENT_SETTINGS, x + (buttonWidth + 4) / 2, 142,
+            this.buttonList.add(new GuiFlatButton(ID_UPDATE_CHECKER, x, 126, buttonWidth, 20, updateCheckerLabel()));
+            this.buttonList.add(new GuiFlatButton(ID_RELOAD_CLIENT_SETTINGS, x, 168, (buttonWidth - 4) / 2, 20, "Reload Settings"));
+            this.buttonList.add(new GuiFlatButton(ID_OPEN_CLIENT_SETTINGS, x + (buttonWidth + 4) / 2, 168,
                     (buttonWidth - 4) / 2, 20, "Open Settings"));
         } else if (selectedCategory == ID_CATEGORY_SHADERLESS) {
             this.bloomSlider = new GuiAusmValueSlider(ID_BLOOM_SLIDER, x, 92, buttonWidth,
@@ -174,6 +176,9 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
             case ID_AUTOMATIC_SHADER_DISABLING:
                 if (client != null) client.setAutomaticShaderDisablingEnabled(!client.automaticShaderDisablingEnabled());
                 break;
+            case ID_UPDATE_CHECKER:
+                if (client != null) client.setUpdateCheckerEnabled(!client.updateCheckerEnabled());
+                break;
             case ID_DYNAMIC_LIGHTS:
                 if (lights != null && lights.available()) {
                     lights.setEnabled(!lights.enabled());
@@ -265,7 +270,7 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
         DynamicLightConfig lights = MainMod.getDynamicLightConfig();
         for (GuiButton button : this.buttonList) {
             int id = MinecraftReflectionCompat.guiButtonId(button);
-            if (id == ID_PORTAL_SHADERS || id == ID_AUTOMATIC_SHADER_DISABLING || id == ID_BLOOM_SLIDER
+            if (id == ID_PORTAL_SHADERS || id == ID_AUTOMATIC_SHADER_DISABLING || id == ID_UPDATE_CHECKER || id == ID_BLOOM_SLIDER
                     || id == ID_RELOAD_CLIENT_SETTINGS || id == ID_OPEN_CLIENT_SETTINGS
                     || id >= ID_SHADERED_LOD_1_SLIDER && id <= ID_SHADERED_LOD_4_SLIDER) {
                 MinecraftReflectionCompat.setGuiButtonEnabled(button, client != null);
@@ -297,6 +302,11 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
         return "Automatic Shader Disabling: " + (config != null && config.automaticShaderDisablingEnabled() ? "ON" : "OFF");
     }
 
+    private String updateCheckerLabel() {
+        ClientSettingsConfig config = MainMod.getClientSettingsConfig();
+        return "Update Checker: " + (config != null && config.updateCheckerEnabled() ? "ON" : "OFF");
+    }
+
     private String dynamicLightsLabel() {
         DynamicLightConfig config = MainMod.getDynamicLightConfig();
         if (config == null || !config.available()) return "Dynamic Lights: Unavailable";
@@ -316,6 +326,7 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
             List<String> tooltip = switch (id) {
                 case ID_PORTAL_SHADERS -> List.of("Use AUSM shaders for Better Portals child views when available.");
                 case ID_AUTOMATIC_SHADER_DISABLING -> List.of("Disable a restored shader pack at startup to keep the first world load stable.");
+                case ID_UPDATE_CHECKER -> List.of("Check for a newer AUSM release after loading a world. Failures only appear in latest.log.");
                 case ID_BLOOM_SLIDER -> List.of("Strength of emissive bloom in the vanilla, shaderless renderer.");
                 case ID_SHADERED_LOD_1_SLIDER -> List.of("Distance in blocks where the shadered LOD changes from full to half resolution.");
                 case ID_SHADERED_LOD_2_SLIDER -> List.of("Distance in blocks where foliage waving is disabled and shadered LOD becomes quarter resolution.");

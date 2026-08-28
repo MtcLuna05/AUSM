@@ -97,6 +97,10 @@
     #define AUSM_VOID_NEBULA_BRIGHTNESS 100 //[0 25 50 75 100 150 200 300]
     #define ASTRAL_CONSTELLATION_STYLE 2 //[0 1 2]
 
+    // AbyssalCraft Wasteland and Dreadlands atmosphere overrides.
+    #define AUSM_ABYSSAL_SKYBOX 1 //[0 1]
+    #define AUSM_ABYSSAL_SUNLIGHT 1 //[0 1]
+
     #define SHADOW_SMOOTHING 4 //[1 2 3 4]
     #define RAIN_PUDDLES 0 //[0 1 2 3 4]
 
@@ -333,7 +337,6 @@
     #ifdef PHOTONICS_LIGHTING
         #undef SS_BLOCKLIGHT
     #endif
-
     //#define RANDOM_BLOCKLIGHT
     #if MCBL_MAIN_DEFINE > 0
         #undef RANDOM_BLOCKLIGHT

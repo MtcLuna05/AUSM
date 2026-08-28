@@ -14,7 +14,13 @@ public enum Attachment {
     AUX3(6, "gaux3"),
     AUX4(7, "gaux4"),
     AUX5(8, "colortex8"),
-    AUX6(9, "colortex9");
+    AUX6(9, "colortex9"),
+    /**
+     * Temporal screen-space lighting history.  Euphoria's MCBL composite
+     * pass resolves its light field here before gbuffers programs consume it
+     * on the following frame.
+     */
+    AUX7(10, "colortex10");
 
     private final int index;
     private final String legacyName;

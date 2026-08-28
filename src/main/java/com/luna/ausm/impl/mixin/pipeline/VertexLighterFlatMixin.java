@@ -1,6 +1,8 @@
 package com.luna.ausm.impl.mixin.pipeline;
 
 import com.luna.ausm.impl.pipeline.vertex.BlockRenderContext;
+import com.luna.ausm.impl.pipeline.bloom.AusmBloomLayer;
+import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraftforge.client.model.pipeline.VertexLighterFlat;
 import org.spongepowered.asm.mixin.Mixin;
@@ -12,10 +14,10 @@ import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 
 /**
  * Blockcraftery uses Forge's light pipeline for its generated host shape.
- * Luminous RandomThings models mark their overlay as unshaded, but that flag
- * is lost when the material is projected onto the host shape.  GPOM's framed
- * material marker restores exactly that model contract for only luminous
- * framed quads; AO and ordinary host materials retain Forge's normal path.
+ * Luminous RandomThings models mark their BLOOM overlay as unshaded, but that
+ * flag is lost when the material is projected onto the host shape. Preserve
+ * that contract only for the copied overlay: the ordinary framed material
+ * must retain Forge's lighting just like the direct contained block.
  */
 @Mixin(value = VertexLighterFlat.class, remap = false)
 public abstract class VertexLighterFlatMixin {
@@ -23,10 +25,9 @@ public abstract class VertexLighterFlatMixin {
 
     /**
      * Blockcraftery's host state has no light value, so Forge otherwise
-     * replaces the material's fully-lit lightmap with the dark host sample.
-     * Preserve native luminous-block semantics for only the GPOM material
-     * overlay while leaving its geometry and all ordinary framed materials
-     * on Forge's regular light path.
+     * replaces the overlay's fully-lit lightmap with the host sample. The
+     * base material is deliberately excluded: making it full-bright is what
+     * made framed luminous blocks brighter than their native counterparts.
      */
     @Inject(
             method = "processQuad",
@@ -45,7 +46,7 @@ public abstract class VertexLighterFlatMixin {
                                                      int multiplier, VertexFormat format, int count, int vertex,
                                                      float x, float y, float z,
                                                      float blockLight, float skyLight) {
-        if (!BlockRenderContext.isFramedMaterialOwner() || !BlockRenderContext.framedBloomBoost()
+        if (!ausm$isFramedBloomOverlay()
                 || lightmap == null || vertex < 0 || vertex >= lightmap.length
                 || lightmap[vertex] == null || lightmap[vertex].length < 2) {
             return;
@@ -66,7 +67,7 @@ public abstract class VertexLighterFlatMixin {
     )
     private static float ausm$preserveFramedLuminousLight(float x, float y, float z) {
         float normalDiffuse = diffuseFactor(x, y, z);
-        if (!BlockRenderContext.isFramedMaterialOwner() || !BlockRenderContext.framedBloomBoost()) {
+        if (!ausm$isFramedBloomOverlay()) {
             return normalDiffuse;
         }
 
@@ -78,5 +79,11 @@ public abstract class VertexLighterFlatMixin {
      */
     private static float diffuseFactor(float x, float y, float z) {
         return Math.min(x * x * 0.6F + y * y * ((3.0F + y) * 0.25F) + z * z * 0.8F, 1.0F);
+    }
+
+    private static boolean ausm$isFramedBloomOverlay() {
+        return BlockRenderContext.isFramedMaterialOwner()
+                && BlockRenderContext.framedBloomBoost()
+                && AusmBloomLayer.isBloomLayer(MinecraftReflectionCompat.currentRenderLayer());
     }
 }

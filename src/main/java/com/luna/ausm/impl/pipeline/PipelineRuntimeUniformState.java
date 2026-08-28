@@ -338,6 +338,7 @@ abstract class PipelineRuntimeUniformState extends PipelineRuntimeValueTypes {
         uniformRegistry.registerInt("colortex7", () -> TextureBinder.COLORTEX7_TEXTURE_UNIT);
         uniformRegistry.registerInt("colortex8", () -> TextureBinder.COLORTEX8_TEXTURE_UNIT);
         uniformRegistry.registerInt("colortex9", () -> TextureBinder.COLORTEX9_TEXTURE_UNIT);
+        uniformRegistry.registerInt("colortex10", () -> TextureBinder.COLORTEX10_TEXTURE_UNIT);
         uniformRegistry.registerInt("colortex16", () -> TextureBinder.COLORTEX16_TEXTURE_UNIT);
         self().registerAttachmentSizeUniforms();
 

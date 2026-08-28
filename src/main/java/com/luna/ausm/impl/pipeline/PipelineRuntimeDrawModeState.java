@@ -493,7 +493,15 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
     }
 
     protected void applyGbufferDepthState(RenderPass pass) {
-        if (!PipelineRuntimeState.isOpaqueTerrainPass(pass) && pass != RenderPass.GBUFFERS_WATER && pass != RenderPass.DH_WATER) {
+        if (!PipelineRuntimeState.isOpaqueTerrainPass(pass)
+                && pass != RenderPass.GBUFFERS_WATER
+                && pass != RenderPass.DH_WATER
+                // TESRs and regular entities use these opaque passes. Vanilla
+                // renderers may leave depth writes disabled after a translucent
+                // draw; without restoring them, COMPOSITE1 sees the background
+                // depth through the object and applies light shafts to it.
+                && pass != RenderPass.GBUFFERS_BLOCK
+                && pass != RenderPass.GBUFFERS_ENTITIES) {
             return;
         }
         MinecraftReflectionCompat.glStateEnableDepth();

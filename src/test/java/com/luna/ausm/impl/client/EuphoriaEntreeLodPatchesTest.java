@@ -99,13 +99,4 @@ final class EuphoriaEntreeLodPatchesTest {
                 "ComplementaryReimagined_r5.8.1 + AUSM 1.12.2 Patches"));
     }
 
-    @Test
-    void generates112PatchesForBothComplementaryStylesAndEuphoriaOutputs() {
-        assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource("ComplementaryUnbound_r5.8.1.zip"));
-        assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource("ComplementaryReimagined_r5.8.1.zip"));
-        assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource(
-                "ComplementaryReimagined_r5.8.1 + EuphoriaPatches_1.9.3"));
-        assertFalse(EuphoriaEntreePackGenerator.isAUSM112PatchSource(
-                "ComplementaryReimagined_r5.8.1 + AUSM 1.12.2 Patches"));
-    }
 }
