@@ -223,11 +223,6 @@ abstract class ShaderPropertiesTextureDirectives extends ShaderPropertiesParsing
     }
 
     protected static List<ProgramId> resolveTextureProgramScope(String scope) {
-        ProgramId programId = ShaderProperties.resolveProgramId(scope);
-        if (programId != null) {
-            return List.of(programId);
-        }
-
         ProgramStage stage = switch (scope) {
             case "gbuffers" -> ProgramStage.GBUFFERS;
             case "shadow" -> ProgramStage.SHADOW;
@@ -257,6 +252,11 @@ abstract class ShaderPropertiesTextureDirectives extends ShaderPropertiesParsing
                 }
             }
             return List.copyOf(ids);
+        }
+
+        ProgramId programId = ShaderProperties.resolveProgramId(scope);
+        if (programId != null) {
+            return List.of(programId);
         }
 
         return switch (scope) {
