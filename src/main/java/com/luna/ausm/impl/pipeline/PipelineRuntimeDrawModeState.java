@@ -174,7 +174,6 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
     }
 
     protected void bindProgramResources(RenderPass pass, ShaderProgram program) {
-        customTextures.bind(pass, program);
         shaderImages.bind(program);
         shaderStorageBuffers.bind();
         if (shaderStorageBuffers.active()) {
@@ -187,6 +186,11 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
                     packDirectives.customUniforms().builtinDependencies()
             ));
         }
+        // Shaderpack texture directives explicitly replace named samplers.
+        // They must win over the standard framebuffer bindings and any
+        // resource/uniform setup above (for example,
+        // texture.deferred.colortex3 in Complementary's cloud pass).
+        customTextures.bind(pass, program);
     }
 
     protected List<Attachment> effectiveDrawBuffersForCurrentPhase(PipelineProgram pipelineProgram) {

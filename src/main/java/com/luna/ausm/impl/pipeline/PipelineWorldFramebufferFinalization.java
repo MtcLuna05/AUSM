@@ -568,11 +568,6 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
         TextureBinder.bindShadowTextures(program.pass());
         shaderProgram.bind();
         bindProgramResources(program.pass(), shaderProgram);
-        // Resource and uniform uploads may touch arbitrary texture units.
-        // Reassert the deferred inputs last so fullscreen passes sample the
-        // current ping-pong read textures, never an output or stale binding.
-        TextureBinder.bindDeferredTextures();
-        TextureBinder.bindShadowTextures(program.pass());
         self().logFullscreenSamplerProbe(program, shaderProgram);
         self().logLightShaftInputProbe(program, shaderProgram);
         return true;
