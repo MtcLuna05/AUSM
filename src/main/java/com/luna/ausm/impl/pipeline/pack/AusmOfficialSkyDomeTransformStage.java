@@ -25,6 +25,13 @@ public final class AusmOfficialSkyDomeTransformStage implements ShaderTransformS
         if (!parameters.fragmentShader() || parameters.pass() != RenderPass.FINAL) {
             return source;
         }
+        // Complementary produces its sky and volumetric clouds in its own
+        // final program. Wrapping that result with AUSM's legacy lower-sky
+        // repair can blend its cloud buffer back toward the vanilla sky based
+        // on depth, which corrupts the pack-owned cloud image.
+        if (source.contains("Complementary Shaders by EminGT")) {
+            return source;
+        }
         if (source.contains(MARKER) || source.contains("AUSM_SKY_TEST_ENABLED")) {
             return source;
         }

@@ -222,7 +222,13 @@ abstract class PipelineChunkUpdateTracking extends PipelineBotaniaSkyRendering {
     }
 
     public boolean shouldUseOwnedSkyOverrideWorld(World world) {
-        return self().isSimpleVoidWorld(world) || self().isOverworldShaderEnvironment(world);
+        // Complementary owns its overworld sky and cloud data across the
+        // normal sky/deferred sequence. Drawing AUSM's extra full-screen sky
+        // backing there overwrites those intermediate attachments. Void-world
+        // support still needs the owned route because it has no vanilla sky.
+        return self().isSimpleVoidWorld(world)
+                || self().isOverworldShaderEnvironment(world)
+                && !self().isComplementaryFinalColorSourceSensitivePack();
     }
 
     protected int renderShaderlessBloomExtractionGeometry(Minecraft mc, Entity viewEntity, boolean allowPipelineActive) {

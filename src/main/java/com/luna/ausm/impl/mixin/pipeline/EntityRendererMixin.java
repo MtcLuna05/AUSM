@@ -19,6 +19,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraft.util.math.RayTraceResult;
+import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -698,11 +699,16 @@ public class EntityRendererMixin {
     @Inject(
             method = "func_175068_a",
             at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
-                    ordinal = 3,
+                    // Celeritas-compatible render transforms may replace the
+                    // RenderGlobal invocation itself. The TRANSLUCENT layer
+                    // constant remains immediately before that draw, so use it
+                    // as the stable phase boundary instead of the fourth call.
+                    value = "FIELD",
+                    target = "Lnet/minecraft/util/BlockRenderLayer;TRANSLUCENT:Lnet/minecraft/util/BlockRenderLayer;",
+                    opcode = Opcodes.GETSTATIC,
                     shift = At.Shift.BEFORE
-            )
+            ),
+            require = 1
     )
     private void onRenderWorldPassBeforeTranslucentTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
@@ -716,16 +722,7 @@ public class EntityRendererMixin {
         context.beginPhase(WorldRenderingPhase.TERRAIN_TRANSLUCENT);
     }
 
-    @Inject(
-            method = "func_175068_a",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/RenderGlobal;func_174977_a(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
-                    ordinal = 3,
-                    shift = At.Shift.AFTER
-            )
-    )
-    private void onRenderWorldPassAfterTranslucentTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+    private void ausm$finishTranslucentTerrain(int pass, float partialTicks) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldBypassWorldPassRendering()) {
             context.renderNativeAusmBloomLayerFromWorldPass(partialTicks, pass);
@@ -755,6 +752,13 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassBeforeHand(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
+        // Celeritas replaces the final RenderGlobal layer invocation, so an
+        // AFTER hook on vanilla's fourth call is never reached. The hand is
+        // the next stable world-pass boundary: close the water program here
+        // before it can leak into hand, weather, or presentation rendering.
+        if (context.getPhase() == WorldRenderingPhase.TERRAIN_TRANSLUCENT) {
+            ausm$finishTranslucentTerrain(pass, partialTicks);
+        }
         context.logSpecialLayerProbe("before-hand");
         if (context.shouldBypassWorldPassRendering()) {
             return;

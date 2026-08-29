@@ -74,6 +74,10 @@ jobs:
           name: AUSM-${{ github.sha }}
           path: dist
 
+      - name: Read full changelog
+        shell: bash
+        run: bash scripts/extract-changelog.sh --full > release-notes.md
+
       - name: Publish versioned release jar
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,8 +95,8 @@ jobs:
           release_tag="AUSM-${version}-Java8"
           if gh release view "${release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "${release_tag}" "${versioned_jar}" --repo "${GITHUB_REPOSITORY}" --clobber
+            gh release edit "${release_tag}" --repo "${GITHUB_REPOSITORY}" --notes-file release-notes.md
           else
-            bash scripts/extract-changelog.sh --full > release-notes.md
             gh release create "${release_tag}" "${versioned_jar}" --repo "${GITHUB_REPOSITORY}" \
               --title "AUSM ${version} Java 8" \
               --notes-file release-notes.md \
