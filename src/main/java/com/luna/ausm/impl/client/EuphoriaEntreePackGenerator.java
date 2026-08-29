@@ -59,7 +59,7 @@ public final class EuphoriaEntreePackGenerator {
     private static final String WORK_NAME = ".ausm-entree-euphoria-work";
     private static final String AUSM_112_PATCH_SUFFIX = " + AUSM 1.12.2 Patches";
     private static final String AUSM_112_PATCH_MARKER = ".ausm-1.12.2-patches-version";
-    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v13";
+    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v14";
     private static final String LOD_API_PROPERTY = "ausm.lod.api=1";
     private static final String LOD_HELPER = "shaders/lib/ausm/distantLod.glsl";
     private static final String LOD_HELPER_INCLUDE = "#include \"/lib/ausm/distantLod.glsl\"";
@@ -302,7 +302,14 @@ public final class EuphoriaEntreePackGenerator {
     }
 
     private static void overlayBundledFiles(Path staging) throws IOException {
+        overlayBundledFiles(staging, true);
+    }
+
+    private static void overlayBundledFiles(Path staging, boolean overwriteCommonLibrary) throws IOException {
         for (String relative : readManifest()) {
+            if (!overwriteCommonLibrary && relative.equals("shaders/lib/common.glsl")) {
+                continue;
+            }
             Path destination = staging.resolve(relative).normalize();
             if (!destination.startsWith(staging)) {
                 throw new IOException("Overlay entry escapes shaderpack root: " + relative);
@@ -372,7 +379,11 @@ public final class EuphoriaEntreePackGenerator {
             Path staging = safeDirectChild(shaderpacks, STAGING_NAME);
             deleteTree(staging);
             materializePack(sourcePack, staging);
-            overlayBundledFiles(staging);
+            // Complementary's current common.glsl owns its complete option surface.
+            // The bundled Entree-era copy is intentionally retained only for the
+            // Euphoria/Entree generator paths above; replacing it here deletes
+            // modern water, cloud, and material options before preprocessing.
+            overlayBundledFiles(staging, false);
             injectAUSM112LodSupportInto(staging);
             Files.writeString(staging.resolve(AUSM_112_PATCH_MARKER), token, StandardCharsets.UTF_8);
             publish(shaderpacks, staging, target);

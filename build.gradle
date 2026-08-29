@@ -10,6 +10,7 @@ plugins {
 
 import org.jetbrains.gradle.ext.Gradle
 import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -483,6 +484,11 @@ tasks.register('prepareMbcSafeHotSwap') {
             }
         }
         String preparedSettings = settings.replaceFirst(/(?m)^JvmArgs=.*$/, 'JvmArgs="' + jvmArgs + '"')
+        if (preparedSettings =~ /(?m)^OverrideJavaArgs=.*$/) {
+            preparedSettings = preparedSettings.replaceFirst(/(?m)^OverrideJavaArgs=.*$/, 'OverrideJavaArgs=true')
+        } else {
+            preparedSettings += (preparedSettings.endsWith('\n') ? '' : '\n') + 'OverrideJavaArgs=true\n'
+        }
         if (preparedSettings != settings) {
             Files.writeString(instanceConfig.toPath(), preparedSettings, java.nio.charset.StandardCharsets.UTF_8)
             logger.lifecycle("Prepared MeatballCraft safe AUSM hot swap profile: ${instanceConfig}")
@@ -492,6 +498,52 @@ tasks.register('prepareMbcSafeHotSwap') {
 
 tasks.named('installMbcJar').configure {
     mustRunAfter(tasks.named('prepareMbcRtxGpu'))
+}
+
+tasks.register('prepareSupersymmetryCleanroomHotSwap') {
+    group = 'development'
+    description = 'Keeps the Supersymmetry bootstrap on Java 8 and passes AUSM debug arguments to Cleanroom’s Java 25 relaunch.'
+    dependsOn(tasks.named('hotswapAgentJar'))
+    doLast {
+        File minecraftDirectory = meatballMinecraftDirectory()
+        File instanceConfig = new File(minecraftDirectory.parentFile, 'instance.cfg')
+        File relauncherConfig = new File(minecraftDirectory, 'config/relauncher.json')
+        if (!instanceConfig.isFile() || !relauncherConfig.isFile()) {
+            throw new GradleException("Supersymmetry Cleanroom configuration is missing under: ${minecraftDirectory}")
+        }
+
+        List<String> debugArgs = [
+                '-javaagent:' + tasks.named('hotswapAgentJar').get().archiveFile.get().asFile.absolutePath,
+                '-Dausm.hotswap.dir=' + layout.buildDirectory.dir('hotswap/classes').get().asFile.absolutePath,
+                '-Dmixin.hotSwap=false',
+                '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005'
+        ]
+        String instanceSettings = instanceConfig.getText('UTF-8')
+        def matcher = (instanceSettings =~ /(?m)^JvmArgs=(.*)$/)
+        if (!matcher.find()) {
+            throw new GradleException("Missing JvmArgs setting: ${instanceConfig}")
+        }
+        String bootstrapArgs = matcher.group(1).trim().replaceAll(/^"|"$/, '')
+        debugArgs.each { argument -> bootstrapArgs = bootstrapArgs.replace(argument, '') }
+        bootstrapArgs = bootstrapArgs.replaceAll(/\s+/, ' ').trim()
+        String bootstrapJava = new File(new File(System.getProperty('user.home'), '.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/java/jre-legacy'), 'bin/java').absolutePath
+        String preparedInstanceSettings = instanceSettings
+                .replaceFirst(/(?m)^JvmArgs=.*$/, 'JvmArgs="' + bootstrapArgs + '"')
+                .replaceFirst(/(?m)^JavaPath=.*$/, 'JavaPath=' + bootstrapJava)
+                .replaceFirst(/(?m)^JavaVersion=.*$/, 'JavaVersion=1.8.0_202')
+                .replaceFirst(/(?m)^JavaVendor=.*$/, 'JavaVendor=Oracle Corporation')
+        Files.writeString(instanceConfig.toPath(), preparedInstanceSettings, java.nio.charset.StandardCharsets.UTF_8)
+
+        Map<String, Object> relauncherSettings = (Map<String, Object>) new JsonSlurper().parse(relauncherConfig)
+        String relaunchArgs = (relauncherSettings.args ?: '').toString()
+        debugArgs.each { argument -> relaunchArgs = relaunchArgs.replace(argument, '') }
+        relaunchArgs = (relaunchArgs.replaceAll(/\s+/, ' ').trim() + ' ' + debugArgs.join(' ')).trim() + ' '
+        relauncherSettings.targetJavaVersion = 25
+        relauncherSettings.javaPath = new File(new File(System.getProperty('user.home'), '.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/java/eclipse_temurin_jre25.0.3+9'), 'bin/java').absolutePath
+        relauncherSettings.args = relaunchArgs
+        Files.writeString(relauncherConfig.toPath(), JsonOutput.prettyPrint(JsonOutput.toJson(relauncherSettings)) + '\n', java.nio.charset.StandardCharsets.UTF_8)
+        logger.lifecycle("Prepared Supersymmetry: Java 8 bootstrap -> Cleanroom Java 25 debug relaunch")
+    }
 }
 
 tasks.register('launchMbcDebug', Exec) {
@@ -529,6 +581,53 @@ tasks.register('launchMbcDebug', Exec) {
         List<String> missingSettings = requiredSettings.findAll { setting -> !instanceSettings.contains(setting) }
         if (!missingSettings.isEmpty()) {
             throw new GradleException("MeatballCraft debug launch is missing required instance settings ${missingSettings}: ${instanceConfig}")
+        }
+    }
+}
+
+tasks.register('launchSupersymmetryDebug', Exec) {
+    group = 'development'
+    description = 'Builds, installs, and launches Supersymmetry through Prism with the AUSM watcher and JDWP.'
+    dependsOn {
+        String configuredDirectory = project.findProperty('meatball_minecraft_dir')?.toString()?.trim()
+        if (configuredDirectory == null || configuredDirectory.isEmpty()) {
+            throw new GradleException('launchSupersymmetryDebug requires -Pmeatball_minecraft_dir=<Supersymmetry minecraft directory>.')
+        }
+        [tasks.named('prepareMbcRtxGpu'), tasks.named('prepareSupersymmetryCleanroomHotSwap'), tasks.named('installMbcJar')]
+    }
+    workingDir(projectDir)
+    environment(meatballRtxGpuEnvironment)
+    List<String> prismCommand = ['flatpak', 'run']
+    meatballRtxGpuEnvironment.each { name, value ->
+        prismCommand.add("--env=${name}=${value}")
+    }
+    prismCommand.add('--env=AUSM_DEBUG_KEYBINDS=1')
+    prismCommand.addAll([
+            '--command=prismlauncher',
+            'org.prismlauncher.PrismLauncher',
+            '--show-window',
+            '--launch',
+            'Supersymmetry'
+    ])
+    commandLine(*prismCommand)
+    doFirst {
+        File minecraftDirectory = meatballMinecraftDirectory()
+        if (minecraftDirectory.parentFile?.name != 'Supersymmetry') {
+            throw new GradleException("launchSupersymmetryDebug only accepts the Supersymmetry profile, got: ${minecraftDirectory}")
+        }
+        String instanceSettings = new File(minecraftDirectory.parentFile, 'instance.cfg').getText('UTF-8')
+        String relauncherSettings = new File(minecraftDirectory, 'config/relauncher.json').getText('UTF-8')
+        List<String> requiredSettings = [
+                'AutomaticJava=false',
+                'JavaVersion=1.8.',
+                'JavaPath=' + new File(new File(System.getProperty('user.home'), '.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/java/jre-legacy'), 'bin/java').absolutePath,
+                '"targetJavaVersion": 25',
+                '-javaagent:' + tasks.named('hotswapAgentJar').get().archiveFile.get().asFile.absolutePath,
+                '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005'
+        ]
+        List<String> missingSettings = requiredSettings.findAll { setting -> !(instanceSettings + relauncherSettings).contains(setting) }
+        if (!missingSettings.isEmpty()) {
+            throw new GradleException("Supersymmetry debug launch is missing required instance settings ${missingSettings}")
         }
     }
 }

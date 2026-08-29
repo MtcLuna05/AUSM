@@ -43,6 +43,7 @@ public final class ShaderOptionScanner {
                 scanShaderFile(pack, base + ".vsh", sliders, propertyOptions, options, visitedFiles);
                 scanShaderFile(pack, base + ".fsh", sliders, propertyOptions, options, visitedFiles);
                 scanShaderFile(pack, base + ".gsh", sliders, propertyOptions, options, visitedFiles);
+                scanShaderFile(pack, base + ".glsl", sliders, propertyOptions, options, visitedFiles);
             }
         }
         scanShaderFile(pack, layout.rootPath("shader.h"), sliders, propertyOptions, options, visitedFiles);

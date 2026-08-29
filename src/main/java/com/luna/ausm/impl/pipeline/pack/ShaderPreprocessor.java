@@ -155,6 +155,10 @@ public class ShaderPreprocessor {
             String processed = applyOptionOverride(line, sourceOptions);
             processed = guardVoxelDependentFeatures(processed);
             processed = normalizeUnsupportedPreprocessor(processed);
+            String processedTrimmed = processed.trim();
+            if (processedTrimmed.matches("(?i)composite\\d+ has been reserved for future use.*")) {
+                processed = processed.substring(0, processed.indexOf(processedTrimmed)) + "// " + processedTrimmed;
+            }
             finalSource.append(normalizeLegacyGlsl(processed, glslVersion)).append("\n");
         }
 

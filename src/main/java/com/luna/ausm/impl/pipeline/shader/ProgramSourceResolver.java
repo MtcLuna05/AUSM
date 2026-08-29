@@ -20,26 +20,34 @@ public final class ProgramSourceResolver {
     }
 
     public static ProgramSourceSet resolve(ShaderPack pack, ProgramId programId) {
+        return resolve(pack, programId, ShaderDimensionContext.currentDimensionId());
+    }
+
+    static ProgramSourceSet resolve(ShaderPack pack, ProgramId programId, int dimensionId) {
         ShaderPackLayout layout = ShaderPackLayout.detect(pack);
-        int dimensionId = ShaderDimensionContext.currentDimensionId();
+
+        String vertexPath = resolveStage(pack, layout, dimensionId, programId, ".vsh");
+        String fragmentPath = resolveStage(pack, layout, dimensionId, programId, ".fsh");
+        String glslPath = resolveStage(pack, layout, dimensionId, programId, ".glsl");
+        if (glslPath != null && isStageGuardedSource(pack, glslPath)) {
+            if (vertexPath == null) {
+                vertexPath = glslPath;
+            }
+            if (fragmentPath == null) {
+                fragmentPath = glslPath;
+            }
+        } else if (fragmentPath == null) {
+            fragmentPath = glslPath;
+        }
 
         return new ProgramSourceSet(
                 programId,
-                resolveStage(pack, layout, dimensionId, programId, ".vsh"),
+                vertexPath,
                 resolveStage(pack, layout, dimensionId, programId, ".tcs"),
                 resolveStage(pack, layout, dimensionId, programId, ".tes"),
-                resolveFragmentStage(pack, layout, dimensionId, programId),
+                fragmentPath,
                 resolveStage(pack, layout, dimensionId, programId, ".gsh")
         );
-    }
-
-    private static String resolveFragmentStage(ShaderPack pack, ShaderPackLayout layout, int dimensionId, ProgramId programId) {
-        String fragmentPath = resolveStage(pack, layout, dimensionId, programId, ".fsh");
-        if (fragmentPath != null) {
-            return fragmentPath;
-        }
-        String glslPath = resolveStage(pack, layout, dimensionId, programId, ".glsl");
-        return glslPath != null && !isStageGuardedSource(pack, glslPath) ? glslPath : null;
     }
 
     private static String resolveStage(ShaderPack pack, ShaderPackLayout layout, int dimensionId, ProgramId programId, String extension) {

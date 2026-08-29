@@ -39,6 +39,9 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
     private static final String CELERITAS_MINECRAFT_MIXIN = "org.taumc.celeritas.mixin.core.MinecraftMixin";
     private static final String CELERITAS_RENDER_GLOBAL_MIXIN = "org.taumc.celeritas.mixin.core.terrain.RenderGlobalMixin";
     private static final String CELERITAS_VINTAGE = "org.taumc.celeritas.CeleritasVintage";
+    private static final String CELERITAS_DEFAULT_CHUNK_RENDERER = "org.embeddedt.embeddium.impl.render.chunk.DefaultChunkRenderer";
+    private static final String CELERITAS_TERRAIN_PASS = "(Lorg/embeddedt/embeddium/impl/render/chunk/terrain/TerrainRenderPass;)V";
+    private static final String PIPELINE_CONTEXT = "com/luna/ausm/impl/pipeline/PipelineContext";
     private static final String UNIVERSAL_TWEAKS_FRUSTUM_MIXIN = "mod.acgaming.universaltweaks.bugfixes.world.culling.mixin.UTFrustumCullingMixin";
     private static final String NAUGHTHIRIUM_FLOAT_VERTEX_CONSUMER = "zone.rong.naughthirium.compat.loliasm.FloatVertexConsumer";
     private static final String NAUGHTHIRIUM_RENDER_TASK_MIXIN = "zone.rong.naughthirium.mixins.loliasm.RenderChunkTaskCompileMixin";
@@ -95,6 +98,9 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         if (CELERITAS_VINTAGE.equals(name) || CELERITAS_VINTAGE.equals(transformedName)) {
             return stripCeleritasDebugOverlayHandler(basicClass);
         }
+        if (CELERITAS_DEFAULT_CHUNK_RENDERER.equals(name) || CELERITAS_DEFAULT_CHUNK_RENDERER.equals(transformedName)) {
+            return rebindAusmAfterCeleritasPassSetup(basicClass);
+        }
         // Celeritas prevents LoliASM's BufferBuilder primer interface from being
         // applied even when Nothirium remains the selected terrain renderer.
         if (shouldStripNaughthiriumHooks()
@@ -139,6 +145,54 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         ClassNode classNode = new ClassNode();
         reader.accept(classNode, 0);
         classNode.methods.removeIf(method -> !"<init>".equals(method.name));
+        ClassWriter writer = new SafeClassWriter(reader, ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
+        classNode.accept(writer);
+        return writer.toByteArray();
+    }
+
+    /**
+     * Celeritas selects its native program at the start of every terrain pass.
+     * Its subsequent native batch setup does not change the GL program, so
+     * restore AUSM once here before the batches write their vertices.
+     */
+    private static byte[] rebindAusmAfterCeleritasPassSetup(byte[] basicClass) {
+        ClassReader reader = new ClassReader(basicClass);
+        ClassNode classNode = new ClassNode();
+        reader.accept(classNode, 0);
+        boolean changed = false;
+        for (MethodNode method : classNode.methods) {
+            if (!"render".equals(method.name)) {
+                continue;
+            }
+            for (AbstractInsnNode instruction : method.instructions.toArray()) {
+                if (!(instruction instanceof MethodInsnNode call)
+                        || !"begin".equals(call.name)
+                        || !CELERITAS_TERRAIN_PASS.equals(call.desc)) {
+                    continue;
+                }
+                InsnList rebind = new InsnList();
+                rebind.add(new MethodInsnNode(
+                        Opcodes.INVOKESTATIC,
+                        PIPELINE_CONTEXT,
+                        "getInstance",
+                        "()Lcom/luna/ausm/impl/pipeline/PipelineContext;",
+                        false
+                ));
+                rebind.add(new MethodInsnNode(
+                        Opcodes.INVOKEVIRTUAL,
+                        PIPELINE_CONTEXT,
+                        "rebindActivePipelinePassAfterRendererSetup",
+                        "()V",
+                        false
+                ));
+                method.instructions.insert(instruction, rebind);
+                changed = true;
+                break;
+            }
+        }
+        if (!changed) {
+            return basicClass;
+        }
         ClassWriter writer = new SafeClassWriter(reader, ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
         classNode.accept(writer);
         return writer.toByteArray();
