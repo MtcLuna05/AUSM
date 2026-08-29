@@ -171,7 +171,20 @@ public final class ShaderProgramSet {
             String tessellationControlPath = resolveProgramArrayStage(pack, layout, name, ".tcs");
             String tessellationEvaluationPath = resolveProgramArrayStage(pack, layout, name, ".tes");
             String geometryPath = resolveProgramArrayStage(pack, layout, name, ".gsh");
-            String fragmentPath = resolveProgramArrayFragmentStage(pack, layout, arrayId, name);
+            String fragmentPath = resolveProgramArrayStage(pack, layout, name, ".fsh");
+            String glslPath = resolveProgramArrayStage(pack, layout, name, ".glsl");
+            if (glslPath != null && arrayId != ProgramArrayId.SHADOWCOMP && !isComputeLikeSource(pack, glslPath)) {
+                if (isStageGuardedSource(pack, glslPath)) {
+                    if (vertexPath == null) {
+                        vertexPath = glslPath;
+                    }
+                    if (fragmentPath == null) {
+                        fragmentPath = glslPath;
+                    }
+                } else if (fragmentPath == null) {
+                    fragmentPath = glslPath;
+                }
+            }
             ShaderProgramSource source = new ShaderProgramSource(
                     null,
                     name,
@@ -190,25 +203,6 @@ public final class ShaderProgramSet {
             sources.add(source);
         }
         return List.copyOf(sources);
-    }
-
-    private static String resolveProgramArrayFragmentStage(ShaderPack pack, ShaderPackLayout layout, ProgramArrayId arrayId, String name) {
-        String fragmentPath = resolveProgramArrayStage(pack, layout, name, ".fsh");
-        if (fragmentPath != null) {
-            return fragmentPath;
-        }
-        String glslPath = resolveProgramArrayStage(pack, layout, name, ".glsl");
-        if (glslPath == null || arrayId == ProgramArrayId.SHADOWCOMP || isComputeLikeSource(pack, glslPath)) {
-            return null;
-        }
-        if (isStageGuardedSource(pack, glslPath)) {
-            MainMod.LOGGER.debug(
-                    "[ShaderProgramSet] Skipping unreferenced stage-guarded program source '{}'.",
-                    glslPath
-            );
-            return null;
-        }
-        return glslPath;
     }
 
     private static String resolveProgramArrayStage(ShaderPack pack, ShaderPackLayout layout, String name, String extension) {

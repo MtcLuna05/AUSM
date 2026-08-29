@@ -501,6 +501,11 @@ tasks.register('prepareMbcSafeHotSwap') {
             }
         }
         String preparedSettings = settings.replaceFirst(/(?m)^JvmArgs=.*$/, 'JvmArgs="' + jvmArgs + '"')
+        if (preparedSettings =~ /(?m)^OverrideJavaArgs=.*$/) {
+            preparedSettings = preparedSettings.replaceFirst(/(?m)^OverrideJavaArgs=.*$/, 'OverrideJavaArgs=true')
+        } else {
+            preparedSettings += (preparedSettings.endsWith('\n') ? '' : '\n') + 'OverrideJavaArgs=true\n'
+        }
         if (preparedSettings != settings) {
             Files.writeString(instanceConfig.toPath(), preparedSettings, java.nio.charset.StandardCharsets.UTF_8)
             logger.lifecycle("Prepared MeatballCraft safe AUSM hot swap profile: ${instanceConfig}")
