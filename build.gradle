@@ -319,6 +319,11 @@ jar {
     finalizedBy(tasks.named(remapTaskName).get())
 }
 
+tasks.named('sourcesJar') {
+    // Keep local runtime class-redefinition helpers out of published sources too.
+    exclude 'com/luna/ausm/impl/hotswap/**'
+}
+
 tasks.named(remapTaskName) {
     archiveFileName.set("AUSM-${project.version}-remapped.jar")
 }

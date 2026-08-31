@@ -34,5 +34,9 @@ DecompOpti/
 # Local vision/watch helper scripts
 tools/
 
+# Local-only runtime class redefinition tooling
+/src/main/java/com/luna/ausm/impl/hotswap/
+/src/test/java/com/luna/ausm/impl/hotswap/
+
 # Hidden/dot folders
 **/.*/

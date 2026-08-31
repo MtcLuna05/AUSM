@@ -46,6 +46,10 @@ jobs:
             find build/libs -maxdepth 1 -type f -print >&2 || true
             exit 1
           fi
+          if jar tf "${jar_path}" | grep -q '^com/luna/ausm/impl/hotswap/'; then
+            echo "Release jar contains local runtime class-redefinition tooling." >&2
+            exit 1
+          fi
           cp "${jar_path}" "dist/${jar_name}"
           cp "${jar_path}" "dist/AUSM-latest.jar"
 
