@@ -8,7 +8,6 @@ import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.ScaledResolution;
-import net.minecraft.client.shader.Framebuffer;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL14;
 
@@ -26,7 +25,6 @@ public final class AusmGuiRenderController {
     }
 
     public static void beginFrame(long nanoTime) {
-        prepareNoWorldFramebuffer();
         compilePipelineBeforeFirstPlayableWorldFrame();
         PipelineContext.getInstance().beginClientRenderFrame(nanoTime);
     }
@@ -190,32 +188,4 @@ public final class AusmGuiRenderController {
         return ShaderPipelineWorldLoadGate.isPlayableWorldReady();
     }
 
-    private static void prepareNoWorldFramebuffer() {
-        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
-        if (minecraft == null || MinecraftReflectionCompat.world(minecraft) != null) {
-            return;
-        }
-        Framebuffer framebuffer = MinecraftReflectionCompat.minecraftFramebuffer(minecraft);
-        if (framebuffer != null) {
-            MinecraftReflectionCompat.bindFramebuffer(framebuffer, false);
-            MinecraftReflectionCompat.glStateViewport(0, 0,
-                    MinecraftReflectionCompat.displayWidth(minecraft),
-                    MinecraftReflectionCompat.displayHeight(minecraft));
-        }
-        MinecraftReflectionCompat.glUseProgram(0);
-        MinecraftReflectionCompat.glStateSetActiveTexture(MinecraftReflectionCompat.defaultTexUnit());
-        MinecraftReflectionCompat.glStateBindTexture(0);
-        MinecraftReflectionCompat.glStateEnableTexture2D();
-        MinecraftReflectionCompat.glStateEnableAlpha();
-        MinecraftReflectionCompat.glStateEnableBlend();
-        MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
-                GL11.GL_SRC_ALPHA,
-                GL11.GL_ONE_MINUS_SRC_ALPHA,
-                GL11.GL_ONE,
-                GL11.GL_ZERO
-        );
-        MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        MinecraftReflectionCompat.glStateDepthMask(true);
-        MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-    }
 }

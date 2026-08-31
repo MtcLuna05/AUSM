@@ -16,12 +16,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class FramebufferMixin {
     @Inject(method = "framebufferRenderExt(IIZ)V", at = @At("HEAD"))
     private void ausm$repairClientArrayStateBeforeFramebufferRender(int width, int height, boolean disableBlend, CallbackInfo ci) {
+        if (ausm$isNoWorldFramebufferPass()) {
+            return;
+        }
         ausm$repairClientArrayState();
         PipelineContext.getInstance().prepareShaderlessHiddenGuiFramebufferPresentation();
     }
 
     @Inject(method = "func_178038_a(IIZ)V", at = @At("HEAD"), remap = false, require = 0)
     private void ausm$repairClientArrayStateBeforeFramebufferRenderSrg(int width, int height, boolean disableBlend, CallbackInfo ci) {
+        if (ausm$isNoWorldFramebufferPass()) {
+            return;
+        }
         ausm$repairClientArrayState();
         PipelineContext.getInstance().prepareShaderlessHiddenGuiFramebufferPresentation();
     }
@@ -88,6 +94,11 @@ public class FramebufferMixin {
         FixedFunctionGlState.resetClientArrayState(true);
     }
 
+    private static boolean ausm$isNoWorldFramebufferPass() {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        return minecraft == null || MinecraftReflectionCompat.world(minecraft) == null;
+    }
+
     private boolean ausm$presentFramebufferImmediately(int width, int height, boolean disableBlend) {
         // Gnetum caches the HUD in alternating transparent framebuffers then
         // relies on vanilla's textured final presentation. A raw FBO blit here
@@ -106,6 +117,14 @@ public class FramebufferMixin {
         }
         PipelineFrameLayerCapture.mirrorExternalPresentation(framebuffer);
         PipelineContext context = PipelineContext.getInstance();
+        // GuiMainMenu uses framebufferRenderExt while it builds and blurs the
+        // vanilla panorama with no world loaded.  That is an internal texture
+        // pass, not final window presentation; replacing it with a raw FBO
+        // blit turns the panorama into a white screen.  Only own this boundary
+        // during actual in-world presentation.
+        if (!context.shouldDirectPresentFramebuffer()) {
+            return false;
+        }
         ausm$repairClientArrayState();
         context.prepareFramebufferPresentation();
         return context.presentFramebufferDirectly(framebuffer, width, height);
