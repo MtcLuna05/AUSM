@@ -27,6 +27,7 @@ import org.lwjgl.opengl.GL43;
 public class ShaderPreprocessor {
     private static final Pattern DEFINE_PATTERN = Pattern.compile("^\\s*(?://\\s*)?#define\\s+([A-Za-z_][A-Za-z0-9_]*)\\b.*$");
     private static final Pattern CONST_PATTERN = Pattern.compile("^(\\s*const\\s+\\w+\\s+)([A-Za-z_][A-Za-z0-9_]*)(\\s*=\\s*)([^;]+)(;.*)$");
+    private static final Pattern LATE_PI_DECLARATION_PATTERN = Pattern.compile("^\\s*const\\s+float\\s+pi\\s*=.*$");
     private static final Pattern CONDITION_DIRECTIVE_PATTERN = Pattern.compile("^(\\s*#(?:if|elif)\\s+)(.*)$");
     private static final Pattern INFIX_IN_PATTERN = Pattern.compile("([A-Za-z_][A-Za-z0-9_\\.]*|[-+]?\\d+(?:\\.\\d+)?)\\s+in\\s*\\(([^()]*)\\)");
     private static final Pattern FUNCTION_IN_PATTERN = Pattern.compile("\\bin\\s*\\(([^()]*)\\)");
@@ -144,6 +145,9 @@ public class ShaderPreprocessor {
         int glslVersion = parseGlslVersion(versionLine);
         ShaderOptions sourceOptions = removeFunctionCollidingOptions(options, rawLines);
         ShaderOptions preludeOptions = removeSourceDeclaredOptions(sourceOptions, rawLines);
+        boolean requiresUnboundLatePiCompatibility = rawLines.stream()
+                .map(String::trim)
+                .anyMatch(line -> LATE_PI_DECLARATION_PATTERN.matcher(line).matches());
 
         StringBuilder finalSource = new StringBuilder();
         for (String line : rawLines) {
@@ -153,6 +157,10 @@ public class ShaderPreprocessor {
             }
 
             String processed = applyOptionOverride(line, sourceOptions);
+            if (requiresUnboundLatePiCompatibility
+                    && LATE_PI_DECLARATION_PATTERN.matcher(processed.trim()).matches()) {
+                processed = "// AUSM supplies pi in the generated prelude.";
+            }
             processed = guardVoxelDependentFeatures(processed);
             processed = normalizeUnsupportedPreprocessor(processed);
             String processedTrimmed = processed.trim();
@@ -172,6 +180,9 @@ public class ShaderPreprocessor {
         out.append(getRenderStageDefines()).append("\n");
         out.append(getProgramDefines(pass, programName)).append("\n");
         out.append(getOptiFineMetadataDefines()).append("\n");
+        if (requiresUnboundLatePiCompatibility) {
+            out.append(getUnboundLatePiCompatibilityPrelude()).append("\n");
+        }
         out.append(finalSource);
 
         String source = addMissingDistantHorizonsCompat(out.toString(), pass, shaderType);
@@ -480,6 +491,20 @@ public class ShaderPreprocessor {
                 #define RGBA32F 0
                 #define RGB10_A2 0
                 #define R11F_G11F_B10F 0
+                """;
+    }
+
+    private static String getUnboundLatePiCompatibilityPrelude() {
+        return """
+                // Complementary Unbound declares pi after include files that use it.
+                // GLSL requires the declaration before those uses.
+                #define pi 3.14159265359
+                #ifndef EMISSION_MULTIPLIER
+                #define EMISSION_MULTIPLIER 1.0
+                #endif
+                #ifndef LAVA_NOISE_INTENSITY
+                #define LAVA_NOISE_INTENSITY 1.0
+                #endif
                 """;
     }
 

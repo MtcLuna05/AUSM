@@ -53,6 +53,8 @@ public class NetHandlerPlayClientMixin {
     private int ausm$preTeleportDimension = Integer.MIN_VALUE;
     @Unique
     private boolean ausm$hasPreTeleportPosition;
+    @Unique
+    private boolean ausm$queuedInitialPlayerChunk;
 
     @Inject(method = {"func_147273_a", "handleUpdateTileEntity"}, at = @At("HEAD"), cancellable = true)
     private void ausm$ignoreUpdateTileEntityWithoutWorld(SPacketUpdateTileEntity packetIn, CallbackInfo ci) {
@@ -147,14 +149,13 @@ public class NetHandlerPlayClientMixin {
         }
     }
 
-    @Inject(method = {"func_184330_a", "handlePlayerPosLook"}, at = @At("HEAD"), cancellable = true)
+    @Inject(method = {"func_184330_a", "handlePlayerPosLook"}, at = @At("HEAD"))
     private void ausm$ignorePlayerPosLookWithoutPlayer(SPacketPlayerPosLook packetIn, CallbackInfo ci) {
         WorldClient world = ausm$world();
         Minecraft mc = MinecraftReflectionCompat.minecraft();
         EntityPlayerSP player = mc != null ? MinecraftReflectionCompat.player(mc) : null;
         if (world == null || player == null) {
             ausm$hasPreTeleportPosition = false;
-            ci.cancel();
             return;
         }
         ausm$preTeleportX = MinecraftReflectionCompat.posX(player);
@@ -168,6 +169,7 @@ public class NetHandlerPlayClientMixin {
 
     @Inject(method = {"func_184330_a", "handlePlayerPosLook"}, at = @At("RETURN"))
     private void ausm$resyncTerrainAfterTeleport(SPacketPlayerPosLook packetIn, CallbackInfo ci) {
+        ausm$queueInitialPlayerChunkRefresh();
         if (!ausm$hasPreTeleportPosition) {
             return;
         }
@@ -190,6 +192,23 @@ public class NetHandlerPlayClientMixin {
                 dx * dx + dy * dy + dz * dz,
                 dx * dx + dz * dz
         );
+    }
+
+    @Unique
+    private void ausm$queueInitialPlayerChunkRefresh() {
+        if (ausm$queuedInitialPlayerChunk) {
+            return;
+        }
+        WorldClient world = ausm$world();
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
+        EntityPlayerSP player = mc != null ? MinecraftReflectionCompat.player(mc) : null;
+        if (world == null || player == null) {
+            return;
+        }
+        ausm$queuedInitialPlayerChunk = true;
+        int chunkX = (int) Math.floor(MinecraftReflectionCompat.posX(player)) >> 4;
+        int chunkZ = (int) Math.floor(MinecraftReflectionCompat.posZ(player)) >> 4;
+        PipelineContext.getInstance().queueClientChunkRenderRefresh(world, chunkX, chunkZ, "chunk-data");
     }
 
     @Inject(method = {"func_147295_a", "handleSetExperience"}, at = @At("HEAD"), cancellable = true)

@@ -379,22 +379,25 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;drawArrays(I)V",
+                    target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;func_177358_a(I)V",
                     ordinal = 2
             ),
-            require = 0
+            require = 1,
+            remap = false
     )
     private void ausm$drawShaderedLowerSkyVbo(VertexBuffer vertexBuffer, int mode) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
             return;
         }
-        context.beginPhase(WorldRenderingPhase.SKY_GROUND);
+        context.beginPhase(WorldRenderingPhase.SKY);
         try {
-            VanillaSkyHorizonSmoother.harmonizeLowerDomeColor();
+            if (!context.isActive()) {
+                VanillaSkyHorizonSmoother.harmonizeLowerDomeColor();
+            }
             MinecraftReflectionCompat.vertexBufferDrawArrays(vertexBuffer, mode);
         } finally {
             context.endPass();
@@ -402,22 +405,25 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/GlStateManager;callList(I)V",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179148_o(I)V",
                     ordinal = 2
             ),
-            require = 0
+            require = 1,
+            remap = false
     )
     private void ausm$drawShaderedLowerSkyList(int list) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
             return;
         }
-        context.beginPhase(WorldRenderingPhase.SKY_GROUND);
+        context.beginPhase(WorldRenderingPhase.SKY);
         try {
-            VanillaSkyHorizonSmoother.harmonizeLowerDomeColor();
+            if (!context.isActive()) {
+                VanillaSkyHorizonSmoother.harmonizeLowerDomeColor();
+            }
             MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179148_o", "callList"}, new Class<?>[]{int.class}, list);
         } finally {
             context.endPass();
@@ -425,22 +431,25 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/GlStateManager;callList(I)V",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179148_o(I)V",
                     ordinal = 3
             ),
-            require = 0
+            require = 1,
+            remap = false
     )
     private void ausm$drawShaderedLowerSkyListAfterHorizon(int list) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldSuppressVanillaLowerSkyGeometry()) {
             return;
         }
-        context.beginPhase(WorldRenderingPhase.SKY_GROUND);
+        context.beginPhase(WorldRenderingPhase.SKY);
         try {
-            VanillaSkyHorizonSmoother.harmonizeLowerDomeColor();
+            if (!context.isActive()) {
+                VanillaSkyHorizonSmoother.harmonizeLowerDomeColor();
+            }
             MinecraftReflectionCompat.invoke(GlStateManager.class, new String[]{"func_179148_o", "callList"}, new Class<?>[]{int.class}, list);
         } finally {
             context.endPass();
@@ -462,9 +471,11 @@ public class RenderSkyMixin {
             ausm$forceResetTessellator(tessellator);
             return;
         }
-        context.beginPhase(WorldRenderingPhase.SKY_GROUND);
+        context.beginPhase(WorldRenderingPhase.SKY);
         try {
-            VanillaSkyHorizonSmoother.harmonizeLowerDomeColor();
+            if (!context.isActive()) {
+                VanillaSkyHorizonSmoother.harmonizeLowerDomeColor();
+            }
             MinecraftReflectionCompat.tessellatorDraw(tessellator);
         } finally {
             context.endPass();
