@@ -4,7 +4,6 @@ import com.luna.ausm.impl.pipeline.PipelineContext;
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.luna.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
-import com.luna.ausm.impl.pipeline.vertex.IPipelineRenderChunk;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GlStateManager;
@@ -20,7 +19,6 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
@@ -74,10 +72,13 @@ public class VboRenderListMixin {
             )
     )
     private VertexBuffer ausm$captureChunkVertexFormat(RenderChunk renderChunk, int layer) {
-        BlockRenderLayer blockLayer = ausm$layerByOrdinal(layer);
-        ausm$currentChunkUsesPipelineVertexFormat = renderChunk instanceof IPipelineRenderChunk pipelineRenderChunk
-                && pipelineRenderChunk.ausm$usesPipelineVertexFormat(blockLayer);
-        return MinecraftReflectionCompat.renderChunkVertexBuffer(renderChunk, layer);
+        VertexBuffer vertexBuffer = MinecraftReflectionCompat.renderChunkVertexBuffer(renderChunk, layer);
+        // RenderChunk's per-layer record can lag behind a forced vanilla
+        // terrain draw. The VBO retains the format it was allocated with, so
+        // it is the authoritative source for this draw's client-array stride.
+        ausm$currentChunkUsesPipelineVertexFormat = ExtendedVertexFormats.isPipelineBlock(
+                MinecraftReflectionCompat.vertexBufferFormat(vertexBuffer));
+        return vertexBuffer;
     }
 
     @Redirect(
@@ -92,13 +93,24 @@ public class VboRenderListMixin {
         }
     }
 
-    @ModifyArg(
+    @Redirect(
             method = "renderChunkLayer",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;drawArrays(I)V"),
-            index = 0
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;drawArrays(I)V")
     )
-    private int ausm$tessellatedChunkDrawMode(int drawMode) {
-        return PipelineContext.getInstance().drawModeForActiveProgram(drawMode);
+    private void ausm$drawTessellatedChunk(VertexBuffer vertexBuffer, int drawMode) {
+        // The VBO is the final producer of this draw's layout. Reapply the
+        // matching client arrays immediately before drawing: intervening
+        // vanilla/compat code may have restored the 28-byte layout after the
+        // VboRenderList setup call.
+        if (ExtendedVertexFormats.isPipelineBlock(MinecraftReflectionCompat.vertexBufferFormat(vertexBuffer))) {
+            ausm$setupPipelineArrayPointers();
+        } else {
+            ausm$setupVanillaArrayPointers();
+        }
+        MinecraftReflectionCompat.vertexBufferDrawArrays(
+                vertexBuffer,
+                PipelineContext.getInstance().drawModeForActiveProgram(drawMode)
+        );
     }
 
     @Unique

@@ -32,7 +32,8 @@ final class GuiControlHints {
         // Reset the inherited widget tint on both sides of the draw so a hovered
         // real button cannot leave the faux Controls button briefly darkened.
         MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
-        button.drawButton(MinecraftReflectionCompat.minecraft(), Integer.MIN_VALUE, Integer.MIN_VALUE, 0.0F);
+        MinecraftReflectionCompat.guiButtonDrawButton(button, MinecraftReflectionCompat.minecraft(),
+                Integer.MIN_VALUE, Integer.MIN_VALUE, 0.0F);
         MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 

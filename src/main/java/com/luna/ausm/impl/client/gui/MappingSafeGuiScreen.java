@@ -110,7 +110,7 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
         if (lines == null || lines.isEmpty()) {
             return;
         }
-        super.drawHoveringText(lines, x, y);
+        MinecraftReflectionCompat.guiScreenDrawHoveringText(this, lines, x, y);
     }
 
     public final boolean func_73868_f() {

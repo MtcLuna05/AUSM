@@ -655,6 +655,16 @@ abstract class MinecraftGlStateReflection extends MinecraftGuiRenderingReflectio
         MinecraftReflectionCompat.bufferEndVertex(textured != null ? textured : positioned != null ? positioned : buffer);
     }
 
+    public static void bufferPosTexColorEnd(BufferBuilder buffer, double x, double y, double z, double u, double v,
+                                            int red, int green, int blue, int alpha) {
+        Object positioned = MinecraftReflectionCompat.bufferPos(buffer, x, y, z);
+        Object textured = MinecraftReflectionCompat.bufferTex(positioned != null ? positioned : buffer, u, v);
+        Object colored = MinecraftReflectionCompat.bufferColor(textured != null ? textured
+                : positioned != null ? positioned : buffer, red, green, blue, alpha);
+        MinecraftReflectionCompat.bufferEndVertex(colored != null ? colored
+                : textured != null ? textured : positioned != null ? positioned : buffer);
+    }
+
     public static void bufferPosColorEnd(BufferBuilder buffer, double x, double y, double z,
                                          int red, int green, int blue, int alpha) {
         Object positioned = MinecraftReflectionCompat.bufferPos(buffer, x, y, z);
@@ -676,6 +686,10 @@ abstract class MinecraftGlStateReflection extends MinecraftGuiRenderingReflectio
 
     public static VertexFormat blockFormat() {
         return MinecraftReflectionCompat.defaultVertexFormat("field_176600_a", "BLOCK");
+    }
+
+    public static VertexFormat positionTexColorFormat() {
+        return MinecraftReflectionCompat.defaultVertexFormat("field_181102_h", "POSITION_TEX_COLOR");
     }
 
     protected static VertexFormat defaultVertexFormat(String srgName, String mcpName) {

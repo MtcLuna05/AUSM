@@ -40,16 +40,30 @@ public final class OwnedSkyStabilityTransformStage implements ShaderTransformSta
 
     @Override
     public String apply(String source, ShaderTransformParameters parameters) {
+        String transformed = source;
+        if (parameters.fragmentShader()
+                && parameters.pass() == RenderPass.GBUFFERS_SKYBASIC
+                && transformed.contains("float VdotU = dot(nViewPos, upVec);")
+                && transformed.contains("color.rgb = GetSky(VdotU, VdotS, dither, true, false);")
+                && !transformed.contains("AUSM_LOWER_SKY_HORIZON_CLAMP")) {
+            transformed = transformed.replace(
+                    "float VdotU = dot(nViewPos, upVec);",
+                    "float VdotU = dot(nViewPos, upVec); // AUSM_LOWER_SKY_HORIZON_CLAMP"
+            ).replace(
+                    "color.rgb = GetSky(VdotU, VdotS, dither, true, false);",
+                    "color.rgb = GetSky(max(VdotU, 0.0), VdotS, dither, true, false);"
+            );
+        }
         if (!parameters.fragmentShader()
                 || parameters.pass() != RenderPass.GBUFFERS_SKYBASIC
-                || source.contains(MARKER)
-                || !source.contains("AusmOwnedSkyStars")) {
-            return source;
+                || transformed.contains(MARKER)
+                || !transformed.contains("AusmOwnedSkyStars")) {
+            return transformed;
         }
 
-        String transformed = OWNED_STAR_FUNCTION.matcher(source)
+        transformed = OWNED_STAR_FUNCTION.matcher(transformed)
                 .replaceFirst(Matcher.quoteReplacement(FILTERED_STAR_FUNCTION.stripTrailing()));
-        if (!source.contains("if (ausmSimpleVoidWorld > 0)")) {
+        if (!transformed.contains("if (ausmSimpleVoidWorld > 0)")) {
             transformed = OWNED_SKY_ASSIGNMENT.matcher(transformed)
                     .replaceAll("$1if (ausmSimpleVoidWorld > 0) $2");
             transformed = OWNED_CELESTIAL_ASSIGNMENT.matcher(transformed)

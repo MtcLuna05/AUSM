@@ -89,6 +89,7 @@
     "pipeline.CustomMainMenuGuiCustomMixin",
     "pipeline.RenderChunkMixin",
     "pipeline.VertexBufferConsumerMixin",
+    "pipeline.VertexBufferMixin",
     "pipeline.VboRenderListMixin",
     "pipeline.WorldVertexBufferUploaderMixin",
     "compat.EfficientEntitiesModelRendererCompatMixin",

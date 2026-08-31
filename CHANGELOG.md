@@ -1,25 +1,15 @@
-# 1.0.2
+# 1.0.3
 
-- Fixed liquids disappearing in Complementary when Celeritas or GregTech changes the terrain render path.
-- Fixed Complementary Reimagined volumetric clouds rendering incorrectly.
-
-## Technical Changes
-
-- Route GregTech's replaced translucent terrain draw through AUSM's water pass instead of suppressing it as an extra bloom draw.
-- Keep Celeritas' native terrain setup from replacing AUSM's active G-buffer program.
-- Preserve modern Complementary common shader sources and support stage-guarded `.glsl` programs and their options.
-
-# 1.0.1
-
-- Fixed shadered liquids disappearing when Celeritas is installed.
-- Fixed some entities and custom models rendering translucent with shaders enabled.
-- Improved shader compatibility for framed blocks, contained shapes, and tile entities.
-- Added AbyssalCraft sunlight colours and a Dreadlands red-sky treatment.
-- Added an optional in-game update notification.
+- Fixed Complementary's lower sky flickering after terrain finishes loading.
+- Fixed corrupted terrain geometry and unreliable chunk rendering on Cleanroom.
+- Fixed Complementary Unbound shader compilation in affected configurations.
+- Fixed the player’s initial chunk occasionally failing to render after joining a world.
+- Improved Complementary patch generation so water, cloud, and material options remain available.
 
 ## Technical Changes
 
-- Render vanilla fluid geometry directly into AUSM's extended terrain buffer, preserving the vertex metadata Celeritas and Nothirium require.
-- Restore opaque depth writes for entity and block-entity G-buffer passes after translucent rendering.
-- Add Abyssal dimension defines and shader transforms for sky, lighting, volumetric light, and lens-flare handling.
-- Separate client and common proxy initialization so dedicated servers do not load client-only classes.
+- Clamp the Complementary lower-horizon sky input and route shadered lower-sky geometry through the sky pass without applying shaderless fog smoothing.
+- Restore each terrain VBO’s own extended vertex layout immediately before it is drawn, including Cleanroom paths that bypass the normal terrain hook.
+- Preprocess Complementary Unbound’s late `pi` declaration before dependent includes, and retain direct Complementary program sources rather than overlaying incompatible Euphoria programs.
+- Queue a one-time client chunk refresh after the player’s first position packet.
+- Keep the Java 8 and Java 25 artifacts aligned for these rendering and shader-compatibility fixes.

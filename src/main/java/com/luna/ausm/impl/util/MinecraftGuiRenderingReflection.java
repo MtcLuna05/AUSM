@@ -35,6 +35,7 @@ import net.minecraft.client.renderer.texture.ITextureObject;
 import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
 import net.minecraft.client.renderer.vertex.VertexBuffer;
+import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.client.resources.I18n;
 import net.minecraft.client.settings.GameSettings;
 import net.minecraft.client.shader.Framebuffer;
@@ -56,6 +57,13 @@ import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 
 abstract class MinecraftGuiRenderingReflection extends MinecraftWorldEntityReflection {
+    private static final ResourceLocation AUSM_OPTIONS_BACKGROUND =
+            new ResourceLocation("textures/gui/options_background.png");
+
+    public static ResourceLocation optionsBackgroundTexture() {
+        return AUSM_OPTIONS_BACKGROUND;
+    }
+
     public static int fontStringWidth(FontRenderer fontRenderer, String text) {
         return MinecraftReflectionCompat.callInt(fontRenderer, new String[]{"func_78256_a", "getStringWidth"},
                 new Class<?>[]{String.class}, 0, text);
@@ -91,6 +99,11 @@ abstract class MinecraftGuiRenderingReflection extends MinecraftWorldEntityRefle
         MinecraftReflectionCompat.invoke(Gui.class, new String[]{"func_73734_a", "drawRect"},
                 new Class<?>[]{int.class, int.class, int.class, int.class, int.class},
                 left, top, right, bottom, color);
+    }
+
+    public static void guiScreenDrawHoveringText(GuiScreen screen, List<String> lines, int x, int y) {
+        MinecraftReflectionCompat.invoke(screen, new String[]{"func_146283_a"},
+                new Class<?>[]{List.class, int.class, int.class}, lines, x, y);
     }
 
     public static int guiButtonId(GuiButton button) {
@@ -154,6 +167,11 @@ abstract class MinecraftGuiRenderingReflection extends MinecraftWorldEntityRefle
         return mouseX >= x && mouseY >= y
                 && mouseX < x + MinecraftReflectionCompat.guiButtonWidth(button)
                 && mouseY < y + MinecraftReflectionCompat.guiButtonHeight(button);
+    }
+
+    public static void guiButtonDrawButton(GuiButton button, Minecraft minecraft, int mouseX, int mouseY, float partialTicks) {
+        MinecraftReflectionCompat.invoke(button, new String[]{"func_146112_a", "drawButton"},
+                new Class<?>[]{Minecraft.class, int.class, int.class, float.class}, minecraft, mouseX, mouseY, partialTicks);
     }
 
     public static int guiTextFieldX(GuiTextField field) {
@@ -347,6 +365,11 @@ abstract class MinecraftGuiRenderingReflection extends MinecraftWorldEntityRefle
     public static VertexBuffer renderChunkVertexBuffer(RenderChunk renderChunk, int layer) {
         return MinecraftReflectionCompat.call(renderChunk, VertexBuffer.class, null,
                 new String[]{"func_178565_b", "getVertexBufferByLayer"}, new Class<?>[]{int.class}, layer);
+    }
+
+    public static VertexFormat vertexBufferFormat(VertexBuffer vertexBuffer) {
+        return MinecraftReflectionCompat.field(vertexBuffer, VertexFormat.class, null,
+                "field_177363_b", "vertexFormat");
     }
 
     public static void renderEntity(Render<?> renderer, Entity entity, double x, double y, double z,
@@ -599,7 +622,7 @@ abstract class MinecraftGuiRenderingReflection extends MinecraftWorldEntityRefle
     }
 
     public static void glUseProgram(int program) {
-        MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153161_d", "glUseProgram"}, new Class<?>[]{int.class}, program);
+        GL20.glUseProgram(program);
     }
 
     public static int glFramebuffer() {
@@ -620,65 +643,51 @@ abstract class MinecraftGuiRenderingReflection extends MinecraftWorldEntityRefle
     }
 
     public static int glCreateProgram() {
-        Object value = MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153183_d", "glCreateProgram"}, NO_PARAMETERS);
-        return value instanceof Number ? ((Number) value).intValue() : GL20.glCreateProgram();
+        return GL20.glCreateProgram();
     }
 
     public static void glDeleteProgram(int program) {
-        MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153187_e", "glDeleteProgram"}, new Class<?>[]{int.class}, program);
+        GL20.glDeleteProgram(program);
     }
 
     public static void glAttachShader(int program, int shader) {
-        MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153178_b", "glAttachShader"},
-                new Class<?>[]{int.class, int.class}, program, shader);
+        GL20.glAttachShader(program, shader);
     }
 
     public static void glLinkProgram(int program) {
-        MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153179_f", "glLinkProgram"}, new Class<?>[]{int.class}, program);
+        GL20.glLinkProgram(program);
     }
 
     public static int glGetProgrami(int program, int pname) {
-        Object value = MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153175_a", "glGetProgrami"},
-                new Class<?>[]{int.class, int.class}, program, pname);
-        return value instanceof Number ? ((Number) value).intValue() : GL20.glGetProgrami(program, pname);
+        return GL20.glGetProgrami(program, pname);
     }
 
     public static String glGetProgramInfoLog(int program, int maxLength) {
-        Object value = MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153166_e", "glGetProgramInfoLog"},
-                new Class<?>[]{int.class, int.class}, program, maxLength);
-        return value instanceof String ? (String) value : GL20.glGetProgramInfoLog(program, maxLength);
+        return GL20.glGetProgramInfoLog(program, maxLength);
     }
 
     public static int glGetUniformLocation(int program, CharSequence name) {
-        Object value = MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153194_a", "glGetUniformLocation"},
-                new Class<?>[]{int.class, CharSequence.class}, program, name);
-        return value instanceof Number ? ((Number) value).intValue() : GL20.glGetUniformLocation(program, name);
+        return GL20.glGetUniformLocation(program, name);
     }
 
     public static int glCreateShader(int shaderType) {
-        Object value = MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153195_b", "glCreateShader"},
-                new Class<?>[]{int.class}, shaderType);
-        return value instanceof Number ? ((Number) value).intValue() : GL20.glCreateShader(shaderType);
+        return GL20.glCreateShader(shaderType);
     }
 
     public static void glCompileShader(int shader) {
-        MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153170_c", "glCompileShader"}, new Class<?>[]{int.class}, shader);
+        GL20.glCompileShader(shader);
     }
 
     public static int glGetShaderi(int shader, int pname) {
-        Object value = MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153157_c", "glGetShaderi"},
-                new Class<?>[]{int.class, int.class}, shader, pname);
-        return value instanceof Number ? ((Number) value).intValue() : GL20.glGetShaderi(shader, pname);
+        return GL20.glGetShaderi(shader, pname);
     }
 
     public static String glGetShaderInfoLog(int shader, int maxLength) {
-        Object value = MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153158_d", "glGetShaderInfoLog"},
-                new Class<?>[]{int.class, int.class}, shader, maxLength);
-        return value instanceof String ? (String) value : GL20.glGetShaderInfoLog(shader, maxLength);
+        return GL20.glGetShaderInfoLog(shader, maxLength);
     }
 
     public static void glDeleteShader(int shader) {
-        MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_153180_a", "glDeleteShader"}, new Class<?>[]{int.class}, shader);
+        GL20.glDeleteShader(shader);
     }
 
     public static int glGenFramebuffers() {

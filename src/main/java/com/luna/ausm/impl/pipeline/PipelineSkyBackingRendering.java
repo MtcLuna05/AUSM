@@ -77,7 +77,7 @@ abstract class PipelineSkyBackingRendering extends PipelineBloomRendering {
         if (!isPipelineActive
                 || mc == null
                 || world == null
-                || !self().shouldUseOwnedSkyOverrideWorld(world)
+                || !self().isOverworldShaderEnvironment(world)
                 || self().isRenderingBetterPortalsNestedView()
                 || self().isRenderingBetterPortalsRenderPass()) {
             return;

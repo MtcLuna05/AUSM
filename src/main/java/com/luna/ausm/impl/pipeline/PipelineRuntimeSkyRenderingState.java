@@ -35,8 +35,10 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
     }
 
     /**
-     * Shadered overworld-like dimensions use a single AUSM canvas. Entree is
-     * the sole owner of the visible sky, celestials, and modded sky details.
+     * Shadered overworld-like dimensions use a single AUSM canvas only when
+     * the active pack permits AUSM to supply the sky backing. Complementary
+     * packs that retain their own final colour source must keep vanilla's sky
+     * geometry; cancelling it there leaves a clear-white G-buffer sky.
      */
     public boolean shouldUseShaderOwnedSkyOverride() {
         Minecraft mc = MinecraftReflectionCompat.minecraft();
@@ -47,6 +49,7 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
     public boolean shouldUseShaderOwnedSkyOverride(World world) {
         return isPipelineActive
                 && world != null
+                && self().shouldUseOwnedSkyOverrideWorld(world)
                 && self().isOverworldShaderEnvironment(world)
                 && !self().isRenderingBetterPortalsNestedView()
                 && !self().isRenderingBetterPortalsRenderPass();
@@ -223,7 +226,7 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
         Minecraft mc = MinecraftReflectionCompat.minecraft();
         World world = mc != null ? MinecraftReflectionCompat.world(mc) : null;
         boolean result = world != null
-                && (isPipelineActive && self().shouldUseOwnedSkyOverrideWorld(world)
+                && (isPipelineActive && self().isOverworldShaderEnvironment(world)
                 || self().isCustomVoidWorldSkyEnabled(world)
                 || self().isSimpleVoidWorld(world) && self().shouldUseShaderlessOwnedSky(mc)
                 || self().shouldUseShaderedF1LowerSkyRepair(mc, world))
