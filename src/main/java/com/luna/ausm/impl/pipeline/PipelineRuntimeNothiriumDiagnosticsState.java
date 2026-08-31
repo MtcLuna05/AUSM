@@ -201,9 +201,6 @@ abstract class PipelineRuntimeDiagnosticsState3 extends PipelineRuntimeDiagnosti
 
         Framebuffer target = MinecraftReflectionCompat.minecraftFramebuffer(mc);
         if (MinecraftReflectionCompat.framebufferObject(target) == shaderlessWorldFramebufferForUi) {
-            self().logShaderlessWorldFramebufferHandoff(
-                    "sync-skip-same-target",
-                    "target=" + self().describeFramebufferTarget(target));
             return;
         }
 
