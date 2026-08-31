@@ -9,5 +9,5 @@
 	"url": "{{ mod_url }}",
 	"updateJSON": "{{ mod_update_json }}",
 	"logoFile": "icon.png",
-	"dependencies": "required-after:mixinbooter@[10.7,)"
+	"dependencies": ["required-after:mixinbooter@[10.7,)"]
 }]

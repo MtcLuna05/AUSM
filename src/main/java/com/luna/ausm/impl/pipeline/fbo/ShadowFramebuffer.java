@@ -35,8 +35,8 @@ public final class ShadowFramebuffer {
     private final ShaderRenderTargetSettings settings;
     private final IntBuffer drawBufferList;
     private final IntBuffer viewportBuffer = BufferUtils.createIntBuffer(16);
-    private final ByteBuffer colorMaskBuffer = BufferUtils.createByteBuffer(4);
-    private final FloatBuffer clearColorBuffer = BufferUtils.createFloatBuffer(4);
+    private final ByteBuffer colorMaskBuffer = BufferUtils.createByteBuffer(16);
+    private final FloatBuffer clearColorBuffer = BufferUtils.createFloatBuffer(16);
     private final FloatBuffer depthReadBuffer = BufferUtils.createFloatBuffer(1);
     private int depthCopyProbeCount;
 

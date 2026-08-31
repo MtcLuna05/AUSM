@@ -496,6 +496,7 @@ abstract class PipelineBloomRendering extends PipelinePortalDiagnostics {
         // owned backing and Botania's intentionally disabled base dome.
         boolean shaderless = self().shouldRenderShaderlessCustomSkyBackingNow(mc);
         boolean shadered = self().shouldRenderShaderedOwnedSkyBacking(mc);
+        boolean renderBacking = isPipelineActive ? (owned || shadered) : shaderless;
         self().logOwnedSkyBackingDecisionProbe("before-sky", mc, world, external, bpNested, bpPass,
                 hasView, hasTarget, owned, shaderless, shadered);
         if (externalWorldFramebufferTarget != null
@@ -507,7 +508,7 @@ abstract class PipelineBloomRendering extends PipelinePortalDiagnostics {
                 || world == null
                 || !hasView
                 || !hasTarget
-                || (!owned && !shaderless && !shadered)) {
+                || !renderBacking) {
             return;
         }
 

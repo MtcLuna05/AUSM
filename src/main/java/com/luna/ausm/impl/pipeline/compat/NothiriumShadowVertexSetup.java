@@ -295,7 +295,7 @@ abstract class NothiriumShadowVertexSetup extends NothiriumShadowCompileScheduli
     }
 
     protected static String colorMaskSummary() {
-        ByteBuffer mask = BufferUtils.createByteBuffer(4);
+        ByteBuffer mask = BufferUtils.createByteBuffer(16);
         GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, mask);
         return (mask.get(0) != 0) + "/" + (mask.get(1) != 0) + "/" + (mask.get(2) != 0) + "/" + (mask.get(3) != 0);
     }

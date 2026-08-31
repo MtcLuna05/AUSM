@@ -93,7 +93,7 @@ abstract class PipelineSkyBackingRendering extends PipelineBloomRendering {
         boolean previousBlend = GL11.glIsEnabled(GL11.GL_BLEND);
         boolean previousCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
         boolean previousScissor = GL11.glIsEnabled(GL11.GL_SCISSOR_TEST);
-        ByteBuffer previousColorMask = BufferUtils.createByteBuffer(4);
+        ByteBuffer previousColorMask = BufferUtils.createByteBuffer(16);
         GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, previousColorMask);
         boolean pushedProjection = false;
         boolean pushedModelView = false;
@@ -260,7 +260,7 @@ abstract class PipelineSkyBackingRendering extends PipelineBloomRendering {
         boolean previousCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
         boolean previousFog = GL11.glIsEnabled(GL11.GL_FOG);
         boolean previousScissor = GL11.glIsEnabled(GL11.GL_SCISSOR_TEST);
-        ByteBuffer previousColorMask = BufferUtils.createByteBuffer(4);
+        ByteBuffer previousColorMask = BufferUtils.createByteBuffer(16);
         GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, previousColorMask);
         boolean pushedProjection = false;
         boolean pushedModelView = false;

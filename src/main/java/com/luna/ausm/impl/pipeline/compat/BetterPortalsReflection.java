@@ -122,7 +122,7 @@ abstract class BetterPortalsReflection extends BetterPortalsRenderState {
     }
 
     protected static boolean[] glBoolean4(int parameter) {
-        ByteBuffer buffer = BufferUtils.createByteBuffer(4);
+        ByteBuffer buffer = BufferUtils.createByteBuffer(16);
         GL11.glGetBoolean(parameter, buffer);
         return new boolean[]{
                 buffer.get(0) != 0,
@@ -133,7 +133,7 @@ abstract class BetterPortalsReflection extends BetterPortalsRenderState {
     }
 
     protected static float[] glFloat4(int parameter) {
-        FloatBuffer buffer = BufferUtils.createFloatBuffer(4);
+        FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
         GL11.glGetFloat(parameter, buffer);
         return new float[]{buffer.get(0), buffer.get(1), buffer.get(2), buffer.get(3)};
     }
