@@ -241,7 +241,7 @@ abstract class PipelineRuntimeStateBase {
 
     protected final FloatBuffer centerDepthTextureBuffer = BufferUtils.createFloatBuffer(1);
 
-    protected final FloatBuffer fogColorBuffer = BufferUtils.createFloatBuffer(4);
+    protected final FloatBuffer fogColorBuffer = BufferUtils.createFloatBuffer(16);
 
     protected final DistantHorizonsMatrixState distantHorizonsMatrices = new DistantHorizonsMatrixState();
 

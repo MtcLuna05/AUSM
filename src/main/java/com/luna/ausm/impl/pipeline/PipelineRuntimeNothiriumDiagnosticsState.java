@@ -213,7 +213,7 @@ abstract class PipelineRuntimeDiagnosticsState3 extends PipelineRuntimeDiagnosti
         int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
         int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
         boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
-        ByteBuffer previousColorMask = BufferUtils.createByteBuffer(4);
+        ByteBuffer previousColorMask = BufferUtils.createByteBuffer(16);
         GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, previousColorMask);
         try {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, shaderlessWorldFramebufferForUi);

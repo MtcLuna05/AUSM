@@ -526,9 +526,9 @@ abstract class PipelineRuntimeProbeState extends PipelineRuntimeCompatibilitySta
     }
 
     protected String skyDomeGlStateSummary() {
-        FloatBuffer clearColor = BufferUtils.createFloatBuffer(4);
+        FloatBuffer clearColor = BufferUtils.createFloatBuffer(16);
         IntBuffer viewport = BufferUtils.createIntBuffer(4);
-        ByteBuffer colorMask = BufferUtils.createByteBuffer(4);
+        ByteBuffer colorMask = BufferUtils.createByteBuffer(16);
         GL11.glGetFloat(GL11.GL_COLOR_CLEAR_VALUE, clearColor);
         GL11.glGetInteger(GL11.GL_VIEWPORT, viewport);
         GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, colorMask);

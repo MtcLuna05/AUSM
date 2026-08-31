@@ -81,7 +81,9 @@ public final class VanillaSkyHorizonSmoother {
     }
 
     private static float[] currentColor() {
-        FloatBuffer color = BufferUtils.createFloatBuffer(4);
+        // LWJGL 2 validates GL_CURRENT_COLOR as a 4x4 float query even
+        // though OpenGL writes only its four color components.
+        FloatBuffer color = BufferUtils.createFloatBuffer(16);
         GL11.glGetFloat(GL11.GL_CURRENT_COLOR, color);
         return new float[]{color.get(0), color.get(1), color.get(2), color.get(3)};
     }

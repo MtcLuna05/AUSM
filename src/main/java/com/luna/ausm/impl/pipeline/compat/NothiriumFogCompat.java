@@ -37,7 +37,7 @@ public final class NothiriumFogCompat {
     }
 
     private static float[] fogColor() {
-        FloatBuffer buffer = BufferUtils.createFloatBuffer(4);
+        FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
         GL11.glGetFloat(GL11.GL_FOG_COLOR, buffer);
         return new float[]{buffer.get(0), buffer.get(1), buffer.get(2), buffer.get(3)};
     }

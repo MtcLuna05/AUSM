@@ -78,7 +78,7 @@ abstract class DeferredFramebufferBase {
 
     protected final FloatBuffer colorReadBuffer = BufferUtils.createFloatBuffer(4);
 
-    protected final FloatBuffer clearColorBuffer = BufferUtils.createFloatBuffer(4);
+    protected final FloatBuffer clearColorBuffer = BufferUtils.createFloatBuffer(16);
 
     protected final Map<Integer, int[]> attachedColorTexturesByFramebuffer = new HashMap<>();
 

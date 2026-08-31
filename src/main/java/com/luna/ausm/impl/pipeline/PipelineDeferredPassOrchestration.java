@@ -498,7 +498,7 @@ abstract class PipelineDeferredPassOrchestration extends PipelineContextBase {
         int previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         int previousDrawBuffer = GL11.glGetInteger(GL11.GL_DRAW_BUFFER);
         boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
-        FloatBuffer previousClearColor = BufferUtils.createFloatBuffer(4);
+        FloatBuffer previousClearColor = BufferUtils.createFloatBuffer(16);
         GL11.glGetFloat(GL11.GL_COLOR_CLEAR_VALUE, previousClearColor);
         float[] color = self().sparseStartupSkyOnlyColor(MinecraftReflectionCompat.minecraft());
         try {

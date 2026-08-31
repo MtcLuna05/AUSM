@@ -385,13 +385,13 @@ abstract class PipelineRuntimeDiagnosticsState0 extends PipelineRuntimeProbeStat
     }
 
     protected String fogColorSummary() {
-        FloatBuffer color = BufferUtils.createFloatBuffer(4);
+        FloatBuffer color = BufferUtils.createFloatBuffer(16);
         GL11.glGetFloat(GL11.GL_FOG_COLOR, color);
         return color.get(0) + "/" + color.get(1) + "/" + color.get(2) + "/" + color.get(3);
     }
 
     protected String currentColorSummary() {
-        FloatBuffer color = BufferUtils.createFloatBuffer(4);
+        FloatBuffer color = BufferUtils.createFloatBuffer(16);
         GL11.glGetFloat(GL11.GL_CURRENT_COLOR, color);
         return color.get(0) + "/" + color.get(1) + "/" + color.get(2) + "/" + color.get(3);
     }

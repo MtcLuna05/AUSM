@@ -40,7 +40,7 @@ public class CustomMainMenuGuiCustomMixin {
 
     private float ausm$currentAlpha() {
         try {
-            FloatBuffer buffer = BufferUtils.createFloatBuffer(4);
+            FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
             GL11.glGetFloat(GL11.GL_CURRENT_COLOR, buffer);
             float alpha = buffer.get(3);
             if (Float.isNaN(alpha) || alpha < 0.0F || alpha > 1.0F) {
