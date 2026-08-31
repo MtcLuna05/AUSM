@@ -293,6 +293,8 @@ compileJava {
 jar {
     archiveClassifier = 'dev'
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    // Runtime class-redefinition helpers are strictly local debugging tooling.
+    exclude 'com/luna/ausm/impl/hotswap/**'
     if (!configurations.contain.isEmpty()) {
         into('/') {
             from configurations.contain
@@ -320,6 +322,11 @@ jar {
         }
     }
     finalizedBy(tasks.named(remapTaskName).get())
+}
+
+tasks.named('sourcesJar') {
+    // Keep local runtime class-redefinition helpers out of published sources too.
+    exclude 'com/luna/ausm/impl/hotswap/**'
 }
 
 tasks.named(remapTaskName) {
