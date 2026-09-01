@@ -107,6 +107,13 @@ abstract class PipelineFrameLifecycle1 extends PipelineFrameLifecycle0 {
             if (prepareVanillaState) {
                 self().finishShaderlessBlockLayerState(layer);
             }
+            // The shaderless main framebuffer's depth is cleared by the
+            // later world-pass presentation path. Render Bloom immediately
+            // after the translucent terrain boundary, while that depth is
+            // still attached and can reject emitters behind opaque geometry.
+            if (!isPipelineActive && layer == BlockRenderLayer.TRANSLUCENT) {
+                PipelineContext.getInstance().renderNativeAusmBloomLayerFromWorldPass((float) partialTicks, pass);
+            }
         }
     }
 

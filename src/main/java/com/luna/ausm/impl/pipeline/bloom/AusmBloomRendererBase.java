@@ -649,12 +649,33 @@ abstract class AusmBloomRendererBase {
                 vec4 c1 = texture2D(source, uv1);
                 vec4 c2 = texture2D(source, uv2);
                 vec4 c3 = texture2D(source, uv3);
+                float receiverDepth = texture2D(sceneDepth, textureCoords).r;
+                float d0 = texture2D(bloomDepth, uv0).r;
+                float d1 = texture2D(bloomDepth, uv1).r;
+                float d2 = texture2D(bloomDepth, uv2).r;
+                float d3 = texture2D(bloomDepth, uv3).r;
+                // Reject at the receiving pixel before downsampling. A later
+                // full-screen composite cannot reconstruct which blur taps
+                // crossed an occluding surface.
+                float blockedDepth = 0.0;
+                if (receiverDepth < 0.99999) {
+                    if (d0 > receiverDepth + 0.00002) { c0.rgb = vec3(0.0); blockedDepth = max(blockedDepth, d0); }
+                    if (d1 > receiverDepth + 0.00002) { c1.rgb = vec3(0.0); blockedDepth = max(blockedDepth, d1); }
+                    if (d2 > receiverDepth + 0.00002) { c2.rgb = vec3(0.0); blockedDepth = max(blockedDepth, d2); }
+                    if (d3 > receiverDepth + 0.00002) { c3.rgb = vec3(0.0); blockedDepth = max(blockedDepth, d3); }
+                }
                 vec3 color = (c0.rgb + c1.rgb + c2.rgb + c3.rgb) * 0.25;
-                float depth = 1.0;
-                if (max(c0.r, max(c0.g, c0.b)) > 0.00001) depth = min(depth, texture2D(bloomDepth, uv0).r);
-                if (max(c1.r, max(c1.g, c1.b)) > 0.00001) depth = min(depth, texture2D(bloomDepth, uv1).r);
-                if (max(c2.r, max(c2.g, c2.b)) > 0.00001) depth = min(depth, texture2D(bloomDepth, uv2).r);
-                if (max(c3.r, max(c3.g, c3.b)) > 0.00001) depth = min(depth, texture2D(bloomDepth, uv3).r);
+                // Retain the farthest contributing source depth. The nearest
+                // one would let a foreground emitter's blurred kernel bleed
+                // across a closer wall at its edge.
+                // Keep rejected tap depth as an occlusion barrier. Dropping it
+                // to zero lets later blur passes treat behind-wall colour as
+                // foreground and re-spread it across the wall.
+                float depth = blockedDepth;
+                if (max(c0.r, max(c0.g, c0.b)) > 0.00001) depth = max(depth, d0);
+                if (max(c1.r, max(c1.g, c1.b)) > 0.00001) depth = max(depth, d1);
+                if (max(c2.r, max(c2.g, c2.b)) > 0.00001) depth = max(depth, d2);
+                if (max(c3.r, max(c3.g, c3.b)) > 0.00001) depth = max(depth, d3);
                 gl_FragColor = vec4(color, depth);
             }
             """;
@@ -686,19 +707,29 @@ abstract class AusmBloomRendererBase {
                 vec4 c2 = texture2D(source, textureCoords - direction * 1.3846153846);
                 vec4 c3 = texture2D(source, textureCoords + direction * 3.2307692308);
                 vec4 c4 = texture2D(source, textureCoords - direction * 3.2307692308);
+                float depth = 0.0;
+                if (depthAware == 1) {
+                    float receiverDepth = texture2D(sceneDepth, textureCoords).r;
+                    float blockedDepth = 0.0;
+                    if (receiverDepth < 0.99999) {
+                        if (c0.a > receiverDepth + 0.00002) { c0.rgb = vec3(0.0); blockedDepth = max(blockedDepth, c0.a); }
+                        if (c1.a > receiverDepth + 0.00002) { c1.rgb = vec3(0.0); blockedDepth = max(blockedDepth, c1.a); }
+                        if (c2.a > receiverDepth + 0.00002) { c2.rgb = vec3(0.0); blockedDepth = max(blockedDepth, c2.a); }
+                        if (c3.a > receiverDepth + 0.00002) { c3.rgb = vec3(0.0); blockedDepth = max(blockedDepth, c3.a); }
+                        if (c4.a > receiverDepth + 0.00002) { c4.rgb = vec3(0.0); blockedDepth = max(blockedDepth, c4.a); }
+                    }
+                    depth = blockedDepth;
+                    if (max(c0.r, max(c0.g, c0.b)) > 0.000001) depth = max(depth, c0.a);
+                    if (max(c1.r, max(c1.g, c1.b)) > 0.000001) depth = max(depth, c1.a);
+                    if (max(c2.r, max(c2.g, c2.b)) > 0.000001) depth = max(depth, c2.a);
+                    if (max(c3.r, max(c3.g, c3.b)) > 0.000001) depth = max(depth, c3.a);
+                    if (max(c4.r, max(c4.g, c4.b)) > 0.000001) depth = max(depth, c4.a);
+                }
                 vec3 sum = c0.rgb * 0.2270270270;
                 sum += c1.rgb * 0.3162162162;
                 sum += c2.rgb * 0.3162162162;
                 sum += c3.rgb * 0.0702702703;
                 sum += c4.rgb * 0.0702702703;
-                float depth = 1.0;
-                if (depthAware == 1) {
-                    if (max(c0.r, max(c0.g, c0.b)) > 0.000001) depth = min(depth, c0.a);
-                    if (max(c1.r, max(c1.g, c1.b)) > 0.000001) depth = min(depth, c1.a);
-                    if (max(c2.r, max(c2.g, c2.b)) > 0.000001) depth = min(depth, c2.a);
-                    if (max(c3.r, max(c3.g, c3.b)) > 0.000001) depth = min(depth, c3.a);
-                    if (max(c4.r, max(c4.g, c4.b)) > 0.000001) depth = min(depth, c4.a);
-                }
                 gl_FragColor = vec4(sum, depth);
             }
             """;
@@ -713,6 +744,7 @@ abstract class AusmBloomRendererBase {
             uniform sampler2D translucentTransmission;
             uniform sampler2D translucentDepth;
             uniform float strength;
+            uniform vec2 bloomTexel;
             uniform int useHandMask;
             uniform int useSceneDepthMask;
             uniform int useBloomTextureDepth;
@@ -720,9 +752,18 @@ abstract class AusmBloomRendererBase {
             varying vec2 textureCoords;
             void main() {
                 vec4 bloomSample = texture2D(bloom, textureCoords);
-                float emissionDepth = useBloomTextureDepth == 1
-                        ? bloomSample.a
-                        : texture2D(bloomDepth, textureCoords).r;
+                float emissionDepth = texture2D(bloomDepth, textureCoords).r;
+                if (useBloomTextureDepth == 1) {
+                    // The blurred bloom target is half resolution and linearly
+                    // filtered for colour. Do not linearly filter its packed
+                    // depth too: interpolating with transparent neighbours can
+                    // pull a behind-wall emitter in front of its occluder.
+                    emissionDepth = max(bloomSample.a,
+                            max(max(texture2D(bloom, textureCoords + vec2(bloomTexel.x, 0.0)).a,
+                                    texture2D(bloom, textureCoords - vec2(bloomTexel.x, 0.0)).a),
+                                    max(texture2D(bloom, textureCoords + vec2(0.0, bloomTexel.y)).a,
+                                            texture2D(bloom, textureCoords - vec2(0.0, bloomTexel.y)).a)));
+                }
                 if (useSceneDepthMask == 1) {
                     float sceneDepth = texture2D(finalDepth, textureCoords).r;
                     if (emissionDepth > sceneDepth + 0.00002 && sceneDepth < 0.99999) {
