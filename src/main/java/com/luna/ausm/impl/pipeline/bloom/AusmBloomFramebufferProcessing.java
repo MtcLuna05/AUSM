@@ -247,6 +247,9 @@ abstract class AusmBloomFramebufferProcessing extends AusmBloomRenderPasses {
             self().bindTextureUniform(compositeProgram, "translucentDepth", translucentDepthTexture, 6);
         }
         AusmBloomRenderer.setUniform1f(compositeProgram, "strength", strength);
+        AusmBloomRenderer.setUniform2f(compositeProgram, "bloomTexel",
+                1.0F / Math.max(1, MinecraftReflectionCompat.framebufferWidth(bloomDownsampleTarget)),
+                1.0F / Math.max(1, MinecraftReflectionCompat.framebufferHeight(bloomDownsampleTarget)));
         AusmBloomRenderer.setUniform1i(compositeProgram, "useHandMask", useHandMask ? 1 : 0);
         AusmBloomRenderer.setUniform1i(compositeProgram, "useSceneDepthMask", useSceneDepthMask ? 1 : 0);
         AusmBloomRenderer.setUniform1i(compositeProgram, "useBloomTextureDepth", bloomTextureCarriesDepth ? 1 : 0);
