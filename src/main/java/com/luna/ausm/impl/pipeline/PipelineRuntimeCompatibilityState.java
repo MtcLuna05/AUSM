@@ -91,7 +91,12 @@ abstract class PipelineRuntimeCompatibilityState extends PipelineRuntimeTerrainF
         IBlockState material = metadata.materialState();
         IBlockAccess blockAccess = BlockRenderContext.blockAccess();
         BlockPos pos = BlockRenderContext.blockPos();
-        int emission = Math.max(metadata.emission(), self().blockRenderEmissionForState(material, blockAccess, pos));
+        // GPOM's provenance is presentation metadata. In particular it
+        // assigns RandomThings' shouldGlow materials an emission of 15 even
+        // when the pack disables LuminousBlocksEmitLight. The direct material
+        // path uses its real state light value, so do the same for framed
+        // double-slope quads instead of promoting that synthetic value.
+        int emission = self().blockRenderEmissionForState(material, blockAccess, pos);
         BlockRenderContext.setQuadBlockMetadata(
                 self().blockEntityIdForActualState(material, blockAccess, pos),
                 (short) MinecraftReflectionCompat.stateRenderTypeOrdinal(material),
