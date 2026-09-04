@@ -323,6 +323,8 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
     }
 
     protected void runFullscreenArrayProgram(FullscreenArrayProgram program) {
+        int gpuTimer = PipelineGpuTiming.beginProgramArray(program.arrayId());
+        try {
         List<Attachment> drawBuffers = program.drawBuffers();
         Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
 
@@ -364,6 +366,9 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
                     drawBuffers,
                     pingPongManager.getReadBuffer()
             );
+        }
+        } finally {
+            PipelineGpuTiming.end(gpuTimer);
         }
     }
 
@@ -441,6 +446,8 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
         if (computes == null || computes.isEmpty()) {
             return;
         }
+        int gpuTimer = PipelineGpuTiming.beginProgram(bindingPass);
+        try {
         int safeWidth = Math.max(1, width);
         int safeHeight = Math.max(1, height);
         for (ComputeProgram compute : computes) {
@@ -473,6 +480,9 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
         }
         MinecraftReflectionCompat.glUseProgram(0);
         TextureBinder.restoreDefaultTextureUnit();
+        } finally {
+            PipelineGpuTiming.end(gpuTimer);
+        }
     }
 
     protected void applyComputeMemoryBarrier(boolean indirectDispatch) {
@@ -498,6 +508,8 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
     }
 
     protected void runFullscreenPass(PipelineProgram program) {
+        int gpuTimer = PipelineGpuTiming.beginProgram(program.pass());
+        try {
         List<Attachment> drawBuffers = program.drawBuffers();
         Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
 
@@ -550,6 +562,9 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
                     drawBuffers,
                     pingPongManager.getReadBuffer()
             );
+        }
+        } finally {
+            PipelineGpuTiming.end(gpuTimer);
         }
     }
 

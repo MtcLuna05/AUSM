@@ -283,8 +283,8 @@ abstract class MinecraftGlStateReflection extends MinecraftGuiRenderingReflectio
     }
 
     public static boolean stateIsVanillaLiquid(IBlockState state) {
-        ResourceLocation name = state != null && MinecraftReflectionCompat.blockFromState(state) != null
-                ? MinecraftReflectionCompat.blockRegistryName(MinecraftReflectionCompat.blockFromState(state)) : null;
+        Block block = MinecraftReflectionCompat.blockFromState(state);
+        ResourceLocation name = block != null ? MinecraftReflectionCompat.blockRegistryName(block) : null;
         if (name == null || !"minecraft".equals(MinecraftReflectionCompat.resourceNamespace(name))) {
             return false;
         }
@@ -294,10 +294,11 @@ abstract class MinecraftGlStateReflection extends MinecraftGuiRenderingReflectio
     }
 
     protected static boolean stateHasFluidLikeRegistryName(IBlockState state) {
-        if (state == null || MinecraftReflectionCompat.blockFromState(state) == null) {
+        Block block = MinecraftReflectionCompat.blockFromState(state);
+        if (block == null) {
             return false;
         }
-        ResourceLocation name = MinecraftReflectionCompat.blockRegistryName(MinecraftReflectionCompat.blockFromState(state));
+        ResourceLocation name = MinecraftReflectionCompat.blockRegistryName(block);
         if (name == null) {
             return false;
         }

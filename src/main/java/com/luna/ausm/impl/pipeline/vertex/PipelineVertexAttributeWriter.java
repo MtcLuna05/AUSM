@@ -14,7 +14,10 @@ public final class PipelineVertexAttributeWriter {
     }
 
     public static void writeBlockPolygon(ByteBuffer buffer, VertexFormat format, int firstVertex, int vertexAmount) {
-        int stride = ExtendedVertexFormats.size(format);
+        // Terrain compilation normally uses the canonical pipeline format.
+        // Avoid its reflective VertexFormat size fallback for every polygon;
+        // retain the fallback for compatible foreign formats.
+        int stride = format == ExtendedVertexFormats.PIPELINE_BLOCK ? 56 : ExtendedVertexFormats.size(format);
         int base = firstVertex * stride;
         if (vertexAmount < 3 || base < 0
                 || base + (vertexAmount - 1) * stride
@@ -22,7 +25,8 @@ public final class PipelineVertexAttributeWriter {
             return;
         }
 
-        PolygonVertices vertices = PolygonVertices.read(buffer, base, stride, vertexAmount);
+        ByteBuffer writable = writableView(buffer);
+        PolygonVertices vertices = PolygonVertices.read(writable, base, stride, vertexAmount);
         float[] normal = NORMAL_SCRATCH.get();
         vertices.computeFaceNormal(normal);
         int packedNormal = IrisVertexMath.packNormal(normal[0], normal[1], normal[2]);
@@ -36,18 +40,18 @@ public final class PipelineVertexAttributeWriter {
             int vertexBase = base + vertex * stride;
             int tangent = packedTangent;
             if (vertexAmount == 3) {
-                int vertexNormal = buffer.getInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET);
+                int vertexNormal = writable.getInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET);
                 tangent = vertices.computeSmoothTangent(vertexNormal);
             } else {
-                buffer.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET, packedNormal);
+                writable.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_NORMAL_OFFSET, packedNormal);
             }
-            buffer.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET, midU);
-            buffer.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET + Float.BYTES, midV);
-            buffer.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_TANGENT_OFFSET, tangent);
-            buffer.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET, BlockRenderContext.midBlock(
-                    buffer.getFloat(vertexBase),
-                    buffer.getFloat(vertexBase + Float.BYTES),
-                    buffer.getFloat(vertexBase + 2 * Float.BYTES),
+            writable.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET, midU);
+            writable.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_TEX_COORD_OFFSET + Float.BYTES, midV);
+            writable.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_TANGENT_OFFSET, tangent);
+            writable.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_BLOCK_MID_BLOCK_OFFSET, BlockRenderContext.midBlock(
+                    writable.getFloat(vertexBase),
+                    writable.getFloat(vertexBase + Float.BYTES),
+                    writable.getFloat(vertexBase + 2 * Float.BYTES),
                     packedLocalPosition,
                     midBlockEmission
             ));
@@ -63,7 +67,8 @@ public final class PipelineVertexAttributeWriter {
             return;
         }
 
-        PolygonVertices vertices = PolygonVertices.read(buffer, base, stride, vertexAmount);
+        ByteBuffer writable = writableView(buffer);
+        PolygonVertices vertices = PolygonVertices.read(writable, base, stride, vertexAmount);
         float[] normal = NORMAL_SCRATCH.get();
         vertices.computeFaceNormal(normal);
         int packedNormal = IrisVertexMath.packNormal(normal[0], normal[1], normal[2]);
@@ -75,15 +80,27 @@ public final class PipelineVertexAttributeWriter {
             int vertexBase = base + vertex * stride;
             int tangent = packedTangent;
             if (vertexAmount == 3) {
-                int vertexNormal = buffer.getInt(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_NORMAL_OFFSET);
+                int vertexNormal = writable.getInt(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_NORMAL_OFFSET);
                 tangent = vertices.computeSmoothTangent(vertexNormal);
             } else {
-                buffer.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_NORMAL_OFFSET, packedNormal);
+                writable.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_NORMAL_OFFSET, packedNormal);
             }
-            buffer.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_MID_TEX_COORD_OFFSET, midU);
-            buffer.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_MID_TEX_COORD_OFFSET + Float.BYTES, midV);
-            buffer.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_TANGENT_OFFSET, tangent);
+            writable.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_MID_TEX_COORD_OFFSET, midU);
+            writable.putFloat(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_MID_TEX_COORD_OFFSET + Float.BYTES, midV);
+            writable.putInt(vertexBase + ExtendedVertexFormats.PIPELINE_ENTITY_TANGENT_OFFSET, tangent);
         }
+    }
+
+    /**
+     * CreativeCore's cached LittleTiles upload leaves the original byte view
+     * with its pre-upload limit, while its int view has already appended the
+     * vertices.  Attribute writes must see the backing storage, but must not
+     * mutate the cache-owned view's position or limit.
+     */
+    private static ByteBuffer writableView(ByteBuffer buffer) {
+        ByteBuffer copy = buffer.duplicate().order(buffer.order());
+        copy.clear();
+        return copy;
     }
 
     private record PolygonVertices(

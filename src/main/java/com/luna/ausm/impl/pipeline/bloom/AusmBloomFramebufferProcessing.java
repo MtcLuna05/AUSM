@@ -448,7 +448,7 @@ abstract class AusmBloomFramebufferProcessing extends AusmBloomRenderPasses {
         }
         globalFacadesBloomResolved = true;
         try {
-            Class<?> renderer = Class.forName("com.luna.globalfacades.client.render.FacadeWorldRenderer");
+            Class<?> renderer = Class.forName("com.l.globalfacades.client.render.FacadeWorldRenderer");
             globalFacadesBloomMethod = renderer.getMethod("renderBloomForAusm");
             try {
                 globalFacadesTranslucentAttenuationMethod = renderer.getMethod(

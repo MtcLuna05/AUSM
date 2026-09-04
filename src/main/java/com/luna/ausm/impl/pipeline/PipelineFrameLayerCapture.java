@@ -283,11 +283,11 @@ public final class PipelineFrameLayerCapture {
         // Input can be processed after beginFrame but before the first phase
         // completes; accept that request instead of waiting for composites.
         beginWorldIfRequested(frameId);
-        mirrorGbufferPreCompositeOutputs(frameId, framebuffer);
         CaptureSession session = sessionFor(frameId);
         if (session == null) {
             return;
         }
+        mirrorGbufferPreCompositeOutputs(frameId, framebuffer);
 
         session.gbufferLayers++;
         if (session.gbufferLayers == 1) {
@@ -367,11 +367,11 @@ public final class PipelineFrameLayerCapture {
 
     static void captureCompositeOutputs(long frameId, String passName, List<Attachment> drawBuffers,
                                         DeferredFramebuffer framebuffer) {
-        mirrorCompositeHistory(frameId, passName, framebuffer);
         CaptureSession session = sessionFor(frameId);
         if (session == null || framebuffer == null || !framebuffer.isUsable()) {
             return;
         }
+        mirrorCompositeHistory(frameId, passName, framebuffer);
         session.compositePasses++;
         String passPrefix = String.format("layers-composite-%02d-after-%s", session.compositePasses,
                 sanitizeFileComponent(passName));
@@ -559,12 +559,12 @@ public final class PipelineFrameLayerCapture {
     }
 
     static void captureFinalPresentation(long frameId, Framebuffer target) {
-        mirrorPipelinePresentation(target);
-        mirrorTemporalPipelinePresentation(frameId, target);
         CaptureSession session = sessionFor(frameId);
         if (session == null) {
             return;
         }
+        mirrorPipelinePresentation(target);
+        mirrorTemporalPipelinePresentation(frameId, target);
         if (target != null) {
             recordForensics(session, "99-final-presentation", target);
             captureTexture(
@@ -582,16 +582,14 @@ public final class PipelineFrameLayerCapture {
      * final target snapshot.
      */
     public static void mirrorExternalPresentation(Framebuffer target) {
-        if (target == null) {
+        CaptureSession session = activeSession();
+        if (target == null || session == null) {
             return;
         }
         mirrorTemporalPresentation(target, temporalExternalTextures, temporalExternalWidths, temporalExternalHeights,
                 temporalExternalValid, temporalExternalFrames, temporalExternalNextSlot, temporalExternalSequence++);
         temporalExternalNextSlot = (temporalExternalNextSlot + 1) % TEMPORAL_PRESENTATION_HISTORY;
-        CaptureSession session = activeSession();
-        if (session != null) {
-            recordForensics(session, "external-before-vanilla-presentation", target);
-        }
+        recordForensics(session, "external-before-vanilla-presentation", target);
     }
 
     /** Records a third-party framebuffer boundary during an active F7 forensic capture. */
@@ -604,18 +602,20 @@ public final class PipelineFrameLayerCapture {
 
     /** Mirrors the final target immediately before AUSM applies post-world bloom. */
     static void capturePreBloomPresentation(Framebuffer target) {
-        mirrorPresentationTarget(target, PreviousPresentationTarget.PRE_BLOOM);
+        if (activeSession() != null) {
+            mirrorPresentationTarget(target, PreviousPresentationTarget.PRE_BLOOM);
+        }
     }
 
     static void captureFinalInputs(DeferredFramebuffer framebuffer) {
-        if (framebuffer == null || !framebuffer.isUsable()) {
+        CaptureSession session = activeSession();
+        if (framebuffer == null || !framebuffer.isUsable() || session == null) {
             return;
         }
         for (Attachment attachment : Attachment.values()) {
             mirrorFinalInput(framebuffer, attachment);
         }
-        CaptureSession session = activeSession();
-        if (session != null && !session.finalInputsCaptured) {
+        if (!session.finalInputsCaptured) {
             captureColortex0State(session, "final-input-before-final", framebuffer.getReadTexture(Attachment.COLOR),
                     framebuffer.getAttachmentWidth(Attachment.COLOR), framebuffer.getAttachmentHeight(Attachment.COLOR));
             session.finalInputsCaptured = true;
@@ -661,7 +661,7 @@ public final class PipelineFrameLayerCapture {
 
     /** Mirrors the completed window backbuffer without a CPU readback. */
     static void mirrorWindowPresentation(int width, int height) {
-        if (width <= 0 || height <= 0 || !ensurePreviousWindowTarget(width, height)) {
+        if (activeSession() == null || width <= 0 || height <= 0 || !ensurePreviousWindowTarget(width, height)) {
             return;
         }
         int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);

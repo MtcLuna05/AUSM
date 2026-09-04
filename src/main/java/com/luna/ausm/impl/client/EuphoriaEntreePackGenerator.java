@@ -59,13 +59,16 @@ public final class EuphoriaEntreePackGenerator {
     private static final String WORK_NAME = ".ausm-entree-euphoria-work";
     private static final String AUSM_112_PATCH_SUFFIX = " + AUSM 1.12.2 Patches";
     private static final String AUSM_112_PATCH_MARKER = ".ausm-1.12.2-patches-version";
-    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v15";
+    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v16";
     private static final String LOD_API_PROPERTY = "ausm.lod.api=1";
     private static final String LOD_HELPER = "shaders/lib/ausm/distantLod.glsl";
     private static final String LOD_HELPER_INCLUDE = "#include \"/lib/ausm/distantLod.glsl\"";
     private static final String VOLUMETRIC_LIGHT_LIBRARY = "shaders/lib/atmospherics/volumetricLight/volumetricLight.glsl";
     private static final String PIXELATION_LIBRARY = "shaders/lib/misc/pixelation.glsl";
     private static final String FXAA_LIBRARY = "shaders/lib/antialiasing/fxaa.glsl";
+    private static final String LUMINOUS_BLOCK_MAPPINGS = "shaders/blockProperties/1.8+/ausm-randomthings-luminous.properties";
+    private static final String EUPHORIA_18_BLOCK_PROPERTIES = "shaders/blockProperties/1.8+/block.properties";
+    private static final String MERGED_BLOCK_PROPERTIES = "shaders/block.properties";
     private static final int RETRY_INTERVAL_TICKS = 20;
     private static final int MAX_RETRY_TICKS = 600;
     private static final Pattern BLOCK_MAPPING = Pattern.compile("^\\s*block\\.(\\d+)\\s*=.*$");
@@ -404,6 +407,7 @@ public final class EuphoriaEntreePackGenerator {
     }
 
     private static void injectAUSM112LodSupportInto(Path patchPack) throws IOException {
+        installBundledLuminousBlockMappings(patchPack);
         Path properties = patchPack.resolve("shaders/shaders.properties");
         ensureLodApiDeclaration(properties);
         ensureAUSMOptionsCategory(properties, patchPack.resolve("shaders/lang/en_US.lang"));
@@ -414,6 +418,100 @@ public final class EuphoriaEntreePackGenerator {
         EuphoriaEntreeLodPatches.inject(patchPack);
         injectLodHelperIntoProgram(patchPack.resolve("shaders/program/gbuffers_terrain.glsl"));
         injectLodHelperIntoProgram(patchPack.resolve("shaders/program/gbuffers_water.glsl"));
+    }
+
+    /**
+     * Adds RandomThings' opaque Luminous Blocks to Euphoria's existing modded
+     * light-source material classes.  These are texture-pack declarations:
+     * IDs 21000-21024 already use automatic texture emission, Bloom, and ACT
+     * colors in Euphoria, so no renderer-specific compatibility path is
+     * needed.  Keep both the authoritative 1.8+ fragment and its currently
+     * generated root in sync; Euphoria may re-merge the latter at any time.
+     */
+    static void installBundledLuminousBlockMappings(Path shaderpack) throws IOException {
+        List<String> mappings = readBundledBlockMappings();
+        mergeBundledBlockMappings(shaderpack.resolve(EUPHORIA_18_BLOCK_PROPERTIES), mappings);
+        mergeBundledBlockMappings(shaderpack.resolve(MERGED_BLOCK_PROPERTIES), mappings);
+    }
+
+    private static List<String> readBundledBlockMappings() throws IOException {
+        List<String> mappings = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                requiredResource(OVERLAY_ROOT + LUMINOUS_BLOCK_MAPPINGS), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (BLOCK_MAPPING.matcher(line).matches()) {
+                    mappings.add(line);
+                }
+            }
+        }
+        return mappings;
+    }
+
+    private static void mergeBundledBlockMappings(Path properties, List<String> mappings) throws IOException {
+        if (!Files.isRegularFile(properties)) {
+            return;
+        }
+        List<String> lines = Files.readAllLines(properties, StandardCharsets.UTF_8);
+        boolean changed = false;
+        for (String mapping : mappings) {
+            Matcher mappingMatcher = BLOCK_MAPPING.matcher(mapping);
+            if (!mappingMatcher.matches()) {
+                continue;
+            }
+            int id = Integer.parseInt(mappingMatcher.group(1));
+            String values = mapping.substring(mapping.indexOf('=') + 1).trim();
+            if (values.isEmpty() || hasBlockMappingValues(lines, id, values)) {
+                continue;
+            }
+            int line = findBlockMappingLine(lines, id);
+            if (line < 0) {
+                continue;
+            }
+            int lastLine = lastBlockMappingLine(lines, line);
+            lines.set(lastLine, lines.get(lastLine) + " " + values);
+            changed = true;
+        }
+        if (changed) {
+            Files.write(properties, lines, StandardCharsets.UTF_8);
+        }
+    }
+
+    private static boolean hasBlockMappingValues(List<String> lines, int id, String values) {
+        int line = findBlockMappingLine(lines, id);
+        if (line < 0) {
+            return false;
+        }
+        int lastLine = lastBlockMappingLine(lines, line);
+        StringBuilder existing = new StringBuilder();
+        for (int current = line; current <= lastLine; current++) {
+            existing.append(lines.get(current)).append('\n');
+        }
+        for (String value : values.split("\\s+")) {
+            if (!value.isEmpty() && !existing.toString().contains(value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int findBlockMappingLine(List<String> lines, int id) {
+        String prefix = "block." + id;
+        for (int line = 0; line < lines.size(); line++) {
+            String trimmed = lines.get(line).trim();
+            if (trimmed.startsWith(prefix) && BLOCK_MAPPING.matcher(lines.get(line)).matches()) {
+                return line;
+            }
+        }
+        return -1;
+    }
+
+    private static int lastBlockMappingLine(List<String> lines, int firstLine) {
+        int line = firstLine;
+        while (line + 1 < lines.size() && lines.get(line).stripTrailing().endsWith("\\")) {
+            line++;
+        }
+        return line;
     }
 
     private static void ensureLodApiDeclaration(Path properties) throws IOException {

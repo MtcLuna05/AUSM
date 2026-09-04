@@ -238,7 +238,7 @@ public final class ShaderBlockIdMap {
     private static void addStateAlias(List<StateRule> stateRules, String namespace, String path, String propertyName, String propertyValue, int id) {
         Block block = findBlock(namespace, path);
         if (block != null) {
-            stateRules.add(new StateRule(block, propertyName, propertyValue, id));
+            stateRules.add(StateRule.property(block, propertyName, propertyValue, id));
         }
     }
 
@@ -281,7 +281,7 @@ public final class ShaderBlockIdMap {
                 "black"
         };
         for (int i = 0; i < colors.length; i++) {
-            stateRules.add(new StateRule(block, "color", colors[i], baseId + i * 2));
+            stateRules.add(StateRule.property(block, "color", colors[i], baseId + i * 2));
         }
     }
 
@@ -412,7 +412,9 @@ public final class ShaderBlockIdMap {
             Block block = registryBlock(parsed.resource());
             if (block != null) {
                 if (parsed.hasStatePredicate()) {
-                    stateRules.add(new StateRule(block, parsed.propertyName(), parsed.propertyValue(), id));
+                    stateRules.add(StateRule.property(block, parsed.propertyName(), parsed.propertyValue(), id));
+                } else if (parsed.hasMetadata()) {
+                    stateRules.add(StateRule.metadata(block, parsed.metadata(), id));
                 } else {
                     blockIds.put(block, id);
                 }
@@ -421,7 +423,13 @@ public final class ShaderBlockIdMap {
             for (ResourceLocation alias : legacyAliases(parsed.resource())) {
                 Block aliasBlock = registryBlock(alias);
                 if (aliasBlock != null) {
-                    blockIds.put(aliasBlock, id);
+                    if (parsed.hasStatePredicate()) {
+                        stateRules.add(StateRule.property(aliasBlock, parsed.propertyName(), parsed.propertyValue(), id));
+                    } else if (parsed.hasMetadata()) {
+                        stateRules.add(StateRule.metadata(aliasBlock, parsed.metadata(), id));
+                    } else {
+                        blockIds.put(aliasBlock, id);
+                    }
                 }
             }
         }
@@ -532,7 +540,7 @@ public final class ShaderBlockIdMap {
                 return parsedStateToken(new ResourceLocation("minecraft", parts[0]), parts[1]);
             }
             if (isMetadataSuffix(parts[1])) {
-                return new ParsedBlockToken(new ResourceLocation("minecraft", parts[0]), null, null);
+                return parsedMetadataToken(new ResourceLocation("minecraft", parts[0]), parts[1]);
             }
             return new ParsedBlockToken(new ResourceLocation(parts[0], parts[1]), null, null);
         }
@@ -544,6 +552,9 @@ public final class ShaderBlockIdMap {
         if (isStateSuffix(parts[2])) {
             return parsedStateToken(resource, parts[2]);
         }
+        if (isMetadataSuffix(parts[2])) {
+            return parsedMetadataToken(resource, parts[2]);
+        }
         return new ParsedBlockToken(resource, null, null);
     }
 
@@ -553,6 +564,14 @@ public final class ShaderBlockIdMap {
             return new ParsedBlockToken(resource, null, null);
         }
         return new ParsedBlockToken(resource, stateSuffix.substring(0, equals), stateSuffix.substring(equals + 1));
+    }
+
+    private static ParsedBlockToken parsedMetadataToken(ResourceLocation resource, String metadataSuffix) {
+        try {
+            return new ParsedBlockToken(resource, null, null, Integer.parseInt(metadataSuffix));
+        } catch (NumberFormatException ignored) {
+            return new ParsedBlockToken(resource, null, null);
+        }
     }
 
     private static boolean isStateSuffix(String value) {
@@ -655,7 +674,15 @@ public final class ShaderBlockIdMap {
         }
     }
 
-    public record StateRule(Block block, String propertyName, String propertyValue, int id) {
+    public record StateRule(Block block, String propertyName, String propertyValue, Integer metadata, int id) {
+        public static StateRule property(Block block, String propertyName, String propertyValue, int id) {
+            return new StateRule(block, propertyName, propertyValue, null, id);
+        }
+
+        public static StateRule metadata(Block block, int metadata, int id) {
+            return new StateRule(block, null, null, metadata, id);
+        }
+
         @SuppressWarnings({"rawtypes", "unchecked"})
         public boolean matches(IBlockState state) {
             if (state == null || MinecraftReflectionCompat.blockFromState(state) != block) {
@@ -671,6 +698,10 @@ public final class ShaderBlockIdMap {
                 return false;
             }
 
+            if (metadata != null) {
+                return block.getMetaFromState(state) == metadata;
+            }
+
             for (Map.Entry<IProperty<?>, Comparable<?>> entry : MinecraftReflectionCompat.stateProperties(state).entrySet()) {
                 IProperty property = entry.getKey();
                 if (property != null && propertyName.equals(MinecraftReflectionCompat.propertyName(property))) {
@@ -682,9 +713,17 @@ public final class ShaderBlockIdMap {
         }
     }
 
-    private record ParsedBlockToken(ResourceLocation resource, String propertyName, String propertyValue) {
+    private record ParsedBlockToken(ResourceLocation resource, String propertyName, String propertyValue, Integer metadata) {
+        private ParsedBlockToken(ResourceLocation resource, String propertyName, String propertyValue) {
+            this(resource, propertyName, propertyValue, null);
+        }
+
         private boolean hasStatePredicate() {
             return propertyName != null && propertyValue != null;
+        }
+
+        private boolean hasMetadata() {
+            return metadata != null;
         }
     }
 

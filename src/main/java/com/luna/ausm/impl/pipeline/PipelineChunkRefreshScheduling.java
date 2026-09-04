@@ -411,6 +411,7 @@ abstract class PipelineDeferredPassOrchestration4 extends PipelineDeferredPassOr
     }
 
     protected void resetPipelineState(Framebuffer preferredTarget) {
+        PipelineGpuTiming.finishFrame();
         activePass = null;
         activeShaderKey = null;
         activePhase = WorldRenderingPhase.NONE;

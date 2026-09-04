@@ -4,18 +4,24 @@ import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.jar.JarFile;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import net.minecraft.client.Minecraft;
 
 public final class AusmBloomResourceIndex {
+    private static final Pattern BLOOM_LAYER_METADATA = Pattern.compile(
+            "\\\"layer\\\"\\s*:\\s*\\\"BLOOM\\\"", Pattern.CASE_INSENSITIVE);
+
     private final AtomicBoolean scanned = new AtomicBoolean();
     private int scannedArchives;
     private int scannedDirectories;
@@ -77,6 +83,13 @@ public final class AusmBloomResourceIndex {
 
         String name = normalizePath(entry.getName());
         scanTexturePath(name);
+        if (isTextureMetadataPath(name)) {
+            try (InputStream input = jar.getInputStream(entry)) {
+                scanTextureMetadata(name, new String(input.readAllBytes(), StandardCharsets.UTF_8));
+            } catch (IOException | RuntimeException ignored) {
+                // A malformed optional resource must not prevent the rest of the pack from being indexed.
+            }
+        }
     }
 
     private void scanDirectoryPack(Path root) {
@@ -91,6 +104,13 @@ public final class AusmBloomResourceIndex {
     private void scanDirectoryEntry(Path root, Path path) {
         String name = normalizePath(root.relativize(path).toString());
         scanTexturePath(name);
+        if (isTextureMetadataPath(name)) {
+            try {
+                scanTextureMetadata(name, Files.readString(path, StandardCharsets.UTF_8));
+            } catch (IOException | RuntimeException ignored) {
+                // A malformed optional resource must not prevent the rest of the pack from being indexed.
+            }
+        }
     }
 
     private void scanTexturePath(String path) {
@@ -112,6 +132,24 @@ public final class AusmBloomResourceIndex {
             addBloomSpriteId(withoutExtension);
             addBloomSpriteId(withoutExtension.substring(0, withoutExtension.length() - "_bloom".length()));
         }
+    }
+
+    /**
+     * CTM's {@code layer=BLOOM} is the pack-native declaration used by BloomTech.
+     * The texture name itself is intentionally ordinary (for example {@code red_t}),
+     * so a suffix-only index silently drops its bloom model quad.
+     */
+    private void scanTextureMetadata(String metadataPath, String metadata) {
+        if (metadata == null || !BLOOM_LAYER_METADATA.matcher(metadata).find()) {
+            return;
+        }
+        bloomTextures++;
+        addBloomSpriteId(metadataPath.substring(0, metadataPath.length() - ".png.mcmeta".length()));
+    }
+
+    private static boolean isTextureMetadataPath(String path) {
+        return path != null && path.startsWith("assets/") && path.contains("/textures/")
+                && path.endsWith(".png.mcmeta");
     }
 
     private static String normalizePath(String path) {

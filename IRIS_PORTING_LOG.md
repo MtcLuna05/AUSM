@@ -1530,3 +1530,64 @@ Temporary local shaderpack test patches:
     is AUSM packaging compatibility for the local 1.12.2 overlay rather than
     an upstream Iris renderer port; the matching regression test covers
     Unbound, Reimagined, Euphoria output, and derivative exclusion.
+    Follow-up: started the Theseus renderer replacement pass from measured
+    shader-on bottlenecks. When AUSM has removed Celeritas terrain ownership,
+    its Minecraft mixin's now-unowned frame-ahead callbacks are stripped so
+    they no longer fence the complete AUSM/Nothirium frame. The Nothirium GL
+    4.3 shadow bridge also has an indirect submission path: transformed terrain
+    vertices accept an instanced section offset, and compatible single-VBO
+    shadow layers upload offset plus draw-command streams before one
+    `glMultiDrawArraysIndirect` call. Capability, shader-attribute, and VBO
+    identity checks retain the scalar route for incompatible renderers. Both
+    changes require class/shader reload and still await in-game/JFR acceptance.
+    Follow-up: runtime acceptance confirmed that the Celeritas frame-fence
+    callbacks are absent and that Nothirium's compatible shadow layers use the
+    indirect submission route. Added non-blocking OpenGL timestamp probes for
+    total frame and shadow time, shadow terrain/entities/block entities/post,
+    grouped gbuffer geometry, prepare/deferred/composite/final programs, and
+    AUSM bloom. Query results are consumed only after
+    `GL_QUERY_RESULT_AVAILABLE` reports ready and are summarized periodically,
+    avoiding `glFinish` or a blocking query-result read in the render loop.
+    Follow-up: extended the compatible GL 4.3 indirect terrain submission to
+    Nothirium's main-camera visibility lists. The shader bridge previously
+    issued a chunk-offset uniform update and scalar `glDrawArrays` for every
+    visible section (about 1,635 calls per frame in the measured world); a
+    pipeline-format single-VBO layer now uploads one instance-offset stream and
+    one indirect-command stream before `glMultiDrawArraysIndirect`. Mixed,
+    legacy-stride, multi-VBO, and non-GL-4.3 lists are preflighted before any
+    draw and retain the complete scalar fallback.
+    Follow-up: removed always-on full-resolution forensic framebuffer mirrors
+    from ordinary frames. Gbuffer, composite, presentation-history, final-input,
+    external-presentation, and window mirrors now run only while an F7 capture
+    session is active. A stationary 3840x2113 shadered-world run dropped from
+    about 54 ms/frame to 47 ms/frame, and a follow-up JFR no longer contained
+    the normal-frame `PipelineFrameLayerCapture` mirror stacks.
+    Follow-up: added two solid-terrain fragment-cost reductions for the
+    generated Complementary/Euphoria path. Manual anisotropic filtering now
+    chooses 1 through the configured maximum samples from the actual pixel
+    footprint instead of taking all 16 samples unconditionally, and generated
+    detail normals (four extra atlas reads) are limited to AUSM's near LOD tier.
+    At 3840x2113 with the 16x AF option retained, the latter reduced grouped
+    terrain GPU time from roughly 25-27 ms to 20-21 ms and total frame time from
+    roughly 45-47 ms to 40-42 ms in the same stationary view. Near geometry,
+    albedo, lighting, shadows, and generated normals inside 96 blocks remain
+    unchanged.
+    Follow-up: added an opt-in fragment-internal terrain GPU profiler gated by
+    `ausm.terrainShaderGpuProbe`. On GL 4.3 plus `GL_ARB_shader_clock`, it
+    sparsely samples fragments into a rotating SSBO ring and delays readback by
+    two 90-frame windows. The permanent probe records one survivor-matched
+    population across total, setup, base texture, material setup, materials,
+    complete lighting, lighting prelude, shadow sampling, blocklight, final
+    lighting mix, post-light work, and framebuffer outputs. A live five-scope
+    compatibility run at 3840x2113 measured base texture sampling at 4,506
+    shader-clock ticks per surviving fragment (39.7% of terrain), complete
+    lighting at 4,080 (35.9%), material work at 1,911 (16.8%), and setup at 299
+    (2.6%). Within lighting, shadow work was the largest subregion at 1,451
+    ticks, but blocklight, final mixing, and prelude were each 1,066-1,210 ticks;
+    no single lighting subsection dominates.
+    Follow-up audit: the live shader source is compiled under
+    `GBUFFERS_TERRAIN`, while the earlier adaptive-AF/generated-normal/shadow
+    reductions were restricted to `GBUFFERS_TERRAIN_SOLID`. Consequently the
+    active base texture path still calls Complementary's full 16-sample
+    `textureAF`, and the earlier timing improvement must not be attributed to
+    adaptive AF until the pass routing is corrected and remeasured.

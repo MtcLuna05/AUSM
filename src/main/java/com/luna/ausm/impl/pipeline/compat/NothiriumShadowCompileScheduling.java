@@ -5,6 +5,8 @@ import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.pipeline.PipelineContext;
 import com.luna.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
+import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -141,13 +143,12 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
         int previousStride = -1;
         double maxDistanceSquared = maxDistance >= 0.0D ? maxDistance * maxDistance : -1.0D;
         NothiriumShadowRenderer.ShadowSelection activeSelection = shadowSelection;
-        // beginShadowSelection has already applied this exact distance test to
-        // its list. Avoid repeating three double-vector calculations for each
-        // chunk across the solid and two cutout layers.
-        boolean selectionAlreadyDistanceCulled = shadowSelectionActive
+        // The active selection is already light-frustum culled and ordered.
+        // The prepared loop applies the smaller non-solid distance limits
+        // directly, without returning to the generic reflective draw path.
+        boolean activeShadowSelection = shadowSelectionActive
                 && activeSelection != null
-                && chunks == activeSelection.chunks
-                && maxDistance == activeSelection.maxDistance;
+                && chunks == activeSelection.chunks;
         PipelineContext context = PipelineContext.getInstance();
         boolean waterAttachmentProbe = false;
         boolean disableCullForMainTerrain = context.shouldDisableNothiriumChunkCulling(layer);
@@ -158,7 +159,7 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
         int shaderlessBloomDimension = shaderlessBloomExtraction
                 ? context.shaderlessBloomExtractionDimensionId()
                 : Integer.MIN_VALUE;
-        if (selectionAlreadyDistanceCulled
+        if (activeShadowSelection
                 && !shaderlessBloomExtraction
                 && !collectState
                 && requirePipelineStride) {
@@ -178,6 +179,44 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
                 : -1;
         boolean useChunkOffsetUniform = activeChunkOffsetUniform >= 0;
         int activeDrawMode = context.drawModeForActiveProgram(GL11.GL_QUADS);
+
+        // The main-view bridge receives Nothirium's already culled per-pass
+        // lists, but previously submitted every section as a uniform update
+        // plus glDrawArrays. On GL 4.3 the same pipeline-format, single-VBO
+        // lists can use the proven shadow offset/command stream and collapse
+        // hundreds of section draws into one multi-draw. The helper performs
+        // an all-or-nothing format/VBO preflight and returns null before any
+        // draw when a legacy or mixed list requires the scalar route.
+        if (!activeShadowSelection
+                && !shaderlessBloomExtraction
+                && !collectState
+                && maxDistanceSquared < 0.0D
+                && GLContext.getCapabilities().OpenGL43
+                && useChunkOffsetUniform
+                && self().chunkOffsetInstanceAttributeLocation(activeProgram) == NOTHIRIUM_OFFSET_ATTRIBUTE) {
+            boolean indirectPreviousCull = false;
+            if (disableCullForMainTerrain) {
+                indirectPreviousCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+                GL11.glDisable(GL11.GL_CULL_FACE);
+            }
+            try {
+                NothiriumShadowRenderer.DrawStats indirectStats = self().tryDrawPreparedPipelineChunksIndirect(
+                        pass, chunks, cameraX, cameraY, cameraZ, -1.0D, false,
+                        fallbackBlockEntityId, fallbackRenderType,
+                        activeChunkOffsetUniform, NOTHIRIUM_OFFSET_ATTRIBUTE, activeDrawMode);
+                if (indirectStats != null) {
+                    return indirectStats;
+                }
+            } finally {
+                if (disableCullForMainTerrain) {
+                    if (indirectPreviousCull) {
+                        GL11.glEnable(GL11.GL_CULL_FACE);
+                    } else {
+                        GL11.glDisable(GL11.GL_CULL_FACE);
+                    }
+                }
+            }
+        }
 
         try {
             if (GLContext.getCapabilities().OpenGL30) {
@@ -202,7 +241,7 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
                 if (collectState) {
                     stats.captureState(reflection, chunk, chunkX, chunkY, chunkZ);
                 }
-                if (!selectionAlreadyDistanceCulled && maxDistanceSquared >= 0.0D) {
+                if (!activeShadowSelection && maxDistanceSquared >= 0.0D) {
                     double dx = chunkX + 8.0D - cameraX;
                     double dy = chunkY + 8.0D - cameraY;
                     double dz = chunkZ + 8.0D - cameraZ;
@@ -362,7 +401,32 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
         boolean useChunkOffsetUniform = activeChunkOffsetUniform >= 0;
         int activeDrawMode = context.drawModeForActiveProgram(GL11.GL_QUADS);
         int previousMatrixMode = -1;
-        boolean waterAttachmentProbe = false;
+        NothiriumShadowRenderer.ShadowSelection activeSelection = shadowSelection;
+        double preparedMaxDistance = activeSelection != null ? activeSelection.maxDistance : -1.0D;
+        if (context.getPhase() == WorldRenderingPhase.TERRAIN_CUTOUT
+                || context.getPhase() == WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED) {
+            preparedMaxDistance = Math.min(preparedMaxDistance, 96.0D);
+        } else if (context.getPhase() == WorldRenderingPhase.TERRAIN_TRANSLUCENT) {
+            preparedMaxDistance = Math.min(preparedMaxDistance, 64.0D);
+        }
+        double preparedMaxDistanceSquared = preparedMaxDistance >= 0.0D
+                ? preparedMaxDistance * preparedMaxDistance : -1.0D;
+        boolean preparedDistanceLimited = activeSelection != null
+                && preparedMaxDistance < activeSelection.maxDistance;
+        int instanceOffsetAttribute = activeProgram > 0
+                ? self().chunkOffsetInstanceAttributeLocation(activeProgram)
+                : -1;
+        if (GLContext.getCapabilities().OpenGL43
+                && useChunkOffsetUniform
+                && instanceOffsetAttribute == NOTHIRIUM_OFFSET_ATTRIBUTE) {
+            NothiriumShadowRenderer.DrawStats indirectStats = self().tryDrawPreparedPipelineChunksIndirect(
+                    pass, chunks, cameraX, cameraY, cameraZ, preparedMaxDistanceSquared,
+                    preparedDistanceLimited, fallbackBlockEntityId, fallbackRenderType,
+                    activeChunkOffsetUniform, instanceOffsetAttribute, activeDrawMode);
+            if (indirectStats != null) {
+                return indirectStats;
+            }
+        }
 
         try {
             if (GLContext.getCapabilities().OpenGL30) {
@@ -376,6 +440,23 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
                     // for that provider on its next render call.
                     stats.unsupportedStride++;
                     continue;
+                }
+
+                int chunkX = access.ausm$blockX();
+                int chunkY = access.ausm$blockY();
+                int chunkZ = access.ausm$blockZ();
+                if (preparedMaxDistanceSquared >= 0.0D
+                        && preparedDistanceLimited) {
+                    double dx = chunkX + 8.0D - cameraX;
+                    double dy = chunkY + 8.0D - cameraY;
+                    double dz = chunkZ + 8.0D - cameraZ;
+                    if (dx * dx + dy * dy + dz * dz > preparedMaxDistanceSquared) {
+                        stats.distanceCulled++;
+                        // ShadowSelectionChunkList is nearest-first. Once this
+                        // layer's smaller range is exceeded, every remaining
+                        // section is also outside it.
+                        break;
+                    }
                 }
 
                 IVBOPart part = access.ausm$vboPart(pass) instanceof IVBOPart value ? value : null;
@@ -412,14 +493,7 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
                     previousVbo = vbo;
                 }
 
-                int chunkX = access.ausm$blockX();
-                int chunkY = access.ausm$blockY();
-                int chunkZ = access.ausm$blockZ();
                 int first = part.getFirst();
-                if (!waterAttachmentProbe && context.getPhase() == WorldRenderingPhase.TERRAIN_TRANSLUCENT) {
-                    context.beginWaterAttachmentDeltaProbe(BlockRenderLayer.TRANSLUCENT);
-                    waterAttachmentProbe = true;
-                }
                 if (useChunkOffsetUniform) {
                     GL20.glUniform3f(activeChunkOffsetUniform,
                             (float) (chunkX - cameraX),
@@ -459,11 +533,130 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
             ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
             ExtendedVertexFormats.disableAttribute(NOTHIRIUM_OFFSET_ATTRIBUTE);
             context.resetChunkFadeUniform();
-            if (waterAttachmentProbe) {
-                context.finishWaterAttachmentDeltaProbe();
-            }
         }
         return stats;
+    }
+
+    /**
+     * Replaces the per-section offset upload and draw call with the same
+     * instance-offset plus indirect-command shape used by Nothirium GL 4.3.
+     * A changed VBO identity aborts before issuing GL work and falls back to
+     * the proven scalar path above.
+     */
+    protected NothiriumShadowRenderer.DrawStats tryDrawPreparedPipelineChunksIndirect(
+            Object pass, Iterable<?> chunks,
+            double cameraX, double cameraY, double cameraZ,
+            double preparedMaxDistanceSquared, boolean preparedDistanceLimited,
+            int fallbackBlockEntityId, short fallbackRenderType,
+            int activeChunkOffsetUniform, int instanceOffsetAttribute, int activeDrawMode) {
+        NothiriumShadowRenderer.DrawStats stats = new NothiriumShadowRenderer.DrawStats();
+        int capacity = chunks instanceof Collection<?> collection
+                ? collection.size()
+                : shadowSelection != null ? shadowSelection.chunks.size() : 256;
+        FloatBuffer offsets = shadowIndirectBatch.beginOffsets(capacity);
+        IntBuffer commands = shadowIndirectBatch.beginCommands(capacity);
+        int batchVbo = -1;
+        int batchStride = -1;
+        int drawCount = 0;
+
+        for (Object chunk : chunks) {
+            stats.total++;
+            if (!(chunk instanceof NothiriumShadowChunkAccess access)) {
+                // Main visibility lists can briefly retain a pre-transform
+                // chunk during reload. Fall back before drawing anything so
+                // that section is not silently omitted from the frame.
+                return null;
+            }
+
+            int chunkX = access.ausm$blockX();
+            int chunkY = access.ausm$blockY();
+            int chunkZ = access.ausm$blockZ();
+            stats.captureFirstChunk(chunkX, chunkY, chunkZ);
+            if (preparedMaxDistanceSquared >= 0.0D && preparedDistanceLimited) {
+                double dx = chunkX + 8.0D - cameraX;
+                double dy = chunkY + 8.0D - cameraY;
+                double dz = chunkZ + 8.0D - cameraZ;
+                if (dx * dx + dy * dy + dz * dz > preparedMaxDistanceSquared) {
+                    stats.distanceCulled++;
+                    break;
+                }
+            }
+            stats.withinDistance++;
+
+            IVBOPart part = access.ausm$vboPart(pass) instanceof IVBOPart value ? value : null;
+            if (part == null) {
+                stats.missingPart++;
+                continue;
+            }
+            stats.partPresent++;
+            if (!part.isValid()) {
+                stats.invalidPart++;
+                continue;
+            }
+            stats.validPart++;
+
+            int count = part.getCount();
+            int size = part.getSize();
+            if (count <= 0) {
+                stats.emptyCount++;
+                continue;
+            }
+            stats.positiveCount++;
+            int stride = NothiriumShadowRenderer.vertexStride(size, count);
+            if (!NothiriumShadowRenderer.isPipelineBlockStride(stride)) {
+                return null;
+            }
+
+            int vbo = part.getVBO();
+            if (vbo <= 0) {
+                stats.badVbo++;
+                continue;
+            }
+            stats.positiveVbo++;
+            if (batchVbo >= 0 && (vbo != batchVbo || stride != batchStride)) {
+                return null;
+            }
+            batchVbo = vbo;
+            batchStride = stride;
+
+            int first = part.getFirst();
+            stats.captureFirstPart(vbo, first, count, part.getOffset(), size, stride, -1);
+            offsets.put((float) (chunkX - cameraX));
+            offsets.put((float) (chunkY - cameraY));
+            offsets.put((float) (chunkZ - cameraZ));
+            commands.put(count);
+            commands.put(1);
+            commands.put(first);
+            commands.put(drawCount);
+            drawCount++;
+        }
+
+        try {
+            if (drawCount > 0) {
+                // The transformed vertex function adds uniform and instanced
+                // offsets. Scalar draws leave the instance attribute at zero;
+                // batched draws leave the legacy uniform at zero.
+                GL20.glUniform3f(activeChunkOffsetUniform, 0.0F, 0.0F, 0.0F);
+                shadowIndirectBatch.draw(batchVbo, batchStride, instanceOffsetAttribute, activeDrawMode,
+                        fallbackBlockEntityId, fallbackRenderType, offsets, commands, drawCount);
+                if (!shadowIndirectBatchLogged) {
+                    shadowIndirectBatchLogged = true;
+                    MainMod.LOGGER.info(
+                            "[AUSMNothiriumTerrainIndirect] active=true phase={} draws={} vbo={} stride={} mode={}",
+                            PipelineContext.getInstance().getPhase(), drawCount, batchVbo, batchStride, activeDrawMode);
+                }
+            }
+            stats.drawn = drawCount;
+            return stats;
+        } finally {
+            NothiriumShadowRenderer.resetClientArrayState();
+            ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_MID_TEX_COORD_ATTRIBUTE);
+            ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_TANGENT_ATTRIBUTE);
+            ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.MC_ENTITY_ATTRIBUTE);
+            ExtendedVertexFormats.disableAttribute(ExtendedVertexFormats.AT_MID_BLOCK_ATTRIBUTE);
+            ExtendedVertexFormats.disableAttribute(NOTHIRIUM_OFFSET_ATTRIBUTE);
+            PipelineContext.getInstance().resetChunkFadeUniform();
+        }
     }
 
     protected int chunkOffsetUniformLocation(int program) {
@@ -476,6 +669,19 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
         }
         int location = GL20.glGetUniformLocation(program, "ausm_ChunkOffset");
         chunkOffsetUniformLocations.put(program, location);
+        return location;
+    }
+
+    protected int chunkOffsetInstanceAttributeLocation(int program) {
+        if (program <= 0) {
+            return -1;
+        }
+        Integer cached = chunkOffsetInstanceAttributeLocations.get(program);
+        if (cached != null) {
+            return cached;
+        }
+        int location = GL20.glGetAttribLocation(program, "ausm_ChunkOffsetInstanced");
+        chunkOffsetInstanceAttributeLocations.put(program, location);
         return location;
     }
 

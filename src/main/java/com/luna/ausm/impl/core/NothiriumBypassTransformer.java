@@ -38,6 +38,8 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
     private static final String TARGET = "meldexun.nothirium.mc.mixin.MixinRenderGlobal";
     private static final String RENDER_GLOBAL = "net.minecraft.client.renderer.RenderGlobal";
     private static final String CELERITAS_MINECRAFT_MIXIN = "org.taumc.celeritas.mixin.core.MinecraftMixin";
+    private static final String CELERITAS_FRAME_HOOK_DESCRIPTOR =
+            "(Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V";
     private static final String CELERITAS_RENDER_GLOBAL_MIXIN = "org.taumc.celeritas.mixin.core.terrain.RenderGlobalMixin";
     private static final String CELERITAS_VINTAGE = "org.taumc.celeritas.CeleritasVintage";
     private static final String CELERITAS_DEFAULT_CHUNK_RENDERER = "org.embeddedt.embeddium.impl.render.chunk.DefaultChunkRenderer";
@@ -89,12 +91,18 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
                 || CELERITAS_RENDER_GLOBAL_MIXIN.equals(transformedName)) {
             // Celeritas' RenderGlobal provider couples chunk construction to
             // CeleritasWorldRenderer. Remove it entirely so Nothirium/AUSM
-            // own the renderer; independent Celeritas frame-ahead remains.
+            // own the renderer.
             return stripCeleritasRenderOwnership(basicClass);
         }
         if (CELERITAS_MINECRAFT_MIXIN.equals(name)
                 || CELERITAS_MINECRAFT_MIXIN.equals(transformedName)) {
-            return basicClass;
+            // Its pre/post render hooks only manage Celeritas' frame-ahead
+            // fence queue. Once terrain ownership above is removed, those
+            // fences wrap AUSM/Nothirium's entire frame without protecting a
+            // Celeritas renderer and can dominate the client thread in
+            // glClientWaitSync. Keep the inert mixin shell for compatibility,
+            // but do not merge its render hooks into Minecraft.
+            return stripCeleritasFrameAheadHooks(basicClass);
         }
         if (CELERITAS_VINTAGE.equals(name) || CELERITAS_VINTAGE.equals(transformedName)) {
             return stripCeleritasDebugOverlayHandler(basicClass);
@@ -146,6 +154,22 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         ClassNode classNode = new ClassNode();
         reader.accept(classNode, 0);
         classNode.methods.removeIf(method -> !"<init>".equals(method.name));
+        ClassWriter writer = new SafeClassWriter(reader, ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
+        classNode.accept(writer);
+        return writer.toByteArray();
+    }
+
+    private static byte[] stripCeleritasFrameAheadHooks(byte[] basicClass) {
+        ClassReader reader = new ClassReader(basicClass);
+        ClassNode classNode = new ClassNode();
+        reader.accept(classNode, 0);
+        boolean changed = classNode.methods.removeIf(method ->
+                CELERITAS_FRAME_HOOK_DESCRIPTOR.equals(method.desc)
+                        && ("preRender".equals(method.name) || "postRender".equals(method.name))
+        );
+        if (!changed) {
+            return basicClass;
+        }
         ClassWriter writer = new SafeClassWriter(reader, ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
         classNode.accept(writer);
         return writer.toByteArray();

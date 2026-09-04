@@ -5,6 +5,8 @@ final class ShaderlessSkyOwnership {
     }
 
     static boolean shouldReplaceVanillaSky(boolean pipelineActive) {
-        return !pipelineActive;
+        // Native shaderless skies own their complete geometry. AUSM only owns
+        // shadered sky output and the shaderless GUI presentation boundary.
+        return false;
     }
 }

@@ -289,24 +289,33 @@ abstract class PipelineRuntimeCompatibilityState extends PipelineRuntimeTerrainF
         if (state == null) {
             return 0;
         }
-        int emission = isPipelineActive && !shaderlessBloomExtractionActive
+        return isPipelineActive && !shaderlessBloomExtractionActive
                 ? self().explicitShaderedBlockEmission(state, blockAccess, pos)
                 : self().blockRenderEmissionForState(state, blockAccess, pos);
-        return PipelineRuntimeState.isBlockcrafteryEditableBlock(state)
-                ? Math.max(emission, self().containedFrameEmission(state, blockAccess, pos))
-                : emission;
     }
 
     public boolean shouldUseShaderlessBloomEmission() {
-        return false;
+        return !isPipelineActive || shaderlessBloomExtractionActive;
     }
 
     public boolean isManualBloomExtractionEnabled() {
-        return false;
+        return !isPipelineActive || shaderlessBloomExtractionActive;
     }
 
     public int blockShaderlessBloomEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
-        return 0;
+        if (state == null) {
+            return 0;
+        }
+
+        IBlockState material = self().actualLightState(state, blockAccess, pos);
+        // The material map is captured on the render thread while the selected
+        // pack loads. Nothirium's worker threads can read the immutable rules
+        // here without parsing shader properties or touching OpenGL.
+        int materialId = material != null ? shaderlessBloomBlockIds.idFor(material) : 0;
+        if (materialId > 20999 && materialId < 21025) {
+            return SHADERLESS_BLOOM_GEOMETRY_EMISSION;
+        }
+        return self().explicitShaderlessBloomEmission(material, blockAccess, pos);
     }
 
     public boolean stateHasShaderlessBloomSource(IBlockState state) {

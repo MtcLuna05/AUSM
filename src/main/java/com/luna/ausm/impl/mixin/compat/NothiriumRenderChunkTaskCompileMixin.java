@@ -248,25 +248,6 @@ public abstract class NothiriumRenderChunkTaskCompileMixin implements NothiriumR
     }
 
     @Unique
-    private static boolean ausm$isRandomThingsLuminousState(IBlockState state) {
-        return NothiriumRenderChunkTaskCompileHooks.ausm$isRandomThingsLuminousState(state);
-    }
-
-    @Unique
-    private static boolean ausm$isNativeBloomOverlayLayer(BlockRenderLayer layer) {
-        return NothiriumRenderChunkTaskCompileHooks.ausm$isNativeBloomOverlayLayer(layer);
-    }
-
-    @Unique
-    public void ausm$logNativeBloomVertexProbe(
-            IBlockState state,
-            BlockPos pos,
-            RegionRenderCacheBuilder regionBuffers
-    ) {
-        NothiriumRenderChunkTaskCompileHooks.ausm$logNativeBloomVertexProbe(this, state, pos, regionBuffers);
-    }
-
-    @Unique
     private static String ausm$describePipelineQuad(ByteBuffer raw, int byteStart, int stride) {
         return NothiriumRenderChunkTaskCompileHooks.ausm$describePipelineQuad(raw, byteStart, stride);
     }

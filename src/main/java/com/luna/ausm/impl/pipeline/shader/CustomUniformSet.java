@@ -129,6 +129,16 @@ public final class CustomUniformSet {
     }
 
     private Map<String, float[]> uniformValuesForFrame(Map<String, float[]> builtins) {
+        // A shader frame can bind many programs (including shadow and deferred
+        // passes), but all custom-uniform inputs are frame-scoped. Reuse the
+        // completed evaluation for those later binds instead of re-running the
+        // full Complementary/Euphoria expression graph per program.
+        float[] frameCounter = builtins.get("frameCounter");
+        float frame = frameCounter != null && frameCounter.length > 0 ? frameCounter[0] : Float.NaN;
+        SmoothState cachedFrame = smoothStates.get(Integer.MIN_VALUE);
+        if (cachedFrame != null && cachedFrame.frame == frame) {
+            return uniformValueScratch;
+        }
         Map<String, float[]> resolved = builtins;
         if (!compiledVariables.isEmpty()) {
             // Keep the stable builtin key set in the backing table. Clearing
@@ -149,6 +159,11 @@ public final class CustomUniformSet {
             if (values.length != 0) {
                 uniformValueScratch.put(rawUniform.name(), values);
             }
+        }
+        if (cachedFrame == null) {
+            smoothStates.put(Integer.MIN_VALUE, new SmoothState(0.0F, frame));
+        } else {
+            cachedFrame.frame = frame;
         }
         return uniformValueScratch;
     }

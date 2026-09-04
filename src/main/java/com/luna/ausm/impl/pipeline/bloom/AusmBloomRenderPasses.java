@@ -336,7 +336,12 @@ abstract class AusmBloomRenderPasses extends AusmBloomRendererBase {
                 composited = true;
             } else {
                 boolean useSceneDepthMask = self().copyDepthTexture(target, false);
-                if (!self().runBlurChain(layerTexture, useSceneDepthMask)) {
+                // Propagating window-space depth through the half-resolution
+                // blur makes perspective-aligned emitters reject alternating
+                // rows of their own bloom. The source geometry was already
+                // rendered against scene depth, so blur colour without packing
+                // that unstable depth into its alpha channel.
+                if (!self().runBlurChain(layerTexture, false)) {
                     if (bloomCompositeLogs < BLOOM_RENDER_LOG_LIMIT) {
                         bloomCompositeLogs++;
                         MainMod.LOGGER.warn("[AUSMBloomComposite] result=blur-failed target={} layer={}",

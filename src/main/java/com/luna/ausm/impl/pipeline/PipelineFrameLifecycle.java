@@ -79,6 +79,7 @@ abstract class PipelineFrameLifecycle extends PipelineWorldRenderScopeBase {
                 frameTimeCounter = 0.0f;
             }
         }
+        PipelineGpuTiming.beginFrame(pipelineFrameId, targetWidth, targetHeight);
         deferredPassesRenderedThisFrame = false;
         preparePassesRenderedBeforeShadowThisFrame = false;
         preTranslucentDepthCopiedThisFrame = false;

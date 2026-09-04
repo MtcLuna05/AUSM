@@ -143,9 +143,10 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
                 if (containedEnderIoLayer != null && layer != null && !AusmBloomLayer.isBloomLayer(layer)) {
                     return layer == containedEnderIoLayer;
                 }
-                // Filled frames are the contained block for every terrain
-                // layer, including native BLOOM.  No GPOM shape or material
-                // route remains in this decision.
+                if (AusmBloomLayer.isBloomLayer(layer)
+                        && !pipeline.hasContainedFrameBloom(state, self.ausm$chunkCache(), pos)) {
+                    return false;
+                }
                 return NothiriumLayerCompileHooks.ausm$canRenderStateInLayer(contained, layer);
             }
             return NothiriumLayerCompileHooks.ausm$canRenderInLayer(block, state, layer);
@@ -169,8 +170,6 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
         self.ausm$state().bloomOnlyBaseFallbackLayer = null;
         self.ausm$state().bloomOnlyBaseFallbackState = null;
         self.ausm$state().emissiveFallbackStart = -1;
-        self.ausm$state().nativeBloomProbeStart = -1;
-        self.ausm$state().nativeBloomProbeLayer = null;
         self.ausm$resetFramedBloomRouteProbe();
         self.ausm$resetBloomBaseRouteProbe();
         PipelineContext pipeline = PipelineContext.getInstance();
@@ -181,20 +180,6 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
             return;
         }
         IBlockState inheritedBloomState = pipeline.inheritedBloomRenderState(state, self.ausm$chunkCache(), pos);
-        BlockRenderLayer currentLayer = MinecraftReflectionCompat.currentRenderLayer();
-        if (NothiriumBloomCompileHooks.ausm$isRandomThingsLuminousState(state) && NothiriumBloomCompileHooks.ausm$isNativeBloomOverlayLayer(currentLayer)
-                && regionBuffers != null) {
-            // Quantum Things emits a SOLID base and a separate translucent
-            // _t overlay. Only the latter is the native bloom source that a
-            // framed material must reproduce; recording the base exhausted
-            // the bounded diagnostic budget before that comparison existed.
-            BufferBuilder nativeBloomBuffer = MinecraftReflectionCompat.regionBufferForLayer(
-                    regionBuffers, currentLayer);
-            self.ausm$state().nativeBloomProbeLayer = currentLayer;
-            self.ausm$state().nativeBloomProbeStart = nativeBloomBuffer != null
-                    ? MinecraftReflectionCompat.bufferVertexCount(nativeBloomBuffer)
-                    : -1;
-        }
         IBlockState bloomOnlyState = NothiriumLayerCompileHooks.ausm$isNativeBloomOnlyBlock(effectiveState)
                 ? effectiveState
                 : NothiriumLayerCompileHooks.ausm$isNativeBloomOnlyBlock(state) ? state : null;
@@ -251,26 +236,8 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
             MinecraftReflectionCompat.setCurrentRenderLayer(naturalLayer);
         }
         self.ausm$captureFramedBloomRouteLayer(bufferBuilder);
-        // The render-layer thread local is initialized immediately above on
-        // Nothirium's first pass.  Capturing only at renderBlockState HEAD
-        // therefore missed native luminous blocks on that pass and left the
-        // framed/native comparison without its source data.
-        if (self.ausm$state().nativeBloomProbeStart < 0 && NothiriumBloomCompileHooks.ausm$isRandomThingsLuminousState(state)
-                && bufferBuilder != null) {
-            BlockRenderLayer nativeLayer = MinecraftReflectionCompat.currentRenderLayer();
-            BufferBuilder nativeBuffer = NothiriumBloomCompileHooks.ausm$isNativeBloomOverlayLayer(nativeLayer)
-                    ? MinecraftReflectionCompat.regionBufferForLayer(bufferBuilder, nativeLayer)
-                    : null;
-            if (nativeBuffer != null) {
-                self.ausm$state().nativeBloomProbeLayer = nativeLayer;
-                self.ausm$state().nativeBloomProbeStart =
-                        MinecraftReflectionCompat.bufferVertexCount(nativeBuffer);
-            }
-        }
         PipelineContext pipeline = PipelineContext.getInstance();
-        // Nothirium bypasses BlockRendererDispatcher's context hook. Set the
-        // native BLOOM marker before the diagnostics-only fast return so every
-        // ordinary luminous block reaches Entree's coat exclusion path.
+        // Nothirium bypasses BlockRendererDispatcher's context hook.
         BlockRenderContext.setFramedBloomBoost(pipeline.stateHasBloomLayerGeometry(state));
         self.ausm$state().terrainCompileProbeLayer = MinecraftReflectionCompat.currentRenderLayer();
         BufferBuilder terrainProbeBuffer = self.ausm$state().terrainCompileProbeLayer != null && bufferBuilder != null
@@ -472,7 +439,6 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
                 );
             }
         }
-        self.ausm$logNativeBloomVertexProbe(state, pos, bufferBuilder);
         self.ausm$logTerrainCompileBlockProbe(state, pos, bufferBuilder, ci.isCancelled());
         self.ausm$state().framedDiagnosticStart = -1;
         self.ausm$state().framedDiagnosticLayer = null;
@@ -660,60 +626,6 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
         self.ausm$state().framedBloomRouteProbeCurrentLayer = null;
         self.ausm$state().framedBloomRouteProbeCurrentStart = -1;
         self.ausm$state().framedBloomRouteProbeBloomStart = -1;
-    }
-
-    public static boolean ausm$isRandomThingsLuminousState(IBlockState state) {
-        Block block = MinecraftReflectionCompat.blockFromState(state);
-        ResourceLocation registryName = MinecraftReflectionCompat.blockRegistryName(block);
-        return registryName != null
-                && "randomthings".equals(MinecraftReflectionCompat.resourceNamespace(registryName))
-                && "luminousblock".equals(MinecraftReflectionCompat.resourcePath(registryName));
-    }
-
-    public static boolean ausm$isNativeBloomOverlayLayer(BlockRenderLayer layer) {
-        return layer == BlockRenderLayer.TRANSLUCENT || AusmBloomLayer.isBloomLayer(layer);
-    }
-
-    public static void ausm$logNativeBloomVertexProbe(NothiriumRenderChunkCompileAccess self,
-                                               IBlockState state,
-                                               BlockPos pos,
-                                               RegionRenderCacheBuilder regionBuffers
-    ) {
-        if (self.ausm$state().nativeBloomProbeStart < 0 || !NothiriumBloomCompileHooks.ausm$isRandomThingsLuminousState(state)
-                || !NothiriumBloomCompileHooks.ausm$isNativeBloomOverlayLayer(self.ausm$state().nativeBloomProbeLayer)
-                || NothiriumCompileDiagnostics.NATIVE_BLOOM_VERTEX_PROBES.get() >= NothiriumCompileDiagnostics.BLOOM_VERTEX_PROBE_LIMIT
-                || regionBuffers == null) {
-            return;
-        }
-        BlockRenderLayer layer = self.ausm$state().nativeBloomProbeLayer;
-        BufferBuilder buffer = layer != null
-                ? MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, layer)
-                : null;
-        if (!(buffer instanceof IBufferBuilderExtension extension)) {
-            return;
-        }
-        int end = extension.ausm$vertexCount();
-        VertexFormat format = extension.ausm$vertexFormat();
-        int stride = ExtendedVertexFormats.size(format);
-        ByteBuffer raw = extension.ausm$byteBuffer();
-        if (end - self.ausm$state().nativeBloomProbeStart < 4
-                || !ExtendedVertexFormats.isPipelineBlock(format)
-                || stride <= 0
-                || raw == null) {
-            return;
-        }
-        int call = NothiriumCompileDiagnostics.NATIVE_BLOOM_VERTEX_PROBES.incrementAndGet();
-        if (call <= NothiriumCompileDiagnostics.BLOOM_VERTEX_PROBE_LIMIT) {
-            MainMod.LOGGER.info(
-                    "[AUSMBloomVertexProbe] kind=native call={} pos={} layer={} bloomLayer={} start={} end={} quad={}",
-                    call,
-                    pos,
-                    layer,
-                    AusmBloomLayer.layer(),
-                    self.ausm$state().nativeBloomProbeStart,
-                    end,
-                    NothiriumBloomCompileHooks.ausm$describePipelineQuad(raw, self.ausm$state().nativeBloomProbeStart * stride, stride));
-        }
     }
 
     public static String ausm$describePipelineQuad(ByteBuffer raw, int byteStart, int stride) {

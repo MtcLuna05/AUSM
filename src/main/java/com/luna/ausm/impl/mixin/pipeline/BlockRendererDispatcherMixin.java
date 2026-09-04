@@ -191,10 +191,6 @@ public class BlockRendererDispatcherMixin {
                     : pipeline.blockRenderEmission(state, blockAccess, pos);
             int packedLightmap = ausm$packedLightmap(contextState, blockAccess, pos);
             ausm$logShaderlessDispatchLightProbe(pipeline, state, contextState, blockAccess, pos, packedLightmap);
-            // Native BLOOM sources such as RandomThings luminous blocks expose no
-            // vanilla light emission. Keep their base-pass vertices explicitly
-            // marked so shader packs can distinguish them from an ordinary block
-            // before optional material effects (notably coated textures) run.
             BlockRenderContext.configureBlock(
                     blockEntityId,
                     (short) MinecraftReflectionCompat.stateRenderTypeOrdinal(contextState),
@@ -417,12 +413,6 @@ public class BlockRendererDispatcherMixin {
             }
         }
         boolean preserveHostSeparateAo = pipeline.shouldSeparateBlockAo(contained, blockAccess, pos);
-        // RandomThings luminous blocks advertise their brightness through a
-        // native BLOOM model layer and therefore report zero through the
-        // vanilla block-emission query. Treat that proven native Bloom route
-        // as emissive before deciding whose colour/AO and lightmap survive
-        // shape mapping; otherwise a framed source inherits the dark host
-        // payload while the direct source remains full-bright.
         boolean containedFrameBloom = pipeline.hasContainedFrameBloom(state, blockAccess, pos);
         // The payload vertices relocate from a cube to arbitrary frame shape
         // geometry. Their light samples must therefore follow the host even

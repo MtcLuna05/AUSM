@@ -19,6 +19,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraft.util.math.RayTraceResult;
+import org.lwjgl.opengl.GL11;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -136,6 +137,32 @@ public class EntityRendererMixin {
         PipelineContext context = PipelineContext.getInstance();
         MainMod.getShaderPackManager().reloadIfDimensionChanged();
         context.beginWorldPassRendering(pass, partialTicks);
+    }
+
+    @Inject(
+            method = "func_175068_a",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/renderer/EntityRenderer;func_78466_h(F)V",
+                    shift = At.Shift.AFTER
+            )
+    )
+    private void ausm$syncShaderlessDriverClearColorAfterFogUpdate(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (context.isActive()) {
+            return;
+        }
+
+        // Vanilla has just updated GlStateManager's cached fog/clear colour.
+        // Shaderless post-world passes use raw GL11 clears; with F1 the skipped
+        // HUD path can leave the driver clear colour stale even though that cache
+        // remains correct. Align the driver before vanilla clears this frame.
+        GL11.glClearColor(
+                MinecraftReflectionCompat.fieldFloat(this, 0.0F, "field_175080_Q", "fogColorRed"),
+                MinecraftReflectionCompat.fieldFloat(this, 0.0F, "field_175082_R", "fogColorGreen"),
+                MinecraftReflectionCompat.fieldFloat(this, 0.0F, "field_175081_S", "fogColorBlue"),
+                0.0F
+        );
     }
 
     @Inject(

@@ -4,8 +4,8 @@ import com.luna.ausm.impl.MainMod;
 import net.minecraftforge.fml.common.Loader;
 
 /**
- * Celeritas is optional. When present, AUSM keeps its frame-ahead and compile
- * optimizations, while AUSM remains the sole terrain/entity renderer.
+ * Celeritas is optional. When present, AUSM keeps its compile optimizations,
+ * while AUSM remains the sole terrain/entity renderer and frame owner.
  */
 public final class CeleritasCompat {
     private static final String MOD_ID = "celeritas";
@@ -47,7 +47,7 @@ public final class CeleritasCompat {
         );
         if (celeritas) {
             MainMod.LOGGER.info(
-                    "[CeleritasCompat] optimization mode: Celeritas frame-ahead/compile helpers retained; AUSM owns terrain, entity, and pass rendering"
+                    "[CeleritasCompat] optimization mode: Celeritas compile helpers retained; AUSM owns frame pacing, terrain, entity, and pass rendering"
             );
         }
     }

@@ -178,6 +178,7 @@ abstract class PipelineRuntimeDiagnosticsState9 extends PipelineRuntimeDiagnosti
                 activePhase,
                 pingPongManager.getReadBuffer()
         );
+        PipelineGpuTiming.endPass();
         PipelineRuntimeState.PassScope scope = passStack.pop();
         activePhase = scope.previousPhase();
         if (!scope.bound()) {

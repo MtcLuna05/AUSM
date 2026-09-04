@@ -48,6 +48,6 @@ public final class ShaderTransformPipeline {
         for (ShaderTransformStage stage : STAGES) {
             transformed = stage.apply(transformed, parameters);
         }
-        return transformed;
+        return new TerrainShaderGpuProbeTransformStage().apply(transformed, parameters);
     }
 }

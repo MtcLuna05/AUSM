@@ -49,7 +49,9 @@ final class PipelineTerrainConstants {
     // rotation advance in visible steps even when camera-delta rebasing keeps
     // the cached map spatially aligned.
     static final int SHADOW_STABLE_UPDATE_INTERVAL_TICKS = 1;
-    static final double SHADOW_STABLE_UPDATE_MOVEMENT_SQ = 0.0625D;
+    // Half a block stays within the selection cache's existing conservative
+    // reuse radius while allowing normal walking to skip an extra shadow pass.
+    static final double SHADOW_STABLE_UPDATE_MOVEMENT_SQ = 0.25D;
     // At interactive frame rates, refresh nearby detailed casters every
     // rendered frame instead of quantizing them to Minecraft's 20 Hz tick.
     // If the client is already below 30 FPS, retain the one-tick reuse gate so

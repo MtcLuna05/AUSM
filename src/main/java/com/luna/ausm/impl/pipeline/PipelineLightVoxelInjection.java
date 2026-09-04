@@ -391,7 +391,13 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
                     self().shadowLayerCullDistance(layer),
                     nothiriumFallbackBlockEntityId(layer),
                     nothiriumFallbackRenderType(layer),
-                    false
+                    // Shadow terrain is compiled through AUSM's extended
+                    // block format. Requiring it here selects Nothirium's
+                    // prepared draw loop, avoiding per-section reflection,
+                    // distance checks and generic-stride setup. A stale VBO
+                    // is still detected and submitted to the normal refresh
+                    // route by renderProviderLayer.
+                    true
             ));
         }
 

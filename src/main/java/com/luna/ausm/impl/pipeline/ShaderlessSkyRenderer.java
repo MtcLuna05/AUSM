@@ -32,11 +32,7 @@ final class ShaderlessSkyRenderer {
     }
 
     static boolean shouldReplaceVanillaSky(boolean pipelineActive) {
-        // Shaderless sky ownership now belongs to vanilla and each dimension's
-        // registered renderer. AUSM retains only the shared presentation-state
-        // repairs and an underlay that is visible solely if a native lower dome
-        // leaves the framebuffer clear colour exposed.
-        return false;
+        return ShaderlessSkyOwnership.shouldReplaceVanillaSky(pipelineActive);
     }
 
     static void renderSky() {

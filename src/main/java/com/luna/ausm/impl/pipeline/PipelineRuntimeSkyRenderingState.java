@@ -24,14 +24,11 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
     }
 
     public boolean shouldUseCompleteOwnedSkyOverride() {
-        Minecraft mc = MinecraftReflectionCompat.minecraft();
-        World world = mc == null ? null : MinecraftReflectionCompat.world(mc);
-        return mc != null
-                && world != null
-                && !isPipelineActive
-                && self().isSimpleVoidWorld(world)
-                && !self().isRenderingBetterPortalsNestedView()
-                && !self().isRenderingBetterPortalsRenderPass();
+        // Shaderless worlds keep their provider's native sky renderer. The
+        // complete owned route cancels RenderGlobal and suppresses Botania's
+        // base geometry, so entering it after the shaderless AUSM backing was
+        // retired leaves only the framebuffer clear colour behind the GUI.
+        return false;
     }
 
     /**
@@ -228,7 +225,6 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
         boolean result = world != null
                 && (isPipelineActive && self().shouldUseOwnedSkyOverrideWorld(world)
                 || self().isCustomVoidWorldSkyEnabled(world)
-                || self().isSimpleVoidWorld(world) && self().shouldUseShaderlessOwnedSky(mc)
                 || self().shouldUseShaderedF1LowerSkyRepair(mc, world))
                 && !self().isRenderingBetterPortalsNestedView()
                 && !self().isRenderingBetterPortalsRenderPass();
@@ -243,9 +239,8 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
 
     protected boolean shouldUseShaderlessOwnedSky(Minecraft mc) {
         World world = mc != null ? MinecraftReflectionCompat.world(mc) : null;
-        // External sky renderers are detached for the compatibility route. Keep
-        // both dome hemispheres under one AUSM backing so F1 and GUI renders do
-        // not inherit the Void World's dark vanilla lower hemisphere.
+        // The name is retained for the shaderless GUI/F1 presentation guards.
+        // Sky geometry itself remains owned by the world's native renderer.
         return !isPipelineActive
                 && world != null
                 && self().isSimpleVoidWorld(world)
@@ -268,8 +263,7 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
     }
 
     public boolean shouldSuppressVanillaSunsetGeometry() {
-        return self().shouldUseShaderOwnedSkyOverride()
-                || self().shouldUseShaderlessOwnedSky(MinecraftReflectionCompat.minecraft());
+        return self().shouldUseShaderOwnedSkyOverride();
     }
 
     public boolean shouldSuppressVoidWorldCustomSkyRenderer(Object skyRenderer, WorldClient world) {
@@ -297,39 +291,13 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
     }
 
     /**
-     * Astral's outer renderer temporarily removes the world's sky renderer and
-     * re-enters RenderGlobal to delegate the Void World sky. That recursion is
-     * what makes its output diverge in F1. Route directly to Botania's selected
-     * renderer while keeping the invocation owned by AUSM's sky boundary.
+     * Keep the complete native Astral route in shaderless mode. Invoking only
+     * its delegated Botania renderer drops Astral's lower dome and produces a
+     * hard half-screen boundary during F1 and GUI presentation.
      */
     public boolean renderShaderlessOwnedVoidCompatibilitySky(Object skyRenderer, float partialTicks,
                                                              WorldClient world, Minecraft minecraft) {
-        if (isPipelineActive
-                || skyRenderer == null
-                || world == null
-                || minecraft == null
-                || !self().isSimpleVoidWorld(world)
-                || !PipelineRuntimeState.isAstralSkyRenderer(skyRenderer)) {
-            return false;
-        }
-        Object delegated = MinecraftReflectionCompat.field(
-                skyRenderer, Object.class, null, "otherSkyRenderer");
-        if (delegated == null
-                || !"vazkii.botania.client.render.world.SkyblockSkyRenderer".equals(delegated.getClass().getName())) {
-            return false;
-        }
-        try {
-            MinecraftReflectionCompat.invoke(
-                    delegated,
-                    new String[]{"render"},
-                    new Class<?>[]{float.class, WorldClient.class, Minecraft.class},
-                    partialTicks,
-                    world,
-                    minecraft);
-            return true;
-        } catch (RuntimeException | LinkageError ignored) {
-            return false;
-        }
+        return false;
     }
 
     public void renderShaderlessBotaniaVoidDetailsIfNeeded(float partialTicks, WorldClient world, Minecraft mc) {
@@ -431,9 +399,7 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
     }
 
     protected boolean shouldSuppressShaderlessSimpleVoidSkyBaseGeometry() {
-        Minecraft mc = MinecraftReflectionCompat.minecraft();
-        World world = mc != null ? MinecraftReflectionCompat.world(mc) : null;
-        return self().shouldUseShaderlessOwnedSky(mc) && self().isSimpleVoidWorld(world);
+        return false;
     }
 
     protected boolean shouldSuppressShaderedSimpleVoidSkyBaseGeometry() {

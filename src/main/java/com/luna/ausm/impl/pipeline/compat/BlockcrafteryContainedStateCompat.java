@@ -51,8 +51,8 @@ public final class BlockcrafteryContainedStateCompat {
 
     public static boolean isEditableFrame(IBlockState state) {
         Block block = MinecraftReflectionCompat.blockFromState(state);
-        ResourceLocation name = block != null ? MinecraftReflectionCompat.blockRegistryName(block) : null;
-        return BLOCKCRAFTERY.equals(MinecraftReflectionCompat.resourceNamespace(name));
+        return block != null
+                && block.getClass().getName().startsWith("epicsquid.blockcraftery.block.BlockEditable");
     }
 
     /**

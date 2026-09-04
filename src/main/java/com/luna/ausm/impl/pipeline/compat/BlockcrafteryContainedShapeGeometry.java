@@ -788,7 +788,7 @@ public final class BlockcrafteryContainedShapeGeometry {
      * at_midBlock while it appends a quad. The frame mapper changes its
      * positions afterwards, so all of those source-cube attributes become
      * stale together. Rebuild them from host geometry and contained UVs;
-     * retain the contained emission byte in at_midBlock.
+     * retain the host's own emission byte in at_midBlock.
      */
     private static void refreshDerivedPipelineAttributes(ByteBuffer destination, byte[] host,
                                                          long startByte, int vertices, int stride,
@@ -839,15 +839,14 @@ public final class BlockcrafteryContainedShapeGeometry {
             for (int vertex = 0; vertex < 4; vertex++) {
                 int offset = quadStart + vertex * stride;
                 int hostOffset = quad * 4 * stride + vertex * stride;
-                int containedMidBlock = destination.getInt(offset + midBlockOffset);
                 int hostMidBlock = host != null && hostOffset + midBlockOffset + Integer.BYTES <= host.length
-                        ? bytesInt(host, hostOffset + midBlockOffset, order) : containedMidBlock;
+                        ? bytesInt(host, hostOffset + midBlockOffset, order)
+                        : destination.getInt(offset + midBlockOffset);
                 destination.putInt(offset + normalOffset, packedNormal);
                 destination.putFloat(offset + midpointOffset, midpointU);
                 destination.putFloat(offset + midpointOffset + 4, midpointV);
                 destination.putInt(offset + tangentOffset, packedTangent);
-                destination.putInt(offset + midBlockOffset,
-                        (hostMidBlock & 0x00FFFFFF) | (containedMidBlock & 0xFF000000));
+                destination.putInt(offset + midBlockOffset, hostMidBlock);
             }
         }
     }
