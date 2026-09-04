@@ -78,16 +78,13 @@ public final class IrisVertexMath {
         float bitangentX = factor * (-deltaU2 * edge1x + deltaU1 * edge2x);
         float bitangentY = factor * (-deltaU2 * edge1y + deltaU1 * edge2y);
         float bitangentZ = factor * (-deltaU2 * edge1z + deltaU1 * edge2z);
-        float bitangentScale = inverseSqrt(bitangentX * bitangentX + bitangentY * bitangentY + bitangentZ * bitangentZ);
-        if (isFinite(bitangentScale) && bitangentScale != 0.0f) {
-            bitangentX *= bitangentScale;
-            bitangentY *= bitangentScale;
-            bitangentZ *= bitangentScale;
-        }
 
         float predictedBitangentX = tangentY * normalZ - tangentZ * normalY;
         float predictedBitangentY = tangentZ * normalX - tangentX * normalZ;
         float predictedBitangentZ = tangentX * normalY - tangentY * normalX;
+        // Handedness only depends on the dot product's sign. Normalizing the
+        // bitangent adds a square root per polygon but multiplies it by a
+        // non-negative scalar, so it cannot affect the result.
         float tangentW = bitangentX * predictedBitangentX
                 + bitangentY * predictedBitangentY
                 + bitangentZ * predictedBitangentZ < 0.0f ? -1.0f : 1.0f;

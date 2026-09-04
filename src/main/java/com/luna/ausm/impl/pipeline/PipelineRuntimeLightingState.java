@@ -37,6 +37,18 @@ import static com.luna.ausm.impl.pipeline.pack.PipelineShaderSettings.parseFloat
 import static com.luna.ausm.impl.pipeline.pack.PipelineShaderSettings.parseFloatSettingWithComment;
 
 abstract class PipelineRuntimeLightingState extends PipelineRuntimeEnvironmentState {
+    /**
+     * Retains the selected pack's block-material rules for shaderless terrain
+     * compilation.  Nothirium workers consume this immutable snapshot and
+     * must never load shader properties themselves, because feature detection
+     * touches the client OpenGL context.
+     */
+    public void captureShaderlessBloomBlockIds(ShaderProperties properties) {
+        if (properties != null) {
+            shaderlessBloomBlockIds = properties.blockIds();
+        }
+    }
+
     protected static float[] vec3(Vec3d vec) {
         return new float[]{
                 (float) MinecraftReflectionCompat.vecX(vec),
@@ -270,6 +282,7 @@ abstract class PipelineRuntimeLightingState extends PipelineRuntimeEnvironmentSt
             ShaderLoadingScreen.setTotalSteps(usingCachedPrograms ? 9 : self().shaderLoadingStepCount(properties));
             ShaderLoadingMap loadingMap = usingCachedPrograms ? null : new ShaderLoadingMap();
             shaderProperties = properties;
+            shaderlessBloomBlockIds = properties.blockIds();
             bloomRenderer.configure(pack, properties);
             ShaderBlockLayerOverrides.install(properties.blockIds());
             ShaderSamplerState.setBreaksAnisotropy(properties.renderSettings().breaksAnisotropy());
@@ -456,6 +469,7 @@ abstract class PipelineRuntimeLightingState extends PipelineRuntimeEnvironmentSt
             ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
             programSet = cachedPrograms.programSet;
             shaderProperties = properties;
+            shaderlessBloomBlockIds = properties.blockIds();
             bloomRenderer.configure(pack, properties);
             ShaderBlockLayerOverrides.install(properties.blockIds());
             ShaderSamplerState.setBreaksAnisotropy(properties.renderSettings().breaksAnisotropy());

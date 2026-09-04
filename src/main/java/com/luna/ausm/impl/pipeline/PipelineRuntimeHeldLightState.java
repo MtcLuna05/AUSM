@@ -458,6 +458,7 @@ abstract class PipelineRuntimeDiagnosticsState6 extends PipelineRuntimeDiagnosti
         boolean bound = self().bindPass(pass);
         self().logPipelinePassProbe(pass, phase, bound);
         passStack.push(new PipelineRuntimeState.PassScope(bound, previousPass, previousShaderKey, previousPhase, previousProgramTessellated, previousProgramGeometric));
+        PipelineGpuTiming.beginPass(pass, phase, renderingShadowMap);
     }
 
     protected void logPipelinePassProbe(RenderPass pass, WorldRenderingPhase phase, boolean bound) {

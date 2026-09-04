@@ -17,6 +17,8 @@ abstract class NothiriumShadowSelection extends NothiriumShadowReflectionBinding
 
     public void resetPipelineProgramState() {
         chunkOffsetUniformLocations.clear();
+        chunkOffsetInstanceAttributeLocations.clear();
+        shadowIndirectBatchLogged = false;
         mainTerrainCompileAttempts.clear();
         mainTerrainCompileScanCursors.clear();
         for (NothiriumShadowRenderer.RotatingShadowSelectionChunkList window : mainTerrainCompileScanWindows) {

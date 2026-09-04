@@ -44,10 +44,9 @@ public final class TerrainCompileCoordinator {
             return false;
         }
         CompileDecision decision = decision(state, pipeline);
-        // The resource pack owns BLOOM participation. Do not synthesize this
-        // layer from a classifier: compatibility mixins must be able to move
-        // a block back into a normal terrain layer without leaving a second
-        // bloom-only mesh behind.
+        // Native BLOOM-layer membership is not enough to make a material
+        // emissive. Keep the layer only when AUSM can identify a resource
+        // Bloom source or the block reports real light emission.
         if (AusmBloomLayer.isBloomLayer(layer)) {
             // Let the position-aware render hook inspect GPOM's material. It
             // will discard hosts without bloom and route inherited bloom
@@ -55,7 +54,9 @@ public final class TerrainCompileCoordinator {
             if (decision.blockcraftery) {
                 return true;
             }
-            return MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer);
+            return MinecraftReflectionCompat.blockCanRenderInLayer(block, state, layer)
+                    && (pipeline.stateHasBloomLayerGeometry(state)
+                    || pipeline.blockRenderEmission(state, null, null) > 0);
         }
         // Fire and Twilight portals may advertise only the compatibility BLOOM
         // layer after the shader bridge changes their render-layer query. Keep

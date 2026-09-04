@@ -26,6 +26,7 @@ import org.lwjgl.glfw.GLFWDropCallback;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.Display;
+import org.lwjgl.opengl.GL11;
 
 public class GuiShaders extends MappingSafeGuiScreen {
     private static final int ID_DONE = 200;
@@ -39,6 +40,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
     private static final int ID_SETTINGS = 208;
 
     private final GuiScreen parentScreen;
+    private final ShaderMenuPresentation presentation;
     private GuiSlotShaders shaderList;
 
     private GuiButton applyButton;
@@ -64,6 +66,7 @@ public class GuiShaders extends MappingSafeGuiScreen {
 
     public GuiShaders(GuiScreen parentScreen) {
         this.parentScreen = parentScreen;
+        this.presentation = ShaderMenuPresentation.forParent(parentScreen != null);
     }
 
     @Override
@@ -306,6 +309,11 @@ public class GuiShaders extends MappingSafeGuiScreen {
             return;
         }
 
+        if (presentation.hasFullPageBackground()) {
+            // Vanilla option submenus paint their own page before their controls.
+            // Do the same so the parent Options screen never leaks through the panels.
+            ausm$drawDefaultBackground();
+        }
         drawPanels();
         this.shaderList.drawScreen(mouseX, mouseY, partialTicks, focusedControl == -1);
         drawHeader();
@@ -481,11 +489,17 @@ public class GuiShaders extends MappingSafeGuiScreen {
     }
 
     private void drawHeader() {
+        if (presentation.hasFullPageBackground()) {
+            this.drawCenteredString(this.fontRenderer, "Shader Options", this.width / 2, 16, 0xFFFFFF);
+            this.drawCenteredString(this.fontRenderer, "Select a shader pack and configure its options.", this.width / 2, 29, 0x9DA7B3);
+            return;
+        }
         this.drawString(this.fontRenderer, "Shaders", 16, 16, 0xFFFFFF);
         this.drawString(this.fontRenderer, "Select a shader pack and configure its options.", 16, 29, 0x9DA7B3);
     }
 
     private void drawPanels() {
+        preparePanelTextureState();
         int topBandBottom = 46;
         int bottomBandTop = Math.max(topBandBottom, this.height - 62);
         int detailsLeft = detailsLeft();
@@ -514,6 +528,43 @@ public class GuiShaders extends MappingSafeGuiScreen {
         drawRect(detailsLeft, 50, this.width - 10, 76, 0x88181818);
         this.drawString(this.fontRenderer, "Packs", 20, 59, 0xFFD6D6D6);
         this.drawString(this.fontRenderer, "Details", detailsLeft + 12, 59, 0xFFD6D6D6);
+        MinecraftReflectionCompat.glStateEnableDepth();
+        MinecraftReflectionCompat.glStateDepthMask(true);
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthMask(true);
+    }
+
+    /**
+     * Draw the textured frame in its own 2-D layer.  The settings route happens
+     * to receive vanilla's background state first, while the in-world route
+     * inherits the world's depth buffer; neither may affect these bands.
+     */
+    private void preparePanelTextureState() {
+        MinecraftReflectionCompat.glUseProgram(0);
+        MinecraftReflectionCompat.setActiveTexture(MinecraftReflectionCompat.defaultTexUnit());
+        MinecraftReflectionCompat.setClientActiveTexture(MinecraftReflectionCompat.defaultTexUnit());
+        MinecraftReflectionCompat.glStateDisableLighting();
+        MinecraftReflectionCompat.glStateDisableColorMaterial();
+        MinecraftReflectionCompat.glStateEnableTexture2D();
+        MinecraftReflectionCompat.glStateEnableAlpha();
+        MinecraftReflectionCompat.glStateEnableBlend();
+        MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+                GL11.GL_SRC_ALPHA,
+                GL11.GL_ONE_MINUS_SRC_ALPHA,
+                GL11.GL_ONE,
+                GL11.GL_ZERO
+        );
+        MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
+        MinecraftReflectionCompat.glStateDisableDepth();
+        MinecraftReflectionCompat.glStateDepthMask(false);
+        GL11.glDisable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthMask(false);
+        // Modded HUD paths occasionally leave a clip rectangle enabled.  The
+        // bands span the screen, so no prior screen is allowed to clip them.
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glMatrixMode(GL11.GL_TEXTURE);
+        GL11.glLoadIdentity();
+        GL11.glMatrixMode(GL11.GL_MODELVIEW);
     }
 
     private void drawPackDetails() {

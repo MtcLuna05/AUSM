@@ -90,6 +90,43 @@ final class EuphoriaEntreeLodPatchesTest {
     }
 
     @Test
+    void configuresLuminousBlocksThroughEuphoriasExistingLightSourceMaterials(@TempDir Path shaderpack) throws IOException {
+        String properties = "block.21000 = ArchitectureCraft:shapeSE \\\n"
+                + "Extrautilities:greenscreen:0\n"
+                + "block.21002 = Extrautilities:greenscreen:12\n"
+                + "block.21004 =\n"
+                + "block.21006 =\n"
+                + "block.21008 =\n"
+                + "block.21010 =\n"
+                + "block.21012 =\n"
+                + "block.21014 =\n"
+                + "block.21016 =\n"
+                + "block.21018 =\n"
+                + "block.21020 =\n"
+                + "block.21022 =\n"
+                + "block.21024 =\n";
+        Path fragment = shaderpack.resolve("shaders/blockProperties/1.8+/block.properties");
+        Path merged = shaderpack.resolve("shaders/block.properties");
+        Files.createDirectories(fragment.getParent());
+        Files.createDirectories(merged.getParent());
+        Files.writeString(fragment, properties);
+        Files.writeString(merged, properties);
+
+        EuphoriaEntreePackGenerator.installBundledLuminousBlockMappings(shaderpack);
+
+        String patchedFragment = Files.readString(fragment);
+        String patchedMerged = Files.readString(merged);
+        assertTrue(patchedFragment.contains("randomthings:luminousblock:0"));
+        assertTrue(patchedFragment.contains("randomthings:luminousblock:15"));
+        assertTrue(patchedFragment.contains("randomthings:luminousblock:12"));
+        assertTrue(patchedFragment.contains("randomthings:luminousblock:6"));
+        assertEquals(patchedFragment, patchedMerged);
+
+        EuphoriaEntreePackGenerator.installBundledLuminousBlockMappings(shaderpack);
+        assertEquals(patchedFragment, Files.readString(fragment));
+    }
+
+    @Test
     void generates112PatchesForBothComplementaryStylesAndEuphoriaOutputs() {
         assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource("ComplementaryUnbound_r5.8.1.zip"));
         assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource("ComplementaryReimagined_r5.8.1.zip"));

@@ -472,9 +472,14 @@ abstract class PipelineRuntimeDiagnosticsState1 extends PipelineRuntimeDiagnosti
     }
 
     protected static boolean isBlockcrafteryEditableBlock(IBlockState state) {
-        ResourceLocation name = PipelineRuntimeState.registryName(state);
-        return name != null && "blockcraftery".equalsIgnoreCase(
-                MinecraftReflectionCompat.resourceNamespace(name));
+        Block block = MinecraftReflectionCompat.blockFromState(state);
+        if (block == null) {
+            return false;
+        }
+        // Blockcraftery ships its editable hosts under this stable, unobfuscated
+        // class prefix.  Class names are immutable and avoid a registry lookup
+        // for every unrelated terrain state during compilation.
+        return block.getClass().getName().startsWith("epicsquid.blockcraftery.block.BlockEditable");
     }
 
     protected static boolean isArchitectureCraftShapeBlock(IBlockState state) {

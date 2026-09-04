@@ -193,6 +193,10 @@ abstract class NothiriumShadowRendererBase {
 
     protected final Map<Integer, Integer> chunkOffsetUniformLocations = new HashMap<>();
 
+    protected final Map<Integer, Integer> chunkOffsetInstanceAttributeLocations = new HashMap<>();
+
+    protected final NothiriumShadowIndirectBatch shadowIndirectBatch = new NothiriumShadowIndirectBatch();
+
     protected final Map<Long, List<Object>> queuedChunkRefreshColumns = new HashMap<>();
 
     protected final FloatBuffer shadowSelectionModelView = BufferUtils.createFloatBuffer(16);
@@ -252,6 +256,8 @@ abstract class NothiriumShadowRendererBase {
     protected boolean shadowSelectionActive;
 
     protected boolean queuedChunkRefreshBatchActive;
+
+    protected boolean shadowIndirectBatchLogged;
 
     protected Object queuedChunkRefreshProvider;
 

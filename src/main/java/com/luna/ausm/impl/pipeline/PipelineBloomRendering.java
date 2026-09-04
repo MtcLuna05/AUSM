@@ -377,9 +377,11 @@ abstract class PipelineBloomRendering extends PipelinePortalDiagnostics {
         boolean framedBloomBootstrap = false;
         self().refreshShaderlessBloomVertexFormatIfNeeded(hasBloomResources);
 
-        // Ordinary terrain is never re-rendered as bloom. Lumenized owns the
-        // resource-pack BLOOM layer and is handled by the native layer path.
-        boolean shouldExtractShaderlessBloom = false;
+        // Native Lumenized BLOOM geometry and automatic emissive extraction
+        // are complementary.  The former is resource-pack supplied, while the
+        // latter is driven by the selected shader pack's material declarations
+        // (for example Euphoria's 21xxx light-source materials).
+        boolean shouldExtractShaderlessBloom = hasShaderlessBloomMetadata;
         boolean nativeBloom = AusmBloomLayer.shouldUseShaderlessNativeHook();
         Entity renderViewEntity = MinecraftReflectionCompat.renderViewEntity(mc);
         self().logShaderlessBloomHook("render target=" + self().describeFramebufferTarget(MinecraftReflectionCompat.minecraftFramebuffer(mc))
@@ -398,7 +400,7 @@ abstract class PipelineBloomRendering extends PipelinePortalDiagnostics {
         }
         self().renderNativeBloomLayerIfNeeded();
         boolean shaderlessExtractRendered = false;
-        if (!nativeBloom && shouldExtractShaderlessBloom) {
+        if (shouldExtractShaderlessBloom) {
             boolean previousShaderlessBloomExtractionActive = shaderlessBloomExtractionActive;
             boolean previousShaderlessBloomExtractionBootstrapActive = shaderlessBloomExtractionBootstrapActive;
             shaderlessBloomExtractionActive = true;

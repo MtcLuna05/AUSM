@@ -42,7 +42,6 @@ import static com.luna.ausm.impl.pipeline.PipelineLightConstants.MAX_CPU_LIGHT_T
 import static com.luna.ausm.impl.pipeline.PipelineLightConstants.MAX_CPU_LIGHT_VOXEL_WRITES_PER_FRAME;
 import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_RENDER_GLOBAL_LOAD_RENDERER_LOGS;
 import static com.luna.ausm.impl.pipeline.PipelineTerrainConstants.ENABLE_SAFE_TERRAIN_FALLBACKS;
-import static com.luna.ausm.impl.pipeline.PipelineTerrainConstants.SHADOW_REALTIME_MAX_FRAME_SECONDS;
 import static com.luna.ausm.impl.pipeline.PipelineTerrainConstants.SHADOW_STABLE_UPDATE_INTERVAL_TICKS;
 import static com.luna.ausm.impl.pipeline.PipelineTerrainConstants.SHADOW_STABLE_UPDATE_MOVEMENT_SQ;
 
@@ -142,6 +141,7 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
         }
 
         self().runPreparePassesBeforeShadowIfRequested();
+        int gpuTimer = PipelineGpuTiming.beginShadow();
         BetterPortalsCompat.logRenderStateDiagnostic("pipeline:shadow-begin world=" + safeDimensionId(world));
         lastShadowFrameId = pipelineFrameId;
         viewportBuffer.clear();
@@ -248,6 +248,7 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
                 self().resetShadowRenderCache();
             }
         } finally {
+            PipelineGpuTiming.resetPassScopes();
             nothiriumShadowRenderer.endShadowSelection();
             MinecraftReflectionCompat.setRenderChunksMany(mc, previousRenderChunksMany);
             renderingShadowMap = false;
@@ -279,6 +280,7 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
             GL11.glViewport(viewportBuffer.get(0), viewportBuffer.get(1), viewportBuffer.get(2), viewportBuffer.get(3));
             TextureBinder.restoreDefaultTextureUnit();
             BetterPortalsCompat.logRenderStateDiagnostic("pipeline:shadow-end world=" + safeDimensionId(world));
+            PipelineGpuTiming.end(gpuTimer);
         }
     }
 
@@ -299,8 +301,12 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
         }
 
         long framesPerShadowUpdate = currentFrameTime <= 1.0F / 60.0F ? 3L : 2L;
-        boolean presentationRateLimited = currentFrameTime <= SHADOW_REALTIME_MAX_FRAME_SECONDS
-                && pipelineFrameId % framesPerShadowUpdate != 0L;
+        // The expensive path is specifically the frame that has fallen below
+        // the interactive budget.  Limiting only faster frames made a
+        // GPU-bound 30 FPS session redraw the full shadow map every frame,
+        // which prevents it from recovering.  The movement test below still
+        // requires a texel-safe rebase before a cached map is presented.
+        boolean presentationRateLimited = pipelineFrameId % framesPerShadowUpdate != 0L;
         boolean sameWorldTick = worldTime - lastShadowRenderWorldTime < SHADOW_STABLE_UPDATE_INTERVAL_TICKS;
         if (!presentationRateLimited && !sameWorldTick) {
             return false;
@@ -313,7 +319,7 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
         double dz = z - lastShadowRenderZ;
         // A populated provider shadow map is expensive to rebuild: it scans
         // and draws radial terrain rather than the normal forward list. The
-        // projection itself is texel-snapped, so tolerate quarter-block
+        // projection itself is texel-snapped, so tolerate half-block
         // motion before rebuilding instead of treating head bob and tiny
         // mouse movement as a full radial redraw request. At interactive
         // frame rates, update the shadow map every second or third presented

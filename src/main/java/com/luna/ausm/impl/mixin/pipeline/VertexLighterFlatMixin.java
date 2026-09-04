@@ -6,6 +6,7 @@ import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraftforge.client.model.pipeline.VertexLighterFlat;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -14,20 +15,22 @@ import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 
 /**
  * Blockcraftery uses Forge's light pipeline for its generated host shape.
- * Luminous RandomThings models mark their BLOOM overlay as unshaded, but that
- * flag is lost when the material is projected onto the host shape. Preserve
- * that contract only for the copied overlay: the ordinary framed material
- * must retain Forge's lighting just like the direct contained block.
+ * Bloom-bearing models can mark their overlay as unshaded, but that flag is
+ * lost when the material is projected onto the host shape. Preserve that
+ * contract only for resource-classified Bloom overlays.
  */
 @Mixin(value = VertexLighterFlat.class, remap = false)
 public abstract class VertexLighterFlatMixin {
     private static final float FULL_BRIGHT_LIGHTMAP = 15.0F * 0x20 / 0xFFFF;
 
+    @Shadow
+    private boolean diffuse;
+
     /**
      * Blockcraftery's host state has no light value, so Forge otherwise
      * replaces the overlay's fully-lit lightmap with the host sample. The
      * base material is deliberately excluded: making it full-bright is what
-     * made framed luminous blocks brighter than their native counterparts.
+     * made framed Bloom materials brighter than their native counterparts.
      */
     @Inject(
             method = "processQuad",

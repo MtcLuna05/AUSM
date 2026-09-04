@@ -59,7 +59,7 @@ public final class LeafPileCompatibilityTransformStage implements ShaderTransfor
                 + indent + "    // BOP's flat_on_floor model authors its up and down faces at the exact same Y.\n"
                 + indent + "    // Lift the card clear of the support block, then pull only the lower face away.\n"
                 + indent + "    position.y += 0.00390625;\n"
-                + indent + "    if (dot(normal, upVec) < -0.5) position.y -= 0.0005;\n"
+                + indent + "    if (gl_Normal.y < -0.5) position.y -= 0.0005;\n"
                 + indent + "}\n"
                 + matcher.group(0);
         return matcher.replaceFirst(Matcher.quoteReplacement(replacement));

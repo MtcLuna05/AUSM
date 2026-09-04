@@ -20,9 +20,6 @@ public final class NothiriumRenderChunkCompileState {
     int bloomBaseRouteProbeBloomStart = -1;
 
     int emissiveFallbackStart = -1;
-    int nativeBloomProbeStart = -1;
-    BlockRenderLayer nativeBloomProbeLayer;
-
     boolean framedBloomRouteProbeTarget;
     IBlockState framedBloomRouteProbeContainedState;
     BlockRenderLayer framedBloomRouteProbeCurrentLayer;

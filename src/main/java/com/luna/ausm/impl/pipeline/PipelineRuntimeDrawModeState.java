@@ -179,6 +179,9 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
         if (shaderStorageBuffers.active()) {
             markShaderStorageBuffersBound();
         }
+        if (pass == RenderPass.GBUFFERS_TERRAIN || pass == RenderPass.GBUFFERS_TERRAIN_SOLID) {
+            TerrainShaderGpuProbe.bindForTerrain();
+        }
         uniformRegistry.uploadAll(program);
         if (!packDirectives.customUniforms().isEmpty()) {
             packDirectives.customUniforms().upload(program, uniformRegistry.scalarValuesInto(

@@ -22,9 +22,6 @@ final class NothiriumCompileDiagnostics {
     static final int BLOOM_BASE_ROUTE_PROBE_LIMIT = 0;
     static final AtomicInteger BLOOM_BASE_ROUTE_PROBES = new AtomicInteger();
 
-    static final int BLOOM_VERTEX_PROBE_LIMIT = 0;
-    static final AtomicInteger NATIVE_BLOOM_VERTEX_PROBES = new AtomicInteger();
-
     static final int ENDERIO_GLASS_LAYER_PROBE_LIMIT = 0;
     static final AtomicInteger ENDERIO_GLASS_LAYER_PROBES = new AtomicInteger();
 

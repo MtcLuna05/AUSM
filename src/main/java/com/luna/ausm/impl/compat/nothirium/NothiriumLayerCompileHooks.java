@@ -589,8 +589,8 @@ abstract class NothiriumLayerCompileHooks extends NothiriumBloomCompileHooks {
     }
 
     public static boolean ausm$isEmissiveBloomFallbackSource(IBlockState state) {
-        ResourceLocation name = NothiriumLayerCompileHooks.ausm$registryName(state);
-        if (state == null || NothiriumLayerCompileHooks.ausm$block(state) == null || MinecraftReflectionCompat.stateRenderType(state) == EnumBlockRenderType.INVISIBLE) {
+        Block block = NothiriumLayerCompileHooks.ausm$block(state);
+        if (block == null || MinecraftReflectionCompat.stateRenderType(state) == EnumBlockRenderType.INVISIBLE) {
             return false;
         }
         if (PipelineContext.getInstance().isBlockcrafteryEditableState(state)) {
@@ -599,6 +599,7 @@ abstract class NothiriumLayerCompileHooks extends NothiriumBloomCompileHooks {
         if (PipelineContext.getInstance().stateHasShaderlessBloomSource(state)) {
             return true;
         }
+        ResourceLocation name = MinecraftReflectionCompat.blockRegistryName(block);
         if (name == null) {
             return false;
         }

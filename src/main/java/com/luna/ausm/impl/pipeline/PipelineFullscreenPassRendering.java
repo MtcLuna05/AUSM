@@ -3,6 +3,7 @@ package com.luna.ausm.impl.pipeline;
 import com.luna.ausm.api.pipeline.fbo.Attachment;
 import com.luna.ausm.api.pipeline.pack.ShaderProgramDirectives;
 import com.luna.ausm.api.pipeline.pack.ShaderViewportScale;
+import com.luna.ausm.api.pipeline.shader.ProgramArrayId;
 import com.luna.ausm.api.pipeline.shader.RenderPass;
 import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.MainMod;
@@ -176,6 +177,8 @@ abstract class PipelineFullscreenPassRendering extends PipelineWorldFramebufferF
                     + ", final=" + self().describePipelineProgram(finalProgram));
             return;
         }
+        int gpuTimer = PipelineGpuTiming.beginProgram(RenderPass.FINAL);
+        try {
         PipelineFrameLayerCapture.captureFinalInputs(readBuffer);
 
         self().logBetterPortalsPipeline("final-pass-start", "target=" + self().describeFramebufferTargetDetailed(target)
@@ -247,6 +250,9 @@ abstract class PipelineFullscreenPassRendering extends PipelineWorldFramebufferF
         logShaderedVoidSkyTargetProbe("final-after-draw", target);
         self().logBetterPortalsPipeline("final-pass-end", "target=" + self().describeFramebufferTargetDetailed(target)
                 + ", targetStatus=" + self().framebufferStatus(target));
+        } finally {
+            PipelineGpuTiming.end(gpuTimer);
+        }
     }
 
     protected void logFinalSkyRepairProbe(PipelineProgram finalProgram) {
@@ -327,6 +333,8 @@ abstract class PipelineFullscreenPassRendering extends PipelineWorldFramebufferF
         if (shadowFramebuffer == null) {
             return;
         }
+        int gpuTimer = PipelineGpuTiming.beginProgramArray(ProgramArrayId.SHADOWCOMP);
+        try {
 
         List<Attachment> drawBuffers = program.drawBuffers();
         RenderPass previousPass = activePass;
@@ -356,6 +364,9 @@ abstract class PipelineFullscreenPassRendering extends PipelineWorldFramebufferF
 
         self().applyShaderImageTextureBarrier();
         shadowFramebuffer.generateShadowColorMipmaps();
+        } finally {
+            PipelineGpuTiming.end(gpuTimer);
+        }
     }
 
     protected void generateWrittenMipmaps(ShaderProgramDirectives directives, Attachment[] flippedAttachments) {
@@ -450,6 +461,7 @@ abstract class PipelineFullscreenPassRendering extends PipelineWorldFramebufferF
         deleteCenterDepthSmoothTexture();
         deleteNoiseTexture();
         bloomRenderer.delete();
+        PipelineGpuTiming.release();
         customTextures.delete();
         if (deleteVanillaTerrainRenderers) {
             deleteCachedVanillaTerrainRenderers();

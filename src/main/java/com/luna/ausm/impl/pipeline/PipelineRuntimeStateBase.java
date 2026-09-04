@@ -12,6 +12,7 @@ import com.luna.ausm.impl.pipeline.fbo.DeferredFramebuffer;
 import com.luna.ausm.impl.pipeline.fbo.PingPongManager;
 import com.luna.ausm.impl.pipeline.fbo.ShadowFramebuffer;
 import com.luna.ausm.impl.pipeline.pack.ShaderPackDirectives;
+import com.luna.ausm.impl.pipeline.pack.ShaderBlockIdMap;
 import com.luna.ausm.impl.pipeline.pack.ShaderProperties;
 import com.luna.ausm.impl.pipeline.render.IrisLightmapTexture;
 import com.luna.ausm.impl.pipeline.resource.ShaderImageSet;
@@ -93,6 +94,11 @@ abstract class PipelineRuntimeStateBase {
     protected ShadowFramebuffer shadowFramebuffer;
 
     protected ShaderProperties shaderProperties = PipelineRuntimeState.emptyShaderProperties();
+
+    // Shaderless terrain may compile on Nothirium worker threads. Retain the
+    // selected pack's immutable material map so those workers never need to
+    // parse shader properties (which probes OpenGL capabilities).
+    protected volatile ShaderBlockIdMap.BlockIdRules shaderlessBloomBlockIds = shaderProperties.blockIds();
 
     protected ShaderPackDirectives packDirectives = PipelineRuntimeState.emptyShaderProperties().packDirectives();
 

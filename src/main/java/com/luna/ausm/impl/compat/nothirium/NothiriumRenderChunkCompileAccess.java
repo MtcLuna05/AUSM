@@ -32,9 +32,6 @@ public interface NothiriumRenderChunkCompileAccess {
 
     void ausm$resetFramedBloomRouteProbe();
 
-    void ausm$logNativeBloomVertexProbe(IBlockState state, BlockPos pos,
-                                        RegionRenderCacheBuilder regionBuffers);
-
     void ausm$beginBloomBaseRouteProbe(IBlockState state, IBlockState effectiveState, BlockPos pos,
                                        RegionRenderCacheBuilder regionBuffers, PipelineContext pipeline);
 

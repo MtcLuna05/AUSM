@@ -33,7 +33,7 @@ public final class GlobalFacadesTerrainBridge {
                 resolved = true;
                 try {
                     Class<?> renderer = Class.forName(
-		                    "com.luna.globalfacades.client.render.FacadeWorldRenderer", false,
+	                    "com.l.globalfacades.client.render.FacadeWorldRenderer", false,
                             GlobalFacadesTerrainBridge.class.getClassLoader());
                     renderMethod = renderer.getMethod("renderDuringWorldPass", float.class);
                 } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {

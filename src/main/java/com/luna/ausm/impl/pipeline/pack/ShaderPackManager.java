@@ -468,6 +468,7 @@ public class ShaderPackManager implements ShaderPackController {
         if (!automaticShaderDisablingEnabled()) {
             clearBetterPortalsPendingState();
             if (!shadersEnabled) {
+                captureShaderlessBloomMaterialRules(dimensionId);
                 PipelineContext.getInstance().setActive(false);
                 return;
             }
@@ -488,8 +489,41 @@ public class ShaderPackManager implements ShaderPackController {
         firstWorldFrameCompileGate.clear();
         compiledPackName = OFF_PACK_NAME;
         clearShaderPropertiesCache();
+        captureShaderlessBloomMaterialRules(dimensionId);
         PipelineContext.getInstance().cleanup();
         rebuildInactiveVanillaRenderers();
+    }
+
+    /**
+     * A selected pack remains useful while its programs are disabled: its
+     * block.properties file classifies terrain bloom sources.  Parse it once
+     * on Minecraft's client thread, then publish only the immutable rules to
+     * shaderless terrain workers.  In particular, do not call this from a
+     * Nothirium compile task; evaluating pack feature conditions reads GL
+     * capabilities and therefore requires the current client context.
+     */
+    private void captureShaderlessBloomMaterialRules(int dimensionId) {
+        if (shadersEnabled || isOffPack(selectedPackName) || !isMinecraftClientThread()) {
+            return;
+        }
+        if (!ensureSelectedPackLoaded()) {
+            return;
+        }
+
+        ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides, dimensionId);
+        PipelineContext context = PipelineContext.getInstance();
+        context.captureShaderlessBloomBlockIds(properties);
+        context.rebuildShaderlessBloomTerrain("selected shaderpack material rules");
+    }
+
+    private static boolean isMinecraftClientThread() {
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        return minecraft != null && MinecraftReflectionCompat.callBoolean(
+                minecraft,
+                new String[]{"func_152345_ab", "isCallingFromMinecraftThread"},
+                MinecraftReflectionCompat.NO_PARAMETERS,
+                false
+        );
     }
 
     private boolean automaticShaderDisablingEnabled() {

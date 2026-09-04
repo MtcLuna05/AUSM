@@ -50,11 +50,10 @@ public final class IrisLightmapTexture {
     }
 
     private static int adaptPixel(int argb) {
-        int alpha = argb & 0xFF000000;
-        int red = adaptChannel((argb >>> 16) & 0xFF);
-        int green = adaptChannel((argb >>> 8) & 0xFF);
-        int blue = adaptChannel(argb & 0xFF);
-        return alpha | red << 16 | green << 8 | blue;
+        // CURVE_EXPONENT=1 and CURVE_BLEND=0 make the adaptation an exact
+        // identity.  Avoid three Math.pow calls for every lightmap pixel on
+        // every pipeline pass while retaining the copy/upload change check.
+        return argb;
     }
 
     private static int adaptChannel(int channel) {

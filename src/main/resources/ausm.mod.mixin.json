@@ -10,6 +10,9 @@
   ],
   "client": [
     "compat.ActuallyAdditionsAssetUtilMixin",
+    "compat.CreativeCoreBufferBuilderUtilsMixin",
+    "compat.LittleTilesChunkBlockLayerCacheMixin",
+    "compat.LittleTilesChunkBlockLayerManagerMixin",
     "compat.AppliedEnergisticsCableBusBakedModelMixin",
     "compat.AppliedEnergisticsFacadeBuilderMixin",
     "compat.ProjectRedLampRendererMixin",
