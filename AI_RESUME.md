@@ -1,5 +1,7 @@
 # AUSM runtime handoff
 
+- 2026-09-05 Java 8 port: cherry-picked all four fixes commits through master81ac3cb and the 1.0.4 changelog draft. Preserved Forge/Java8 configuration; restored vertexBufferFormat reflection helper required by new LittleTiles code. Built build/libs/AUSM-1.0.4-Java8.jar, SHA-256 edc1ef1f2e428a5e076669bb0308e0c2bdf876fe53c698ffcb08d7027f4b1c39. Archive integrity passes; all609 classes have major version<=52. Full suite:97 passed,2 skipped,2 source-convention failures (PipelineFrameLayerCapture1355 lines; inline qualified type in PipelineRuntimeSkyDetailState), identical affected source files on master. No Java8 runtime/install validation. No push or game restart.
+
 - Java 8 port targets 1.0.4. Runtime acceptance below refers to the Java 25 MBC client, not Java 8 runtime validation. Preserve Forge/Java 8 build configuration; do not install or restart a client without asking.
 - 2026-09-05 user visual acceptance: the live-program-interface fix resolved the shaderless bloom leak ("this fixed it"). Hand leak was also previously accepted. User requested committing all changes locally, no push. Latest build/install SHA-256: 1f48d58f9e1c814c7e679e48c9720ee90165991584f481a15ae54a538243c292. Ten routing regression tests pass; MBC remains running with helper hot swaps applied. Generated logs and stray --help PostScript artifact are excluded from the source commit and left untouched.
 

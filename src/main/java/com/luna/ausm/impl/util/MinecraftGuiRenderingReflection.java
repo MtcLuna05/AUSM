@@ -35,6 +35,7 @@ import net.minecraft.client.renderer.texture.ITextureObject;
 import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
 import net.minecraft.client.renderer.vertex.VertexBuffer;
+import net.minecraft.client.renderer.vertex.VertexFormat;
 import net.minecraft.client.resources.I18n;
 import net.minecraft.client.settings.GameSettings;
 import net.minecraft.client.shader.Framebuffer;
@@ -347,6 +348,11 @@ abstract class MinecraftGuiRenderingReflection extends MinecraftWorldEntityRefle
     public static VertexBuffer renderChunkVertexBuffer(RenderChunk renderChunk, int layer) {
         return MinecraftReflectionCompat.call(renderChunk, VertexBuffer.class, null,
                 new String[]{"func_178565_b", "getVertexBufferByLayer"}, new Class<?>[]{int.class}, layer);
+    }
+
+    public static VertexFormat vertexBufferFormat(VertexBuffer vertexBuffer) {
+        return MinecraftReflectionCompat.field(vertexBuffer, VertexFormat.class, null,
+                "field_177363_b", "vertexFormat");
     }
 
     public static void renderEntity(Render<?> renderer, Entity entity, double x, double y, double z,
