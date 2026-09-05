@@ -1,5 +1,7 @@
 # AUSM runtime handoff
 
+- 2026-09-05 release follow-up: master already1.0.4; ported four fixes commits through81ac3cb to java-8 in /tmp/ausm-java8 and started CHANGELOG.md1.0.4 draft on both branches. Java8-only adaptation restores vertexBufferFormat helper for LittleTiles. Java8 artifact built and ZIP-verified, all609 classes<=major52, SHA-256 edc1ef1f2e428a5e076669bb0308e0c2bdf876fe53c698ffcb08d7027f4b1c39. Full Java8-source suite97 pass/2 skip/2 source-convention failures inherited from identical master files. Java8 runtime not tested or installed; game untouched; no push.
+
 - 2026-09-05 user visual acceptance: the live-program-interface fix resolved the shaderless bloom leak ("this fixed it"). Hand leak was also previously accepted. User requested committing all changes locally, no push. Latest build/install SHA-256: 1f48d58f9e1c814c7e679e48c9720ee90165991584f481a15ae54a538243c292. Ten routing regression tests pass; MBC remains running with helper hot swaps applied. Generated logs and stray --help PostScript artifact are excluded from the source commit and left untouched.
 
 - Live-interface fix persisted: installMbcJar succeeded after the13:20:16 hot swap. Ten tests pass, game running, no active agent probes. Await user visual on->off validation; no restart/commit/push.
