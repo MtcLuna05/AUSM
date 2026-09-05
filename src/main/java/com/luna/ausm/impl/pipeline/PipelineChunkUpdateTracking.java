@@ -5,9 +5,7 @@ import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.mixin.pipeline.EntityRendererAccessor;
 import com.luna.ausm.impl.pipeline.bloom.AusmBloomLayer;
-import com.luna.ausm.impl.pipeline.bloom.BloomExtractionPlan;
 import com.luna.ausm.impl.pipeline.compat.BetterPortalsCompat;
-import com.luna.ausm.impl.pipeline.compat.CeleritasCompat;
 import com.luna.ausm.impl.pipeline.compat.NothiriumBypass;
 import com.luna.ausm.impl.pipeline.compat.NothiriumShadowRenderer;
 import com.luna.ausm.impl.pipeline.matrix.MatrixState;
@@ -67,134 +65,11 @@ abstract class PipelineChunkUpdateTracking extends PipelineBotaniaSkyRendering {
         }
     }
 
-    public void handleShaderlessBloomRenderUpdateRange(World world, int minX, int minY, int minZ,
-                                                       int maxX, int maxY, int maxZ) {
-        if (world == null) {
-            return;
-        }
-        Minecraft mc = MinecraftReflectionCompat.minecraft();
-        if (mc == null || MinecraftReflectionCompat.world(mc) != world) {
-            return;
-        }
 
-        // Generic render updates are not proof that shaderless bloom sources changed.
-        // Keep extraction metadata stable until the requested rebuild publishes its
-        // compile summary; actual block changes invalidate through the block-update path.
-    }
 
-    protected boolean renderUpdateRangeContainsShaderlessBloomSource(World world, int minX, int minY, int minZ,
-                                                                     int maxX, int maxY, int maxZ) {
-        int startX = Math.min(minX, maxX);
-        int endX = Math.max(minX, maxX);
-        int startY = Math.clamp(Math.min(minY, maxY), 0, 255);
-        int endY = Math.clamp(Math.max(minY, maxY), 0, 255);
-        int startZ = Math.min(minZ, maxZ);
-        int endZ = Math.max(minZ, maxZ);
-        long volume = (long) (endX - startX + 1) * (long) (endY - startY + 1) * (long) (endZ - startZ + 1);
-        if (volume <= 0L || volume > 4096L) {
-            return false;
-        }
 
-        BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
-        for (int y = startY; y <= endY; y++) {
-            for (int z = startZ; z <= endZ; z++) {
-                for (int x = startX; x <= endX; x++) {
-                    MinecraftReflectionCompat.mutableBlockPosSet(mutablePos, x, y, z);
-                    if (!MinecraftReflectionCompat.worldIsBlockLoaded(world, mutablePos, false)) {
-                        continue;
-                    }
-                    try {
-                        IBlockState state = MinecraftReflectionCompat.worldBlockState(world, mutablePos);
-                        if (stateHasShaderlessBloomSource(state)) {
-                            return true;
-                        }
-                    } catch (RuntimeException | LinkageError ignored) {
-                    }
-                }
-            }
-        }
-        return false;
-    }
 
-    protected void queueShaderlessBloomClientChunkRefreshes(World world, int sectionMinX, int sectionMaxX,
-                                                            int sectionMinZ, int sectionMaxZ) {
-        int startX = Math.min(sectionMinX, sectionMaxX);
-        int endX = Math.max(sectionMinX, sectionMaxX);
-        int startZ = Math.min(sectionMinZ, sectionMaxZ);
-        int endZ = Math.max(sectionMinZ, sectionMaxZ);
-        int queued = 0;
-        for (int sectionZ = startZ; sectionZ <= endZ; sectionZ++) {
-            for (int sectionX = startX; sectionX <= endX; sectionX++) {
-                self().queueShaderlessBloomClientChunkRefresh(world, sectionX, sectionZ);
-                queued++;
-                if (queued >= MAX_SHADERLESS_BLOOM_LOCAL_CHUNK_REFRESHES_PER_UPDATE) {
-                    return;
-                }
-            }
-        }
-    }
 
-    protected void queueShaderlessBloomClientChunkRefresh(World world, int chunkX, int chunkZ) {
-        if (world instanceof WorldClient worldClient) {
-            self().queueClientChunkRenderRefresh(worldClient, chunkX, chunkZ, CLIENT_CHUNK_RENDER_REFRESH_REASON_SHADERLESS_BLOOM);
-        }
-    }
-
-    protected boolean invalidateShaderlessBloomMetadataSection(int dimension, int sectionX, int sectionY, int sectionZ) {
-        boolean hadBloomMetadata = false;
-        for (BlockRenderLayer layer : BlockRenderLayer.values()) {
-            if (layer == null) {
-                continue;
-            }
-            long key = BloomExtractionPlan.metadataKey(dimension, sectionX, sectionY, sectionZ, layer);
-            hadBloomMetadata |= shaderlessBloomMetadataChunkLayers.remove(key);
-            shaderlessBloomMetadataKnownChunkLayers.remove(key);
-        }
-        return hadBloomMetadata;
-    }
-
-    protected boolean hasShaderlessBloomMetadata() {
-        return !shaderlessBloomMetadataChunkLayers.isEmpty();
-    }
-
-    public boolean isShaderlessBloomExtractionActive() {
-        return shaderlessBloomExtractionActive;
-    }
-
-    public boolean shouldRenderShaderlessBloomChunkLayer(BlockRenderLayer layer, int chunkBlockX, int chunkBlockY, int chunkBlockZ) {
-        return self().shouldRenderShaderlessBloomChunkLayer(
-                layer,
-                chunkBlockX,
-                chunkBlockY,
-                chunkBlockZ,
-                self().shaderlessBloomExtractionDimensionId()
-        );
-    }
-
-    public int shaderlessBloomExtractionDimensionId() {
-        return shaderlessBloomExtractionActive ? self().currentClientDimensionId() : Integer.MIN_VALUE;
-    }
-
-    public boolean shouldRenderShaderlessBloomChunkLayer(BlockRenderLayer layer, int chunkBlockX, int chunkBlockY,
-                                                         int chunkBlockZ, int dimension) {
-        if (!shaderlessBloomExtractionActive) {
-            return true;
-        }
-        if (layer == null) {
-            return false;
-        }
-        if (AusmBloomLayer.isBloomLayer(layer) || shaderlessBloomExtractionBootstrapActive) {
-            return true;
-        }
-        long key = BloomExtractionPlan.metadataKey(
-                dimension,
-                chunkBlockX >> 4,
-                chunkBlockY >> 4,
-                chunkBlockZ >> 4,
-                layer
-        );
-        return shaderlessBloomMetadataChunkLayers.contains(key);
-    }
 
     public void prepareShaderlessOptimizedBloomDraw() {
     }
@@ -231,143 +106,8 @@ abstract class PipelineChunkUpdateTracking extends PipelineBotaniaSkyRendering {
                 && !self().isComplementaryFinalColorSourceSensitivePack();
     }
 
-    protected int renderShaderlessBloomExtractionGeometry(Minecraft mc, Entity viewEntity, boolean allowPipelineActive) {
-        return self().renderBloomExtractionGeometry(mc, viewEntity, allowPipelineActive);
-    }
-
-    protected int renderBloomExtractionGeometry(Minecraft mc, Entity viewEntity, boolean allowPipelineActive) {
-        if (mc == null || viewEntity == null) {
-            return 0;
-        }
-        float partialTicks = MinecraftReflectionCompat.renderPartialTicks(mc);
-        if (!isPipelineActive && MinecraftReflectionCompat.entityRenderer(mc) != null) {
-            ((EntityRendererAccessor) MinecraftReflectionCompat.entityRenderer(mc)).ausm$setupCameraTransform(partialTicks, 2);
-            MatrixState.captureGbufferMatrices();
-        }
-        return self().renderEmissiveExtractionTerrain(partialTicks, viewEntity, allowPipelineActive);
-    }
-
-    protected int renderEmissiveExtractionTerrain(float partialTicks, Entity viewEntity, boolean allowPipelineActive) {
-        if ((!allowPipelineActive && isPipelineActive) || viewEntity == null) {
-            return 0;
-        }
-        if (CeleritasCompat.installed()
-                || !NothiriumShadowRenderer.isAvailable()
-                || NothiriumBypass.shouldBypass()) {
-            return self().renderVanillaEmissiveTerrain(partialTicks, viewEntity, allowPipelineActive);
-        }
-        return self().renderNothiriumEmissiveExtractionTerrain(partialTicks, viewEntity);
-    }
-
-    protected int renderNothiriumEmissiveExtractionTerrain(float partialTicks, Entity viewEntity) {
-        double cameraX = interpolate(MinecraftReflectionCompat.lastTickPosX(viewEntity),
-                MinecraftReflectionCompat.posX(viewEntity), partialTicks);
-        double cameraY = interpolate(MinecraftReflectionCompat.lastTickPosY(viewEntity),
-                MinecraftReflectionCompat.posY(viewEntity), partialTicks);
-        double cameraZ = interpolate(MinecraftReflectionCompat.lastTickPosZ(viewEntity),
-                MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        nothiriumShadowRenderer.drainUploads();
-
-        WorldRenderingPhase previousPhase = activePhase;
-        boolean previousShaderlessWorldPassActive = shaderlessWorldPassActive;
-        if (!isPipelineActive) {
-            shaderlessWorldPassActive = true;
-        }
-        try {
-            activePhase = WorldRenderingPhase.TERRAIN_SOLID;
-            int solid = self().renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.SOLID, cameraX, cameraY, cameraZ);
-            activePhase = WorldRenderingPhase.TERRAIN_CUTOUT_MIPPED;
-            int cutoutMipped = self().renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.CUTOUT_MIPPED, cameraX, cameraY, cameraZ);
-            activePhase = WorldRenderingPhase.TERRAIN_CUTOUT;
-            int cutout = self().renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.CUTOUT, cameraX, cameraY, cameraZ);
-            activePhase = WorldRenderingPhase.TERRAIN_TRANSLUCENT;
-            int translucent = self().renderShaderlessNothiriumExtractionLayer(BlockRenderLayer.TRANSLUCENT, cameraX, cameraY, cameraZ);
-            BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-            Minecraft mc = MinecraftReflectionCompat.minecraft();
-            int bloom = PipelineContext.shouldRenderSyntheticBloomLayerWithRenderGlobal(bloomLayer) && mc != null && MinecraftReflectionCompat.renderGlobal(mc) != null
-                    ? self().renderShaderlessVanillaEmissiveLayerIfVisible(mc, WorldRenderingPhase.TERRAIN_TRANSLUCENT, bloomLayer, partialTicks, viewEntity)
-                    : 0;
-            return solid + cutoutMipped + cutout + translucent + bloom;
-        } finally {
-            activePhase = previousPhase;
-            shaderlessWorldPassActive = previousShaderlessWorldPassActive;
-        }
-    }
-
-    protected int renderShaderlessNothiriumExtractionLayer(BlockRenderLayer layer, double cameraX, double cameraY, double cameraZ) {
-        if (!shouldRenderShaderlessExtractionLayer(layer)) {
-            return 0;
-        }
-        boolean forceBloomLayerEmission = AusmBloomLayer.isBloomLayer(layer);
-        bloomRenderer.setShaderlessForceEmission(forceBloomLayerEmission ? 1.0F : 0.0F);
-        try {
-            return PipelineContext.positiveCount(nothiriumShadowRenderer.renderVisibleLayer(layer, cameraX, cameraY, cameraZ, 0, (short) 0));
-        } finally {
-            if (forceBloomLayerEmission) {
-                bloomRenderer.setShaderlessForceEmission(0.0F);
-            }
-        }
-    }
-
-    protected int renderVanillaEmissiveTerrain(float partialTicks, Entity viewEntity, boolean allowPipelineActive) {
-        if (!allowPipelineActive && isPipelineActive) {
-            return 0;
-        }
-        Minecraft mc = MinecraftReflectionCompat.minecraft();
-        if (mc == null || MinecraftReflectionCompat.renderGlobal(mc) == null || MinecraftReflectionCompat.world(mc) == null || viewEntity == null) {
-            return 0;
-        }
-
-        WorldRenderingPhase previousPhase = activePhase;
-        boolean previousShaderlessWorldPassActive = shaderlessWorldPassActive;
-        if (!isPipelineActive) {
-            shaderlessWorldPassActive = true;
-        }
-        try {
-            int rendered = 0;
-            for (BlockRenderLayer layer : BloomExtractionPlan.terrainLayers()) {
-                rendered += self().renderShaderlessVanillaEmissiveLayerIfVisible(
-                        mc, BloomExtractionPlan.phaseFor(layer), layer, partialTicks, viewEntity);
-            }
-            BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-            int bloom = PipelineContext.shouldRenderSyntheticBloomLayerWithRenderGlobal(bloomLayer)
-                    ? self().renderShaderlessVanillaEmissiveLayerIfVisible(mc, WorldRenderingPhase.TERRAIN_TRANSLUCENT, bloomLayer, partialTicks, viewEntity)
-                    : 0;
-            return rendered + bloom;
-        } finally {
-            activePhase = previousPhase;
-            shaderlessWorldPassActive = previousShaderlessWorldPassActive;
-        }
-    }
-
-    protected int renderShaderlessVanillaEmissiveLayerIfVisible(Minecraft mc, WorldRenderingPhase phase, BlockRenderLayer layer,
-                                                                float partialTicks, Entity viewEntity) {
-        if (!shouldRenderShaderlessExtractionLayer(layer)) {
-            return 0;
-        }
-        return self().renderShaderlessVanillaEmissiveLayer(mc, phase, layer, partialTicks, viewEntity);
-    }
-
-    protected int renderShaderlessVanillaEmissiveLayer(Minecraft mc, WorldRenderingPhase phase, BlockRenderLayer layer,
-                                                       float partialTicks, Entity viewEntity) {
-        activePhase = phase;
-        boolean forceBloomLayerEmission = AusmBloomLayer.isBloomLayer(layer);
-        prepareShaderlessBlockLayerState(layer);
-        bloomRenderer.setShaderlessForceEmission(forceBloomLayerEmission ? 1.0F : 0.0F);
-        try {
-            RenderGlobal renderGlobal = MinecraftReflectionCompat.renderGlobal(mc);
-            return renderGlobal != null ? PipelineContext.positiveCount(MinecraftReflectionCompat.renderBlockLayer(renderGlobal, layer, partialTicks, 2, viewEntity)) : 0;
-        } finally {
-            if (forceBloomLayerEmission) {
-                bloomRenderer.setShaderlessForceEmission(0.0F);
-            }
-            finishShaderlessBlockLayerState(layer);
-            activePhase = WorldRenderingPhase.NONE;
-        }
-    }
-
     protected static boolean shouldRenderSyntheticBloomLayerWithRenderGlobal(BlockRenderLayer layer) {
-        return BloomExtractionPlan.shouldRenderSyntheticLayer(layer, PipelineContext.isNothiriumLoaded());
+        return layer != null && (!AusmBloomLayer.isBloomLayer(layer) || !PipelineContext.isNothiriumLoaded());
     }
 
     protected static boolean isNothiriumLoaded() {
@@ -400,12 +140,6 @@ abstract class PipelineChunkUpdateTracking extends PipelineBotaniaSkyRendering {
         MainMod.LOGGER.info("[AUSMBloom] Shaderless pre-GUI hook {}", detail);
     }
 
-    protected String bloomMetadataSummary() {
-        return "known=" + shaderlessBloomMetadataKnownChunkLayers.size()
-                + ", bloom=" + shaderlessBloomMetadataChunkLayers.size()
-                + ", extractionActive=" + shaderlessBloomExtractionActive
-                + ", bootstrap=" + shaderlessBloomExtractionBootstrapActive;
-    }
 
     protected static String glStateSummary() {
         return FixedFunctionGlState.summary();

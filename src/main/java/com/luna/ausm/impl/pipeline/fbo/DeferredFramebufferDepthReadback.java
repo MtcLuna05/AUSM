@@ -339,6 +339,7 @@ abstract class DeferredFramebufferDepthReadback extends DeferredFramebufferAttac
     }
 
     public void delete() {
+        HandDepthSnapshot.delete();
         if (fboId > -1) {
             MinecraftReflectionCompat.glDeleteFramebuffers(fboId);
             fboId = -1;

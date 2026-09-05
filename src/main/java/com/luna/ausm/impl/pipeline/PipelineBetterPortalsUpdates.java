@@ -367,14 +367,12 @@ abstract class PipelineBetterPortalsUpdates extends PipelineShadowPolicy {
             } else {
                 self().adoptMainWorldVanillaViewFrustum(renderGlobal, MinecraftReflectionCompat.world(mc), "main-load-vanilla-owner");
             }
-            self().clearShaderlessBloomMetadata();
             self().scheduleWorldLoadLightRecalculation();
             return;
         }
 
         self().adoptMainWorldVanillaViewFrustum(renderGlobal, MinecraftReflectionCompat.world(mc), manualChunkReload ? "manual-reload" : "main-load");
         self().markShaderlessMainWorldNothiriumReload(MinecraftReflectionCompat.world(mc), manualChunkReload ? "manual-load-renderers" : "main-load-renderers");
-        self().clearShaderlessBloomMetadata();
         self().scheduleInactiveVanillaRecoveryFrame();
     }
 

@@ -349,17 +349,13 @@ abstract class PipelineFrameLifecycle1 extends PipelineFrameLifecycle0 {
 
     protected void prepareShaderlessBlockLayerState(BlockRenderLayer layer) {
         Minecraft mc = MinecraftReflectionCompat.minecraft();
-        if (!shaderlessBloomExtractionActive) {
-            MinecraftReflectionCompat.glUseProgram(0);
-        }
+        MinecraftReflectionCompat.glUseProgram(0);
         if (self().shouldUseHardwareSafeVanillaBlockLayerState() && pingPongManager.isInitialized()) {
             pingPongManager.bindForGbuffers(fallbackColorAttachment());
         }
         TextureBinder.restoreDefaultTextureUnit();
         resetIndexedBlendState();
-        if (!shaderlessBloomExtractionActive) {
-            disablePipelineVertexAttributes();
-        }
+        disablePipelineVertexAttributes();
         unbindShaderStorageBuffers();
         GL11.glDisable(GL11.GL_SCISSOR_TEST);
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);

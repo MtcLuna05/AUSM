@@ -152,15 +152,7 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
         PipelineContext context = PipelineContext.getInstance();
         boolean waterAttachmentProbe = false;
         boolean disableCullForMainTerrain = context.shouldDisableNothiriumChunkCulling(layer);
-        // Shadered shadow terrain never uses the shaderless bloom metadata.
-        // Avoid an extra context dispatch and metadata lookup for every
-        // Nothirium section in the normal shadow path.
-        boolean shaderlessBloomExtraction = context.isShaderlessBloomExtractionActive();
-        int shaderlessBloomDimension = shaderlessBloomExtraction
-                ? context.shaderlessBloomExtractionDimensionId()
-                : Integer.MIN_VALUE;
         if (activeShadowSelection
-                && !shaderlessBloomExtraction
                 && !collectState
                 && requirePipelineStride) {
             return self().drawPreparedPipelineChunks(pass, chunks, cameraX, cameraY, cameraZ,
@@ -188,7 +180,6 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
         // an all-or-nothing format/VBO preflight and returns null before any
         // draw when a legacy or mixed list requires the scalar route.
         if (!activeShadowSelection
-                && !shaderlessBloomExtraction
                 && !collectState
                 && maxDistanceSquared < 0.0D
                 && GLContext.getCapabilities().OpenGL43
@@ -251,11 +242,6 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
                     }
                 }
                 stats.withinDistance++;
-                if (shaderlessBloomExtraction && !context.shouldRenderShaderlessBloomChunkLayer(
-                        layer, chunkX, chunkY, chunkZ, shaderlessBloomDimension)) {
-                    continue;
-                }
-
                 Object part = reflection.getVboPart(chunk, pass);
                 if (part == null) {
                     stats.missingPart++;
@@ -663,26 +649,19 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowVisibleLa
         if (program <= 0) {
             return -1;
         }
-        Integer cached = chunkOffsetUniformLocations.get(program);
-        if (cached != null) {
-            return cached;
-        }
-        int location = GL20.glGetUniformLocation(program, "ausm_ChunkOffset");
-        chunkOffsetUniformLocations.put(program, location);
-        return location;
+        // GL names are reused after shader-pack teardown. A numeric program
+        // ID alone cannot identify a linked interface across mode changes.
+        // This lookup is made once per batch, outside the section draw loop.
+        return GL20.glGetUniformLocation(program, "ausm_ChunkOffset");
     }
 
     protected int chunkOffsetInstanceAttributeLocation(int program) {
         if (program <= 0) {
             return -1;
         }
-        Integer cached = chunkOffsetInstanceAttributeLocations.get(program);
-        if (cached != null) {
-            return cached;
-        }
-        int location = GL20.glGetAttribLocation(program, "ausm_ChunkOffsetInstanced");
-        chunkOffsetInstanceAttributeLocations.put(program, location);
-        return location;
+        // In particular, native bloom programs do not consume instanced
+        // offsets. A stale positive location selects an incompatible draw path.
+        return GL20.glGetAttribLocation(program, "ausm_ChunkOffsetInstanced");
     }
 
     protected void refreshUnsupportedPipelineChunks(NothiriumShadowRenderer.Reflection reflection, List<Object> chunks)

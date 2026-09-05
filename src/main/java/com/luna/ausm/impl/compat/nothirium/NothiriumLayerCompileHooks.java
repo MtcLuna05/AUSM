@@ -80,7 +80,7 @@ abstract class NothiriumLayerCompileHooks extends NothiriumBloomCompileHooks {
         int baseEnd = NothiriumLayerCompileHooks.ausm$layerVertexCount(regionBuffers, baseLayer);
         int bloomEnd = NothiriumLayerCompileHooks.ausm$layerVertexCount(regionBuffers, bloomLayer);
         MainMod.LOGGER.info(
-                "[AUSMBloomBaseRouteProbe] call={} thread={} kind={} route={} pos={} currentLayer={} baseLayer={} bloomLayer={} currentStart={} currentEnd={} currentDelta={} baseStart={} baseEnd={} baseDelta={} bloomStart={} bloomEnd={} bloomDelta={} manualExtraction={} pipelineActive={} forceVanilla={} original={} effective={} originalRenderType={} effectiveRenderType={} originalNatural={} effectiveNatural={} originalNativeBloomOnly={} effectiveNativeBloomOnly={} originalLayers={}/{}/{}/{}/{} effectiveLayers={}/{}/{}/{}/{} solidBuffer={} cutoutMippedBuffer={} cutoutBuffer={} translucentBuffer={} bloomBuffer={}",
+                "[AUSMBloomBaseRouteProbe] call={} thread={} kind={} route={} pos={} currentLayer={} baseLayer={} bloomLayer={} currentStart={} currentEnd={} currentDelta={} baseStart={} baseEnd={} baseDelta={} bloomStart={} bloomEnd={} bloomDelta={} textureFallback={} pipelineActive={} forceVanilla={} original={} effective={} originalRenderType={} effectiveRenderType={} originalNatural={} effectiveNatural={} originalNativeBloomOnly={} effectiveNativeBloomOnly={} originalLayers={}/{}/{}/{}/{} effectiveLayers={}/{}/{}/{}/{} solidBuffer={} cutoutMippedBuffer={} cutoutBuffer={} translucentBuffer={} bloomBuffer={}",
                 probe,
                 Thread.currentThread().getName(),
                 self.ausm$state().bloomBaseRouteProbeKind,
@@ -98,7 +98,7 @@ abstract class NothiriumLayerCompileHooks extends NothiriumBloomCompileHooks {
                 self.ausm$state().bloomBaseRouteProbeBloomStart,
                 bloomEnd,
                 NothiriumLayerCompileHooks.ausm$delta(self.ausm$state().bloomBaseRouteProbeBloomStart, bloomEnd),
-                pipeline.isManualBloomExtractionEnabled(),
+                pipeline.shouldRenderTextureBloomFallback(),
                 pipeline.isPipelineActive(),
                 pipeline.shouldForceVanillaTerrainRenderer(),
                 NothiriumLayerCompileHooks.ausm$stateName(state),
@@ -246,96 +246,7 @@ abstract class NothiriumLayerCompileHooks extends NothiriumBloomCompileHooks {
         );
     }
 
-    public static boolean ausm$renderStackedEmissiveBloomLayer(NothiriumRenderChunkCompileAccess self,
-                                                        IBlockState renderState,
-                                                        IBlockState fallbackTarget,
-                                                        BlockPos pos,
-                                                        RegionRenderCacheBuilder regionBuffers
-    ) {
-        if (PipelineContext.getInstance().isFramedBlockDiagnosticTarget(renderState)) {
-            return false;
-        }
-        IBlockState fallbackSourceState = NothiriumLayerCompileHooks.ausm$isEmissiveBloomFallbackSource(fallbackTarget)
-                ? fallbackTarget
-                : renderState;
-        boolean emissiveTarget = NothiriumLayerCompileHooks.ausm$isEmissiveBloomFallbackSource(fallbackSourceState);
-        IBlockState fallbackRenderState = PipelineContext.getInstance()
-                .inheritedBloomGeometryRenderState(renderState, fallbackSourceState);
-        try {
-            if (!emissiveTarget) {
-                self.ausm$logEmissiveFallback("skip-not-emissive-target", renderState, fallbackRenderState,
-                        pos, fallbackSourceState, null, null, -1, false, 0, null, regionBuffers);
-                return false;
-            }
-            if (pos == null || regionBuffers == null) {
-                self.ausm$logEmissiveFallback(pos == null ? "skip-missing-pos" : "skip-missing-region-buffers",
-                        renderState, fallbackRenderState, pos, fallbackSourceState, null, null, -1, false, 0,
-                        null, regionBuffers);
-                return false;
-            }
 
-            BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-            if (bloomLayer == null) {
-                self.ausm$logEmissiveFallback("skip-missing-bloom-layer", renderState, fallbackRenderState,
-                        pos, fallbackSourceState, null, null, -1, false, 0, null, regionBuffers);
-                return false;
-            }
-
-            boolean textureBloomSource = PipelineContext.getInstance().stateUsesTextureBloomSource(fallbackSourceState);
-            boolean solidBloomMaskFallback = false;
-            IBlockState fallbackGeometryState = fallbackRenderState;
-            BlockRenderLayer renderLayer = NothiriumLayerCompileHooks.ausm$bloomFallbackLayer(fallbackSourceState);
-            BlockRenderLayer bufferLayer = renderLayer;
-            BufferBuilder buffer = MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, bufferLayer);
-            if (buffer == null) {
-                self.ausm$logEmissiveFallback("skip-missing-buffer", renderState, fallbackRenderState,
-                        pos, fallbackSourceState, bufferLayer, null, -1, false, 0, null, regionBuffers);
-                return false;
-            }
-
-            int start = self.ausm$state().emissiveFallbackStart;
-            int normalDelta = start >= 0 ? MinecraftReflectionCompat.bufferVertexCount(buffer) - start : 0;
-            if (normalDelta > 0 && solidBloomMaskFallback) {
-                ((IBufferBuilderExtension) buffer).ausm$truncateVertexCount(start);
-                self.ausm$logEmissiveFallback("replace-normal-geometry", renderState, fallbackRenderState, pos,
-                        fallbackSourceState, bufferLayer, renderLayer, normalDelta, false, 0, buffer, regionBuffers);
-                normalDelta = 0;
-            } else if (normalDelta > 0) {
-                NothiriumLayerCompileHooks.ausm$markShaderlessBloomMetadata(buffer, bufferLayer, pos);
-                self.ausm$logEmissiveFallback("normal-or-dispatcher-present", renderState, fallbackRenderState, pos,
-                        fallbackSourceState, bufferLayer, renderLayer, normalDelta, false, 0, buffer, regionBuffers);
-            }
-
-            if (!((IBufferBuilderExtension) buffer).ausm$isDrawing()) {
-                MinecraftReflectionCompat.bufferBegin(buffer, 7, NothiriumPipelineCompat.pipelineBlockFormat(MinecraftReflectionCompat.blockFormat()));
-                int originX = Math.floorDiv(MinecraftReflectionCompat.blockPosX(pos), 16) * 16;
-                int originY = Math.floorDiv(MinecraftReflectionCompat.blockPosY(pos), 16) * 16;
-                int originZ = Math.floorDiv(MinecraftReflectionCompat.blockPosZ(pos), 16) * 16;
-                MinecraftReflectionCompat.bufferSetTranslation(buffer, -originX, -originY, -originZ);
-            }
-
-            int fallbackStart = MinecraftReflectionCompat.bufferVertexCount(buffer);
-            boolean rendered = self.ausm$renderEmissiveFallbackWithLayer(fallbackGeometryState, fallbackSourceState, pos, buffer, renderLayer, solidBloomMaskFallback);
-            int fallbackDelta = MinecraftReflectionCompat.bufferVertexCount(buffer) - fallbackStart;
-            if (fallbackDelta > 0) {
-                NothiriumLayerCompileHooks.ausm$markShaderlessBloomMetadata(buffer, bufferLayer, pos);
-            }
-            String mode = normalDelta > 0 ? "stacked-bloom-layer" : "fallback-bloom-layer";
-            self.ausm$logEmissiveFallback(mode, renderState, fallbackGeometryState, pos,
-                    fallbackSourceState, bufferLayer, renderLayer, normalDelta, rendered, fallbackDelta, buffer,
-                    regionBuffers);
-            return true;
-        } finally {
-            self.ausm$state().emissiveFallbackStart = -1;
-        }
-    }
-
-    public static void ausm$markShaderlessBloomMetadata(BufferBuilder buffer, BlockRenderLayer layer, BlockPos pos) {
-        if (buffer instanceof IBufferBuilderExtension extension) {
-            extension.ausm$markShaderlessBloomMetadata();
-        }
-        PipelineContext.getInstance().recordShaderlessBloomMetadata(pos, layer);
-    }
 
     public static BlockRenderLayer ausm$framedGeometryLayer(IBlockState framedState, IBlockState inheritedState) {
         BlockRenderLayer inheritedLayer = NothiriumLayerCompileHooks.ausm$bloomFallbackLayer(inheritedState);
@@ -596,17 +507,7 @@ abstract class NothiriumLayerCompileHooks extends NothiriumBloomCompileHooks {
         if (PipelineContext.getInstance().isBlockcrafteryEditableState(state)) {
             return false;
         }
-        if (PipelineContext.getInstance().stateHasShaderlessBloomSource(state)) {
-            return true;
-        }
-        ResourceLocation name = MinecraftReflectionCompat.blockRegistryName(block);
-        if (name == null) {
-            return false;
-        }
-        String path = MinecraftReflectionCompat.resourcePathLower(name);
-        String namespace = MinecraftReflectionCompat.resourceNamespace(name);
-        return "lumenized".equals(namespace)
-                || path.contains("lumenized");
+        return PipelineContext.getInstance().stateUsesTextureBloomSource(state);
     }
 
     public static boolean ausm$isFireFallbackTarget(IBlockState state) {

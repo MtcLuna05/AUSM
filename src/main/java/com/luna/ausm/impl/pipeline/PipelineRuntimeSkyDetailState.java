@@ -224,10 +224,20 @@ abstract class PipelineRuntimeDiagnosticsState7 extends PipelineRuntimeDiagnosti
                 && (self().getPhase() == WorldRenderingPhase.HAND_SOLID
                 || self().getPhase() == WorldRenderingPhase.HAND_TRANSLUCENT)) {
             self().bindPass(activePass);
+            // The arm renderer enables blending again without necessarily
+            // changing its factors. Fullscreen/indexed blending can leave
+            // alpha=(ZERO, ONE), preserving world material data under the hand.
+            // Update both vanilla's cache and GL: indexed state is not tracked
+            // by GlStateManager, so its cached global factors can be stale.
+            MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
+                    GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
+            org.lwjgl.opengl.GL14.glBlendFuncSeparate(
+                    GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
             // The hand redirect repairs vanilla client state after beginHand()
             // established MC_HAND_DEPTH.  Reapply the reserved range here,
             // immediately before EntityRenderer draws the held model.
-            GL11.glDepthRange(0.0D, ShaderEnvironmentDefines.HAND_DEPTH);
+            GL11.glDepthRange(0.5D - ShaderEnvironmentDefines.HAND_DEPTH * 0.5D,
+                    0.5D + ShaderEnvironmentDefines.HAND_DEPTH * 0.5D);
         }
     }
 
@@ -266,9 +276,7 @@ abstract class PipelineRuntimeDiagnosticsState7 extends PipelineRuntimeDiagnosti
         TextureBinder.restoreDefaultTextureUnit();
         disablePipelineVertexAttributes();
         restoreVanillaClientRenderState();
-        if (!shaderlessBloomExtractionActive) {
-            self().unbindShaderStorageBuffers();
-        }
+        self().unbindShaderStorageBuffers();
         GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         MinecraftReflectionCompat.glStateEnableTexture2D();
         MinecraftReflectionCompat.glStateEnableAlpha();

@@ -488,9 +488,7 @@ abstract class PipelineRuntimeDiagnosticsState0 extends PipelineRuntimeProbeStat
         IBlockState contained = self().inheritedBlockcrafteryRenderState(state, blockAccess, pos);
         if (contained == null) return false;
         BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        boolean bloom = self().stateHasBloomLayerGeometry(contained)
-                || (bloomLayer != null && PipelineRuntimeState.canRenderInLayer(contained, bloomLayer))
-                || self().blockRenderEmissionForState(contained, blockAccess, pos) > 0;
+        boolean bloom = self().stateUsesTextureBloomSource(contained);
         if (!bloom) return false;
         int probe = blockcrafteryBloomDecisionProbeCount.incrementAndGet();
         if (probe <= 0) {
@@ -546,6 +544,6 @@ abstract class PipelineRuntimeDiagnosticsState0 extends PipelineRuntimeProbeStat
         if (state == null || MinecraftReflectionCompat.blockFromState(state) == null) {
             return false;
         }
-        return self().blockShaderlessBloomEmission(state, blockAccess, pos) > 0;
+        return self().stateUsesTextureBloomSource(state);
     }
 }

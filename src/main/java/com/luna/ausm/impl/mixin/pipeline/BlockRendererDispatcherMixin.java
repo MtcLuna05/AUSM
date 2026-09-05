@@ -186,8 +186,8 @@ public class BlockRendererDispatcherMixin {
             int startVertex = bufferBuilder != null ? MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : -1;
             TerrainRenderProbeState.setTerrainDispatchStart(startVertex);
             int blockEntityId = pipeline.blockEntityIdForActualState(contextState, blockAccess, pos);
-            int blockEmission = pipeline.shouldUseShaderlessBloomEmission()
-                    ? pipeline.blockShaderlessBloomEmission(state, blockAccess, pos)
+            int blockEmission = pipeline.shouldUseShaderlessMaterialEmission()
+                    ? pipeline.blockShaderlessMaterialEmission(state, blockAccess, pos)
                     : pipeline.blockRenderEmission(state, blockAccess, pos);
             int packedLightmap = ausm$packedLightmap(contextState, blockAccess, pos);
             ausm$logShaderlessDispatchLightProbe(pipeline, state, contextState, blockAccess, pos, packedLightmap);
@@ -630,9 +630,6 @@ public class BlockRendererDispatcherMixin {
         ausm$leaveEnderIoSolidPayloadContext(state);
         PipelineContext pipeline = PipelineContext.getInstance();
         Integer framedStart = BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.get();
-        if (ausm$appendBloomFallbackIfMissing(state, pos, blockAccess, bufferBuilder)) {
-            cir.setReturnValue(true);
-        }
         Integer terrainStart = TerrainRenderProbeState.terrainDispatchStart();
         int terrainEnd = bufferBuilder != null ? MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) : -1;
         ausm$logTerrainDispatchProbe("return", state, pipeline.effectiveBlockRenderState(state, blockAccess, pos), pos,
@@ -662,134 +659,6 @@ public class BlockRendererDispatcherMixin {
         BlockRenderContext.clear();
     }
 
-    @Unique
-    private static boolean ausm$appendBloomFallbackIfMissing(IBlockState state, BlockPos pos, IBlockAccess blockAccess,
-                                                             BufferBuilder bufferBuilder) {
-        PipelineContext pipeline = PipelineContext.getInstance();
-        boolean framedFallbackCandidate = pipeline.isFramedBlockDiagnosticTarget(state);
-        // Filled frames compile directly from their contained block; no host
-        // geometry is copied into the bloom pass.
-        if (framedFallbackCandidate && pipeline.hasNothiriumBloomBackend()) {
-            return false;
-        }
-        if (!pipeline.isManualBloomExtractionEnabled()) {
-            return false;
-        }
-        BlockRenderLayer layer = MinecraftReflectionCompat.currentRenderLayer();
-        int framedEmission = 0;
-        boolean targetedFramedBloom = false;
-        Integer start = BlockRendererDispatcherHooks.PROBE_START_VERTEX.get();
-        boolean framedFallback = false;
-        if (start == null && pipeline.isFramedBlockDiagnosticTarget(state)) {
-            start = BlockRendererDispatcherHooks.FRAMED_DIAGNOSTIC_START_VERTEX.get();
-            framedFallback = true;
-        }
-        if (start == null) {
-            ausm$logEmissiveDispatcherFallbackSkip("missing-start", state, null, null, pos,
-                    MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer(), null, bufferBuilder, framedFallbackCandidate);
-            return false;
-        }
-        if (bufferBuilder == null) {
-            ausm$logEmissiveDispatcherFallbackSkip("missing-buffer", state, null, null, pos,
-                    MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer(), start, null, framedFallbackCandidate);
-            return false;
-        }
-        if (BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.get() != null) {
-            ausm$logEmissiveDispatcherFallbackSkip("recursive-fallback", state, null, null, pos,
-                    MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer(), start, bufferBuilder, framedFallbackCandidate);
-            return false;
-        }
-
-        IBlockState inheritedState = pipeline.inheritedBloomRenderState(state, blockAccess, pos);
-        ausm$logBlockcrafteryBloomFallbackProbe("candidate", state, inheritedState, null, pos, blockAccess,
-                MinecraftReflectionCompat.currentRenderLayer(), AusmBloomLayer.layer(), start, -1, framedEmission,
-                "buffer=" + ausm$bufferDetails(bufferBuilder));
-        boolean forcedFramedBloom = targetedFramedBloom;
-        IBlockState fallbackSourceState = ausm$isEmissiveBloomFallbackSource(inheritedState)
-                ? inheritedState
-                : forcedFramedBloom ? state : framedFallbackCandidate ? null : state;
-        if (!forcedFramedBloom && !ausm$isEmissiveBloomFallbackSource(fallbackSourceState)) {
-            return false;
-        }
-        IBlockState fallbackState = pipeline.inheritedBloomGeometryRenderState(state, fallbackSourceState);
-
-        BlockRenderLayer bloomLayer = AusmBloomLayer.layer();
-        if (layer == null || bloomLayer == null) {
-            ausm$logBlockcrafteryBloomFallbackProbe("skip-missing-layer", state, inheritedState, fallbackSourceState,
-                    pos, blockAccess, layer, bloomLayer, start, MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) - start,
-                    framedEmission, "missing=" + (layer == null ? "current" : "bloom"));
-            ausm$logEmissiveDispatcherFallbackSkip(layer == null ? "missing-current-layer" : "missing-bloom-layer",
-                    state, inheritedState, fallbackSourceState, pos, layer, bloomLayer, start, bufferBuilder,
-                    framedFallbackCandidate);
-            return false;
-        }
-        if (framedFallback && layer != bloomLayer) {
-            ausm$logBlockcrafteryBloomFallbackProbe("skip-non-bloom-layer", state, inheritedState, fallbackSourceState,
-                    pos, blockAccess, layer, bloomLayer, start, MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) - start,
-                    framedEmission, "framed=true");
-            ausm$logEmissiveDispatcherFallbackSkip("framed-non-bloom-layer", state, inheritedState, fallbackSourceState,
-                    pos, layer, bloomLayer, start, bufferBuilder, true);
-            return false;
-        }
-        if (!framedFallback && layer == bloomLayer) {
-            ausm$logBlockcrafteryBloomFallbackProbe("skip-already-bloom-layer", state, inheritedState,
-                    fallbackSourceState, pos, blockAccess, layer, bloomLayer, start,
-                    MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) - start, framedEmission, "framed=false");
-            ausm$logEmissiveDispatcherFallbackSkip("nonframed-already-bloom-layer", state, inheritedState,
-                    fallbackSourceState, pos, layer, bloomLayer, start, bufferBuilder, false);
-            return false;
-        }
-
-        boolean textureBloomSource = pipeline.stateUsesTextureBloomSource(fallbackSourceState);
-        boolean solidBloomMaskFallback = framedFallback && !textureBloomSource;
-        IBlockState fallbackGeometryState = solidBloomMaskFallback ? state : fallbackState;
-        int normalDelta = MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) - start;
-        if (normalDelta > 0 && solidBloomMaskFallback) {
-            ((IBufferBuilderExtension) bufferBuilder).ausm$truncateVertexCount(start);
-            ausm$logBlockcrafteryBloomFallbackProbe("replace-normal-geometry", state, inheritedState, fallbackSourceState,
-                    pos, blockAccess, layer, bloomLayer, start, normalDelta, framedEmission,
-                    "fallbackState=" + ausm$stateName(fallbackState));
-            normalDelta = 0;
-        } else if (normalDelta > 0) {
-            ausm$logBlockcrafteryBloomFallbackProbe("skip-normal-geometry", state, inheritedState, fallbackSourceState,
-                    pos, blockAccess, layer, bloomLayer, start, normalDelta, framedEmission,
-                    "fallbackState=" + ausm$stateName(fallbackState));
-            ausm$logEmissiveDispatcherFallbackSkip("normal-geometry-present", state, inheritedState, fallbackSourceState,
-                    pos, layer, bloomLayer, start, bufferBuilder, framedFallbackCandidate);
-            return false;
-        }
-
-        BlockRenderLayer previousLayer = layer;
-        BlockRenderLayer fallbackRenderLayer = framedFallback && !textureBloomSource
-                ? ausm$framedGeometryLayer(fallbackGeometryState, fallbackSourceState)
-                : ausm$bloomFallbackLayer(fallbackSourceState);
-        int fallbackStart = MinecraftReflectionCompat.bufferVertexCount(bufferBuilder);
-        boolean rendered = false;
-        try {
-            BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.set(Boolean.TRUE);
-            if (solidBloomMaskFallback) {
-                BlockRenderContext.setBloomMaskFallback(true);
-            }
-            MinecraftReflectionCompat.setCurrentRenderLayer(fallbackRenderLayer);
-            BlockRendererDispatcher dispatcher = MinecraftReflectionCompat.blockRendererDispatcher(MinecraftReflectionCompat.minecraft());
-            rendered = dispatcher != null && MinecraftReflectionCompat.renderBlock(dispatcher, fallbackGeometryState, pos, blockAccess, bufferBuilder);
-        } finally {
-            MinecraftReflectionCompat.setCurrentRenderLayer(previousLayer);
-            BlockRenderContext.clearBloomMaskFallback();
-            BlockRendererDispatcherHooks.BLOOM_FALLBACK_RENDER.remove();
-        }
-
-        int fallbackDelta = MinecraftReflectionCompat.bufferVertexCount(bufferBuilder) - fallbackStart;
-        ausm$logBlockcrafteryBloomFallbackProbe(fallbackDelta > 0 ? "rendered" : "render-empty", state,
-                inheritedState, fallbackSourceState, pos, blockAccess, previousLayer, bloomLayer, fallbackStart,
-                fallbackDelta, framedEmission, "fallbackLayer=" + fallbackRenderLayer
-                        + ", rendered=" + rendered
-                        + ", fallbackState=" + ausm$stateName(fallbackGeometryState));
-        ausm$logEmissiveDispatcherFallback(state, inheritedState, fallbackSourceState, fallbackGeometryState, pos, previousLayer,
-                bloomLayer, fallbackRenderLayer, start, fallbackStart, normalDelta, bufferBuilder, framedFallback,
-                rendered, fallbackDelta);
-        return fallbackDelta > 0;
-    }
 
     @Unique
     private static BlockRenderLayer ausm$framedGeometryLayer(IBlockState framedState, IBlockState inheritedState) {

@@ -483,9 +483,7 @@ abstract class PipelineRuntimeDiagnosticsState extends PipelineRuntimeStateBase 
 
     protected final Set<String> softVanillaSpecialBlockProbeKeys = ConcurrentHashMap.newKeySet();
 
-    protected final ConcurrentLongSet shaderlessBloomMetadataKnownChunkLayers = new ConcurrentLongSet();
 
-    protected final ConcurrentLongSet shaderlessBloomMetadataChunkLayers = new ConcurrentLongSet();
 
     protected final AtomicInteger currentProblemProbeCount = new AtomicInteger();
 
@@ -515,9 +513,7 @@ abstract class PipelineRuntimeDiagnosticsState extends PipelineRuntimeStateBase 
 
     protected boolean shaderlessBloomVertexFormatRefreshRequested = false;
 
-    protected boolean shaderlessBloomExtractionActive = false;
 
-    protected boolean shaderlessBloomExtractionBootstrapActive = false;
 
     protected int shaderlessTerrainSolidCount = -1;
 

@@ -35,8 +35,6 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
     @Unique
     private boolean[] ausm$pipelineVertexFormatByLayer;
 
-    @Unique
-    private boolean[] ausm$shaderlessBloomMetadataByLayer;
 
     @Unique
     private static boolean ausm$loggedNullWorldRepair;
@@ -92,17 +90,6 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
         int index = ausm$layerIndex(layer);
         if (index >= 0) {
             ausm$pipelineVertexFormatByLayer()[index] = ausm$pendingPipelineVertexFormat;
-            boolean hasBloomMetadata = bufferBuilder instanceof IBufferBuilderExtension extension
-                    && extension.ausm$hasShaderlessBloomMetadata();
-            ausm$shaderlessBloomMetadataByLayer()[index] = hasBloomMetadata;
-            PipelineContext.getInstance().recordShaderlessBloomLayerSummary(
-                    MinecraftReflectionCompat.renderChunkPosition((RenderChunk) (Object) this),
-                    layer,
-                    hasBloomMetadata
-            );
-            if (bufferBuilder instanceof IBufferBuilderExtension extension) {
-                extension.ausm$resetShaderlessBloomMetadata();
-            }
         }
     }
 
@@ -117,11 +104,6 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
         return ausm$pipelineVertexFormat;
     }
 
-    @Override
-    public boolean ausm$hasShaderlessBloomMetadata(BlockRenderLayer layer) {
-        int index = ausm$layerIndex(layer);
-        return index < 0 || ausm$shaderlessBloomMetadataByLayer()[index];
-    }
 
     @Unique
     private int ausm$layerIndex(BlockRenderLayer layer) {
@@ -141,13 +123,6 @@ public class RenderChunkMixin implements IPipelineRenderChunk {
         return ausm$pipelineVertexFormatByLayer;
     }
 
-    @Unique
-    private boolean[] ausm$shaderlessBloomMetadataByLayer() {
-        if (ausm$shaderlessBloomMetadataByLayer == null) {
-            ausm$shaderlessBloomMetadataByLayer = new boolean[BlockRenderLayer.values().length];
-        }
-        return ausm$shaderlessBloomMetadataByLayer;
-    }
 
     @Unique
     private static int ausm$dimensionId(World world) {

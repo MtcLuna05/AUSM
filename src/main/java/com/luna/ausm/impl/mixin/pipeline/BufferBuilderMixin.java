@@ -36,8 +36,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     @Unique
     private int ausm$capturedTranslucentAlphaOffset = -1;
 
-    @Unique
-    private boolean ausm$shaderlessBloomMetadata;
 
     @Unique
     private static final boolean AUSM$LITTLE_ENDIAN = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
@@ -103,20 +101,8 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         field_178997_d = Math.clamp(field_178997_d, 0, vertexCount);
     }
 
-    @Override
-    public void ausm$resetShaderlessBloomMetadata() {
-        ausm$shaderlessBloomMetadata = false;
-    }
 
-    @Override
-    public void ausm$markShaderlessBloomMetadata() {
-        ausm$shaderlessBloomMetadata = true;
-    }
 
-    @Override
-    public boolean ausm$hasShaderlessBloomMetadata() {
-        return ausm$shaderlessBloomMetadata;
-    }
 
     @Override
     public VertexFormat ausm$vertexFormat() {
@@ -249,7 +235,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             PipelineVertexAttributeWriter.writeBlockPolygon(field_179001_a, field_179011_q, vertexBase + vertex, 4);
         }
 
-        ausm$markCurrentContextShaderlessBloomMetadata();
         ausm$resetPipelineVertexCursor();
         ci.cancel();
     }
@@ -319,7 +304,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             PipelineVertexAttributeWriter.writeBlockPolygon(field_179001_a, field_179011_q, vertexBase + vertex, 4);
         }
 
-        ausm$markCurrentContextShaderlessBloomMetadata();
         ausm$resetPipelineVertexCursor();
         ci.cancel();
     }
@@ -353,7 +337,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return false;
         }
         if (!ausm$shouldMutateVanillaEmissiveData()) {
-            ausm$markCurrentContextShaderlessBloomMetadata();
             return false;
         }
 
@@ -380,7 +363,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
 
         field_178997_d += vertexTotal;
-        ausm$markCurrentContextShaderlessBloomMetadata();
         ci.cancel();
         return true;
     }
@@ -390,7 +372,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
             return false;
         }
         if (!ausm$shouldMutateVanillaEmissiveData()) {
-            ausm$markCurrentContextShaderlessBloomMetadata();
             return false;
         }
 
@@ -421,7 +402,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
 
         field_178997_d += vertexTotal;
-        ausm$markCurrentContextShaderlessBloomMetadata();
         ci.cancel();
         return true;
     }
@@ -447,14 +427,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                 || BlockRenderContext.blockAlpha() >= 0;
     }
 
-    @Unique
-    private void ausm$markCurrentContextShaderlessBloomMetadata() {
-        if (BlockRenderContext.blockEmission() <= 0 && !BlockRenderContext.bloomMaskFallback()) {
-            return;
-        }
-        ausm$markShaderlessBloomMetadata();
-        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
-    }
 
     @Unique
     private boolean ausm$shouldApplyCompatibilityEmissiveBoost() {
@@ -503,11 +475,11 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         ausm$sanitizeCurrentAgricraftCropVertex(blockState);
         ausm$applyBloomMaskCurrentVertex(blockState);
         ausm$applyCustomLiquidTintCurrentVertex(blockState);
-        ausm$recordPipelineEmissionBloomMetadata(blockState);
 
         int blockEmission = ausm$shouldApplyCompatibilityEmissiveBoost()
                 ? blockState.vanillaLightmapEmission()
                 : 0;
+        // Emissive lightmap adjustment is independent of texture-defined bloom.
         if (blockEmission <= 0 || field_179011_q == null || !ExtendedVertexFormats.hasUvOffset(field_179011_q, 1)) {
             return;
         }
@@ -524,14 +496,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         field_179001_a.putShort(offset + 2, (short) ((packed >>> 16) & 0xFFFF));
     }
 
-    @Unique
-    private void ausm$recordPipelineEmissionBloomMetadata(BlockRenderContext.State blockState) {
-        if (!ExtendedVertexFormats.isPipelineBlock(field_179011_q)
-                || blockState.vanillaLightmapEmission() <= 0) {
-            return;
-        }
-        ausm$markCurrentContextShaderlessBloomMetadata();
-    }
 
     private void ausm$sanitizeCurrentAgricraftCropVertex(BlockRenderContext.State blockState) {
         if (!blockState.isAgricraftCrop()
@@ -692,9 +656,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
         }
         int blockEmission = BlockRenderContext.vanillaLightmapEmission();
         ausm$applyEmissiveLightmap(vertexData, vertexBase, blockEmission);
-        if (blockEmission > 0) {
-            PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
-        }
     }
 
     @Unique
@@ -781,9 +742,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
     private static void ausm$applyBloomMaskVertexData(int[] vertexData, int vertexBase) {
         boolean bloomMaskFallback = BlockRenderContext.bloomMaskFallback();
         ausm$applyBloomMaskVertexData(vertexData, vertexBase, bloomMaskFallback);
-        if (bloomMaskFallback) {
-            PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
-        }
     }
 
     @Unique
@@ -862,8 +820,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                 field_179001_a.putShort(lightOffset + 2, (short) 240);
             }
         }
-        ausm$markShaderlessBloomMetadata();
-        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
     }
 
     @Unique
@@ -882,8 +838,6 @@ public class BufferBuilderMixin implements IBufferBuilderExtension {
                 field_179001_a.putShort(lightOffset + 2, (short) 240);
             }
         }
-        ausm$markShaderlessBloomMetadata();
-        PipelineContext.getInstance().recordCurrentShaderlessBloomMetadata(MinecraftReflectionCompat.currentRenderLayer());
     }
 
     @Unique

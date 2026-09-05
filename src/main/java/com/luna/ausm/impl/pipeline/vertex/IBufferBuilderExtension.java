@@ -19,15 +19,8 @@ public interface IBufferBuilderExtension {
         return false;
     }
 
-    default void ausm$resetShaderlessBloomMetadata() {
-    }
 
-    default void ausm$markShaderlessBloomMetadata() {
-    }
 
-    default boolean ausm$hasShaderlessBloomMetadata() {
-        return true;
-    }
 
     default VertexFormat ausm$vertexFormat() {
         return null;

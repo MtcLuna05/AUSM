@@ -82,12 +82,7 @@ public final class BlockRenderDiagnostics {
         if (pipeline.isBlockcrafteryEditableState(state)) {
             return false;
         }
-        if (pipeline.stateHasShaderlessBloomSource(state)) {
-            return true;
-        }
-        String path = MinecraftReflectionCompat.resourcePathLower(name);
-        String namespace = MinecraftReflectionCompat.resourceNamespace(name);
-        return "lumenized".equals(namespace) || path.contains("lumenized");
+        return pipeline.stateUsesTextureBloomSource(state);
     }
 
     public static BlockRenderLayer ausm$bloomFallbackLayer(IBlockState state) {

@@ -7,7 +7,4 @@ public interface IPipelineRenderChunk {
 
     boolean ausm$usesPipelineVertexFormat();
 
-    default boolean ausm$hasShaderlessBloomMetadata(BlockRenderLayer layer) {
-        return true;
-    }
 }

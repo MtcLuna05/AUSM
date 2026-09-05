@@ -71,6 +71,15 @@ public class ShaderPackManager implements ShaderPackController {
             return true;
         }
 
+        if (packName != null
+                && (packName.startsWith("ComplementaryUnbound") || packName.startsWith("ComplementaryReimagined"))
+                && packName.endsWith(".zip")) {
+            String generatedPack = packName.substring(0, packName.length() - ".zip".length()) + " + AUSM 1.12.2 Patches";
+            if (repository.isAvailable(generatedPack)) {
+                packName = generatedPack;
+            }
+        }
+
         if (!isPackAvailable(packName)) {
             fallbackToOff("Selected shaderpack '{}' is no longer available; disabling shaders.", packName);
             return false;
@@ -112,6 +121,13 @@ public class ShaderPackManager implements ShaderPackController {
     public void loadSavedConfiguration() {
         SavedShaderConfiguration saved = configurationStore.load(OFF_PACK_NAME);
         selectedPackName = saved.selectedPackName();
+        if ((selectedPackName.startsWith("ComplementaryUnbound") || selectedPackName.startsWith("ComplementaryReimagined"))
+                && selectedPackName.endsWith(".zip")) {
+            String generatedPack = selectedPackName.substring(0, selectedPackName.length() - ".zip".length()) + " + AUSM 1.12.2 Patches";
+            if (repository.isAvailable(generatedPack)) {
+                selectedPackName = generatedPack;
+            }
+        }
         boolean savedEnabled = saved.enabled();
         boolean packAvailable = !isOffPack(selectedPackName) && isPackAvailable(selectedPackName);
         shadersEnabled = !automaticShaderDisablingEnabled() && savedEnabled && packAvailable;
@@ -208,6 +224,15 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     public void reloadPack() {
+        if ((selectedPackName.startsWith("ComplementaryUnbound") || selectedPackName.startsWith("ComplementaryReimagined"))
+                && selectedPackName.endsWith(".zip")) {
+            String generatedPack = selectedPackName.substring(0, selectedPackName.length() - ".zip".length()) + " + AUSM 1.12.2 Patches";
+            if (repository.isAvailable(generatedPack)) {
+                selectedPackName = generatedPack;
+                currentOptionOverrides = loadOptionOverrides(generatedPack);
+                saveShaderConfig();
+            }
+        }
         PipelineContext.getInstance().clearCompiledPipelineCache();
         betterPortalsPrewarmedCacheKeys.clear();
         if (isOffPack(selectedPackName)) {
@@ -646,6 +671,11 @@ public class ShaderPackManager implements ShaderPackController {
                 rebuildInactiveVanillaRenderers();
                 afterVanillaNanos = System.nanoTime();
                 PipelineContext.getInstance().recoverShaderlessBloomAfterShaderDisable("shader-toggle-off");
+                // Shaderless terrain compilation still needs the selected
+                // pack's block-material rules.  Refresh them after cleanup so
+                // a failed or deferred shader program load cannot leave the
+                // extractor with the previous pack's empty material map.
+                captureShaderlessBloomMaterialRules(getEffectiveRenderDimensionId());
             }
         } finally {
             logShaderToggleTiming(enabled, wasEnabled, wasActive, wasPendingReload,

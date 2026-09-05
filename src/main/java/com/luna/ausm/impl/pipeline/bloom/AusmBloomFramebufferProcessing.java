@@ -66,31 +66,6 @@ abstract class AusmBloomFramebufferProcessing extends AusmBloomRenderPasses {
         }
     }
 
-    protected void renderFramebufferBloom(Framebuffer target) {
-        if (target == null || MinecraftReflectionCompat.framebufferTexture(target) <= 0) {
-            return;
-        }
-        if (!self().ensureTargets(MinecraftReflectionCompat.framebufferWidth(target), MinecraftReflectionCompat.framebufferHeight(target))) {
-            return;
-        }
-
-        RenderState state = self().captureState();
-        try {
-            if (self().runThresholdBlurChain(MinecraftReflectionCompat.framebufferTexture(target))) {
-                self().compositeBlurredBloom(target, FRAMEBUFFER_BLOOM_STRENGTH);
-                if (framebufferBloomLogs < BLOOM_RENDER_LOG_LIMIT) {
-                    framebufferBloomLogs++;
-
-                }
-            } else if (framebufferBloomLogs < BLOOM_RENDER_LOG_LIMIT) {
-                framebufferBloomLogs++;
-
-            }
-        } finally {
-            state.restore();
-        }
-    }
-
     protected boolean runBlurChain(int sourceTexture, boolean depthAware) {
         if (sourceTexture <= 0 || !self().ensureTargets(width, height)) {
             return false;
@@ -142,37 +117,6 @@ abstract class AusmBloomFramebufferProcessing extends AusmBloomRenderPasses {
         AusmBloomRenderer.setUniform1i(copyProgram, "depthAware", enabled ? 1 : 0);
     }
 
-    protected boolean runThresholdBlurChain(int sourceTexture) {
-        if (sourceTexture <= 0 || !self().ensureTargets(width, height)) {
-            return false;
-        }
-        if (self().thresholdProgram() == -1 || self().blurProgram() == -1) {
-            return false;
-        }
-
-        self().bindHalfTarget(bloomDownsampleTarget);
-        MinecraftReflectionCompat.glUseProgram(thresholdProgram);
-        self().bindTextureUniform(thresholdProgram, "source", sourceTexture, 0);
-        AusmBloomRenderer.setUniform1f(thresholdProgram, "threshold", FRAMEBUFFER_BLOOM_THRESHOLD);
-        AusmBloomRenderer.drawFullscreenQuad();
-
-        for (int i = 0; i < blurIterations; i++) {
-            self().bindHalfTarget(bloomBlurTarget);
-            MinecraftReflectionCompat.glUseProgram(blurProgram);
-            self().bindTextureUniform(blurProgram, "source", MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), 0);
-            self().bindDepthAwareBlurUniforms(false);
-            AusmBloomRenderer.setUniform2f(blurProgram, "direction", 1.0F / Math.max(1, halfWidth), 0.0F);
-            AusmBloomRenderer.drawFullscreenQuad();
-
-            self().bindHalfTarget(bloomDownsampleTarget);
-            MinecraftReflectionCompat.glUseProgram(blurProgram);
-            self().bindTextureUniform(blurProgram, "source", MinecraftReflectionCompat.framebufferTexture(bloomBlurTarget), 0);
-            self().bindDepthAwareBlurUniforms(false);
-            AusmBloomRenderer.setUniform2f(blurProgram, "direction", 0.0F, 1.0F / Math.max(1, halfHeight));
-            AusmBloomRenderer.drawFullscreenQuad();
-        }
-        return true;
-    }
 
     protected void compositeBlurredBloom(Framebuffer target, float strength) {
         self().compositeTexture(target, MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), strength);
@@ -181,7 +125,10 @@ abstract class AusmBloomFramebufferProcessing extends AusmBloomRenderPasses {
     protected void compositeBlurredBloom(Framebuffer target, float strength, int preHandDepthTexture, int postHandDepthTexture,
                                          boolean useSceneDepthMask) {
         self().compositeTexture(target, MinecraftReflectionCompat.framebufferTexture(bloomDownsampleTarget), strength,
-                preHandDepthTexture, postHandDepthTexture, useSceneDepthMask, true);
+                // Blur alpha carries filtered source opacity, not depth.  Using
+                // it as an emitter depth turns opaque behind-wall bloom into a
+                // near-plane sample and defeats the scene-depth rejection.
+                preHandDepthTexture, postHandDepthTexture, useSceneDepthMask, false);
     }
 
     protected void compositeTexture(Framebuffer target, int texture, float strength) {

@@ -328,7 +328,6 @@ abstract class PipelineShadowPolicy extends PipelineFrameLifecycle {
         if (!isPipelineActive) {
             BetterPortalsCompat.cancelMainViewSwapRecovery();
             self().clearPendingShaderChunkRefreshes();
-            self().clearShaderlessBloomMetadata();
             self().clearPendingBetterPortalsPortalBlockRefresh();
             self().clearScheduledWorldTerrainRefresh();
             self().clearScheduledBloomTerrainRefresh();
@@ -363,7 +362,6 @@ abstract class PipelineShadowPolicy extends PipelineFrameLifecycle {
             return;
         }
 
-        self().clearShaderlessBloomMetadata();
         self().resetPipelineState(MinecraftReflectionCompat.minecraftFramebuffer(mc));
         currentWorldPass = 0;
         currentWorldPartialTicks = 0.0F;
@@ -422,7 +420,6 @@ abstract class PipelineShadowPolicy extends PipelineFrameLifecycle {
         BetterPortalsCompat.cancelMainViewSwapRecovery();
         self().clearPendingShaderChunkRefreshes();
         self().clearPendingBetterPortalsPortalBlockRefresh();
-        self().clearShaderlessBloomMetadata();
         self().clearScheduledWorldTerrainRefresh();
         self().clearScheduledBloomTerrainRefresh();
         currentWorldPass = 0;

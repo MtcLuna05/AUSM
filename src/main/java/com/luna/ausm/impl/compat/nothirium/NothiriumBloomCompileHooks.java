@@ -28,40 +28,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHooksBase {
-    public static void ausm$resetShaderlessBloomLayerSummaries(NothiriumRenderChunkCompileAccess self, RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
+    public static void ausm$beginSectionCompileCaches(NothiriumRenderChunkCompileAccess self, RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
         NothiriumLayerCompileHooks.ausm$clearThreadCaches();
         PipelineContext.getInstance().beginFramedMaterialCompileCache();
         TerrainCompileCoordinator.beginSection();
-        NothiriumBloomCompileHooks.ausm$resetShaderlessBloomMetadata(regionBuffers);
     }
 
-    public static void ausm$recordShaderlessBloomLayerSummaries(NothiriumRenderChunkCompileAccess self, RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
-        try {
-            Object result = cir.getReturnValue();
-            if (result != null && !"SUCCESSFUL".equals(String.valueOf(result))) {
-                return;
-            }
-            Object renderChunk = self.ausm$renderChunk();
-            if (!(renderChunk instanceof meldexun.nothirium.mc.renderer.chunk.RenderChunk chunk)) {
-                return;
-            }
-            int x = chunk.getX();
-            int y = chunk.getY();
-            int z = chunk.getZ();
-            for (BlockRenderLayer layer : BlockRenderLayer.values()) {
-                BufferBuilder buffer = regionBuffers != null
-                        ? MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, layer)
-                        : null;
-                boolean hasBloomMetadata = buffer instanceof IBufferBuilderExtension extension
-                        && extension.ausm$hasShaderlessBloomMetadata();
-                PipelineContext.getInstance().recordShaderlessBloomLayerSummary(x, y, z, layer, hasBloomMetadata);
-            }
-        } finally {
-            NothiriumBloomCompileHooks.ausm$resetShaderlessBloomMetadata(regionBuffers);
-            PipelineContext.getInstance().endFramedMaterialCompileCache();
-            TerrainCompileCoordinator.endSection();
-            NothiriumLayerCompileHooks.ausm$clearThreadCaches();
-        }
+    public static void ausm$endSectionCompileCaches(NothiriumRenderChunkCompileAccess self, RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
+        PipelineContext.getInstance().endFramedMaterialCompileCache();
+        TerrainCompileCoordinator.endSection();
+        NothiriumLayerCompileHooks.ausm$clearThreadCaches();
     }
 
     public static void ausm$probeNothiriumCompileBuffers(NothiriumRenderChunkCompileAccess self, RegionRenderCacheBuilder regionBuffers,
@@ -92,17 +68,6 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
         );
     }
 
-    public static void ausm$resetShaderlessBloomMetadata(RegionRenderCacheBuilder regionBuffers) {
-        if (regionBuffers == null) {
-            return;
-        }
-        for (BlockRenderLayer layer : BlockRenderLayer.values()) {
-            BufferBuilder buffer = MinecraftReflectionCompat.regionBufferForLayer(regionBuffers, layer);
-            if (buffer instanceof IBufferBuilderExtension extension) {
-                extension.ausm$resetShaderlessBloomMetadata();
-            }
-        }
-    }
 
     public static VertexFormat ausm$usePipelineBlockFormat(NothiriumRenderChunkCompileAccess self, VertexFormat original) {
         return NothiriumPipelineCompat.pipelineBlockFormat(original);
@@ -276,8 +241,8 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
 
         int blockEntityId = pipeline.blockEntityIdForActualState(actualState, self.ausm$chunkCache(), pos);
         int packedLightmap = NothiriumBloomCompileHooks.ausm$packedLightmap(contextState, self.ausm$chunkCache(), pos);
-        int blockEmission = pipeline.shouldUseShaderlessBloomEmission()
-                ? pipeline.blockShaderlessBloomEmission(state, self.ausm$chunkCache(), pos)
+        int blockEmission = pipeline.shouldUseShaderlessMaterialEmission()
+                ? pipeline.blockShaderlessMaterialEmission(state, self.ausm$chunkCache(), pos)
                 : pipeline.blockRenderEmission(state, self.ausm$chunkCache(), pos);
         // Nothirium builds terrain without BlockRendererDispatcher's context
         // hook.  Preserve the native BLOOM marker here as well so the shader
@@ -501,15 +466,6 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
                 route = "fire-cutout";
                 return;
             }
-            if (!pipeline.isManualBloomExtractionEnabled()) {
-                route = "skip-stacked-manual-disabled";
-                return;
-            }
-            IBlockState fallbackTarget = inheritedBloomState != null ? inheritedBloomState : effectiveState;
-            if (self.ausm$renderStackedEmissiveBloomLayer(state, fallbackTarget, pos, regionBuffers)) {
-                route = "stacked-emissive";
-                return;
-            }
         } finally {
             self.ausm$logFramedBloomRouteProbe(state, pos, regionBuffers, pipeline, route);
             self.ausm$resetFramedBloomRouteProbe();
@@ -524,10 +480,7 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
             return;
         }
         IBlockState contained = pipeline.inheritedBlockcrafteryRenderState(state, self.ausm$chunkCache(), pos);
-        // Shadered Bloom does not use the shaderless extractor, so its source
-        // predicate is intentionally false while the actual framed source is
-        // active.  Ask the shared framed decision instead; it covers native
-        // Bloom-layer geometry and contained emission alike.
+        // Framed bloom eligibility comes from the contained texture resources.
         if (contained == null || !pipeline.hasContainedFrameBloom(state, self.ausm$chunkCache(), pos)) {
             return;
         }
@@ -571,7 +524,7 @@ abstract class NothiriumBloomCompileHooks extends NothiriumRenderChunkCompileHoo
                 NothiriumLayerCompileHooks.ausm$canRenderStateInLayer(contained, current),
                 NothiriumLayerCompileHooks.ausm$canRenderStateInLayer(contained, bloom),
                 pipeline.shouldReplaceFilledBlockcrafteryFrame(state, self.ausm$chunkCache(), pos),
-                pipeline.isManualBloomExtractionEnabled(),
+                pipeline.shouldRenderTextureBloomFallback(),
                 NothiriumLayerCompileHooks.ausm$stateName(state),
                 NothiriumLayerCompileHooks.ausm$stateName(contained));
         NothiriumBloomCompileHooks.ausm$logFramedBloomFinalCompileProbe(pos, regionBuffers, bloom,

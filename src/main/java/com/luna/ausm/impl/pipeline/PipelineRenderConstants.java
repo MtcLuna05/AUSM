@@ -4,8 +4,8 @@ import com.luna.ausm.api.pipeline.pack.ShaderBlendMode;
 import org.lwjgl.opengl.GL11;
 
 final class PipelineRenderConstants {
-    static final int SHADERLESS_BLOOM_GEOMETRY_EMISSION = 15;
-    static final int SHADERLESS_LIGHT_EMITTING_BLOOM_GEOMETRY_EMISSION = 5;
+    static final int SHADERLESS_MATERIAL_EMISSION = 15;
+    static final int SHADERLESS_LIGHT_EMITTING_TEXTURE_EMISSION = 5;
     static final ShaderBlendMode OIT_COEFFICIENT_BLEND = new ShaderBlendMode(true, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ONE);
     static final ShaderBlendMode WATER_BLEND_MODE = new ShaderBlendMode(true, GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA);
     static final ShaderBlendMode BLOCK_ENTITY_TRANSLUCENT_BLEND = new ShaderBlendMode(true, GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);

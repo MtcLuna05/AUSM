@@ -204,7 +204,6 @@ abstract class PipelineDeferredPassOrchestration2 extends PipelineDeferredPassOr
         } else {
             clearShaderedTerrainFallbackState();
             self().clearPendingShaderChunkRefreshes();
-            self().clearShaderlessBloomMetadata();
             self().clearScheduledWorldTerrainRefresh();
             self().clearScheduledBloomTerrainRefresh();
             shaderlessBloomVertexFormatRefreshRequested = false;
@@ -223,7 +222,6 @@ abstract class PipelineDeferredPassOrchestration2 extends PipelineDeferredPassOr
     }
 
     public void recoverShaderlessBloomAfterShaderDisable(String reason) {
-        self().clearShaderlessBloomMetadata();
         shaderlessBloomVertexFormatRefreshRequested = false;
         self().clearPendingShaderChunkRefreshes();
         self().clearPendingClientChunkRenderRefreshes();

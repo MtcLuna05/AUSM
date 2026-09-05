@@ -18,8 +18,8 @@ import net.minecraft.world.World;
 
 import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_BLOCKCRAFTERY_ROUTE_PROBE_LOGS;
 import static com.luna.ausm.impl.pipeline.PipelineProbeLimits.MAX_SOFT_VANILLA_SPECIAL_BLOCK_PROBE_LOGS;
-import static com.luna.ausm.impl.pipeline.PipelineRenderConstants.SHADERLESS_BLOOM_GEOMETRY_EMISSION;
-import static com.luna.ausm.impl.pipeline.PipelineRenderConstants.SHADERLESS_LIGHT_EMITTING_BLOOM_GEOMETRY_EMISSION;
+import static com.luna.ausm.impl.pipeline.PipelineRenderConstants.SHADERLESS_MATERIAL_EMISSION;
+import static com.luna.ausm.impl.pipeline.PipelineRenderConstants.SHADERLESS_LIGHT_EMITTING_TEXTURE_EMISSION;
 
 abstract class PipelineRuntimeCompatibilityState extends PipelineRuntimeTerrainFormatState {
     public void logBlockcrafteryRouteProbe(
@@ -103,7 +103,7 @@ abstract class PipelineRuntimeCompatibilityState extends PipelineRuntimeTerrainF
                 self().blockMetadataForActualState(material),
                 emission
         );
-        BlockRenderContext.setQuadFramedBloomBoost(metadata.bloom() || emission > 0);
+        BlockRenderContext.setQuadFramedBloomBoost(self().stateUsesTextureBloomSource(material));
 
         return true;
     }
@@ -289,20 +289,21 @@ abstract class PipelineRuntimeCompatibilityState extends PipelineRuntimeTerrainF
         if (state == null) {
             return 0;
         }
-        return isPipelineActive && !shaderlessBloomExtractionActive
+        return isPipelineActive
                 ? self().explicitShaderedBlockEmission(state, blockAccess, pos)
                 : self().blockRenderEmissionForState(state, blockAccess, pos);
     }
 
-    public boolean shouldUseShaderlessBloomEmission() {
-        return !isPipelineActive || shaderlessBloomExtractionActive;
+    public boolean shouldUseShaderlessMaterialEmission() {
+        return !isPipelineActive;
     }
 
-    public boolean isManualBloomExtractionEnabled() {
-        return !isPipelineActive || shaderlessBloomExtractionActive;
+    public boolean shouldRenderTextureBloomFallback() {
+        return !isPipelineActive;
     }
 
-    public int blockShaderlessBloomEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+    // Lighting only: these values never qualify geometry for bloom.
+    public int blockShaderlessMaterialEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
         if (state == null) {
             return 0;
         }
@@ -311,25 +312,26 @@ abstract class PipelineRuntimeCompatibilityState extends PipelineRuntimeTerrainF
         // The material map is captured on the render thread while the selected
         // pack loads. Nothirium's worker threads can read the immutable rules
         // here without parsing shader properties or touching OpenGL.
-        int materialId = material != null ? shaderlessBloomBlockIds.idFor(material) : 0;
-        if (materialId > 20999 && materialId < 21025) {
-            return SHADERLESS_BLOOM_GEOMETRY_EMISSION;
+        int materialId = material != null ? shaderlessMaterialBlockIds.idFor(material) : 0;
+        // 10028 is Complementary's generic texture-emissive material class;
+        // Euphoria refines the same contract with its 21xxx color classes.
+        // Both are shader-pack material declarations, never block-specific
+        // renderer exceptions.
+        if (materialId == 10028 || (materialId > 20999 && materialId < 21025)) {
+            return SHADERLESS_MATERIAL_EMISSION;
         }
-        return self().explicitShaderlessBloomEmission(material, blockAccess, pos);
+        return self().explicitShaderlessMaterialEmission(material, blockAccess, pos);
     }
 
-    public boolean stateHasShaderlessBloomSource(IBlockState state) {
-        if (isPipelineActive && !shaderlessBloomExtractionActive) {
-            return false;
-        }
-        return self().blockShaderlessBloomEmission(state, null, null) > 0;
+    public boolean stateHasTextureBloomSource(IBlockState state) {
+        return self().stateUsesTextureBloomSource(state);
     }
 
     public boolean stateUsesTextureBloomSource(IBlockState state) {
         if (state == null || MinecraftReflectionCompat.blockFromState(state) == null || PipelineRuntimeState.isBlockcrafteryEditableBlock(state)) {
             return false;
         }
-        return self().stateHasBloomResourceGeometry(state) || self().isLumenizedBloomState(state);
+        return self().stateHasBloomResourceGeometry(state);
     }
 
     /**
@@ -343,12 +345,12 @@ abstract class PipelineRuntimeCompatibilityState extends PipelineRuntimeTerrainF
                 || self().shouldRenderBloomSourceInBaseLayer(state, layer);
     }
 
-    protected int explicitShaderlessBloomEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+    protected int explicitShaderlessMaterialEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
         if (self().stateHasBloomLayerGeometry(state) || self().stateHasBloomResourceGeometry(state) || self().isLumenizedBloomState(state)) {
-            return self().shaderlessBloomGeometryEmission(state, blockAccess, pos);
+            return self().shaderlessTextureEmission(state, blockAccess, pos);
         }
         if (self().shaderlessHighLightEmission(state, blockAccess, pos) > 0) {
-            return SHADERLESS_BLOOM_GEOMETRY_EMISSION;
+            return SHADERLESS_MATERIAL_EMISSION;
         }
         return 0;
     }
@@ -361,17 +363,17 @@ abstract class PipelineRuntimeCompatibilityState extends PipelineRuntimeTerrainF
             int light = blockAccess != null && pos != null
                     ? MinecraftReflectionCompat.stateLightValue(state, blockAccess, pos)
                     : PipelineRuntimeState.intrinsicBlockEmission(state);
-            return light > 0 ? SHADERLESS_BLOOM_GEOMETRY_EMISSION : 0;
+            return light > 0 ? SHADERLESS_MATERIAL_EMISSION : 0;
         } catch (RuntimeException | LinkageError ignored) {
             return 0;
         }
     }
 
-    protected int shaderlessBloomGeometryEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
+    protected int shaderlessTextureEmission(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {
         if (self().blockRenderEmissionForState(state, blockAccess, pos) > 0) {
-            return SHADERLESS_LIGHT_EMITTING_BLOOM_GEOMETRY_EMISSION;
+            return SHADERLESS_LIGHT_EMITTING_TEXTURE_EMISSION;
         }
-        return SHADERLESS_BLOOM_GEOMETRY_EMISSION;
+        return SHADERLESS_MATERIAL_EMISSION;
     }
 
     public int blockRenderAlpha(IBlockState state, IBlockAccess blockAccess, BlockPos pos) {

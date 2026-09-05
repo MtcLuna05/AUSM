@@ -55,8 +55,8 @@ public abstract class NothiriumRenderChunkTaskCompileMixin implements NothiriumR
             at = @At("HEAD"),
             remap = false
     )
-    void ausm$resetShaderlessBloomLayerSummaries(RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
-        NothiriumRenderChunkTaskCompileHooks.ausm$resetShaderlessBloomLayerSummaries(this, regionBuffers, cir);
+    void ausm$beginSectionCompileCaches(RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
+        NothiriumRenderChunkTaskCompileHooks.ausm$beginSectionCompileCaches(this, regionBuffers, cir);
     }
 
     @Inject(
@@ -64,8 +64,8 @@ public abstract class NothiriumRenderChunkTaskCompileMixin implements NothiriumR
             at = @At("RETURN"),
             remap = false
     )
-    void ausm$recordShaderlessBloomLayerSummaries(RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
-        NothiriumRenderChunkTaskCompileHooks.ausm$recordShaderlessBloomLayerSummaries(this, regionBuffers, cir);
+    void ausm$endSectionCompileCaches(RegionRenderCacheBuilder regionBuffers, CallbackInfoReturnable<?> cir) {
+        NothiriumRenderChunkTaskCompileHooks.ausm$endSectionCompileCaches(this, regionBuffers, cir);
     }
 
     @Inject(
@@ -98,10 +98,6 @@ public abstract class NothiriumRenderChunkTaskCompileMixin implements NothiriumR
         }
     }
 
-    @Unique
-    private static void ausm$resetShaderlessBloomMetadata(RegionRenderCacheBuilder regionBuffers) {
-        NothiriumRenderChunkTaskCompileHooks.ausm$resetShaderlessBloomMetadata(regionBuffers);
-    }
 
     @ModifyArg(
             method = "renderBlockState",
@@ -330,20 +326,7 @@ public abstract class NothiriumRenderChunkTaskCompileMixin implements NothiriumR
         NothiriumRenderChunkTaskCompileHooks.ausm$logBloomOnlyBaseFallback(mode, originalState, fallbackState, pos, baseLayer, normalDelta, rendered, fallbackDelta);
     }
 
-    @Unique
-    public boolean ausm$renderStackedEmissiveBloomLayer(
-            IBlockState renderState,
-            IBlockState fallbackTarget,
-            BlockPos pos,
-            RegionRenderCacheBuilder regionBuffers
-    ) {
-        return NothiriumRenderChunkTaskCompileHooks.ausm$renderStackedEmissiveBloomLayer(this, renderState, fallbackTarget, pos, regionBuffers);
-    }
 
-    @Unique
-    private static void ausm$markShaderlessBloomMetadata(BufferBuilder buffer, BlockRenderLayer layer, BlockPos pos) {
-        NothiriumRenderChunkTaskCompileHooks.ausm$markShaderlessBloomMetadata(buffer, layer, pos);
-    }
 
     @Unique
     private static BlockRenderLayer ausm$framedGeometryLayer(IBlockState framedState, IBlockState inheritedState) {
