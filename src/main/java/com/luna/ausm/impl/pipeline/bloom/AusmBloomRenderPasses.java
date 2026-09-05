@@ -13,7 +13,6 @@ import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.util.Locale;
-import java.util.function.IntSupplier;
 import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.entity.Entity;
@@ -178,74 +177,11 @@ abstract class AusmBloomRenderPasses extends AusmBloomRendererBase {
         }
 
         resourceIndex.scanOnce();
-        boolean compositedLayerBloom = false;
         if (layerBloomPending) {
-            compositedLayerBloom = self().compositePendingLayerBloom(target, true, preHandDepthTexture, postHandDepthTexture);
-        }
-
-        if (!compositedLayerBloom
-                && FRAMEBUFFER_BLOOM_FALLBACK_ENABLED
-                && !PipelineContext.getInstance().isActive()
-                && resourceIndex.hasBloomResources()) {
-            self().renderFramebufferBloom(target);
+            self().compositePendingLayerBloom(target, true, preHandDepthTexture, postHandDepthTexture);
         }
 
         layerBloomPending = false;
-    }
-
-    public boolean renderShaderlessEmissiveTerrainBloom(Framebuffer target, IntSupplier geometryRenderer) {
-        return self().renderEmissiveTerrainBloomCount(target, null, geometryRenderer, false) > 0;
-    }
-
-    public int renderEmissiveTerrainBloomCount(Framebuffer target, DeferredFramebuffer pipelineDepthSource,
-                                               IntSupplier geometryRenderer, boolean allowPipelineActive) {
-        translucentAttenuationAvailable = false;
-        if (target == null
-                || geometryRenderer == null
-                || MinecraftReflectionCompat.framebufferTexture(target) <= 0
-                || (!allowPipelineActive && PipelineContext.getInstance().isActive())) {
-            return 0;
-        }
-        if (!self().ensureTargets(MinecraftReflectionCompat.framebufferWidth(target), MinecraftReflectionCompat.framebufferHeight(target))) {
-            return 0;
-        }
-
-        int program = self().emissiveExtractProgram();
-        if (program == -1) {
-            return 0;
-        }
-
-        int rendered = 0;
-        RenderState state = self().captureState();
-        try {
-            self().clearLayerTarget(false);
-            self().copyDepth(pipelineDepthSource, target);
-            self().bindLayerTargetForGeometry();
-            AusmBloomRenderer.prepareShaderlessEmissiveGeometryState(program);
-            rendered = geometryRenderer.getAsInt();
-        } finally {
-            MinecraftReflectionCompat.glUseProgram(0);
-            state.restore();
-        }
-
-        if (rendered <= 0) {
-            layerBloomPending = false;
-            return 0;
-        }
-
-        layerBloomPending = true;
-        if (!loggedShaderlessEmissiveRenderer) {
-            loggedShaderlessEmissiveRenderer = true;
-            MainMod.LOGGER.info("[AUSMBloom] Rendering shaderless emissive terrain bloom with AUSM vertex emission metadata.");
-        }
-        return rendered;
-    }
-
-    public void setShaderlessForceEmission(float forceEmission) {
-        int program = emissiveExtractProgram;
-        if (program != -1) {
-            AusmBloomRenderer.setUniform1f(program, "forceEmission", Math.clamp(forceEmission, 0.0F, 1.0F));
-        }
     }
 
     public void clearPendingLayerBloom() {
@@ -292,18 +228,14 @@ abstract class AusmBloomRenderPasses extends AusmBloomRendererBase {
         layerBloomPending = false;
 
         AusmBloomRenderer.deleteProgram(copyProgram);
-        AusmBloomRenderer.deleteProgram(thresholdProgram);
         AusmBloomRenderer.deleteProgram(blurProgram);
         AusmBloomRenderer.deleteProgram(compositeProgram);
         AusmBloomRenderer.deleteProgram(nativeBloomGeometryProgram);
-        AusmBloomRenderer.deleteProgram(emissiveExtractProgram);
         AusmBloomRenderer.deleteProgram(translucentAttenuationProgram);
         copyProgram = -1;
-        thresholdProgram = -1;
         blurProgram = -1;
         compositeProgram = -1;
         nativeBloomGeometryProgram = -1;
-        emissiveExtractProgram = -1;
         translucentAttenuationProgram = -1;
         translucentAttenuationAvailable = false;
         self().resetShaderPackConfiguration();

@@ -39,11 +39,8 @@ abstract class AusmBloomRendererBase {
      */
     protected static final String BLOOM_COMPOSITE_REPLACE_SETTING = "ausmBloomCompositeReplace";
 
-    protected static final float FRAMEBUFFER_BLOOM_STRENGTH = 0.525F;
 
-    protected static final float FRAMEBUFFER_BLOOM_THRESHOLD = 0.86F;
 
-    protected static final boolean FRAMEBUFFER_BLOOM_FALLBACK_ENABLED = false;
 
     protected static final int BLOOM_RENDER_LOG_LIMIT = 8;
 
@@ -87,7 +84,6 @@ abstract class AusmBloomRendererBase {
 
     protected int copyProgram = -1;
 
-    protected int thresholdProgram = -1;
 
     protected int blurProgram = -1;
 
@@ -95,7 +91,6 @@ abstract class AusmBloomRendererBase {
 
     protected int nativeBloomGeometryProgram = -1;
 
-    protected int emissiveExtractProgram = -1;
 
     protected int translucentAttenuationProgram = -1;
 
@@ -117,13 +112,11 @@ abstract class AusmBloomRendererBase {
 
     protected boolean loggedLayerRenderer;
 
-    protected boolean loggedShaderlessEmissiveRenderer;
 
     protected boolean loggedProgramFailure;
 
     protected int bloomCompositeLogs;
 
-    protected int framebufferBloomLogs;
 
     protected int bloomRenderLogs;
 
@@ -327,9 +320,13 @@ abstract class AusmBloomRendererBase {
             }
             MinecraftReflectionCompat.glUseProgram(program);
             MinecraftReflectionCompat.glStateSetActiveTexture(GL13.GL_TEXTURE0);
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
             MinecraftReflectionCompat.glStateBindTexture(texture0);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture0);
             MinecraftReflectionCompat.glStateSetActiveTexture(activeTexture);
+            GL13.glActiveTexture(activeTexture);
             MinecraftReflectionCompat.glStateBindTexture(texture);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
             MinecraftReflectionCompat.glStateDepthMask(depthMask);
             GL11.glDepthFunc(depthFunc);
             MinecraftReflectionCompat.glStateAlphaFunc(alphaFunc, alphaRef);
@@ -513,32 +510,6 @@ abstract class AusmBloomRendererBase {
             }
             """;
 
-    protected static final String EMISSIVE_EXTRACT_VERTEX_SHADER = """
-            #version 120
-            attribute vec4 mc_Entity;
-            attribute vec4 at_midBlock;
-            uniform float forceEmission;
-            varying vec2 textureCoords;
-            varying vec4 vertexColor;
-            varying float vertexEmission;
-            void main() {
-                gl_Position = ftransform();
-                textureCoords = gl_MultiTexCoord0.st;
-                vertexColor = gl_Color;
-                float rawEmission = at_midBlock.w;
-                float metadataEmission = rawEmission >= 0.5 && rawEmission <= 15.5 ? rawEmission / 15.0 : 0.0;
-                // GPOM dual slopes keep both materials in one host mesh. Its
-                // per-quad provenance marks native BLOOM material with the
-                // framed marker even when that material emits no block light.
-                // Treat only that marker as a bloom source; ordinary frame
-                // geometry and the other half remain dark.
-                if (abs(mc_Entity.w - 150.0) < 0.5) {
-                    metadataEmission = max(metadataEmission, 0.8);
-                }
-                vertexEmission = max(metadataEmission, forceEmission);
-            }
-            """;
-
     protected static final String NATIVE_BLOOM_GEOMETRY_VERTEX_SHADER = """
             #version 120
             attribute vec4 mc_Entity;
@@ -568,28 +539,6 @@ abstract class AusmBloomRendererBase {
                     discard;
                 }
                 gl_FragColor = color;
-            }
-            """;
-
-    protected static final String EMISSIVE_EXTRACT_FRAGMENT_SHADER = """
-            #version 120
-            uniform sampler2D terrain;
-            varying vec2 textureCoords;
-            varying vec4 vertexColor;
-            varying float vertexEmission;
-            void main() {
-                if (vertexEmission <= 0.0) {
-                    discard;
-                }
-            vec4 albedo = texture2D(terrain, textureCoords) * vertexColor;
-            if (albedo.a <= 0.003921569) {
-                discard;
-            }
-            float emissionMask = smoothstep(0.04, 0.45, vertexEmission);
-            vec3 bloom = albedo.rgb * (1.15 + vertexEmission * 4.25) * emissionMask;
-            float bloomPeak = max(bloom.r, max(bloom.g, bloom.b));
-            bloom /= 1.0 + max(bloomPeak - 1.0, 0.0) * 0.5;
-            gl_FragColor = vec4(bloom, albedo.a * emissionMask);
             }
             """;
 
@@ -680,18 +629,6 @@ abstract class AusmBloomRendererBase {
             }
             """;
 
-    protected static final String THRESHOLD_FRAGMENT_SHADER = """
-            #version 120
-            uniform sampler2D source;
-            uniform float threshold;
-            varying vec2 textureCoords;
-            void main() {
-                vec3 color = texture2D(source, textureCoords).rgb;
-                float brightness = dot(color, vec3(0.2126, 0.7152, 0.0722));
-                float bloom = smoothstep(threshold, 1.0, brightness);
-                gl_FragColor = vec4(color * bloom, 1.0);
-            }
-            """;
 
     protected static final String BLUR_FRAGMENT_SHADER = """
             #version 120

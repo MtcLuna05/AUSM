@@ -217,7 +217,10 @@ abstract class PipelineDeferredPassOrchestration extends PipelineContextBase {
         // OptiFine/Iris compress first-person geometry into a dedicated near
         // depth domain. Shader packs use MC_HAND_DEPTH (and Euphoria's 0.56
         // cutoff) to recognize those pixels during later post processing.
-        GL11.glDepthRange(0.0D, ShaderEnvironmentDefines.HAND_DEPTH);
+        // MC_HAND_DEPTH scales NDC Z around zero, not window depth around
+        // zero. The equivalent window-depth interval is centred on 0.5.
+        GL11.glDepthRange(0.5D - ShaderEnvironmentDefines.HAND_DEPTH * 0.5D,
+                0.5D + ShaderEnvironmentDefines.HAND_DEPTH * 0.5D);
         if (preHandDepthCopiedThisFrame) {
             return;
         }
@@ -235,11 +238,9 @@ abstract class PipelineDeferredPassOrchestration extends PipelineContextBase {
         }
         try {
             if (pingPongManager.isInitialized()) {
-                // Later post-processing passes use depth snapshots to decide whether a
-                // pixel belongs to stable opaque scene history. Refresh depthtex2 after
-                // the hand draw so held items have a current near-depth classification
-                // without disturbing depthtex1's pre-translucent water/refraction role.
-                pingPongManager.copyPreHandDepth();
+                // The opaque snapshot must contain the solid hand for volumetric
+                // occlusion, but not translucent terrain. Keep depthtex2 hand-free.
+                com.luna.ausm.impl.pipeline.fbo.HandDepthSnapshot.merge(pingPongManager.getReadBuffer());
             }
         } finally {
             GL11.glDepthRange(0.0D, 1.0D);

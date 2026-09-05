@@ -98,7 +98,7 @@ abstract class PipelineRuntimeStateBase {
     // Shaderless terrain may compile on Nothirium worker threads. Retain the
     // selected pack's immutable material map so those workers never need to
     // parse shader properties (which probes OpenGL capabilities).
-    protected volatile ShaderBlockIdMap.BlockIdRules shaderlessBloomBlockIds = shaderProperties.blockIds();
+    protected volatile ShaderBlockIdMap.BlockIdRules shaderlessMaterialBlockIds = shaderProperties.blockIds();
 
     protected ShaderPackDirectives packDirectives = PipelineRuntimeState.emptyShaderProperties().packDirectives();
 

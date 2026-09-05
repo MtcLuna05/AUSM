@@ -65,10 +65,6 @@ abstract class PipelineBloomRendering extends PipelinePortalDiagnostics {
         return rendered;
     }
 
-    public int renderEmissiveBloomExtractionFromWorldPass(float partialTicks, int pass) {
-        return 0;
-    }
-
     protected void logVisibleBloomDiag(String stage, int pass, int rendered, String detail) {
         // Diagnostic disabled.
     }
@@ -295,10 +291,10 @@ abstract class PipelineBloomRendering extends PipelinePortalDiagnostics {
                     ? pingPongManager.getReadBuffer()
                     : null;
             int preHandDepthTexture = handMaskSource != null
-                    ? handMaskSource.getDepthSamplerTexture(DeferredFramebuffer.DEPTHTEX1_SNAPSHOT)
+                    ? handMaskSource.getDepthSamplerTexture(DeferredFramebuffer.DEPTHTEX2_SNAPSHOT)
                     : 0;
             int postHandDepthTexture = handMaskSource != null
-                    ? handMaskSource.getDepthSamplerTexture(DeferredFramebuffer.DEPTHTEX2_SNAPSHOT)
+                    ? handMaskSource.getDepthTexture()
                     : 0;
             bloomRenderer.renderPostWorldBloom(target, preHandDepthTexture, postHandDepthTexture);
             return;
@@ -343,9 +339,7 @@ abstract class PipelineBloomRendering extends PipelinePortalDiagnostics {
     }
 
     public void renderShaderlessBloomBeforeGui() {
-        if (disableShaderlessPreGuiHooks) {
-            return;
-        }
+        // Only texture-defined native BLOOM geometry is composited here.
         if (isPipelineActive) {
             return;
         }
@@ -373,25 +367,14 @@ abstract class PipelineBloomRendering extends PipelinePortalDiagnostics {
             return;
         }
         boolean hasBloomResources = bloomRenderer.hasBloomResources();
-        boolean hasShaderlessBloomMetadata = self().hasShaderlessBloomMetadata();
-        boolean framedBloomBootstrap = false;
-        self().refreshShaderlessBloomVertexFormatIfNeeded(hasBloomResources);
-
-        // Native Lumenized BLOOM geometry and automatic emissive extraction
-        // are complementary.  The former is resource-pack supplied, while the
-        // latter is driven by the selected shader pack's material declarations
-        // (for example Euphoria's 21xxx light-source materials).
-        boolean shouldExtractShaderlessBloom = hasShaderlessBloomMetadata;
         boolean nativeBloom = AusmBloomLayer.shouldUseShaderlessNativeHook();
         Entity renderViewEntity = MinecraftReflectionCompat.renderViewEntity(mc);
         self().logShaderlessBloomHook("render target=" + self().describeFramebufferTarget(MinecraftReflectionCompat.minecraftFramebuffer(mc))
                 + " bloomResources=" + hasBloomResources
-                + " metadata=" + hasShaderlessBloomMetadata
-                + " framedBootstrap=" + framedBloomBootstrap
                 + " nativeBloom=" + nativeBloom
                 + " bloomLayerRendered=" + bloomLayerRenderedThisWorldPass
                 + " renderPass=" + self().isRenderingBetterPortalsRenderPass());
-        if (!shouldExtractShaderlessBloom && !nativeBloom) {
+        if (!nativeBloom) {
             shaderlessBloomRenderedThisWorldPass = true;
             shaderlessBloomRenderedThisWorldFrame = true;
             self().sealShaderlessWorldFramebufferAlpha("no-bloom-before-gui");
@@ -399,31 +382,7 @@ abstract class PipelineBloomRendering extends PipelinePortalDiagnostics {
             return;
         }
         self().renderNativeBloomLayerIfNeeded();
-        boolean shaderlessExtractRendered = false;
-        if (shouldExtractShaderlessBloom) {
-            boolean previousShaderlessBloomExtractionActive = shaderlessBloomExtractionActive;
-            boolean previousShaderlessBloomExtractionBootstrapActive = shaderlessBloomExtractionBootstrapActive;
-            shaderlessBloomExtractionActive = true;
-            shaderlessBloomExtractionBootstrapActive = framedBloomBootstrap && !hasShaderlessBloomMetadata;
-            try {
-                shaderlessExtractRendered = bloomRenderer.renderShaderlessEmissiveTerrainBloom(
-                        MinecraftReflectionCompat.minecraftFramebuffer(mc),
-                        () -> self().renderShaderlessBloomExtractionGeometry(mc, renderViewEntity, false)
-                );
-            } finally {
-                shaderlessBloomExtractionActive = previousShaderlessBloomExtractionActive;
-                shaderlessBloomExtractionBootstrapActive = previousShaderlessBloomExtractionBootstrapActive;
-            }
-            self().logShaderlessBloomHook("extract-rendered=" + shaderlessExtractRendered
-                    + " bloomLayerRendered=" + bloomLayerRenderedThisWorldPass
-                    + " bypass=" + NothiriumBypass.shouldBypass());
-        }
-        if (shaderlessExtractRendered) {
-            bloomRenderer.renderPostWorldBloom(MinecraftReflectionCompat.minecraftFramebuffer(mc));
-            self().logShaderlessBloomHook("extract-composited");
-        } else {
-            self().renderPostWorldBloom(MinecraftReflectionCompat.minecraftFramebuffer(mc), false);
-        }
+        self().renderPostWorldBloom(MinecraftReflectionCompat.minecraftFramebuffer(mc), false);
         shaderlessBloomRenderedThisWorldPass = true;
         shaderlessBloomRenderedThisWorldFrame = true;
         self().sealShaderlessWorldFramebufferAlpha("post-bloom-before-gui");

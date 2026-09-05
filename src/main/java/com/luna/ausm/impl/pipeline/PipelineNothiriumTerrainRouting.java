@@ -146,9 +146,6 @@ abstract class PipelineFrameLifecycle2 extends PipelineFrameLifecycle1 {
         }
     }
 
-    protected boolean shouldRenderShaderlessExtractionLayer(BlockRenderLayer layer) {
-        return true;
-    }
 
     protected int shaderlessTerrainLayerCount(BlockRenderLayer layer) {
         if (layer == BlockRenderLayer.SOLID) {
@@ -437,7 +434,6 @@ abstract class PipelineFrameLifecycle2 extends PipelineFrameLifecycle1 {
 
     public abstract void clearScheduledWorldTerrainRefresh();
 
-    public abstract void clearShaderlessBloomMetadata();
 
     protected abstract int[][] compositeFallbackProbePoints(int width, int height);
 

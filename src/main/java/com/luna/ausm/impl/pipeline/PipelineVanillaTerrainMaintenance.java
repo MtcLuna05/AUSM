@@ -381,7 +381,6 @@ abstract class PipelineVanillaTerrainMaintenance extends PipelineBetterPortalsUp
         vanillaViewFrustums.clear();
         vanillaViewFrustumRenderDistances.clear();
         vanillaViewFrustumChunkPositionKeys.clear();
-        self().clearShaderlessBloomMetadata();
         vanillaViewFrustumStateStack.clear();
         activeVanillaViewFrustumRenderGlobal = null;
         activeVanillaViewFrustumWorld = null;

@@ -19,12 +19,6 @@ abstract class AusmBloomProgramLifecycle extends AusmBloomFramebufferProcessing 
         return copyProgram;
     }
 
-    protected int thresholdProgram() {
-        if (thresholdProgram == -1) {
-            thresholdProgram = self().createProgram("threshold", THRESHOLD_FRAGMENT_SHADER);
-        }
-        return thresholdProgram;
-    }
 
     protected int blurProgram() {
         if (blurProgram == -1) {
@@ -74,18 +68,6 @@ abstract class AusmBloomProgramLifecycle extends AusmBloomFramebufferProcessing 
             return minimum;
         }
         return Math.clamp(value, minimum, maximum);
-    }
-
-    protected int emissiveExtractProgram() {
-        if (emissiveExtractProgram == -1) {
-            emissiveExtractProgram = self().createProgram(
-                    "shaderless-emissive-extract",
-                    EMISSIVE_EXTRACT_VERTEX_SHADER,
-                    EMISSIVE_EXTRACT_FRAGMENT_SHADER,
-                    true
-            );
-        }
-        return emissiveExtractProgram;
     }
 
     protected int nativeBloomGeometryProgram() {
@@ -169,8 +151,12 @@ abstract class AusmBloomProgramLifecycle extends AusmBloomFramebufferProcessing 
     }
 
     protected void bindTextureUniform(int program, String name, int texture, int unit) {
+        // Cached binds must address the same unit as OpenGL. Otherwise the
+        // composite leaves its bloom image bound in place of the block atlas.
+        MinecraftReflectionCompat.glStateSetActiveTexture(GL13.GL_TEXTURE0 + unit);
         GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
         MinecraftReflectionCompat.glStateBindTexture(texture);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
         GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
         int location = GL20.glGetUniformLocation(program, name);
@@ -184,26 +170,6 @@ abstract class AusmBloomProgramLifecycle extends AusmBloomFramebufferProcessing 
         if (location != -1) {
             GL20.glUniform1i(location, unit);
         }
-    }
-
-    protected static void prepareShaderlessEmissiveGeometryState(int program) {
-        AusmBloomRenderer.bindBlockAtlasOnDefaultTextureUnit();
-
-        MinecraftReflectionCompat.glUseProgram(program);
-        AusmBloomRenderer.bindSamplerUniform(program, "terrain", 0);
-        AusmBloomRenderer.setUniform1f(program, "forceEmission", 0.0F);
-        MinecraftReflectionCompat.glStateEnableTexture2D();
-        MinecraftReflectionCompat.glStateEnableDepth();
-        MinecraftReflectionCompat.glStateDepthMask(false);
-        GL11.glDepthFunc(GL11.GL_LEQUAL);
-        GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-        GL11.glPolygonOffset(SHADERLESS_EMISSIVE_DEPTH_BIAS_FACTOR, SHADERLESS_EMISSIVE_DEPTH_BIAS_UNITS);
-        MinecraftReflectionCompat.glStateEnableAlpha();
-        MinecraftReflectionCompat.glStateAlphaFunc(GL11.GL_GREATER, 0.003921569F);
-        MinecraftReflectionCompat.glStateDisableCull();
-        MinecraftReflectionCompat.glStateDisableBlend();
-        MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
-        MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
     }
 
     protected static void bindBlockAtlasOnDefaultTextureUnit() {

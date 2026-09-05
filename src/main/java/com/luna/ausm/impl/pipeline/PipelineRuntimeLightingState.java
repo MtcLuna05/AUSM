@@ -45,7 +45,7 @@ abstract class PipelineRuntimeLightingState extends PipelineRuntimeEnvironmentSt
      */
     public void captureShaderlessBloomBlockIds(ShaderProperties properties) {
         if (properties != null) {
-            shaderlessBloomBlockIds = properties.blockIds();
+            shaderlessMaterialBlockIds = properties.blockIds();
         }
     }
 
@@ -282,7 +282,7 @@ abstract class PipelineRuntimeLightingState extends PipelineRuntimeEnvironmentSt
             ShaderLoadingScreen.setTotalSteps(usingCachedPrograms ? 9 : self().shaderLoadingStepCount(properties));
             ShaderLoadingMap loadingMap = usingCachedPrograms ? null : new ShaderLoadingMap();
             shaderProperties = properties;
-            shaderlessBloomBlockIds = properties.blockIds();
+            shaderlessMaterialBlockIds = properties.blockIds();
             bloomRenderer.configure(pack, properties);
             ShaderBlockLayerOverrides.install(properties.blockIds());
             ShaderSamplerState.setBreaksAnisotropy(properties.renderSettings().breaksAnisotropy());
@@ -469,7 +469,7 @@ abstract class PipelineRuntimeLightingState extends PipelineRuntimeEnvironmentSt
             ShaderProperties properties = preloadedProperties != null ? preloadedProperties : ShaderProperties.load(pack, optionOverrides);
             programSet = cachedPrograms.programSet;
             shaderProperties = properties;
-            shaderlessBloomBlockIds = properties.blockIds();
+            shaderlessMaterialBlockIds = properties.blockIds();
             bloomRenderer.configure(pack, properties);
             ShaderBlockLayerOverrides.install(properties.blockIds());
             ShaderSamplerState.setBreaksAnisotropy(properties.renderSettings().breaksAnisotropy());

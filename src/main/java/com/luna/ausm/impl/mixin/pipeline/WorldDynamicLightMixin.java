@@ -82,14 +82,6 @@ public class WorldDynamicLightMixin {
         return listeners.get(index);
     }
 
-    @Inject(method = "notifyBlockUpdate", at = @At("HEAD"))
-    private void ausm$invalidateShaderlessBloomMetadataOnBlockUpdate(BlockPos pos, IBlockState oldState,
-                                                                     IBlockState newState, int flags,
-                                                                     CallbackInfo ci) {
-        PipelineContext context = PipelineContext.getInstance();
-        World world = (World) (Object) this;
-        context.handleShaderlessBloomBlockUpdate(world, pos, oldState, newState, flags);
-    }
 
     /**
      * Chunk render caches already receive dynamic light while terrain is baked. Live
@@ -114,12 +106,4 @@ public class WorldDynamicLightMixin {
         return DynamicLightManager.applyPackedLight(pos, original);
     }
 
-    @Inject(method = "markBlockRangeForRenderUpdate(IIIIII)V", at = @At("HEAD"), require = 0)
-    private void ausm$invalidateShaderlessBloomMetadataOnRenderUpdate(int minX, int minY, int minZ,
-                                                                      int maxX, int maxY, int maxZ,
-                                                                      CallbackInfo ci) {
-        World world = (World) (Object) this;
-        PipelineContext context = PipelineContext.getInstance();
-        context.handleShaderlessBloomRenderUpdateRange(world, minX, minY, minZ, maxX, maxY, maxZ);
-    }
 }

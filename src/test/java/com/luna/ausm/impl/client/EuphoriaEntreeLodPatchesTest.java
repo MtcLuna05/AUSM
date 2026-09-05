@@ -127,6 +127,19 @@ final class EuphoriaEntreeLodPatchesTest {
     }
 
     @Test
+    void configuresLuminousBlocksThroughComplementarysGenericEmissiveMaterial(@TempDir Path shaderpack) throws IOException {
+        Path properties = shaderpack.resolve("shaders/block.properties");
+        Files.createDirectories(properties.getParent());
+        Files.writeString(properties, "block.10028=\n");
+
+        EuphoriaEntreePackGenerator.installBundledLuminousBlockMappings(shaderpack);
+
+        String patched = Files.readString(properties);
+        assertTrue(patched.contains("block.10028= randomthings:luminousblock:0"));
+        assertTrue(patched.contains("randomthings:luminousblock:15"));
+    }
+
+    @Test
     void generates112PatchesForBothComplementaryStylesAndEuphoriaOutputs() {
         assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource("ComplementaryUnbound_r5.8.1.zip"));
         assertTrue(EuphoriaEntreePackGenerator.isAUSM112PatchSource("ComplementaryReimagined_r5.8.1.zip"));

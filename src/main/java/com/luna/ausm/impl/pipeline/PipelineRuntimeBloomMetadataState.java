@@ -32,18 +32,7 @@ abstract class PipelineRuntimeDiagnosticsState1 extends PipelineRuntimeDiagnosti
     }
 
     protected boolean isExplicitBloomState(IBlockState state) {
-        ResourceLocation name = PipelineRuntimeState.registryName(state);
-        if (name == null) {
-            return false;
-        }
-        String path = MinecraftReflectionCompat.resourcePathLower(name);
-        String namespaceValue = MinecraftReflectionCompat.resourceNamespace(name);
-        String namespace = namespaceValue != null ? namespaceValue.toLowerCase(Locale.ROOT) : "";
-        String blockClass = MinecraftReflectionCompat.lowerClassName(
-                MinecraftReflectionCompat.blockFromState(state));
-        return namespace.contains("lumenized")
-                || path.contains("lumenized")
-                || blockClass.contains("lumenized");
+        return self().stateHasBloomResourceGeometry(state);
     }
 
     protected boolean isLumenizedBloomState(IBlockState state) {

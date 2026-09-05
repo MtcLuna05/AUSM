@@ -193,7 +193,7 @@ abstract class PipelineDistantHorizonsInterop extends PipelineShadowEntityCullin
     }
 
     /**
-     * Lets GlobalFacades join the active translucent terrain pass without
+     * Lets GlobalFacades join the active opaque terrain pass without
      * replacing AUSM's shader or framebuffer ownership. A null return tells
      * the caller to use its ordinary fixed-function overlay format instead.
      */
@@ -207,8 +207,9 @@ abstract class PipelineDistantHorizonsInterop extends PipelineShadowEntityCullin
         boolean available = isPipelineActive
                 && worldFrameActive
                 && !renderingShadowMap
-                && activePass == RenderPass.GBUFFERS_WATER
-                && getPhase() == WorldRenderingPhase.TERRAIN_TRANSLUCENT
+                && (activePass == RenderPass.GBUFFERS_TERRAIN
+                || activePass == RenderPass.GBUFFERS_TERRAIN_CUTOUT)
+                && getPhase() == WorldRenderingPhase.TERRAIN_CUTOUT
                 && ExtendedVertexFormats.PIPELINE_BLOCK != null
                 && program > 0;
         String probeKey = available

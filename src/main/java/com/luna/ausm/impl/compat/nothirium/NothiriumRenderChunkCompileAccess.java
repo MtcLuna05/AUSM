@@ -43,8 +43,6 @@ public interface NothiriumRenderChunkCompileAccess {
     boolean ausm$renderMissingBloomOnlyBaseFallback(IBlockState originalState, BlockPos pos,
                                                     RegionRenderCacheBuilder regionBuffers);
 
-    boolean ausm$renderStackedEmissiveBloomLayer(IBlockState renderState, IBlockState fallbackTarget,
-                                                 BlockPos pos, RegionRenderCacheBuilder regionBuffers);
 
     boolean ausm$renderEmissiveFallbackWithLayer(IBlockState state, IBlockState maskColorState,
                                                  BlockPos pos, BufferBuilder buffer,

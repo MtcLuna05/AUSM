@@ -347,13 +347,12 @@ public class EntityRendererMixin {
     )
     private void onRenderWorldPassAfterCutoutTerrain(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
-        // Shaderless facades are fixed-function terrain, so submit them at the
-        // opaque/cutout boundary before entities and particles. The later
-        // translucent-terrain bridge remains the shader-pipeline route; the
-        // facade renderer's per-frame guard prevents a duplicate submission.
-        if (!context.isActive()) {
-            GlobalFacadesTerrainBridge.render(partialTicks);
-        }
+        // Facades are surface replacements, not a late translucent overlay.
+        // Submit them before this terrain pass closes so shadered facades write
+        // the same depth attachment that is snapshotted for later particles,
+        // screen-space effects, and deferred passes. Shaderless rendering uses
+        // the same fixed-function boundary.
+        GlobalFacadesTerrainBridge.render(partialTicks);
         if (context.shouldBypassWorldPassRendering()) {
             return;
         }
@@ -757,11 +756,6 @@ public class EntityRendererMixin {
             return;
         }
 
-        // GlobalFacades must submit while AUSM still owns the water/terrain
-        // shader and framebuffer. Its old AFTER injection ran only once this
-        // pass had been closed, forcing a fixed-function fallback that could
-        // be overwritten by later presentation work.
-        GlobalFacadesTerrainBridge.render(partialTicks);
         context.endPass();
         context.restoreTerrainCulling();
         context.restoreWaterRenderState();

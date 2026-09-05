@@ -1,7 +1,6 @@
 package com.luna.ausm.impl.pipeline;
 
 import com.luna.ausm.impl.pipeline.bloom.AusmBloomLayer;
-import com.luna.ausm.impl.pipeline.bloom.BloomExtractionPlan;
 import com.luna.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.luna.ausm.impl.pipeline.render.TextureBinder;
 import com.luna.ausm.impl.pipeline.vertex.BlockRenderContext;
@@ -464,137 +463,19 @@ abstract class PipelineBotaniaSkyRendering extends PipelineSkyBackingRendering {
         self().rebuildTerrainRenderers(recreateNothirium, false);
     }
 
-    protected boolean hasShaderlessFramedBloomBootstrapCandidate() {
-        return false;
-    }
 
-    public void recordCurrentShaderlessBloomMetadata(BlockRenderLayer layer) {
-        self().recordShaderlessBloomMetadata(
-                BlockRenderContext.blockX(),
-                BlockRenderContext.blockY(),
-                BlockRenderContext.blockZ(),
-                layer
-        );
-    }
 
-    public void recordShaderlessBloomMetadata(BlockPos pos, BlockRenderLayer layer) {
-        if (pos == null) {
-            return;
-        }
-        self().recordShaderlessBloomMetadata(MinecraftReflectionCompat.blockPosX(pos), MinecraftReflectionCompat.blockPosY(pos), MinecraftReflectionCompat.blockPosZ(pos), layer);
-    }
 
-    public void recordShaderlessBloomMetadata(int blockX, int blockY, int blockZ, BlockRenderLayer layer) {
-        self().recordShaderlessBloomMetadata(blockX, blockY, blockZ, layer, true);
-    }
 
-    public void recordShaderlessBloomMetadata(BlockPos pos, BlockRenderLayer layer, boolean hasBloom) {
-        if (pos == null) {
-            return;
-        }
-        self().recordShaderlessBloomMetadata(MinecraftReflectionCompat.blockPosX(pos), MinecraftReflectionCompat.blockPosY(pos), MinecraftReflectionCompat.blockPosZ(pos), layer, hasBloom);
-    }
 
-    public void recordShaderlessBloomMetadata(int blockX, int blockY, int blockZ, BlockRenderLayer layer, boolean hasBloom) {
-        if (layer == null) {
-            return;
-        }
-        long key = BloomExtractionPlan.metadataKey(
-                self().currentClientDimensionId(),
-                blockX >> 4,
-                blockY >> 4,
-                blockZ >> 4,
-                layer
-        );
-        shaderlessBloomMetadataKnownChunkLayers.add(key);
-        if (hasBloom) {
-            shaderlessBloomMetadataChunkLayers.add(key);
-        }
-    }
 
-    public void recordShaderlessBloomLayerSummary(BlockPos pos, BlockRenderLayer layer, boolean hasBloom) {
-        if (pos == null) {
-            return;
-        }
-        self().recordShaderlessBloomLayerSummary(
-                MinecraftReflectionCompat.blockPosX(pos),
-                MinecraftReflectionCompat.blockPosY(pos),
-                MinecraftReflectionCompat.blockPosZ(pos),
-                layer,
-                hasBloom
-        );
-    }
 
-    public void recordShaderlessBloomLayerSummary(int blockX, int blockY, int blockZ, BlockRenderLayer layer, boolean hasBloom) {
-        if (layer == null) {
-            return;
-        }
-        long key = BloomExtractionPlan.metadataKey(
-                self().currentClientDimensionId(),
-                blockX >> 4,
-                blockY >> 4,
-                blockZ >> 4,
-                layer
-        );
-        shaderlessBloomMetadataKnownChunkLayers.add(key);
-        if (hasBloom) {
-            shaderlessBloomMetadataChunkLayers.add(key);
-        } else {
-            shaderlessBloomMetadataChunkLayers.remove(key);
-        }
-    }
 
-    public void clearShaderlessBloomMetadata() {
-        shaderlessBloomMetadataKnownChunkLayers.clear();
-        shaderlessBloomMetadataChunkLayers.clear();
-    }
 
     public void rebuildShaderlessBloomTerrain(String reason) {
-        self().clearShaderlessBloomMetadata();
         self().scheduleBloomTerrainRefresh(reason);
     }
 
-    public void handleShaderlessBloomBlockUpdate(World world, BlockPos pos, IBlockState oldState, IBlockState newState, int flags) {
-        if (world == null || pos == null) {
-            return;
-        }
-        Minecraft mc = MinecraftReflectionCompat.minecraft();
-        if (mc == null || MinecraftReflectionCompat.world(mc) != world) {
-            return;
-        }
-
-        int dimension = self().safeDimensionId(world);
-        int sectionX = MinecraftReflectionCompat.blockPosX(pos) >> 4;
-        int sectionY = Math.clamp(MinecraftReflectionCompat.blockPosY(pos) >> 4, 0, 15);
-        int sectionZ = MinecraftReflectionCompat.blockPosZ(pos) >> 4;
-        boolean hadBloomMetadata = self().invalidateShaderlessBloomMetadataSection(dimension, sectionX, sectionY, sectionZ);
-        boolean bloomSourceChanged = stateHasShaderlessBloomSource(oldState) || stateHasShaderlessBloomSource(newState);
-        if (!hadBloomMetadata && !bloomSourceChanged) {
-            return;
-        }
-
-        // Lumenized's native BLOOM layer is rebuilt by the normal world block
-        // update. Scheduling our legacy shaderless extractor here recompiled
-        // every populated section in the column several times and caused
-        // visible flicker after ordinary block placement.
-        if (AusmBloomLayer.shouldUseShaderlessNativeHook()) {
-            return;
-        }
-
-        int x = MinecraftReflectionCompat.blockPosX(pos);
-        int y = MinecraftReflectionCompat.blockPosY(pos);
-        int z = MinecraftReflectionCompat.blockPosZ(pos);
-        MinecraftReflectionCompat.worldMarkBlockRangeForRenderUpdate(
-                world,
-                x - 1,
-                Math.max(0, y - 1),
-                z - 1,
-                x + 1,
-                Math.min(255, y + 1),
-                z + 1
-        );
-        self().queueShaderlessBloomClientChunkRefresh(world, sectionX, sectionZ);
-    }
 
     public void handleClientBlockRenderUpdate(World world, BlockPos pos) {
         if (pos == null) {
