@@ -5,7 +5,6 @@
 - Made texture-defined bloom use the dedicated bloom layer, including Random Things luminous blocks without shaders. Removed material-brightness extraction as an alternate bloom source.
 - Fixed excess emission on GPOM double slopes and improved contained-block emission handling.
 - Improved LittleTiles and CreativeCore vertex-buffer compatibility, including extended vertex layouts and cached render layers.
-- Improved Global Facades rendering integration and texture-based bloom routing.
 - Gave the shader menu a dedicated settings-page presentation and consistent top and bottom dirt bars, including when opened in-world.
 - Improved Complementary patch selection and luminous-block material configuration.
 - Improved Botania sky-rendering compatibility.
@@ -18,8 +17,6 @@
 - Correct hand depth compression, depth-snapshot ownership, and alpha blend state before deferred composition.
 - Keep shader-property evaluation used by terrain compilation away from worker-thread OpenGL capability queries.
 - Add regression coverage for texture-only bloom routing, shader menus, terrain transforms, compatibility hooks, and hand rendering.
-
-Release notes are still being compiled. Java 8 runtime validation is separate from the confirmed Java 25 in-game fixes.
 
 # 1.0.3
 
