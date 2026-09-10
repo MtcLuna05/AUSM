@@ -54,16 +54,17 @@ public final class AusmGuiRenderController {
         if (isHudHidden()) {
             return;
         }
-        try {
-            Class.forName("me.decce.gnetum.Gnetum", false, AusmGuiRenderController.class.getClassLoader());
+        if (GnetumCompatibility.isInstalled()) {
             // Gnetum replaces the entire Forge HUD render with a multi-pass
             // cache. Its bind/unbind window begins after this injected HEAD
             // callback, so an AUSM HUD boundary cannot safely be nested here.
-            // Let Gnetum own this render entirely; AUSM's world presentation
-            // has already completed before the HUD begins.
+            // Restore before Gnetum draws uncached HUD elements (including the
+            // crosshair), never at its later cached-HUD composite boundary.
+            PipelineContext context = PipelineContext.getInstance();
+            if (context.isActive()) {
+                context.restoreCurrentWorldForExternalHudComposite();
+            }
             return;
-        } catch (ClassNotFoundException | LinkageError ignored) {
-            // Gnetum is optional; use AUSM's normal HUD path otherwise.
         }
         PipelineContext context = PipelineContext.getInstance();
         context.beginGuiItemRenderScope();
@@ -74,22 +75,15 @@ public final class AusmGuiRenderController {
         if (isHudHidden()) {
             return;
         }
-        try {
-            Class.forName("me.decce.gnetum.Gnetum", false, AusmGuiRenderController.class.getClassLoader());
+        if (GnetumCompatibility.isInstalled()) {
             return;
-        } catch (ClassNotFoundException | LinkageError ignored) {
-            // Gnetum is optional; use AUSM's normal HUD path otherwise.
         }
-        try {
-            PipelineContext context = PipelineContext.getInstance();
-            context.endGuiItemRenderScope();
-            context.finishOwnedGuiRendering();
-            Minecraft minecraft = MinecraftReflectionCompat.minecraft();
-            if (minecraft != null) {
-                ShaderCompileNotifications.renderOverlay(new ScaledResolution(minecraft));
-            }
-        } finally {
-            // No Gnetum state is active on the normal AUSM HUD path.
+        PipelineContext context = PipelineContext.getInstance();
+        context.endGuiItemRenderScope();
+        context.finishOwnedGuiRendering();
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        if (minecraft != null) {
+            ShaderCompileNotifications.renderOverlay(new ScaledResolution(minecraft));
         }
     }
 
@@ -103,13 +97,14 @@ public final class AusmGuiRenderController {
         int height = Math.max(1, MinecraftReflectionCompat.fieldInt(screen, 1, "field_146295_m", "height"));
         boolean previousDepthTest = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
         boolean previousDepthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
-        // The world depth buffer must not decide which pixels receive the GUI
-        // dim layer. Otherwise clear-depth sky darkens while nearer terrain
-        // rejects the quad, producing a sky-only rectangle behind inventory.
-        MinecraftReflectionCompat.glStateDisableDepth();
-        GL11.glDisable(GL11.GL_DEPTH_TEST);
-        MinecraftReflectionCompat.glStateDepthMask(false);
-        GL11.glDepthMask(false);
+        int previousDepthFunc = GL11.glGetInteger(GL11.GL_DEPTH_FUNC);
+        // Ignore world depth, but retain vanilla's GUI background depth write.
+        // Screens can use that plane to layer their own backgrounds with GEQUAL.
+        MinecraftReflectionCompat.glStateEnableDepth();
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthFunc(GL11.GL_ALWAYS);
+        MinecraftReflectionCompat.glStateDepthMask(true);
+        GL11.glDepthMask(true);
         MinecraftReflectionCompat.glStateDisableTexture2D();
         GL11.glDisable(GL11.GL_TEXTURE_2D);
         MinecraftReflectionCompat.glStateEnableBlend();
@@ -131,11 +126,12 @@ public final class AusmGuiRenderController {
         GL11.glShadeModel(GL11.GL_SMOOTH);
         GL11.glBegin(GL11.GL_QUADS);
         color(0xC0101010);
-        GL11.glVertex3f(0.0F, 0.0F, 0.0F);
+        // Match vanilla's winding under the Y-down GUI projection.
         GL11.glVertex3f(width, 0.0F, 0.0F);
+        GL11.glVertex3f(0.0F, 0.0F, 0.0F);
         color(0xD0101010);
-        GL11.glVertex3f(width, height, 0.0F);
         GL11.glVertex3f(0.0F, height, 0.0F);
+        GL11.glVertex3f(width, height, 0.0F);
         GL11.glEnd();
         GL11.glShadeModel(GL11.GL_FLAT);
         MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
@@ -155,6 +151,7 @@ public final class AusmGuiRenderController {
         }
         MinecraftReflectionCompat.glStateDepthMask(previousDepthMask);
         GL11.glDepthMask(previousDepthMask);
+        GL11.glDepthFunc(previousDepthFunc);
         return true;
     }
 

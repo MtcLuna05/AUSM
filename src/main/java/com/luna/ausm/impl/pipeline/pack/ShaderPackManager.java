@@ -20,7 +20,6 @@ import net.minecraft.world.WorldProvider;
 public class ShaderPackManager implements ShaderPackController {
     private static final String OFF_PACK_NAME = "OFF";
     private static final String INTERNAL_PACK_NAME = "(internal)";
-    private static final int SHADER_TOGGLE_TIMING_PROBE_LIMIT = 0;
 
     private final ShaderPackRepository repository;
     private final ShaderPackConfigurationStore configurationStore;
@@ -37,7 +36,6 @@ public class ShaderPackManager implements ShaderPackController {
     private final Set<String> betterPortalsPrewarmedCacheKeys = new HashSet<>();
     private String lastDeferredBetterPortalsCacheKey = "";
     private String compiledPackName = OFF_PACK_NAME;
-    private int shaderToggleTimingProbeLogs;
 
     public ShaderPackManager(Path minecraftRunDir) {
         repository = new ShaderPackRepository(minecraftRunDir.resolve("shaderpacks"));
@@ -67,7 +65,7 @@ public class ShaderPackManager implements ShaderPackController {
             compiledPackName = OFF_PACK_NAME;
             pendingPipelineReload = false;
             PipelineContext.getInstance().cleanup();
-            rebuildInactiveVanillaRenderers();
+            PipelineContext.getInstance().setActive(false);
             return true;
         }
 
@@ -101,7 +99,7 @@ public class ShaderPackManager implements ShaderPackController {
             pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
             compiledPackName = OFF_PACK_NAME;
             PipelineContext.getInstance().cleanup();
-            rebuildInactiveVanillaRenderers();
+            PipelineContext.getInstance().setActive(false);
             MainMod.LOGGER.info("Selected shaderpack '{}' for manual enable.", packName);
             return true;
         }
@@ -172,7 +170,7 @@ public class ShaderPackManager implements ShaderPackController {
             this.pendingBetterPortalsParentRestoreDimensionId = Integer.MIN_VALUE;
             this.compiledPackName = OFF_PACK_NAME;
             this.pendingPipelineReload = true;
-            rebuildInactiveVanillaRenderers();
+            PipelineContext.getInstance().setActive(false);
             return;
         }
 
@@ -516,7 +514,7 @@ public class ShaderPackManager implements ShaderPackController {
         clearShaderPropertiesCache();
         captureShaderlessBloomMaterialRules(dimensionId);
         PipelineContext.getInstance().cleanup();
-        rebuildInactiveVanillaRenderers();
+        PipelineContext.getInstance().setActive(false);
     }
 
     /**
@@ -614,107 +612,54 @@ public class ShaderPackManager implements ShaderPackController {
     }
 
     public void setShadersEnabled(boolean enabled) {
-        long startedNanos = System.nanoTime();
-        boolean wasEnabled = shadersEnabled;
-        boolean wasActive = PipelineContext.getInstance().isActive();
-        boolean wasPendingReload = pendingPipelineReload;
-        long afterConfigNanos = startedNanos;
-        long afterPackLoadNanos = startedNanos;
-        long afterPipelineNanos = startedNanos;
-        long afterCleanupNanos = startedNanos;
-        long afterVanillaNanos = startedNanos;
-        try {
-            if (isOffPack(selectedPackName)) {
-                shadersEnabled = false;
-            } else if (enabled && !isPackAvailable(selectedPackName)) {
-                fallbackToOff("Selected shaderpack '{}' is no longer available; disabling shaders.", selectedPackName);
-                return;
-            } else {
-                shadersEnabled = enabled;
-            }
-            saveShaderConfig();
-            afterConfigNanos = System.nanoTime();
-            if (shadersEnabled && (pendingPipelineReload || currentPack == null || !selectedPackName.equals(currentPack.getName()))) {
-                if (pendingPipelineReload && currentPack != null && selectedPackName.equals(currentPack.getName()) && !isInternalPack(currentPack)) {
-                    closeCurrentPack();
-                    currentPack = null;
-                    clearShaderPropertiesCache();
-                }
-                if (!ensureSelectedPackLoaded()) {
-                    return;
-                }
-                afterPackLoadNanos = System.nanoTime();
-                ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
-                if (!initializeCurrentPipeline(properties, true)) {
-                    return;
-                }
-                afterPipelineNanos = System.nanoTime();
-            }
-            if (shadersEnabled) {
-                if (firstWorldFrameCompileGate.isPending()) {
-                    PipelineContext.getInstance().setActive(false);
-                } else {
-                    PipelineContext.getInstance().setActive(true);
-                }
-                if (!PipelineContext.getInstance().isActive()) {
-                    if (!firstWorldFrameCompileGate.isPending()) {
-                        markPipelineInactive();
-                    }
-                }
-            } else {
-                PipelineContext.getInstance().cleanup();
-                afterCleanupNanos = System.nanoTime();
-                compiledDimensionId = Integer.MIN_VALUE;
-                clearBetterPortalsPendingState();
-                compiledPackName = OFF_PACK_NAME;
-                pendingPipelineReload = currentPack != null && !isInternalPack(currentPack);
-                rebuildInactiveVanillaRenderers();
-                afterVanillaNanos = System.nanoTime();
-                PipelineContext.getInstance().recoverShaderlessBloomAfterShaderDisable("shader-toggle-off");
-                // Shaderless terrain compilation still needs the selected
-                // pack's block-material rules.  Refresh them after cleanup so
-                // a failed or deferred shader program load cannot leave the
-                // extractor with the previous pack's empty material map.
-                captureShaderlessBloomMaterialRules(getEffectiveRenderDimensionId());
-            }
-        } finally {
-            logShaderToggleTiming(enabled, wasEnabled, wasActive, wasPendingReload,
-                    startedNanos, afterConfigNanos, afterPackLoadNanos,
-                    afterPipelineNanos, afterCleanupNanos, afterVanillaNanos);
-        }
-    }
-
-    private void logShaderToggleTiming(boolean requestedEnabled, boolean wasEnabled, boolean wasActive,
-                                       boolean wasPendingReload, long startedNanos, long afterConfigNanos,
-                                       long afterPackLoadNanos, long afterPipelineNanos,
-                                       long afterCleanupNanos, long afterVanillaNanos) {
-        if (shaderToggleTimingProbeLogs >= SHADER_TOGGLE_TIMING_PROBE_LIMIT) {
+        if (isOffPack(selectedPackName)) {
+            shadersEnabled = false;
+        } else if (enabled && !isPackAvailable(selectedPackName)) {
+            fallbackToOff("Selected shaderpack '{}' is no longer available; disabling shaders.", selectedPackName);
             return;
+        } else {
+            shadersEnabled = enabled;
         }
-        shaderToggleTimingProbeLogs++;
-        long now = System.nanoTime();
-        MainMod.LOGGER.info(
-                "[AUSMShaderToggleTiming] call={} requestEnabled={} previousEnabled={} previousActive={} previousPendingReload={} finalEnabled={} finalActive={} pack={} totalMs={} configMs={} packLoadMs={} pipelineInitMs={} cleanupMs={} vanillaRebuildMs={} postVanillaMs={}",
-                shaderToggleTimingProbeLogs,
-                requestedEnabled,
-                wasEnabled,
-                wasActive,
-                wasPendingReload,
-                shadersEnabled,
-                PipelineContext.getInstance().isActive(),
-                selectedPackName,
-                toggleMillis(now - startedNanos),
-                toggleMillis(afterConfigNanos - startedNanos),
-                toggleMillis(afterPackLoadNanos - afterConfigNanos),
-                toggleMillis(afterPipelineNanos - afterPackLoadNanos),
-                toggleMillis(afterCleanupNanos - afterPipelineNanos),
-                toggleMillis(afterVanillaNanos - afterCleanupNanos),
-                toggleMillis(now - afterVanillaNanos)
-        );
-    }
-
-    private static double toggleMillis(long nanos) {
-        return Math.max(0.0D, nanos / 1_000_000.0D);
+        saveShaderConfig();
+        if (shadersEnabled && (pendingPipelineReload || currentPack == null || !selectedPackName.equals(currentPack.getName()))) {
+            if (pendingPipelineReload && currentPack != null && selectedPackName.equals(currentPack.getName()) && !isInternalPack(currentPack)) {
+                closeCurrentPack();
+                currentPack = null;
+                clearShaderPropertiesCache();
+            }
+            if (!ensureSelectedPackLoaded()) {
+                return;
+            }
+            ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
+            if (!initializeCurrentPipeline(properties, true)) {
+                return;
+            }
+        }
+        if (shadersEnabled) {
+            if (firstWorldFrameCompileGate.isPending()) {
+                PipelineContext.getInstance().setActive(false);
+            } else {
+                PipelineContext.getInstance().setActive(true);
+            }
+            if (!PipelineContext.getInstance().isActive()) {
+                if (!firstWorldFrameCompileGate.isPending()) {
+                    markPipelineInactive();
+                }
+            }
+        } else {
+            PipelineContext.getInstance().cleanup();
+            compiledDimensionId = Integer.MIN_VALUE;
+            clearBetterPortalsPendingState();
+            compiledPackName = OFF_PACK_NAME;
+            pendingPipelineReload = currentPack != null && !isInternalPack(currentPack);
+            PipelineContext.getInstance().setActive(false);
+            PipelineContext.getInstance().recoverShaderlessBloomAfterShaderDisable("shader-toggle-off");
+            // Shaderless terrain compilation still needs the selected
+            // pack's block-material rules.  Refresh them after cleanup so
+            // a failed or deferred shader program load cannot leave the
+            // extractor with the previous pack's empty material map.
+            captureShaderlessBloomMaterialRules(getEffectiveRenderDimensionId());
+        }
     }
 
     public Map<String, String> getCurrentOptionOverrides() {
@@ -808,7 +753,7 @@ public class ShaderPackManager implements ShaderPackController {
             if (!shadersEnabled) {
                 pendingPipelineReload = true;
                 PipelineContext.getInstance().cleanup();
-                rebuildInactiveVanillaRenderers();
+                PipelineContext.getInstance().setActive(false);
                 return;
             }
             initializeCurrentPipeline(properties, true);
@@ -839,7 +784,7 @@ public class ShaderPackManager implements ShaderPackController {
             if (!shadersEnabled) {
                 pendingPipelineReload = true;
                 PipelineContext.getInstance().cleanup();
-                rebuildInactiveVanillaRenderers();
+                PipelineContext.getInstance().setActive(false);
                 return;
             }
             ShaderProperties properties = getShaderProperties(currentPack.getName(), currentOptionOverrides);
@@ -918,13 +863,12 @@ public class ShaderPackManager implements ShaderPackController {
                 selectedPackName, dimensionId);
     }
 
-
     private void markPipelineInactive() {
         compiledDimensionId = Integer.MIN_VALUE;
         clearBetterPortalsPendingState();
         compiledPackName = OFF_PACK_NAME;
         pendingPipelineReload = currentPack != null && !isInternalPack(currentPack);
-        rebuildInactiveVanillaRenderers();
+        PipelineContext.getInstance().setActive(false);
     }
 
     private String compiledPipelineCacheKey(String packName, Map<String, String> optionOverrides, int dimensionId) {
@@ -942,10 +886,6 @@ public class ShaderPackManager implements ShaderPackController {
             return "internal";
         }
         return repository.fingerprint(packName);
-    }
-
-    private void rebuildInactiveVanillaRenderers() {
-        PipelineContext.getInstance().setActive(false);
     }
 
     private boolean ensureSelectedPackLoaded() {
@@ -1057,5 +997,4 @@ public class ShaderPackManager implements ShaderPackController {
     private static boolean isInternalPack(ShaderPack pack) {
         return pack == null || INTERNAL_PACK_NAME.equals(pack.getName());
     }
-
 }

@@ -1,4 +1,10 @@
-# 1.0.4 (Draft)
+# 1.0.5
+
+- Restored in-world menu backgrounds and corrected indexed attachment blending.
+- Fixed shaderless terrain, the first-person arm, and held items becoming fully bright when lightmap texturing was disabled.
+- Fixed the missing crosshair with shaders and Gnetum by restoring the world image before uncached HUD elements render.
+
+# 1.0.4
 
 - Fixed displaced shaderless bloom after enabling and disabling shaders.
 - Fixed first-person hand transparency and effects leaking through the hand with shaders enabled.

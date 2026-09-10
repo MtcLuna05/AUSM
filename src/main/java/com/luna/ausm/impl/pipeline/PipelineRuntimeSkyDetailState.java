@@ -12,6 +12,7 @@ import java.util.Locale;
 import net.minecraft.client.Minecraft;
 import net.minecraft.entity.Entity;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
@@ -220,6 +221,16 @@ abstract class PipelineRuntimeDiagnosticsState7 extends PipelineRuntimeDiagnosti
         MinecraftReflectionCompat.glStateColorMask(true, true, true, true);
         MinecraftReflectionCompat.glStateColor(1.0F, 1.0F, 1.0F, 1.0F);
         self().restoreVanillaFixedFunctionTextureState(mc);
+        if (!isPipelineActive) {
+            // The arm and held item use vanilla's current lightmap coordinates.
+            // Repair the actual enable bit as well as the cache: a stale cache
+            // can make enableLightmap() leave this texture unit disabled.
+            MinecraftReflectionCompat.glStateSetActiveTexture(MinecraftReflectionCompat.lightmapTexUnit());
+            GL13.glActiveTexture(MinecraftReflectionCompat.lightmapTexUnit());
+            MinecraftReflectionCompat.glStateEnableTexture2D();
+            GL11.glEnable(GL11.GL_TEXTURE_2D);
+            TextureBinder.restoreDefaultTextureUnit();
+        }
         if (isPipelineActive && worldFrameActive && activePass != null
                 && (self().getPhase() == WorldRenderingPhase.HAND_SOLID
                 || self().getPhase() == WorldRenderingPhase.HAND_TRANSLUCENT)) {
@@ -231,7 +242,7 @@ abstract class PipelineRuntimeDiagnosticsState7 extends PipelineRuntimeDiagnosti
             // by GlStateManager, so its cached global factors can be stale.
             MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                     GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
-            org.lwjgl.opengl.GL14.glBlendFuncSeparate(
+            GL14.glBlendFuncSeparate(
                     GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
             // The hand redirect repairs vanilla client state after beginHand()
             // established MC_HAND_DEPTH.  Reapply the reserved range here,

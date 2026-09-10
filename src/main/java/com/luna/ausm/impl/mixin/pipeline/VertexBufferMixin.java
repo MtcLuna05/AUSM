@@ -1,11 +1,14 @@
 package com.luna.ausm.impl.mixin.pipeline;
 
+import com.luna.ausm.impl.pipeline.PipelineContext;
 import com.luna.ausm.impl.pipeline.vertex.ExtendedVertexFormats;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.vertex.VertexBuffer;
 import net.minecraft.client.renderer.vertex.VertexFormat;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL20;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -24,6 +27,20 @@ public class VertexBufferMixin {
                 this, VertexFormat.class, null, "field_177363_b", "vertexFormat");
         if (!ExtendedVertexFormats.isPipelineBlock(format)) {
             return;
+        }
+
+        // Layer setup can be invalidated before an individual chunk is drawn.
+        // Keep the existing lightmap binding/matrix, but restore its enable bit
+        // in both Minecraft's cache and GL for the fixed-function terrain path.
+        if (!PipelineContext.getInstance().isPipelineActive()
+                && GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM) == 0) {
+            int previousTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+            MinecraftReflectionCompat.glStateSetActiveTexture(MinecraftReflectionCompat.lightmapTexUnit());
+            GL13.glActiveTexture(MinecraftReflectionCompat.lightmapTexUnit());
+            MinecraftReflectionCompat.glStateEnableTexture2D();
+            GL11.glEnable(GL11.GL_TEXTURE_2D);
+            MinecraftReflectionCompat.glStateSetActiveTexture(previousTexture);
+            GL13.glActiveTexture(previousTexture);
         }
 
         int stride = ExtendedVertexFormats.size(format);

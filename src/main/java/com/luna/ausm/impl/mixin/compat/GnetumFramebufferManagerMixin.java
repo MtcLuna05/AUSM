@@ -1,6 +1,5 @@
 package com.luna.ausm.impl.mixin.compat;
 
-import com.luna.ausm.impl.client.GnetumCompatibility;
 import com.luna.ausm.impl.client.GnetumRenderProbe;
 import com.luna.ausm.impl.pipeline.PipelineFrameLayerCapture;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
@@ -44,8 +43,6 @@ public class GnetumFramebufferManagerMixin {
         Minecraft minecraft = MinecraftReflectionCompat.minecraft();
         Framebuffer target = MinecraftReflectionCompat.minecraftFramebuffer(minecraft);
         PipelineFrameLayerCapture.recordExternalFramebufferForensics("gnetum-before-hud-blit", target);
-        GnetumCompatibility.restoreShaderedWorldBeforeCacheBlit();
-        PipelineFrameLayerCapture.recordExternalFramebufferForensics("gnetum-after-world-restore", target);
         GnetumRenderProbe.record("blit-before", this);
     }
 

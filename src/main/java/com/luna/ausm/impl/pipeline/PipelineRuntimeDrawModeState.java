@@ -348,8 +348,10 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
             return;
         }
 
-        MinecraftReflectionCompat.glStateEnableBlend();
         if (blendMode != null) {
+            // Attachment-only overrides must not enable blending on the other
+            // targets (opaque entities can inherit an additive sky blend func).
+            MinecraftReflectionCompat.glStateEnableBlend();
             MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                     blendMode.srcRgb(),
                     blendMode.dstRgb(),
