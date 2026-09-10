@@ -1,6 +1,6 @@
 # 1.0.5
 
-- Restored in-world menu backgrounds and corrected indexed attachment blending for issue #8.
+- Restored in-world menu backgrounds and corrected indexed attachment blending.
 - Fixed shaderless terrain, the first-person arm, and held items becoming fully bright when lightmap texturing was disabled.
 - Fixed the missing crosshair with shaders and Gnetum by restoring the world image before uncached HUD elements render.
 
