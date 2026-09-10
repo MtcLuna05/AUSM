@@ -54,8 +54,7 @@ public final class AusmGuiRenderController {
         if (isHudHidden()) {
             return;
         }
-        try {
-            Class.forName("me.decce.gnetum.Gnetum", false, AusmGuiRenderController.class.getClassLoader());
+        if (GnetumCompatibility.isInstalled()) {
             // Gnetum replaces the entire Forge HUD render with a multi-pass
             // cache. Its bind/unbind window begins after this injected HEAD
             // callback, so an AUSM HUD boundary cannot safely be nested here.
@@ -66,8 +65,6 @@ public final class AusmGuiRenderController {
                 context.restoreCurrentWorldForExternalHudComposite();
             }
             return;
-        } catch (ClassNotFoundException | LinkageError ignored) {
-            // Gnetum is optional; use AUSM's normal HUD path otherwise.
         }
         PipelineContext context = PipelineContext.getInstance();
         context.beginGuiItemRenderScope();
@@ -78,22 +75,15 @@ public final class AusmGuiRenderController {
         if (isHudHidden()) {
             return;
         }
-        try {
-            Class.forName("me.decce.gnetum.Gnetum", false, AusmGuiRenderController.class.getClassLoader());
+        if (GnetumCompatibility.isInstalled()) {
             return;
-        } catch (ClassNotFoundException | LinkageError ignored) {
-            // Gnetum is optional; use AUSM's normal HUD path otherwise.
         }
-        try {
-            PipelineContext context = PipelineContext.getInstance();
-            context.endGuiItemRenderScope();
-            context.finishOwnedGuiRendering();
-            Minecraft minecraft = MinecraftReflectionCompat.minecraft();
-            if (minecraft != null) {
-                ShaderCompileNotifications.renderOverlay(new ScaledResolution(minecraft));
-            }
-        } finally {
-            // No Gnetum state is active on the normal AUSM HUD path.
+        PipelineContext context = PipelineContext.getInstance();
+        context.endGuiItemRenderScope();
+        context.finishOwnedGuiRendering();
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        if (minecraft != null) {
+            ShaderCompileNotifications.renderOverlay(new ScaledResolution(minecraft));
         }
     }
 

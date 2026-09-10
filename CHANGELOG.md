@@ -1,4 +1,4 @@
-# 1.0.5 (Draft)
+# 1.0.5
 
 - Restored in-world menu backgrounds and corrected indexed attachment blending for issue #8.
 - Fixed shaderless terrain, the first-person arm, and held items becoming fully bright when lightmap texturing was disabled.

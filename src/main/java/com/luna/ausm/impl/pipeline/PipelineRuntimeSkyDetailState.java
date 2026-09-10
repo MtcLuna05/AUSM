@@ -242,7 +242,7 @@ abstract class PipelineRuntimeDiagnosticsState7 extends PipelineRuntimeDiagnosti
             // by GlStateManager, so its cached global factors can be stale.
             MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                     GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
-            org.lwjgl.opengl.GL14.glBlendFuncSeparate(
+            GL14.glBlendFuncSeparate(
                     GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
             // The hand redirect repairs vanilla client state after beginHand()
             // established MC_HAND_DEPTH.  Reapply the reserved range here,
