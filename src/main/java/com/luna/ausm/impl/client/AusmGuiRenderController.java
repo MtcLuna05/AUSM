@@ -59,8 +59,12 @@ public final class AusmGuiRenderController {
             // Gnetum replaces the entire Forge HUD render with a multi-pass
             // cache. Its bind/unbind window begins after this injected HEAD
             // callback, so an AUSM HUD boundary cannot safely be nested here.
-            // Let Gnetum own this render entirely; AUSM's world presentation
-            // has already completed before the HUD begins.
+            // Restore before Gnetum draws uncached HUD elements (including the
+            // crosshair), never at its later cached-HUD composite boundary.
+            PipelineContext context = PipelineContext.getInstance();
+            if (context.isActive()) {
+                context.restoreCurrentWorldForExternalHudComposite();
+            }
             return;
         } catch (ClassNotFoundException | LinkageError ignored) {
             // Gnetum is optional; use AUSM's normal HUD path otherwise.

@@ -76,15 +76,11 @@ public final class GnetumCompatibility {
     }
 
     /**
-     * Gnetum is about to alpha-composite its cached HUD into the Minecraft
-     * framebuffer. Re-establish AUSM's final world image first, because a
-     * prior cache pass may have cleared that framebuffer.
+     * Retained for the existing framebuffer mixin's call site. Gnetum already
+     * drew uncached HUD elements by this point, so restoring the world here
+     * would erase them. AusmGuiRenderController.beginHud restores it earlier.
      */
     public static void restoreShaderedWorldBeforeCacheBlit() {
-        PipelineContext context = PipelineContext.getInstance();
-        if (context.isActive()) {
-            context.restoreCurrentWorldForExternalHudComposite();
-        }
     }
 
     private static void remapCachedElementsToFirstPass(HudPassOverride override) throws IllegalAccessException {
