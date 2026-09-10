@@ -414,8 +414,9 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
             return;
         }
 
-        MinecraftReflectionCompat.glStateEnableBlend();
         if (blendMode != null) {
+            // A per-target directive does not change the global blend state.
+            MinecraftReflectionCompat.glStateEnableBlend();
             MinecraftReflectionCompat.glStateTryBlendFuncSeparate(
                     blendMode.srcRgb(),
                     blendMode.dstRgb(),

@@ -87,9 +87,10 @@ final class PipelineGlState {
     }
 
     static void resetIndexedBlendState() {
-        for (int i = 0; i < maxDrawBuffers(); i++) {
-            setIndexedBlend(i, false);
-        }
+        // Global GL_BLEND disables every draw buffer. Keep Minecraft's cache in
+        // sync too, so the next vanilla enableBlend does not silently skip it.
+        MinecraftReflectionCompat.glStateDisableBlend();
+        GL11.glDisable(GL11.GL_BLEND);
     }
 
     static void resetOitRenderState() {
