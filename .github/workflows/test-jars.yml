@@ -61,7 +61,7 @@ jobs:
             echo "Validation: packaging and targeted client-only/packet-ownership regression tests."
             echo "This is not a stable release; multiplayer crash reproduction still needs player testing."
             echo
-            bash scripts/extract-changelog.sh --full
+            bash scripts/extract-changelog.sh --unreleased
           } > release-notes.md
 
       - uses: actions/upload-artifact@v4
