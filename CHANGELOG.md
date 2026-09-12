@@ -1,3 +1,9 @@
+# Unreleased
+
+- Removed AUSM's vanilla client packet-handler mixin, including packet-cancellation guards and chunk-triggered tile-entity reconstruction.
+- Made AUSM explicitly client-only and disabled its coremod and mixin hooks on dedicated servers. Servers do not need AUSM installed.
+- Removed the Better Portals server-world repair.
+
 # 1.0.5
 
 - Restored in-world menu backgrounds and corrected indexed attachment blending.

@@ -5,9 +5,7 @@
   "plugin": "com.luna.ausm.impl.MainMixinConfigPlugin",
   "refmap": "ausm.refmap.json",
   "compatibilityLevel": "JAVA_21",
-  "mixins": [
-    "compat.BetterPortalsServerWorldsManagerMixin"
-  ],
+  "mixins": [],
   "client": [
     "compat.ActuallyAdditionsAssetUtilMixin",
     "compat.CreativeCoreBufferBuilderUtilsMixin",
@@ -70,7 +68,6 @@
     "pipeline.LayerArmorBaseMixin",
     "pipeline.LayerSpiderEyesMixin",
     "pipeline.MinecraftMixin",
-    "pipeline.NetHandlerPlayClientMixin",
     "pipeline.RenderItemMixin",
     "pipeline.RenderLightningBoltMixin",
     "pipeline.RenderMixin",

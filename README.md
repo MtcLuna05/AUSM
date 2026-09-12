@@ -51,6 +51,8 @@ If that's not enough to hook you in, the mod also features some improvements eve
 
 ## Installation
 
+AUSM is client-only. Install it on the client; vanilla and modded servers do not need AUSM. Other mods in your instance may still require a matching server installation.
+
 1. Download the newest AUSM release:
     - `AUSM-<version>-Java8.jar` for Forge.
     - `AUSM-<version>-Java25.jar` for Cleanroom.

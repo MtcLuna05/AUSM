@@ -2,6 +2,8 @@ package com.luna.ausm.impl;
 
 import java.util.List;
 import java.util.Set;
+import net.minecraftforge.fml.relauncher.FMLLaunchHandler;
+import net.minecraftforge.fml.relauncher.Side;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -18,6 +20,9 @@ public class MainMixinConfigPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        if (FMLLaunchHandler.side() != Side.CLIENT) {
+            return false;
+        }
         OptionalMixinTarget target = OptionalMixinTargets.find(mixinClassName);
         return target == null || OptionalClassResourceLocator.isPresent(
                 target.resourcePath(), target.allowJarFallback());

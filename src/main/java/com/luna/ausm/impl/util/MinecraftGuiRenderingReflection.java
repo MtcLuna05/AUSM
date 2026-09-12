@@ -15,7 +15,6 @@ import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.GuiTextField;
 import net.minecraft.client.gui.ScaledResolution;
 import net.minecraft.client.multiplayer.WorldClient;
-import net.minecraft.client.network.NetHandlerPlayClient;
 import net.minecraft.client.particle.ParticleManager;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.ChunkRenderContainer;
@@ -42,7 +41,6 @@ import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.player.EntityPlayer;
-import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.network.PacketBuffer;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.BlockRenderLayer;
@@ -51,7 +49,6 @@ import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.RayTraceResult;
 import net.minecraft.world.World;
-import net.minecraft.world.WorldServer;
 import net.minecraft.world.chunk.BlockStateContainer;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
@@ -387,11 +384,6 @@ abstract class MinecraftGuiRenderingReflection extends MinecraftWorldEntityRefle
         return MinecraftReflectionCompat.callBoolean(entity, new String[]{"func_70608_bn", "isPlayerSleeping"}, NO_PARAMETERS, false);
     }
 
-    public static WorldServer playerServerWorld(EntityPlayerMP player) {
-        return MinecraftReflectionCompat.call(player, WorldServer.class, null,
-                new String[]{"func_71121_q", "getServerWorld"}, NO_PARAMETERS);
-    }
-
     public static String entityName(Entity entity) {
         return MinecraftReflectionCompat.call(entity, String.class, "unknown", new String[]{"func_70005_c_", "getName"}, NO_PARAMETERS);
     }
@@ -463,11 +455,6 @@ abstract class MinecraftGuiRenderingReflection extends MinecraftWorldEntityRefle
 
     public static void deleteFramebuffer(Framebuffer framebuffer) {
         MinecraftReflectionCompat.invoke(framebuffer, new String[]{"func_147608_a", "deleteFramebuffer"}, NO_PARAMETERS);
-    }
-
-    public static WorldClient netHandlerWorld(NetHandlerPlayClient handler) {
-        Object value = MinecraftReflectionCompat.getField(handler, "field_147300_g", "world", "clientWorldController");
-        return value instanceof WorldClient ? (WorldClient) value : null;
     }
 
     public static boolean blockStateContainerRead(BlockStateContainer container, PacketBuffer buffer) {

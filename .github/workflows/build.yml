@@ -64,7 +64,7 @@ jobs:
     name: Publish build release
     needs: jar
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.actor == 'MtcLuna05')
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.actor == 'MtcLuna05'))
     permissions:
       contents: write
 

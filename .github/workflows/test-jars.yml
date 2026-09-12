@@ -1,0 +1,86 @@
+name: Test jars
+
+on:
+  push:
+    branches: [test-jars]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/test-jars'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Identify test build
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_version="$(sed -n 's/^mod_version[[:space:]]*=[[:space:]]*//p' gradle.properties | head -n 1)"
+          echo "TEST_VERSION=${base_version}-test.${GITHUB_SHA:0:12}" >> "$GITHUB_ENV"
+          echo "TEST_TAG=test-jars-${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+      - name: Build and check client-only packet ownership
+        run: >-
+          ./gradlew --no-daemon "-Pmod_version=${TEST_VERSION}" assemble test
+          --tests '*ClientOnlyLoadingTest' --tests '*ChunkPacketOwnershipTest'
+
+      - name: Validate and stage distributable
+        shell: bash
+        run: |
+          set -euo pipefail
+          export JAR_PATH="build/libs/AUSM-${TEST_VERSION}-Java25.jar"
+          python3 - <<'PY'
+          import json, os, zipfile
+          with zipfile.ZipFile(os.environ['JAR_PATH']) as jar:
+              assert jar.testzip() is None
+              names = jar.namelist()
+              assert not any('/hotswap/' in name for name in names)
+              assert not any('NetHandlerPlayClientMixin' in name or 'BetterPortalsServerWorldsManagerMixin' in name for name in names)
+              for name in ('ausm.default.mixin.json', 'ausm.mod.mixin.json'):
+                  config = json.loads(jar.read(name))
+                  assert not config.get('mixins') and not config.get('server')
+          PY
+          mkdir -p dist
+          cp "$JAR_PATH" dist/
+          (cd dist && sha256sum *.jar > SHA256SUMS)
+          {
+            echo "Experimental Java 25 / Cleanroom build from test-jars."
+            echo
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Validation: packaging and targeted client-only/packet-ownership regression tests."
+            echo "This is not a stable release; multiplayer crash reproduction still needs player testing."
+            echo
+            bash scripts/extract-changelog.sh --full
+          } > release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AUSM-test-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TEST_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TEST_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TEST_TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease --latest=false
+          else
+            gh release create "$TEST_TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "AUSM ${TEST_VERSION} Java 25 (test)" \
+              --notes-file release-notes.md --prerelease --latest=false
+          fi

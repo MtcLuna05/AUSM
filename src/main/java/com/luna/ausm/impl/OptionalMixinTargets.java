@@ -37,7 +37,6 @@ final class OptionalMixinTargets {
             target("BetterPortalsPortalRendererMixin", "de/johni0702/minecraft/betterportals/client/render/PortalRenderer.class", false),
             target("BetterPortalsClientWorldsManagerMixin", "de/johni0702/minecraft/view/impl/client/ClientWorldsManagerImpl.class", false),
             target("BetterPortalsCreateWorldHandlerMixin", "de/johni0702/minecraft/view/impl/net/CreateWorld$Handler.class", true),
-            target("BetterPortalsServerWorldsManagerMixin", "de/johni0702/minecraft/view/impl/server/ServerWorldsManagerImpl.class", false),
             target("AbyssalCraftPortalLayerMixin", "com/shinoow/abyssalcraft/common/blocks/BlockAbyssPortal.class", false),
             target("AbyssalCraftShadowEntityRendererMixin", "com/shinoow/abyssalcraft/client/render/entity/RenderShadowMonster.class", false),
             target("AbyssalCraftNecroDataCapMessageMixin", "com/shinoow/abyssalcraft/common/network/client/NecroDataCapMessage.class", true),
