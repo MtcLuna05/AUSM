@@ -1,5 +1,6 @@
 package com.luna.ausm.impl.pipeline;
 
+import com.luna.ausm.impl.pipeline.compat.NothiriumShadowCoverage;
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.mixin.pipeline.RenderGlobalAccessor;
 import com.luna.ausm.impl.pipeline.fbo.ShadowFramebuffer;
@@ -54,6 +55,10 @@ abstract class PipelineShadowCamera extends PipelineLightVoxelInjection {
                 + self().positiveShadowCount(cutoutCount)
                 + self().positiveShadowCount(translucentCount);
         boolean useNothiriumShadowBridge = self().shouldUseNothiriumShadowBridge();
+        int requiredDraws = useNothiriumShadowBridge
+                ? NothiriumShadowCoverage.requiredDraws(
+                        nothiriumShadowRenderer, SPARSE_SHADOW_MIN_TERRAIN_DRAWS)
+                : SPARSE_SHADOW_MIN_TERRAIN_DRAWS;
         // glReadPixels synchronizes the render thread with the GPU. Validate
         // the map while it is warming up. Once accepted, keep the inexpensive
         // CPU submission check on every replacement frame: Nothirium can
@@ -62,7 +67,7 @@ abstract class PipelineShadowCamera extends PipelineLightVoxelInjection {
         if (shadowMapUsable) {
             shadowMapPopulated = drawPopulated;
             boolean currentCoverageReady = !useNothiriumShadowBridge
-                    || terrainDrawCount >= SPARSE_SHADOW_MIN_TERRAIN_DRAWS;
+                    || terrainDrawCount >= requiredDraws;
             shadowMapSparseForSampling = !currentCoverageReady;
             if (!drawPopulated || !currentCoverageReady) {
                 shadowMapUsable = false;
@@ -71,6 +76,11 @@ abstract class PipelineShadowCamera extends PipelineLightVoxelInjection {
             return;
         }
         ShadowFramebuffer.DepthStats stats = shadowFramebuffer.readDepthStats(4);
+        if (stats.nonClear() == 0 && terrainDrawCount >= requiredDraws
+                && requiredDraws < SPARSE_SHADOW_MIN_TERRAIN_DRAWS) {
+            // A small island can fit entirely between the coarse sample points.
+            stats = shadowFramebuffer.readDepthStats(0);
+        }
         boolean populated = terrainPopulated
                 || (!self().shouldUseNothiriumShadowBridge() && stats.nonClear() > 0);
         shadowMapPopulated = populated || drawPopulated;
@@ -79,7 +89,7 @@ abstract class PipelineShadowCamera extends PipelineLightVoxelInjection {
         float verticalDelta = self().cameraVerticalDelta();
         boolean upwardMotion = verticalDelta > SHADOW_UPWARD_CAMERA_DELTA_SUPPRESSION;
         boolean nothiriumTerrainCoverageReady = !useNothiriumShadowBridge
-                || (terrainDrawCount >= SPARSE_SHADOW_MIN_TERRAIN_DRAWS
+                || (terrainDrawCount >= requiredDraws
                 && stats.nonClear() >= SPARSE_SHADOW_MIN_NON_CLEAR_SAMPLES);
         if (nothiriumTerrainCoverageReady) {
             shadowMapCoverageStableFrames = Math.min(SPARSE_SHADOW_STABLE_FRAMES, shadowMapCoverageStableFrames + 1);
@@ -94,7 +104,7 @@ abstract class PipelineShadowCamera extends PipelineLightVoxelInjection {
         shadowMapUsable = stats.nonClear() > 0
                 && !sparseNothiriumShadow
                 && !unstableSparseShadow;
-        boolean clearAfterFullTerrainSubmission = terrainDrawCount >= SPARSE_SHADOW_MIN_TERRAIN_DRAWS
+        boolean clearAfterFullTerrainSubmission = terrainDrawCount >= requiredDraws
                 && stats.nonClear() == 0;
         if (!shadowMapUsable && drawPopulated && clearAfterFullTerrainSubmission) {
             invalidShadowTerrainFrames++;

@@ -6,6 +6,7 @@ import com.luna.ausm.impl.client.ClientSettingsConfig;
 import com.luna.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.luna.ausm.impl.pipeline.fbo.ShadowFramebuffer;
 import com.luna.ausm.impl.pipeline.matrix.MatrixState;
+import com.luna.ausm.impl.pipeline.pack.AdvancedRocketrySkyTransform;
 import com.luna.ausm.impl.pipeline.render.ShaderSamplerState;
 import com.luna.ausm.impl.pipeline.render.TextureBinder;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
@@ -179,6 +180,8 @@ abstract class PipelineRuntimeUniformState extends PipelineRuntimeValueTypes {
         uniformRegistry.registerFloat("isPrecipitationRain", () -> self().currentBiomePrecipitation(mc) == 1 && cameraPositionUnshifted[1] < 96.0 ? 1.0f : 0.0f);
         uniformRegistry.registerFloat("isEyeInCave", () -> self().isEyeInCave(mc) ? 1.0f : 0.0f);
         uniformRegistry.registerInt("renderStage", () -> self().getPhase().ordinal());
+        uniformRegistry.registerInt("ausmAdvancedRocketrySky",
+                AdvancedRocketrySkyTransform::activeSpaceWorld);
         uniformRegistry.registerFloat("mc_chunkFade", () -> ENABLE_CHUNK_FADE ? currentChunkFade : 1.0f);
         uniformRegistry.registerVec3("ausmAstralConstellationColor", () -> currentAstralConstellationColor.clone());
         uniformRegistry.registerVec3("ausmAstralTierColor", () -> currentAstralTierColor.clone());
