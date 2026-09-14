@@ -1,5 +1,6 @@
 package com.luna.ausm.impl.pipeline;
 
+import com.luna.ausm.impl.pipeline.compat.NothiriumShadowCoverage;
 import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.mixin.pipeline.RenderGlobalAccessor;
@@ -456,7 +457,9 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
                 MinecraftReflectionCompat.posY(viewEntity), partialTicks);
         double cameraZ = PipelineWorldRenderScope.interpolate(MinecraftReflectionCompat.lastTickPosZ(viewEntity),
                 MinecraftReflectionCompat.posZ(viewEntity), partialTicks);
-        int remaining = SPARSE_SHADOW_MIN_TERRAIN_DRAWS;
+        int requiredDraws = NothiriumShadowCoverage.requiredDraws(
+                        nothiriumShadowRenderer, SPARSE_SHADOW_MIN_TERRAIN_DRAWS);
+        int remaining = requiredDraws;
         int ready = nothiriumShadowRenderer.countRenderableShadowLayer(
                 BlockRenderLayer.SOLID, cameraX, cameraY, cameraZ,
                 self().shadowLayerCullDistance(BlockRenderLayer.SOLID), remaining);
@@ -493,7 +496,7 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
             }
             ready += count;
         }
-        if (ready >= SPARSE_SHADOW_MIN_TERRAIN_DRAWS) {
+        if (ready >= requiredDraws) {
             return false;
         }
         return true;

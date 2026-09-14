@@ -13,7 +13,6 @@ import net.minecraft.client.renderer.vertex.VertexFormatElement;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityList;
 import net.minecraft.nbt.NBTTagCompound;
-import net.minecraft.network.play.server.SPacketChunkData;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.ResourceLocation;
@@ -383,30 +382,9 @@ abstract class MinecraftClientReflection extends MinecraftReflectionCompatBase {
                 new Class<?>[]{BlockPos.class}, pos);
     }
 
-    @SuppressWarnings("unchecked")
-    public static List<NBTTagCompound> chunkDataTileEntityTags(SPacketChunkData packet) {
-        Object value = MinecraftReflectionCompat.invoke(packet, new String[]{"func_189554_f", "getTileEntityTags"}, NO_PARAMETERS);
-        return value instanceof List<?> ? (List<NBTTagCompound>) value : Collections.emptyList();
-    }
-
     public static int nbtInteger(NBTTagCompound tag, String key, int fallback) {
         return MinecraftReflectionCompat.callInt(tag, new String[]{"func_74762_e", "getInteger"},
                 new Class<?>[]{String.class}, fallback, key);
-    }
-
-    public static TileEntity createTileEntity(World world, NBTTagCompound tag) {
-        return MinecraftReflectionCompat.callStatic(TileEntity.class, TileEntity.class, null,
-                new String[]{"func_190200_a", "create"},
-                new Class<?>[]{World.class, NBTTagCompound.class}, world, tag);
-    }
-
-    public static boolean worldSetTileEntity(World world, BlockPos pos, TileEntity tileEntity) {
-        if (world == null || pos == null || tileEntity == null) {
-            return false;
-        }
-        MinecraftReflectionCompat.invoke(world, new String[]{"func_175690_a", "setTileEntity"},
-                new Class<?>[]{BlockPos.class, TileEntity.class}, pos, tileEntity);
-        return MinecraftReflectionCompat.blockAccessTileEntity(world, pos) != null;
     }
 
     @SuppressWarnings("unchecked")

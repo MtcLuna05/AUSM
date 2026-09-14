@@ -477,7 +477,29 @@ public final class ShadowFramebuffer {
         previous.restore();
     }
 
+    /** Zero requests a full readback for geometry missed by the coarse grid. */
     public DepthStats readDepthStats(int samplesPerAxis) {
+        if (samplesPerAxis == 0) {
+            SavedFramebufferState previous = saveFramebufferState();
+            FloatBuffer pixels = BufferUtils.createFloatBuffer(resolution * resolution);
+            try {
+                MinecraftReflectionCompat.glBindFramebuffer(MinecraftReflectionCompat.glFramebuffer(), fboId);
+                GL11.glReadPixels(0, 0, resolution, resolution, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, pixels);
+                float min = 1.0F;
+                float max = 0.0F;
+                int nonClear = 0;
+                for (int index = 0; index < pixels.capacity(); index++) {
+                    float depth = pixels.get(index);
+                    min = Math.min(min, depth);
+                    max = Math.max(max, depth);
+                    if (depth < 0.9999F) nonClear++;
+                }
+                return new DepthStats(pixels.get((resolution / 2) * resolution + resolution / 2),
+                        min, max, nonClear, pixels.capacity());
+            } finally {
+                previous.restore();
+            }
+        }
         int samples = Math.max(1, samplesPerAxis);
         SavedFramebufferState previous = saveFramebufferState();
         MinecraftReflectionCompat.glBindFramebuffer(MinecraftReflectionCompat.glFramebuffer(), fboId);

@@ -11,7 +11,7 @@ import net.minecraftforge.fml.common.SidedProxy;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 
-@Mod(modid = Reference.MODID, name = Reference.MOD_NAME, version = Reference.VERSION, acceptableRemoteVersions = "*")
+@Mod(modid = Reference.MODID, name = Reference.MOD_NAME, version = Reference.VERSION, acceptableRemoteVersions = "*", clientSideOnly = true)
 public class MainMod {
 
     public static final NoOpLogger LOGGER = NoOpLogger.INSTANCE;

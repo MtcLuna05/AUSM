@@ -10,7 +10,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.jar.JarFile;
 import net.minecraft.launchwrapper.Launch;
+import net.minecraftforge.fml.relauncher.FMLLaunchHandler;
 import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin;
+import net.minecraftforge.fml.relauncher.Side;
 import org.jetbrains.annotations.Nullable;
 import zone.rong.mixinbooter.IEarlyMixinLoader;
 
@@ -47,6 +49,9 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin, IEarlyMixinLoader {
 
     @Override
     public @Nullable String[] getASMTransformerClass() {
+        if (FMLLaunchHandler.side() != Side.CLIENT) {
+            return new String[0];
+        }
         return new String[]{
                 "com.luna.ausm.impl.core.ProjectRedScalaModuleTransformer",
                 "com.luna.ausm.impl.core.InfinityLibBakedModelTransformer",
@@ -73,7 +78,9 @@ public class MainLoadingPlugin implements IFMLLoadingPlugin, IEarlyMixinLoader {
 
     @Override
     public void injectData(Map<String, Object> map) {
-        exposeOptionalCompatJars(map);
+        if (FMLLaunchHandler.side() == Side.CLIENT) {
+            exposeOptionalCompatJars(map);
+        }
     }
 
     private static void exposeOptionalCompatJars(Map<String, Object> data) {

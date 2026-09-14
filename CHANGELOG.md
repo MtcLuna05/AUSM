@@ -1,3 +1,15 @@
+# Unreleased
+
+# 1.0.6
+
+- Restored Advanced Rocketry space-station planet and sky textures with Complementary shaders, and disabled terrestrial light shafts in space to remove the white haze.
+- Fixed missing shadows on small stations and islands by scaling shadow coverage requirements to nearby terrain and checking depth missed by sparse samples.
+- Excluded Alfheim light-only sections from shadow terrain coverage counts.
+
+- Removed AUSM's vanilla client packet-handler mixin, including packet-cancellation guards and chunk-triggered tile-entity reconstruction.
+- Made AUSM explicitly client-only and disabled its coremod and mixin hooks on dedicated servers. Servers do not need AUSM installed.
+- Removed the Better Portals server-world repair.
+
 # 1.0.5
 
 - Restored in-world menu backgrounds and corrected indexed attachment blending.
