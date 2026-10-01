@@ -1,5 +1,7 @@
 package com.luna.ausm.impl.pipeline.pack;
 
+import com.luna.ausm.api.pipeline.shader.ProgramGroup;
+
 /**
  * Carries AbyssalCraft's dimension atmosphere into Complementary Unbound.
  * The direct-light tint requires ACT's colored-lighting path and can be
@@ -36,6 +38,19 @@ public final class AbyssalDimensionLightingTransformStage implements ShaderTrans
         }
         String withTints = source.replaceAll("(vec3\\s+lightColor\\s*=)", "$1 AUSM_ABYSSAL_LIGHT_TINT *");
         withTints = withTints.replaceAll("(vec3\\s+ambientColor\\s*=)", "$1 AUSM_ABYSSAL_AMBIENT_TINT *");
+        if (parameters.pass() != null
+                && parameters.pass().programId().group() == ProgramGroup.GBUFFERS
+                && parameters.pass().getProgramName().startsWith("gbuffers_terrain")
+                && !withTints.contains("AUSM_ABYSSAL_SKY_LIGHTMAP")
+                && withTints.contains("vec2 lmCoordM = lmCoord;")) {
+            withTints = withTints.replace(
+                    "vec2 lmCoordM = lmCoord;",
+                    "vec2 lmCoordM = lmCoord;\n"
+                            + "    #if defined AUSM_ABYSSAL_WASTELAND\n"
+                            + "        // AUSM_ABYSSAL_SKY_LIGHTMAP\n"
+                            + "        lmCoordM.y = max(lmCoordM.y, 1.0);\n"
+                            + "    #endif");
+        }
         withTints = disableDreadlandsLightShafts(withTints);
         int versionAt = withTints.indexOf("#version");
         int insertAt = versionAt < 0 ? 0 : withTints.indexOf('\n', versionAt) + 1;

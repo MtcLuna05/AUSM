@@ -59,7 +59,7 @@ public final class EuphoriaEntreePackGenerator {
     private static final String WORK_NAME = ".ausm-entree-euphoria-work";
     private static final String AUSM_112_PATCH_SUFFIX = " + AUSM 1.12.2 Patches";
     private static final String AUSM_112_PATCH_MARKER = ".ausm-1.12.2-patches-version";
-    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v17";
+    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v18";
     private static final String LOD_API_PROPERTY = "ausm.lod.api=1";
     private static final String LOD_HELPER = "shaders/lib/ausm/distantLod.glsl";
     private static final String LOD_HELPER_INCLUDE = "#include \"/lib/ausm/distantLod.glsl\"";
@@ -388,6 +388,7 @@ public final class EuphoriaEntreePackGenerator {
             // Direct derivatives receive only the self-contained LOD injection
             // below; the Euphoria/Entree paths above retain the full overlay.
             injectAUSM112LodSupportInto(staging);
+            ComplementaryGlintPatch.inject(staging, sourcePackName);
             Files.writeString(staging.resolve(AUSM_112_PATCH_MARKER), token, StandardCharsets.UTF_8);
             publish(shaderpacks, staging, target);
             MainMod.LOGGER.info("[AUSM112] Generated shaderpack '{}' from '{}'", target.getFileName(), sourceName);

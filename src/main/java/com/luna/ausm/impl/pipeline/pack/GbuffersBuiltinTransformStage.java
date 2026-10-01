@@ -1,6 +1,7 @@
 package com.luna.ausm.impl.pipeline.pack;
 
 import com.luna.ausm.api.pipeline.shader.ProgramStage;
+import com.luna.ausm.api.pipeline.shader.RenderPass;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -33,9 +34,16 @@ public final class GbuffersBuiltinTransformStage implements ShaderTransformStage
                 || !parameters.vertexShader()) {
             return source;
         }
+        return transformVertex(source, parameters.pass());
+    }
 
+    static String transformVertex(String source, RenderPass pass) {
         String transformed = source;
-        transformed = replaceAndInject(transformed, GL_TEXTURE_MATRIX_0, "iris_TextureMat", "uniform mat4 iris_TextureMat;\n");
+        // Vanilla changes the texture matrix between glint draws, after the
+        // program is bound. Keep the live built-in instead of the identity uniform.
+        if (pass != RenderPass.GBUFFERS_ARMOR_GLINT) {
+            transformed = replaceAndInject(transformed, GL_TEXTURE_MATRIX_0, "iris_TextureMat", "uniform mat4 iris_TextureMat;\n");
+        }
         transformed = replaceAndInject(transformed, GL_LIGHTMAP_TEXTURE_MATRIX, "iris_LightmapTextureMatrix", "uniform mat4 iris_LightmapTextureMatrix;\n");
         transformed = replaceAndInject(transformed, GL_MODEL_VIEW_MATRIX_INVERSE, "iris_ModelViewMatInverse", "uniform mat4 iris_ModelViewMatInverse;\n");
         transformed = replaceAndInject(transformed, GL_PROJECTION_MATRIX_INVERSE, "iris_ProjMatInverse", "uniform mat4 iris_ProjMatInverse;\n");

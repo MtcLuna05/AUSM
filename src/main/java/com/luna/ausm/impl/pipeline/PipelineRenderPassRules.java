@@ -10,6 +10,9 @@ import org.lwjgl.opengl.GL11;
  * Stateless render-pass classification and default blend policy.
  */
 final class PipelineRenderPassRules {
+    private static final ShaderBlendMode GLINT_BLEND_MODE =
+            new ShaderBlendMode(true, GL11.GL_SRC_COLOR, GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE);
+
     private PipelineRenderPassRules() {
     }
 
@@ -18,6 +21,8 @@ final class PipelineRenderPassRules {
     }
 
     static ShaderBlendMode defaultBlendMode(RenderPass pass) {
+        if (pass == RenderPass.GBUFFERS_ARMOR_GLINT)
+            return GLINT_BLEND_MODE;
         if (isOpaqueTerrainPass(pass) || pass == RenderPass.SHADOW || pass == RenderPass.SHADOW_SOLID || pass == RenderPass.SHADOW_CUTOUT || pass == RenderPass.SHADOW_WATER || pass == RenderPass.SHADOW_ENTITIES || pass == RenderPass.SHADOW_LIGHTNING || pass == RenderPass.SHADOW_BLOCK)
             return ShaderBlendMode.OFF;
         return pass == RenderPass.GBUFFERS_SPIDEREYES ? new ShaderBlendMode(true, GL11.GL_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE) : null;

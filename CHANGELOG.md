@@ -1,5 +1,13 @@
 # Unreleased
 
+# 1.0.7
+
+- Fixed frozen and opaque enchantment glint, and corrected held-item glint depth and hand sway with Complementary shaders.
+- Restored block-texture animation with Nothirium and Naughthirium when LoliASM's on-demand animation is enabled, while retaining Celeritas compatibility safeguards.
+- Fixed frozen entity-fire textures with LoliASM's on-demand animation.
+- Removed forced full skylight coordinates from shaderless terrain rendering.
+- Added synthetic skylight for Abyssal Wasteland terrain with Complementary shaders while preserving block light and shadow processing.
+
 # 1.0.6
 
 - Restored Advanced Rocketry space-station planet and sky textures with Complementary shaders, and disabled terrestrial light shafts in space to remove the white haze.

@@ -53,7 +53,6 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
     private static final Map<String, String> HANDLER_BYPASS_METHODS = new HashMap<>();
     private static final Set<String> VOID_HANDLERS = new HashSet<>();
     private static volatile Boolean celeritasInstalled;
-    private static volatile Boolean nothiriumInstalled;
 
     static {
         VOID_HANDLERS.add("stopChunkUpdates(Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V");
@@ -112,11 +111,13 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         }
         // Celeritas prevents LoliASM's BufferBuilder primer interface from being
         // applied even when Nothirium remains the selected terrain renderer.
-        if (shouldStripNaughthiriumHooks()
+        // Otherwise these hooks must remain: LoliASM needs Naughthirium's visible
+        // sprite tracking to update on-demand animations, with or without shaders.
+        if (celeritasPresent()
                 && (NAUGHTHIRIUM_FLOAT_VERTEX_CONSUMER.equals(name) || NAUGHTHIRIUM_FLOAT_VERTEX_CONSUMER.equals(transformedName))) {
             return stripLoliTextureHook(basicClass);
         }
-        if (shouldStripNaughthiriumHooks()
+        if (celeritasPresent()
                 && (NAUGHTHIRIUM_RENDER_TASK_MIXIN.equals(name) || NAUGHTHIRIUM_RENDER_TASK_MIXIN.equals(transformedName))) {
             return stripHandlers(basicClass);
         }
@@ -368,23 +369,6 @@ public final class NothiriumBypassTransformer implements IClassTransformer {
         boolean present = modPresent("celeritas");
         celeritasInstalled = present;
         return present;
-    }
-
-    private static boolean nothiriumPresent() {
-        Boolean cached = nothiriumInstalled;
-        if (cached != null) {
-            return cached;
-        }
-        boolean present = modPresent("nothirium", "naughthirium");
-        nothiriumInstalled = present;
-        return present;
-    }
-
-    private static boolean shouldStripNaughthiriumHooks() {
-        // AUSM owns the vertex metadata contract whenever Nothirium is the
-        // active backend. LoliASM's optional Naughthirium hooks can append a
-        // different primer/compile path even without Celeritas installed.
-        return celeritasPresent() || nothiriumPresent();
     }
 
     private static boolean modPresent(String... prefixes) {

@@ -7,6 +7,7 @@
   "compatibilityLevel": "JAVA_8",
   "mixins": [],
   "client": [
+    "compat.LoliEntityFireMixin",
     "compat.ActuallyAdditionsAssetUtilMixin",
     "compat.CreativeCoreBufferBuilderUtilsMixin",
     "compat.LittleTilesChunkBlockLayerCacheMixin",
