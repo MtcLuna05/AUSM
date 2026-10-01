@@ -4,6 +4,7 @@ import java.util.Map;
 
 final class OptionalMixinTargets {
     private static final Map<String, OptionalMixinTarget> TARGETS = Map.ofEntries(
+            target("LoliEntityFireMixin", "zone/rong/loliasm/client/sprite/ondemand/IAnimatedSpriteActivator.class", true),
             target("NothiriumRenderChunkTaskCompileMixin", "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskCompile.class", true),
             target("NothiriumRenderChunkTaskSortTranslucentMixin", "meldexun/nothirium/mc/renderer/chunk/RenderChunkTaskSortTranslucent.class", true),
             target("NothiriumShadowChunkAccessMixin", "meldexun/nothirium/renderer/chunk/AbstractRenderChunk.class", true),
