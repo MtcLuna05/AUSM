@@ -409,8 +409,6 @@ abstract class PipelineFrameLifecycle1 extends PipelineFrameLifecycle0 {
         shaderlessTerrainPreviousLightmapX = MinecraftReflectionCompat.fieldFloat(OpenGlHelper.class, 0.0F, "lastBrightnessX", "lastBrightnessX");
         shaderlessTerrainPreviousLightmapY = MinecraftReflectionCompat.fieldFloat(OpenGlHelper.class, 0.0F, "lastBrightnessY", "lastBrightnessY");
         shaderlessTerrainLightmapCoordsSaved = true;
-        MinecraftReflectionCompat.invoke(OpenGlHelper.class, new String[]{"func_77475_a", "setLightmapTextureCoords"},
-                new Class<?>[]{int.class, float.class, float.class}, MinecraftReflectionCompat.lightmapTexUnit(), 0.0F, 240.0F);
     }
 
     protected void restoreShaderlessTerrainLightmapCoords() {
