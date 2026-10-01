@@ -1,10 +1,12 @@
 package com.luna.ausm.impl.pipeline;
 
 import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
+import com.luna.ausm.api.pipeline.shader.RenderPass;
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.pipeline.pack.ShaderEnvironmentDefines;
 import com.luna.ausm.impl.pipeline.render.TextureBinder;
 import com.luna.ausm.impl.pipeline.shader.ShaderProgram;
+import com.luna.ausm.impl.pipeline.shader.PipelineProgram;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import java.awt.Color;
 import java.lang.reflect.Method;
@@ -117,6 +119,14 @@ abstract class PipelineRuntimeDiagnosticsState7 extends PipelineRuntimeDiagnosti
      * opaque glint texture to cover the item's complete baked quad.
      */
     public void prepareItemGlintDrawState() {
+        // RenderItem changes blend factors after beginItemGlintPhase(), but
+        // never enables blending. Restore the pass policy and pack overrides.
+        if (itemGlintMaskDepth > 0 && activePass == RenderPass.GBUFFERS_ARMOR_GLINT) {
+            PipelineProgram program = self().effectivePipelineProgram(activePass);
+            if (program != null) {
+                self().applyBlendMode(activePass, self().effectiveDrawBuffersForCurrentPhase(program));
+            }
+        }
         GL11.glEnable(GL11.GL_DEPTH_TEST);
         GL11.glDepthMask(false);
         GL11.glDepthFunc(GL11.GL_EQUAL);
