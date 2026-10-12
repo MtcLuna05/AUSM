@@ -4,6 +4,7 @@ import com.luna.ausm.api.pipeline.fbo.Attachment;
 import com.luna.ausm.api.pipeline.shader.RenderPass;
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.pipeline.PipelineContext;
+import com.luna.ausm.impl.pipeline.ShadedDistantHorizonsRendering;
 import com.luna.ausm.impl.pipeline.fbo.DeferredFramebuffer;
 import com.luna.ausm.impl.pipeline.fbo.ShadowFramebuffer;
 import com.luna.ausm.impl.pipeline.shader.ShaderBindingLayout;
@@ -84,6 +85,7 @@ public class TextureBinder {
         bindRawTexture(COLORTEX16_TEXTURE_UNIT, fallbackBlackTexture());
         bindRawTexture(CENTER_DEPTH_SMOOTH_TEXTURE_UNIT, PipelineContext.getInstance().getCenterDepthSmoothTexture());
         bindNoiseTexture();
+        ShadedDistantHorizonsRendering.bindDepthTextures();
 
         restoreDefaultTextureUnit();
     }
@@ -112,6 +114,7 @@ public class TextureBinder {
         bindRawTexture(COLORTEX16_TEXTURE_UNIT, fallbackBlackTexture());
         bindRawTexture(CENTER_DEPTH_SMOOTH_TEXTURE_UNIT, PipelineContext.getInstance().getCenterDepthSmoothTexture());
         bindNoiseTexture();
+        ShadedDistantHorizonsRendering.bindDepthTextures();
 
         restoreDefaultTextureUnit();
     }
@@ -306,9 +309,11 @@ public class TextureBinder {
             case "gaux2" -> COLORTEX5_TEXTURE_UNIT;
             case "gaux3" -> COLORTEX6_TEXTURE_UNIT;
             case "gaux4" -> COLORTEX7_TEXTURE_UNIT;
-            case "gdepthtex", "depthtex0", "dhDepthTex", "dhDepthTex0" -> DEPTHTEX0_TEXTURE_UNIT;
-            case "depthtex1", "dhDepthTex1" -> DEPTHTEX1_TEXTURE_UNIT;
-            case "depthtex2", "dhDepthTex2" -> DEPTHTEX2_TEXTURE_UNIT;
+            case "gdepthtex", "depthtex0" -> DEPTHTEX0_TEXTURE_UNIT;
+            case "depthtex1" -> DEPTHTEX1_TEXTURE_UNIT;
+            case "depthtex2" -> DEPTHTEX2_TEXTURE_UNIT;
+            case "dhDepthTex", "dhDepthTex0" -> ShadedDistantHorizonsRendering.DEPTH_UNIT;
+            case "dhDepthTex1", "dhDepthTex2" -> ShadedDistantHorizonsRendering.OPAQUE_DEPTH_UNIT;
             case "noisetex" -> NOISETEX_TEXTURE_UNIT;
             case "iris_centerDepthSmooth" -> CENTER_DEPTH_SMOOTH_TEXTURE_UNIT;
             default -> -1;

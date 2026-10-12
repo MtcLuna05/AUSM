@@ -446,6 +446,8 @@ abstract class PipelineFullscreenPassRendering extends PipelineWorldFramebufferF
         MinecraftReflectionCompat.glBindFramebuffer(MinecraftReflectionCompat.glFramebuffer(), 0);
 
         pingPongManager.cleanup();
+        NativeDistantHorizonsCompositor.release();
+        DistantHorizonsShadowRendering.release();
         if (shadowFramebuffer != null) {
             shadowFramebuffer.delete();
             shadowFramebuffer = null;

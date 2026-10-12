@@ -38,12 +38,16 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
 
     protected void ausm$mouseReleased(int mouseX, int mouseY, int mouseButton) {
         for (GuiButton button : buttonList) {
-            MinecraftReflectionCompat.invoke(
-                    button,
-                    new String[]{"func_146118_a", "mouseReleased"},
-                    new Class<?>[]{int.class, int.class},
-                    mouseX,
-                    mouseY);
+            if (button instanceof GuiAusmValueSlider slider) {
+                slider.mouseReleased(mouseX, mouseY);
+            } else {
+                MinecraftReflectionCompat.invoke(
+                        button,
+                        new String[]{"func_146118_a", "mouseReleased"},
+                        new Class<?>[]{int.class, int.class},
+                        mouseX,
+                        mouseY);
+            }
         }
     }
 
@@ -52,15 +56,20 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
 
     protected void ausm$drawScreen(int mouseX, int mouseY, float partialTicks) {
         for (GuiButton button : buttonList) {
-            // Exactly one draw route: runtime classes use the SRG name, development classes use the fallback.
-            MinecraftReflectionCompat.invoke(
-                    button,
-                    new String[]{"func_191745_a", "drawButton"},
-                    new Class<?>[]{Minecraft.class, int.class, int.class, float.class},
-                    mc,
-                    mouseX,
-                    mouseY,
-                    partialTicks);
+            if (button instanceof GuiAusmValueSlider slider) {
+                // The custom slider keeps its own method name in the runtime JAR.
+                slider.drawButton(mc, mouseX, mouseY, partialTicks);
+            } else {
+                // Vanilla controls use Cleanroom's SRG name at runtime.
+                MinecraftReflectionCompat.invoke(
+                        button,
+                        new String[]{"func_191745_a", "drawButton"},
+                        new Class<?>[]{Minecraft.class, int.class, int.class, float.class},
+                        mc,
+                        mouseX,
+                        mouseY,
+                        partialTicks);
+            }
         }
     }
 
@@ -69,14 +78,19 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
             return;
         }
         for (GuiButton button : buttonList) {
-            Object pressed = MinecraftReflectionCompat.invoke(
-                    button,
-                    new String[]{"func_146116_c", "mousePressed"},
-                    new Class<?>[]{Minecraft.class, int.class, int.class},
-                    mc,
-                    mouseX,
-                    mouseY);
-            if (Boolean.TRUE.equals(pressed)) {
+            boolean pressed;
+            if (button instanceof GuiAusmValueSlider slider) {
+                pressed = slider.mousePressed(mc, mouseX, mouseY);
+            } else {
+                pressed = Boolean.TRUE.equals(MinecraftReflectionCompat.invoke(
+                        button,
+                        new String[]{"func_146116_c", "mousePressed"},
+                        new Class<?>[]{Minecraft.class, int.class, int.class},
+                        mc,
+                        mouseX,
+                        mouseY));
+            }
+            if (pressed) {
                 ausm$actionPerformed(button);
                 return;
             }
@@ -146,6 +160,20 @@ abstract class MappingSafeGuiScreen extends GuiScreen {
                 ausm$mouseClicked(mouseX, mouseY, mouseButton);
             } else {
                 ausm$mouseReleased(mouseX, mouseY, mouseButton);
+            }
+        } else if (Mouse.isButtonDown(0)) {
+            for (GuiButton button : buttonList) {
+                if (button instanceof GuiAusmValueSlider slider) {
+                    slider.mouseDragged(mc, mouseX, mouseY);
+                } else {
+                    MinecraftReflectionCompat.invoke(
+                            button,
+                            new String[]{"func_146119_b", "mouseDragged"},
+                            new Class<?>[]{Minecraft.class, int.class, int.class},
+                            mc,
+                            mouseX,
+                            mouseY);
+                }
             }
         }
     }

@@ -194,11 +194,8 @@ unimined.minecraft {
 }
 
 dependencies {
-    if (propertyBool('enable_junit_testing')) {
-        testImplementation 'org.junit.jupiter:junit-jupiter:6.0.3'
-        testImplementation 'org.ow2.asm:asm-tree:9.9'
-        testImplementation 'net.minecraft:launchwrapper:1.12'
-        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    if (propertyBool('use_asset_mover')) {
+        implementation "com.cleanroommc:assetmover:${propertyString('asset_mover_version')}"
     }
 }
 
@@ -782,28 +779,6 @@ tasks.register('rollbackHotSwap', JavaExec) {
         }
         File agentArchive = tasks.named('hotswapAgentJar').get().archiveFile.get().asFile
         setArgs([targetPid, agentArchive.absolutePath, '@rollback'])
-    }
-}
-
-compileTestJava {
-    sourceCompatibility = targetCompatibility = JavaVersion.VERSION_21
-}
-
-test {
-    useJUnitPlatform()
-    if (rootProject.ext.preferredJavaHome != null) {
-        doFirst {
-            executable = new File(rootProject.ext.preferredJavaHome, 'bin/java').absolutePath
-        }
-    } else {
-        javaLauncher.set(javaToolchains.launcherFor {
-            languageVersion = JavaLanguageVersion.of(25)
-        })
-    }
-    if (propertyBool('show_testing_output')) {
-        testLogging {
-            showStandardStreams = true
-        }
     }
 }
 

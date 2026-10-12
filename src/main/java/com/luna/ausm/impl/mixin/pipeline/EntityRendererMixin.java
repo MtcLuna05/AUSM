@@ -9,6 +9,7 @@ import com.luna.ausm.impl.pipeline.matrix.MatrixState;
 import com.luna.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.settings.GameSettings;
 import net.minecraft.client.particle.ParticleManager;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.EntityRenderer;
@@ -124,6 +125,22 @@ public class EntityRendererMixin {
 
     private void ausm$finishGuiScreenRendering() {
         AusmGuiRenderController.endScreen();
+    }
+
+    @Redirect(
+            method = "func_175068_a(IFJ)V",
+            at = @At(value = "FIELD",
+                    target = "Lnet/minecraft/client/settings/GameSettings;field_151451_c:I",
+                    opcode = Opcodes.GETFIELD, ordinal = 0),
+            require = 1
+    )
+    private int ausm$keepShaderSkyAtShortRenderDistance(GameSettings settings) {
+        int distance = MinecraftReflectionCompat.renderDistanceChunks(settings, 4);
+        PipelineContext context = PipelineContext.getInstance();
+        // This is only vanilla's four-chunk sky gate, not the terrain radius.
+        // DH exposes the skipped sky at short distances; a shadow refresh can
+        // temporarily raise that radius and otherwise make the sky flash.
+        return context.isActive() && !context.isShadowPassActive() ? Math.max(distance, 4) : distance;
     }
 
     @Inject(method = "func_175068_a", at = @At("HEAD"), cancellable = true)

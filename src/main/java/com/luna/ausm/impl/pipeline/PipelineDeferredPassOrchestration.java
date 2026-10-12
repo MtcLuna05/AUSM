@@ -7,6 +7,7 @@ import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.luna.ausm.impl.pipeline.fbo.DeferredFramebuffer;
+import com.luna.ausm.impl.pipeline.fbo.HandDepthSnapshot;
 import com.luna.ausm.impl.pipeline.pack.ShaderEnvironmentDefines;
 import com.luna.ausm.impl.pipeline.shader.PipelineProgram;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
@@ -145,6 +146,7 @@ abstract class PipelineDeferredPassOrchestration extends PipelineContextBase {
         clearPendingPersistentHistoryIfNeeded();
         logDeferredBoundaryProbe("begin-translucents-entry", "beforeDepthCopy=true");
         copyPreTranslucentDepth();
+        ShadedDistantHorizonsRendering.merge(false);
         logDeferredBoundaryProbe("before-deferred", "preDepthCopied=" + preTranslucentDepthCopiedThisFrame);
         DeferredFramebuffer preDeferredBuffer = pingPongManager.getReadBuffer();
         self().logFlatFoliageHighlightProbe(preDeferredBuffer);
@@ -240,7 +242,7 @@ abstract class PipelineDeferredPassOrchestration extends PipelineContextBase {
             if (pingPongManager.isInitialized()) {
                 // The opaque snapshot must contain the solid hand for volumetric
                 // occlusion, but not translucent terrain. Keep depthtex2 hand-free.
-                com.luna.ausm.impl.pipeline.fbo.HandDepthSnapshot.merge(pingPongManager.getReadBuffer());
+                HandDepthSnapshot.merge(pingPongManager.getReadBuffer());
             }
         } finally {
             GL11.glDepthRange(0.0D, 1.0D);
@@ -373,6 +375,7 @@ abstract class PipelineDeferredPassOrchestration extends PipelineContextBase {
         }
 
         logDeferredBoundaryProbe("before-composite", "external=false");
+        ShadedDistantHorizonsRendering.merge(true);
         self().runFullscreenPasses(ProgramArrayId.COMPOSITE);
         self().logBetterPortalsPipeline("after-composite");
         logColorBufferProbe("after-composite");

@@ -15,9 +15,13 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'org.spongepowered:mixin:0.8.5'
     modImplementation('maven.modrinth:mixinbooter:10.7') {
         transitive = false
+    }
+    compileOnly 'maven.modrinth:distanthorizonsapi:7.2.0'
+    compileOnly "com.cleanroommc:sponge-mixin:0.20.13+mixin.0.8.7"
+    if (propertyBool('enable_lwjglx')) {
+        compileOnly "com.cleanroommc:lwjglx:1.0.0"
     }
     modImplementation 'curse.maven:hei-557549:6187146' // Use for mod Mixin example
     compileOnly 'curse.maven:nothirium-624960:7207682'

@@ -1,5 +1,4 @@
 package com.luna.ausm.impl.client;
-
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import java.io.BufferedReader;
@@ -32,7 +31,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
-
 /**
  * Builds Entree + Euphoria and overlays AUSM's maintained Entree additions.
  * If the ordinary Complementary + Euphoria output is absent, a pinned binary
@@ -42,7 +40,6 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
  */
 public final class EuphoriaEntreePackGenerator {
     public static final String TARGET_PACK = "Complimentary Entree + EuphoriaPatches_1.9.3";
-
     private static final String EUPHORIA_PACK = "ComplementaryUnbound_r5.8.1 + EuphoriaPatches_1.9.3";
     private static final String EUPHORIA_PATCH_SUFFIX = " + EuphoriaPatches_1.9.3";
     private static final String ENTREE_PACK = "Complimentary Entree";
@@ -74,26 +71,21 @@ public final class EuphoriaEntreePackGenerator {
     private static final Pattern BLOCK_MAPPING = Pattern.compile("^\\s*block\\.(\\d+)\\s*=.*$");
     private static final Pattern ROOT_OPTIONS_SCREEN = Pattern.compile("(?m)^(\\s*screen=)([^\\r\\n]*)");
     private static final EuphoriaEntreePackGenerator INSTANCE = new EuphoriaEntreePackGenerator();
-
     private int ticks;
     private int failureLogs;
     private boolean optionsCopiedThisStartup;
-
     private EuphoriaEntreePackGenerator() {
     }
-
     public static void init() {
         generateNow();
         FMLCommonHandler.instance().bus().register(INSTANCE);
     }
-
     /**
      * Called by the Euphoria Patcher constructor compatibility hook.
      */
     public static void generateNow() {
         INSTANCE.generateIfNeeded();
     }
-
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) {
@@ -107,7 +99,6 @@ public final class EuphoriaEntreePackGenerator {
             FMLCommonHandler.instance().bus().unregister(this);
         }
     }
-
     private synchronized void generateIfNeeded() {
         // This generator is packaged after the normal Minecraft remap inputs;
         // calling the MCP name directly survives into the distributable JAR
@@ -117,7 +108,6 @@ public final class EuphoriaEntreePackGenerator {
         if (minecraft == null) {
             return;
         }
-
         Path gameDir = MinecraftReflectionCompat.gameDir(minecraft).toPath().toAbsolutePath().normalize();
         Path shaderpacks = gameDir.resolve("shaderpacks").normalize();
         try {
@@ -134,7 +124,6 @@ public final class EuphoriaEntreePackGenerator {
         if (entree == null) {
             return;
         }
-
         Path euphoriaProperties = euphoria.resolve("shaders/shaders.properties");
         String token;
         try {
@@ -165,14 +154,12 @@ public final class EuphoriaEntreePackGenerator {
             }
         }
     }
-
     private void copyEntreeOptionsOnce(Path gameDir) throws IOException {
         if (!optionsCopiedThisStartup) {
             copyEntreeOptions(gameDir);
             optionsCopiedThisStartup = true;
         }
     }
-
     private static void generateFromPatchedPack(Path shaderpacks, Path euphoria, Path entreeBlocks, Path target, String token) throws IOException {
         Path staging = safeDirectChild(shaderpacks, STAGING_NAME);
         deleteTree(staging);
@@ -183,7 +170,6 @@ public final class EuphoriaEntreePackGenerator {
         Files.writeString(staging.resolve(MARKER_FILE), token, StandardCharsets.UTF_8);
         publish(shaderpacks, staging, target);
     }
-
     private static void generateFromEntree(Path shaderpacks, Path entree, Path target, String token) throws IOException {
         Path staging = safeDirectChild(shaderpacks, STAGING_NAME);
         Path work = safeDirectChild(shaderpacks, WORK_NAME);
@@ -191,7 +177,6 @@ public final class EuphoriaEntreePackGenerator {
         Path entreeTar = work.resolve("entree.tar");
         Path euphoriaTar = work.resolve("euphoria.tar");
         Path patch = work.resolve("entree-euphoria.patch");
-
         deleteTree(staging);
         deleteTree(work);
         Files.createDirectories(work);
@@ -199,7 +184,6 @@ public final class EuphoriaEntreePackGenerator {
             materializePack(entree, extractedEntree);
             invokeArchive(extractedEntree, entreeTar);
             requireSha256(entreeTar, NATIVE_ENTREE_TAR_SHA256, "Entree shader base");
-
             try (InputStream stream = requiredResource(NATIVE_PATCH)) {
                 Files.copy(stream, patch, StandardCopyOption.REPLACE_EXISTING);
             }
@@ -207,7 +191,6 @@ public final class EuphoriaEntreePackGenerator {
             requireSha256(euphoriaTar, NATIVE_EUPHORIA_TAR_SHA256, "Euphoria shader result");
             invokeExtract(euphoriaTar, staging);
             requireEuphoriaMarker(staging);
-
             overlayBundledFiles(staging);
             injectAUSM112LodSupportInto(staging);
             mergeEntreeBlockMappings(staging.resolve("shaders/block.properties"), extractedEntree.resolve("shaders/block.properties"));
@@ -218,11 +201,9 @@ public final class EuphoriaEntreePackGenerator {
             deleteTree(work);
         }
     }
-
     private static void publish(Path shaderpacks, Path staging, Path target) throws IOException {
         Path previous = safeDirectChild(shaderpacks, PREVIOUS_NAME);
         deleteTree(previous);
-
         boolean parkedTarget = false;
         try {
             if (Files.exists(target)) {
@@ -240,7 +221,6 @@ public final class EuphoriaEntreePackGenerator {
             deleteTree(staging);
         }
     }
-
     private static void invokeArchive(Path source, Path archive) throws IOException {
         invokePatcherMethod(
                 "com.euphoriapatches.euphoria_patcher.io.ArchiveUtils",
@@ -250,7 +230,6 @@ public final class EuphoriaEntreePackGenerator {
                 archive
         );
     }
-
     private static void invokeExtract(Path archive, Path destination) throws IOException {
         invokePatcherMethod(
                 "com.euphoriapatches.euphoria_patcher.io.ArchiveUtils",
@@ -260,7 +239,6 @@ public final class EuphoriaEntreePackGenerator {
                 destination
         );
     }
-
     private static void invokeBinaryPatch(Path source, Path destination, Path patch) throws IOException {
         invokePatcherMethod(
                 "com.euphoriapatches.shadow.io.sigpipe.jbsdiff.ui.FileUI",
@@ -271,7 +249,6 @@ public final class EuphoriaEntreePackGenerator {
                 patch.toFile()
         );
     }
-
     private static void invokePatcherMethod(String className, String methodName, Class<?>[] parameterTypes, Object... arguments) throws IOException {
         try {
             Class<?> owner = Class.forName(className, true, EuphoriaEntreePackGenerator.class.getClassLoader());
@@ -289,25 +266,21 @@ public final class EuphoriaEntreePackGenerator {
             throw new IOException("Could not invoke Euphoria Patcher " + methodName, failure);
         }
     }
-
     private static void requireSha256(Path file, String expected, String description) throws IOException {
         String actual = sha256(file);
         if (!expected.equals(actual)) {
             throw new IOException(description + " is not the supported release (expected " + expected + ", got " + actual + ")");
         }
     }
-
     private static void requireEuphoriaMarker(Path root) throws IOException {
         Path marker = root.resolve("shaders/lib/misc/myFile.glsl");
         if (!Files.isRegularFile(marker) || !Files.readString(marker, StandardCharsets.UTF_8).startsWith(EUPHORIA_MARKER)) {
             throw new IOException("Patched Entree output is missing the Euphoria 1.9.3 marker");
         }
     }
-
     private static void overlayBundledFiles(Path staging) throws IOException {
         overlayBundledFiles(staging, true);
     }
-
     private static void overlayBundledFiles(Path staging, boolean overwriteCommonLibrary) throws IOException {
         for (String relative : readManifest()) {
             if (!overwriteCommonLibrary && relative.equals("shaders/lib/common.glsl")) {
@@ -323,7 +296,6 @@ public final class EuphoriaEntreePackGenerator {
             }
         }
     }
-
     /**
      * Keeps generated 1.12.2 patch folders compatible with AUSM's distance-LOD
      * contract. Older generated folders predate the helper or only patch one
@@ -344,7 +316,6 @@ public final class EuphoriaEntreePackGenerator {
             injectAUSM112LodSupportInto(patchPack);
         }
     }
-
     /**
      * Euphoria creates its patched directories, while plain Complementary
      * Unbound and Reimagined packs are direct sources. In every case AUSM
@@ -378,7 +349,6 @@ public final class EuphoriaEntreePackGenerator {
                     continue;
                 }
             }
-
             Path staging = safeDirectChild(shaderpacks, STAGING_NAME);
             deleteTree(staging);
             materializePack(sourcePack, staging);
@@ -394,7 +364,6 @@ public final class EuphoriaEntreePackGenerator {
             MainMod.LOGGER.info("[AUSM112] Generated shaderpack '{}' from '{}'", target.getFileName(), sourceName);
         }
     }
-
     static boolean isAUSM112PatchSource(String name) {
         String packName = withoutZipExtension(name);
         return !packName.endsWith(AUSM_112_PATCH_SUFFIX)
@@ -402,11 +371,9 @@ public final class EuphoriaEntreePackGenerator {
                 || packName.startsWith("ComplementaryUnbound")
                 || packName.startsWith("ComplementaryReimagined"));
     }
-
     private static String withoutZipExtension(String name) {
         return name.endsWith(".zip") ? name.substring(0, name.length() - 4) : name;
     }
-
     private static void injectAUSM112LodSupportInto(Path patchPack) throws IOException {
         installBundledLuminousBlockMappings(patchPack);
         Path properties = patchPack.resolve("shaders/shaders.properties");
@@ -420,7 +387,6 @@ public final class EuphoriaEntreePackGenerator {
         injectLodHelperIntoProgram(patchPack.resolve("shaders/program/gbuffers_terrain.glsl"));
         injectLodHelperIntoProgram(patchPack.resolve("shaders/program/gbuffers_water.glsl"));
     }
-
     /**
      * Adds RandomThings' opaque Luminous Blocks to Euphoria's existing modded
      * light-source material classes.  These are texture-pack declarations:
@@ -434,7 +400,6 @@ public final class EuphoriaEntreePackGenerator {
         mergeBundledBlockMappings(shaderpack.resolve(EUPHORIA_18_BLOCK_PROPERTIES), mappings);
         mergeBundledBlockMappings(shaderpack.resolve(MERGED_BLOCK_PROPERTIES), mappings);
     }
-
     private static List<String> readBundledBlockMappings() throws IOException {
         List<String> mappings = new ArrayList<>();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
@@ -448,7 +413,6 @@ public final class EuphoriaEntreePackGenerator {
         }
         return mappings;
     }
-
     private static void mergeBundledBlockMappings(Path properties, List<String> mappings) throws IOException {
         if (!Files.isRegularFile(properties)) {
             return;
@@ -477,7 +441,6 @@ public final class EuphoriaEntreePackGenerator {
             Files.write(properties, lines, StandardCharsets.UTF_8);
         }
     }
-
     private static boolean hasBlockMappingValues(List<String> lines, int id, String values) {
         int line = findBlockMappingLine(lines, id);
         if (line < 0) {
@@ -495,7 +458,6 @@ public final class EuphoriaEntreePackGenerator {
         }
         return true;
     }
-
     private static int findBlockMappingLine(List<String> lines, int id) {
         String prefix = "block." + id;
         for (int line = 0; line < lines.size(); line++) {
@@ -506,7 +468,6 @@ public final class EuphoriaEntreePackGenerator {
         }
         return -1;
     }
-
     private static int lastBlockMappingLine(List<String> lines, int firstLine) {
         int line = firstLine;
         while (line + 1 < lines.size() && lines.get(line).stripTrailing().endsWith("\\")) {
@@ -514,7 +475,6 @@ public final class EuphoriaEntreePackGenerator {
         }
         return line;
     }
-
     private static void ensureLodApiDeclaration(Path properties) throws IOException {
         if (!Files.isRegularFile(properties)) {
             return;
@@ -527,7 +487,6 @@ public final class EuphoriaEntreePackGenerator {
                 + LOD_API_PROPERTY + "\n\n";
         Files.writeString(properties, declaration + source, StandardCharsets.UTF_8);
     }
-
     private static void ensureAUSMOptionsCategory(Path properties, Path languageFile) throws IOException {
         if (!Files.isRegularFile(properties)) {
             return;
@@ -585,7 +544,6 @@ public final class EuphoriaEntreePackGenerator {
             Files.writeString(languageFile, updatedLanguage, StandardCharsets.UTF_8);
         }
     }
-
     private static String placeAUSMSettingsAtTop(String source) {
         Matcher rootScreen = ROOT_OPTIONS_SCREEN.matcher(source);
         if (!rootScreen.find()) {
@@ -603,14 +561,12 @@ public final class EuphoriaEntreePackGenerator {
                 + (entries.isEmpty() ? "" : " " + entries);
         return source.substring(0, rootScreen.start()) + replacement + source.substring(rootScreen.end());
     }
-
     private static void ensureBundledLodHelper(Path helper) throws IOException {
         Files.createDirectories(helper.getParent());
         try (InputStream stream = requiredResource(OVERLAY_ROOT + LOD_HELPER)) {
             Files.copy(stream, helper, StandardCopyOption.REPLACE_EXISTING);
         }
     }
-
     static void ensureStablePixelationLibrary(Path pixelationLibrary) throws IOException {
         if (!Files.isRegularFile(pixelationLibrary)) {
             return;
@@ -619,7 +575,6 @@ public final class EuphoriaEntreePackGenerator {
             Files.copy(stream, pixelationLibrary, StandardCopyOption.REPLACE_EXISTING);
         }
     }
-
     private static void ensureDriverSafeFxaaLibrary(Path fxaaLibrary) throws IOException {
         if (!Files.isRegularFile(fxaaLibrary)) {
             return;
@@ -632,16 +587,13 @@ public final class EuphoriaEntreePackGenerator {
                 ivec2 FXAAClampPixel(ivec2 pixel) {
                     return clamp(pixel, ivec2(0), ivec2(viewWidth - 1, viewHeight - 1));
                 }
-
                 vec2 FXAASafeTexelUv(ivec2 pixel) {
                     return (vec2(FXAAClampPixel(pixel)) + 0.5) / vec2(viewWidth, viewHeight);
                 }
-
                 vec2 FXAASafeUv(vec2 uv) {
                     vec2 halfPixel = 0.5 / vec2(viewWidth, viewHeight);
                     return clamp(uv, halfPixel, vec2(1.0) - halfPixel);
                 }
-
                 """;
         String patched = source;
         if (!patched.contains("FXAAClampPixel")) {
@@ -691,7 +643,6 @@ public final class EuphoriaEntreePackGenerator {
         Files.writeString(fxaaLibrary, patched, StandardCharsets.UTF_8);
         MainMod.LOGGER.info("[AUSM] Applied clamped, explicit-LOD FXAA sampling");
     }
-
     private static void ensureClampedVolumetricLight(Path volumetricLightLibrary) throws IOException {
         if (!Files.isRegularFile(volumetricLightLibrary)) {
             return;
@@ -710,7 +661,6 @@ public final class EuphoriaEntreePackGenerator {
                 + "    volumetricLight.rgb = clamp(volumetricLight.rgb, vec3(0.0), vec3(1.0));";
         Files.writeString(volumetricLightLibrary, source.replace(anchor, patch), StandardCharsets.UTF_8);
     }
-
     private static void injectLodHelperIntoProgram(Path program) throws IOException {
         if (!Files.isRegularFile(program)) {
             return;
@@ -731,7 +681,6 @@ public final class EuphoriaEntreePackGenerator {
             MainMod.LOGGER.info("[AUSM112Lod] Injected custom LOD support into {}", program.getFileName());
         }
     }
-
     static String injectLodFallbackUsage(String programName, String source) {
         if ("gbuffers_terrain.glsl".equals(programName)) {
             source = source.replace(
@@ -797,7 +746,6 @@ public final class EuphoriaEntreePackGenerator {
         }
         return source;
     }
-
     private static List<String> readManifest() throws IOException {
         List<String> entries = new ArrayList<>();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(requiredResource(MANIFEST), StandardCharsets.UTF_8))) {
@@ -811,7 +759,6 @@ public final class EuphoriaEntreePackGenerator {
         }
         return entries;
     }
-
     private static InputStream requiredResource(String path) throws IOException {
         InputStream stream = EuphoriaEntreePackGenerator.class.getResourceAsStream(path);
         if (stream == null) {
@@ -819,7 +766,6 @@ public final class EuphoriaEntreePackGenerator {
         }
         return stream;
     }
-
     private static void mergeEntreeBlockMappings(Path targetBlocks, Path entreeBlocks) throws IOException {
         if (!Files.isRegularFile(entreeBlocks) || !Files.isRegularFile(targetBlocks)) {
             return;
@@ -827,7 +773,6 @@ public final class EuphoriaEntreePackGenerator {
         List<String> targetLines = Files.readAllLines(targetBlocks, StandardCharsets.UTF_8);
         Set<Integer> existingIds = new HashSet<>();
         collectBlockIds(targetLines, existingIds);
-
         List<String> additions = new ArrayList<>();
         for (String line : Files.readAllLines(entreeBlocks, StandardCharsets.UTF_8)) {
             Matcher matcher = BLOCK_MAPPING.matcher(line);
@@ -847,7 +792,6 @@ public final class EuphoriaEntreePackGenerator {
         targetLines.addAll(additions);
         Files.write(targetBlocks, targetLines, StandardCharsets.UTF_8);
     }
-
     private static void collectBlockIds(List<String> lines, Set<Integer> result) {
         for (String line : lines) {
             Matcher matcher = BLOCK_MAPPING.matcher(line);
@@ -856,7 +800,6 @@ public final class EuphoriaEntreePackGenerator {
             }
         }
     }
-
     private static boolean isEntreeCustomBlockId(int id) {
         return id == 12003
                 || id >= 12070 && id <= 12080
@@ -866,7 +809,6 @@ public final class EuphoriaEntreePackGenerator {
                 || id >= 12270 && id <= 12283
                 || id >= 32620 && id <= 32645;
     }
-
     private static void copyEntreeOptions(Path gameDir) throws IOException {
         Path options = gameDir.resolve("config/ausm/shader-options");
         Path source = options.resolve("Complimentary_Entree.properties");
@@ -876,14 +818,12 @@ public final class EuphoriaEntreePackGenerator {
             Files.copy(source, destination, StandardCopyOption.REPLACE_EXISTING);
         }
     }
-
     private static String fingerprint(Path file) throws IOException {
         if (!Files.isRegularFile(file)) {
             return "missing:" + file.getFileName();
         }
         return file.getFileName() + ":" + Files.size(file) + ":" + Files.getLastModifiedTime(file).toMillis();
     }
-
     private static String fingerprintPack(Path pack) throws IOException {
         if (Files.isRegularFile(pack)) {
             return pack.getFileName() + ":sha256:" + sha256(pack);
@@ -892,7 +832,6 @@ public final class EuphoriaEntreePackGenerator {
                 + fingerprint(pack.resolve("shaders/lib/common.glsl")) + ":"
                 + fingerprint(pack.resolve("shaders/block.properties"));
     }
-
     private static String sha256(Path file) throws IOException {
         MessageDigest digest;
         try {
@@ -916,11 +855,9 @@ public final class EuphoriaEntreePackGenerator {
         }
         return result.toString();
     }
-
     private static String readStringIfPresent(Path file) throws IOException {
         return Files.isRegularFile(file) ? Files.readString(file, StandardCharsets.UTF_8) : "";
     }
-
     private static Path safeDirectChild(Path root, String name) {
         Path normalizedRoot = root.toAbsolutePath().normalize();
         Path child = normalizedRoot.resolve(name).normalize();
@@ -929,7 +866,6 @@ public final class EuphoriaEntreePackGenerator {
         }
         return child;
     }
-
     private static Path findPack(Path shaderpacks, String name) {
         Path directory = safeDirectChild(shaderpacks, name);
         if (Files.isDirectory(directory)) {
@@ -941,7 +877,6 @@ public final class EuphoriaEntreePackGenerator {
         }
         return null;
     }
-
     private static Path materializedPackFile(Path pack, String relative, Path shaderpacks) throws IOException {
         if (Files.isDirectory(pack)) {
             return pack.resolve(relative);
@@ -952,14 +887,12 @@ public final class EuphoriaEntreePackGenerator {
         materializePack(pack, extracted);
         return extracted.resolve(relative);
     }
-
     private static void cleanupMaterializedPackFile(Path materialized, Path shaderpacks) throws IOException {
         Path work = safeDirectChild(shaderpacks, WORK_NAME);
         if (materialized != null && materialized.toAbsolutePath().normalize().startsWith(work)) {
             deleteTree(work);
         }
     }
-
     private static void materializePack(Path pack, Path destination) throws IOException {
         if (Files.isDirectory(pack)) {
             copyTree(pack, destination);
@@ -967,7 +900,6 @@ public final class EuphoriaEntreePackGenerator {
         }
         extractZip(pack, destination);
     }
-
     private static void extractZip(Path archive, Path destination) throws IOException {
         Path normalizedDestination = destination.toAbsolutePath().normalize();
         Files.createDirectories(normalizedDestination);
@@ -995,7 +927,6 @@ public final class EuphoriaEntreePackGenerator {
             }
         }
     }
-
     private static void copyTree(Path source, Path destination) throws IOException {
         Files.walkFileTree(source, new SimpleFileVisitor<>() {
             @Override
@@ -1003,7 +934,6 @@ public final class EuphoriaEntreePackGenerator {
                 Files.createDirectories(destination.resolve(source.relativize(dir)));
                 return FileVisitResult.CONTINUE;
             }
-
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                 Files.copy(file, destination.resolve(source.relativize(file)), StandardCopyOption.REPLACE_EXISTING);
@@ -1011,7 +941,6 @@ public final class EuphoriaEntreePackGenerator {
             }
         });
     }
-
     private static void deleteTree(Path root) throws IOException {
         if (!Files.exists(root)) {
             return;
@@ -1022,7 +951,6 @@ public final class EuphoriaEntreePackGenerator {
                 Files.delete(file);
                 return FileVisitResult.CONTINUE;
             }
-
             @Override
             public FileVisitResult postVisitDirectory(Path dir, IOException failure) throws IOException {
                 if (failure != null) {
@@ -1033,7 +961,6 @@ public final class EuphoriaEntreePackGenerator {
             }
         });
     }
-
     private static void move(Path source, Path destination) throws IOException {
         try {
             Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE);

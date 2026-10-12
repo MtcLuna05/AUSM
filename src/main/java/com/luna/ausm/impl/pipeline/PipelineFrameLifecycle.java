@@ -55,6 +55,10 @@ abstract class PipelineFrameLifecycle extends PipelineWorldRenderScopeBase {
         forensicTrace("frame-begin", "target-pending");
         externalWorldFramebufferTarget = BetterPortalsCompat.currentShaderRenderPassFramebuffer();
         boolean betterPortalsExternalTarget = isBetterPortalsExternalWorldTarget();
+        if (!betterPortalsExternalTarget) {
+            NativeDistantHorizonsCompositor.beginFrame();
+            ShadedDistantHorizonsRendering.beginFrame();
+        }
         int targetWidth = worldTargetWidth(mc);
         int targetHeight = worldTargetHeight(mc);
         self().observePresentationBeforeWorldRendering(mc);

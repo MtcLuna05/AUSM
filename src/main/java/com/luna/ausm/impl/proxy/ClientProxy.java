@@ -2,6 +2,7 @@ package com.luna.ausm.impl.proxy;
 
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.client.ClientSettingsConfig;
+import com.luna.ausm.impl.client.DistantHorizonsCompat;
 import com.luna.ausm.impl.client.dynamic.DynamicLightConfig;
 import com.luna.ausm.impl.client.EuphoriaEntreePackGenerator;
 import com.luna.ausm.impl.client.KeybindManager;
@@ -47,6 +48,7 @@ public class ClientProxy extends CommonProxy {
         super.init(event);
 
         KeybindManager.init();
+        DistantHorizonsCompat.init();
         EuphoriaEntreePackGenerator.init();
         ThaumcraftParticleBridge.init();
     }

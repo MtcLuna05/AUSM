@@ -7,6 +7,9 @@
   "compatibilityLevel": "JAVA_8",
   "mixins": [],
   "client": [
+    "compat.DistantHorizonsVanillaFadeMixin",
+    "compat.DistantHorizonsFarFadeMixin",
+    "compat.DistantHorizonsAntialiasingMixin",
     "compat.LoliEntityFireMixin",
     "compat.ActuallyAdditionsAssetUtilMixin",
     "compat.CreativeCoreBufferBuilderUtilsMixin",
@@ -75,6 +78,7 @@
     "pipeline.RenderManagerAccessor",
     "pipeline.RenderManagerMixin",
     "pipeline.RenderGlobalAccessor",
+    "pipeline.DistantHorizonsTerrainStateMixin",
     "pipeline.RenderSkyMixin",
     "pipeline.ViewFrustumAccessor",
     "pipeline.TileEntityBeaconRendererMixin",

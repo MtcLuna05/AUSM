@@ -350,7 +350,8 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
                     MainMod.LOGGER.info(
                             "[AUSMWorldFluid] name={} block={} id={} meta={} still={} flowing={} density={} viscosity={} luminosity={}",
                             fluid.getName(), fluid.getBlock().getRegistryName(),
-                            Block.getIdFromBlock(fluid.getBlock()), fluid.getBlock().getMetaFromState(fluid.getBlock().getDefaultState()),
+                            Block.getIdFromBlock(fluid.getBlock()), MinecraftReflectionCompat.blockMetaFromState(
+                                    fluid.getBlock(), MinecraftReflectionCompat.blockDefaultState(fluid.getBlock())),
                             fluid.getStill(), fluid.getFlowing(),
                             fluid.getDensity(), fluid.getViscosity(), fluid.getLuminosity());
                 }

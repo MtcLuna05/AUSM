@@ -154,7 +154,10 @@ abstract class PipelineRuntimeUniformState extends PipelineRuntimeValueTypes {
         uniformRegistry.registerFloat("framemod2", () -> (float) (pipelineFrameId & 1L));
         // The generated 1.12.2 patch folders inject this opt-in helper into
         // terrain and water stages. It is harmless for packs that do not use it.
-        uniformRegistry.registerInt("ausmLodFallbackEnabled", () -> 1);
+        uniformRegistry.registerInt("ausmLodFallbackEnabled", () -> {
+            ClientSettingsConfig settings = MainMod.getClientSettingsConfig();
+            return settings != null && settings.shaderedLodFeaturesEnabled() ? 1 : 0;
+        });
         uniformRegistry.registerFloat("ausmLod1RadiusBlocks", () -> shaderedLodRadius(1));
         uniformRegistry.registerFloat("ausmLod2RadiusBlocks", () -> shaderedLodRadius(2));
         uniformRegistry.registerFloat("ausmLod3RadiusBlocks", () -> shaderedLodRadius(3));
@@ -259,14 +262,22 @@ abstract class PipelineRuntimeUniformState extends PipelineRuntimeValueTypes {
         uniformRegistry.registerMatrix4("iris_ProjectionMatrixInverse", MatrixState::projectionInverse);
         uniformRegistry.registerMatrix4("iris_ProjMatInverse", MatrixState::projectionInverse);
         uniformRegistry.registerMatrix4("gbufferPreviousProjection", MatrixState::previousProjection);
-        uniformRegistry.registerMatrix4("dhProjection", distantHorizonsMatrices::projection);
-        uniformRegistry.registerMatrix4("dhProjectionInverse", distantHorizonsMatrices::projectionInverse);
-        uniformRegistry.registerMatrix4("dhPreviousProjection", distantHorizonsMatrices::projection);
+        uniformRegistry.registerMatrix4("dhProjection", () -> ShadedDistantHorizonsRendering.requested()
+                ? ShadedDistantHorizonsRendering.PROJECTION : distantHorizonsMatrices.projection());
+        uniformRegistry.registerMatrix4("dhProjectionInverse", () -> ShadedDistantHorizonsRendering.requested()
+                ? ShadedDistantHorizonsRendering.PROJECTION_INVERSE : distantHorizonsMatrices.projectionInverse());
+        uniformRegistry.registerMatrix4("dhPreviousProjection", () -> ShadedDistantHorizonsRendering.requested()
+                ? ShadedDistantHorizonsRendering.PREVIOUS_PROJECTION : distantHorizonsMatrices.projection());
         uniformRegistry.registerMatrix4("dhModelView", distantHorizonsMatrices::modelView);
         uniformRegistry.registerMatrix4("dhModelViewProjection", distantHorizonsMatrices::modelViewProjection);
         uniformRegistry.registerVec3("dhModelOffset", distantHorizonsMatrices::modelOffset);
-        uniformRegistry.registerInt("dhMaterialId", () -> 0);
-        uniformRegistry.registerInt("dhRenderDistance", () -> mc != null && MinecraftReflectionCompat.gameSettings(mc) != null ? MinecraftReflectionCompat.renderDistanceChunks(mc) * 16 : 0);
+        // dhMaterialId is a per-vertex attribute, never a uniform.
+        uniformRegistry.registerInt("ausmDhTransitionActive", () -> ShadedDistantHorizonsRendering.shaderpackOverrideActive ? 1 : 0);
+        uniformRegistry.registerInt("dhRenderDistance", () -> ShadedDistantHorizonsRendering.requested()
+                ? ShadedDistantHorizonsRendering.renderDistance
+                : mc != null && MinecraftReflectionCompat.gameSettings(mc) != null ? MinecraftReflectionCompat.renderDistanceChunks(mc) * 16 : 0);
+        uniformRegistry.registerFloat("dhNearPlane", () -> ShadedDistantHorizonsRendering.near);
+        uniformRegistry.registerFloat("dhFarPlane", () -> ShadedDistantHorizonsRendering.far);
         uniformRegistry.registerFloat("fovYInverse", PipelineGlState::fovYInverse);
         uniformRegistry.registerMatrix4("textureMatrix", MatrixState::identity);
         uniformRegistry.registerMatrix4("iris_TextureMat", MatrixState::identity);
@@ -364,10 +375,10 @@ abstract class PipelineRuntimeUniformState extends PipelineRuntimeValueTypes {
             int shadowColorIndex = i;
             uniformRegistry.registerVec2i("shadowcolor" + shadowColorIndex + "Size", () -> self().shadowSize());
         }
-        uniformRegistry.registerInt("dhDepthTex", () -> TextureBinder.DEPTHTEX0_TEXTURE_UNIT);
-        uniformRegistry.registerInt("dhDepthTex0", () -> TextureBinder.DEPTHTEX0_TEXTURE_UNIT);
-        uniformRegistry.registerInt("dhDepthTex1", () -> TextureBinder.DEPTHTEX1_TEXTURE_UNIT);
-        uniformRegistry.registerInt("dhDepthTex2", () -> TextureBinder.DEPTHTEX2_TEXTURE_UNIT);
+        uniformRegistry.registerInt("dhDepthTex", () -> ShadedDistantHorizonsRendering.DEPTH_UNIT);
+        uniformRegistry.registerInt("dhDepthTex0", () -> ShadedDistantHorizonsRendering.DEPTH_UNIT);
+        uniformRegistry.registerInt("dhDepthTex1", () -> ShadedDistantHorizonsRendering.OPAQUE_DEPTH_UNIT);
+        uniformRegistry.registerInt("dhDepthTex2", () -> ShadedDistantHorizonsRendering.OPAQUE_DEPTH_UNIT);
         uniformRegistry.registerInt("noisetex", () -> TextureBinder.NOISETEX_TEXTURE_UNIT);
 
         // Iris wraps frameTimeCounter hourly to avoid large float precision loss in pack animations.

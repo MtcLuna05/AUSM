@@ -1,5 +1,6 @@
 package com.luna.ausm.impl.pipeline;
 
+import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import java.nio.FloatBuffer;
 import net.minecraft.client.shader.Framebuffer;
 import org.lwjgl.BufferUtils;
@@ -45,8 +46,9 @@ final class PipelineFrameForensics {
         if (framebuffer == null) {
             return label + " framebuffer=null";
         }
-        return describeTexture(label, framebuffer.framebufferTexture, framebuffer.framebufferWidth, framebuffer.framebufferHeight)
-                + " fbo=" + framebuffer.framebufferObject;
+        return describeTexture(label, MinecraftReflectionCompat.framebufferTexture(framebuffer),
+                MinecraftReflectionCompat.framebufferWidth(framebuffer), MinecraftReflectionCompat.framebufferHeight(framebuffer))
+                + " fbo=" + MinecraftReflectionCompat.framebufferObject(framebuffer);
     }
 
     private static String summarize(String label, int texture, int width, int height, FloatBuffer pixels) {

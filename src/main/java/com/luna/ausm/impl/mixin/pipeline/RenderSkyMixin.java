@@ -30,7 +30,7 @@ public class RenderSkyMixin {
     private static final ThreadLocal<Deque<Object>> ausm$blockedSkyRenderers = ThreadLocal.withInitial(ArrayDeque::new);
     private static final ResourceLocation ausm$moonPhasesTexture = new ResourceLocation("textures/environment/moon_phases.png");
 
-    @Inject(method = "markBlocksForUpdate", at = @At("HEAD"))
+    @Inject(method = "func_184385_a", at = @At("HEAD"))
     private void ausm$ensureViewFrustumBeforeBlockUpdate(int minX, int minY, int minZ,
                                                          int maxX, int maxY, int maxZ,
                                                          boolean updateImmediately,
@@ -38,17 +38,17 @@ public class RenderSkyMixin {
         PipelineContext.getInstance().ensureRenderGlobalViewFrustum((RenderGlobal) (Object) this);
     }
 
-    @Inject(method = "loadRenderers", at = @At("HEAD"))
+    @Inject(method = "func_72712_a", at = @At("HEAD"))
     private void ausm$logLoadRenderers(CallbackInfo ci) {
         PipelineContext.getInstance().handleRenderGlobalLoadRenderers((RenderGlobal) (Object) this);
     }
 
-    @Inject(method = "loadRenderers", at = @At("RETURN"))
+    @Inject(method = "func_72712_a", at = @At("RETURN"))
     private void ausm$afterLoadRenderers(CallbackInfo ci) {
         PipelineContext.getInstance().handleRenderGlobalLoadRenderersComplete((RenderGlobal) (Object) this);
     }
 
-    @Inject(method = "renderSky(FI)V", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "func_174976_a(FI)V", at = @At("HEAD"), cancellable = true, require = 1)
     private void onRenderSkyHead(float partialTicks, int pass, CallbackInfo ci) {
         // Some nested/custom sky paths can leave the shared Tessellator open.
         // Vanilla sky immediately calls BufferBuilder.begin(), which hard-crashes
@@ -98,7 +98,7 @@ public class RenderSkyMixin {
         }
     }
 
-    @Inject(method = "renderSky(FI)V", at = @At("RETURN"))
+    @Inject(method = "func_174976_a(FI)V", at = @At("RETURN"))
     private void onRenderSkyReturn(float partialTicks, int pass, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         Deque<Object> blockedRenderers = ausm$blockedSkyRenderers.get();
@@ -115,7 +115,7 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
                     target = "Lnet/minecraftforge/client/IRenderHandler;render(FLnet/minecraft/client/multiplayer/WorldClient;Lnet/minecraft/client/Minecraft;)V"
@@ -163,7 +163,7 @@ public class RenderSkyMixin {
         }
     }
 
-    @Inject(method = "renderSkyEnd()V", at = @At("HEAD"), require = 0)
+    @Inject(method = "func_180448_r()V", at = @At("HEAD"), require = 0)
     private void ausm$beforeVoidSkybox(CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldUseCompleteOwnedSkyOverride()) {
@@ -174,7 +174,7 @@ public class RenderSkyMixin {
         context.beginPhase(WorldRenderingPhase.VOID);
     }
 
-    @Inject(method = "renderSkyEnd()V", at = @At("RETURN"), require = 0)
+    @Inject(method = "func_180448_r()V", at = @At("RETURN"), require = 0)
     private void ausm$afterVoidSkybox(CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldUseCompleteOwnedSkyOverride()) {
@@ -185,10 +185,10 @@ public class RenderSkyMixin {
     }
 
     @Inject(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/BufferBuilder;begin(ILnet/minecraft/client/renderer/vertex/VertexFormat;)V",
+                    target = "Lnet/minecraft/client/renderer/BufferBuilder;func_181668_a(ILnet/minecraft/client/renderer/vertex/VertexFormat;)V",
                     ordinal = 0,
                     shift = At.Shift.BEFORE
             )
@@ -198,10 +198,10 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/Tessellator;draw()V",
+                    target = "Lnet/minecraft/client/renderer/Tessellator;func_78381_a()V",
                     ordinal = 0
             )
     )
@@ -219,10 +219,10 @@ public class RenderSkyMixin {
     }
 
     @Inject(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/texture/TextureManager;bindTexture(Lnet/minecraft/util/ResourceLocation;)V",
+                    target = "Lnet/minecraft/client/renderer/texture/TextureManager;func_110577_a(Lnet/minecraft/util/ResourceLocation;)V",
                     ordinal = 0,
                     shift = At.Shift.BEFORE
             )
@@ -234,10 +234,10 @@ public class RenderSkyMixin {
     }
 
     @Inject(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/texture/TextureManager;bindTexture(Lnet/minecraft/util/ResourceLocation;)V",
+                    target = "Lnet/minecraft/client/renderer/texture/TextureManager;func_110577_a(Lnet/minecraft/util/ResourceLocation;)V",
                     ordinal = 1,
                     shift = At.Shift.BEFORE
             )
@@ -249,10 +249,10 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/Tessellator;draw()V",
+                    target = "Lnet/minecraft/client/renderer/Tessellator;func_78381_a()V",
                     ordinal = 1
             )
     )
@@ -266,10 +266,10 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/Tessellator;draw()V",
+                    target = "Lnet/minecraft/client/renderer/Tessellator;func_78381_a()V",
                     ordinal = 2
             )
     )
@@ -299,10 +299,10 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;drawArrays(I)V",
+                    target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;func_177358_a(I)V",
                     ordinal = 0
             ),
             require = 0
@@ -317,10 +317,10 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/GlStateManager;callList(I)V",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179148_o(I)V",
                     ordinal = 0
             ),
             require = 0
@@ -335,10 +335,10 @@ public class RenderSkyMixin {
     }
 
     @Inject(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/multiplayer/WorldClient;getStarBrightness(F)F",
+                    target = "Lnet/minecraft/client/multiplayer/WorldClient;func_72880_h(F)F",
                     shift = At.Shift.BEFORE
             )
     )
@@ -349,10 +349,10 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;drawArrays(I)V",
+                    target = "Lnet/minecraft/client/renderer/vertex/VertexBuffer;func_177358_a(I)V",
                     ordinal = 1
             )
     )
@@ -364,10 +364,10 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/GlStateManager;callList(I)V",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179148_o(I)V",
                     ordinal = 1
             )
     )
@@ -457,10 +457,10 @@ public class RenderSkyMixin {
     }
 
     @Redirect(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/Tessellator;draw()V",
+                    target = "Lnet/minecraft/client/renderer/Tessellator;func_78381_a()V",
                     ordinal = 3
             ),
             require = 0
@@ -483,10 +483,10 @@ public class RenderSkyMixin {
     }
 
     @Inject(
-            method = "renderSky(FI)V",
+            method = "func_174976_a(FI)V",
             at = @At(
                     value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/GlStateManager;disableBlend()V",
+                    target = "Lnet/minecraft/client/renderer/GlStateManager;func_179084_k()V",
                     shift = At.Shift.BEFORE
             )
     )
@@ -494,7 +494,7 @@ public class RenderSkyMixin {
         PipelineContext.getInstance().endPass();
     }
 
-    @Inject(method = "renderClouds(FIDDD)V", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "func_180447_b(FIDDD)V", at = @At("HEAD"), cancellable = true, require = 1)
     private void onRenderCloudsHead(float partialTicks, int pass, double x, double y, double z, CallbackInfo ci) {
         PipelineContext context = PipelineContext.getInstance();
         if (context.shouldUseShaderlessSkyOverride() || !context.shouldRenderClouds()) {
@@ -504,7 +504,7 @@ public class RenderSkyMixin {
         context.beginPhase(WorldRenderingPhase.CLOUDS);
     }
 
-    @Inject(method = "renderClouds(FIDDD)V", at = @At("RETURN"))
+    @Inject(method = "func_180447_b(FIDDD)V", at = @At("RETURN"))
     private void onRenderCloudsReturn(float partialTicks, int pass, double x, double y, double z, CallbackInfo ci) {
         PipelineContext.getInstance().endPass();
     }

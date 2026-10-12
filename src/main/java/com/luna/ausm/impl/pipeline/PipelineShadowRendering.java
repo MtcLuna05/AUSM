@@ -232,6 +232,8 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
                 blockEntityCount = self().renderShadowBlockEntitiesDirect(mc, viewEntity, shadowCamera, partialTicks);
                 endPass();
             }
+            int distantShadowDraws = DistantHorizonsShadowRendering.render(PipelineContext.getInstance(), partialTicks);
+            if (distantShadowDraws > 0) solidCount = Math.max(0, solidCount) + distantShadowDraws;
             shadowFramebuffer.copyDepthToSnapshot();
             if (renderShadowTerrain && shaderProperties.renderSettings().shadowTranslucent()) {
                 translucentCount = self().renderShadowTerrainLayer(mc, WorldRenderingPhase.TERRAIN_TRANSLUCENT, BlockRenderLayer.TRANSLUCENT, partialTicks, viewEntity);

@@ -52,6 +52,14 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
                 pingPongManager == null ? null : pingPongManager.getReadBuffer(),
                 programs.get(RenderPass.FINAL));
         MinecraftReflectionCompat.bindFramebuffer(target, false);
+        if (!externalTarget) {
+            NativeDistantHorizonsCompositor.draw(
+                    // Vanilla clears live terrain depth before drawing the hand.
+                    // depthtex1 preserves the opaque world and merges the solid hand.
+                    pingPongManager.getReadBuffer().getDepthSamplerTexture(DeferredFramebuffer.DEPTHTEX1_SNAPSHOT),
+                    MinecraftReflectionCompat.framebufferWidth(target),
+                    MinecraftReflectionCompat.framebufferHeight(target));
+        }
         PipelineFrameLayerCapture.capturePreBloomPresentation(target);
         if (renderPostBloom) {
             self().renderPostWorldBloom(target, externalTarget);
@@ -515,6 +523,9 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
         Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
 
         PipelineFrameLayerCapture.beginIfRequested(pipelineFrameId, pingPongManager.getReadBuffer());
+        if (!isBetterPortalsExternalWorldTarget()) {
+            NativeDistantHorizonsAntialiasing.composeBeforeResolve(activePackName, program, pingPongManager.getReadBuffer());
+        }
         // Older Complementary-style packs use colortex2 for water auxiliary
         // data during gbuffers_water, then use its alternate texture as TAA
         // history in COMPOSITE5.  Keep the water data available to the earlier

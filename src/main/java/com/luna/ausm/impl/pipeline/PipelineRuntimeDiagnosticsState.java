@@ -278,6 +278,8 @@ abstract class PipelineRuntimeDiagnosticsState extends PipelineRuntimeStateBase 
 
     protected boolean waterAttachmentDeltaProbeActive = false;
 
+    protected int waterAttachmentProbeFramebuffer = 0;
+
     protected int handItemDrawStateLogs = 0;
 
     protected int handGbufferProbeLogs = 0;
