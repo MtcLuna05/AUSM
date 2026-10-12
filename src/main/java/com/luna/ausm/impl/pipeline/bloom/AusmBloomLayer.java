@@ -16,6 +16,7 @@ public final class AusmBloomLayer {
     private static final String NOTHIRIUM_BLOCK_RENDER_LAYER_UTIL = "meldexun.nothirium.mc.util.BlockRenderLayerUtil";
 
     private static BlockRenderLayer bloomLayer;
+    private static volatile boolean existingLayerLookupComplete;
     private static boolean standaloneCreateAttempted;
     private static boolean nothiriumBloomPassPatched;
     private static boolean nothiriumRendererRecreatePending;
@@ -92,10 +93,20 @@ public final class AusmBloomLayer {
     }
 
     private static BlockRenderLayer existingLayer() {
-        try {
-            return BlockRenderLayer.valueOf("BLOOM");
-        } catch (IllegalArgumentException ignored) {
-            return null;
+        if (existingLayerLookupComplete) {
+            return bloomLayer;
+        }
+        synchronized (AusmBloomLayer.class) {
+            if (!existingLayerLookupComplete) {
+                for (BlockRenderLayer candidate : BlockRenderLayer.values()) {
+                    if ("BLOOM".equals(candidate.name())) {
+                        bloomLayer = candidate;
+                        break;
+                    }
+                }
+                existingLayerLookupComplete = true;
+            }
+            return bloomLayer;
         }
     }
 
@@ -103,6 +114,10 @@ public final class AusmBloomLayer {
         try {
             if (existingLayer() == null) {
                 ensureEnumConstant(BlockRenderLayer.class, "BLOOM");
+                synchronized (AusmBloomLayer.class) {
+                    bloomLayer = null;
+                    existingLayerLookupComplete = false;
+                }
             }
         } catch (LinkageError | RuntimeException error) {
             if (!loggedLumenizedInitFailure) {

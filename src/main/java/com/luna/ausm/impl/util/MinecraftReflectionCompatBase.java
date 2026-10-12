@@ -106,6 +106,9 @@ abstract class MinecraftReflectionCompatBase {
     protected static final ThreadLocal<IdentityHashMap<IBlockState, EnumBlockRenderType>> THREAD_STATE_RENDER_TYPE_CACHE =
             ThreadLocal.withInitial(IdentityHashMap::new);
 
+    protected static final ThreadLocal<IdentityHashMap<IBlockState, Boolean>> THREAD_STATE_LIQUID_OR_WATER_CACHE =
+            ThreadLocal.withInitial(IdentityHashMap::new);
+
     protected static final ThreadLocal<IdentityHashMap<IBlockState, Block>> THREAD_STATE_BLOCK_CACHE =
             ThreadLocal.withInitial(IdentityHashMap::new);
 

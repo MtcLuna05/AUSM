@@ -271,18 +271,30 @@ abstract class DeferredFramebufferAttachments extends DeferredFramebufferBase {
         GL11.glDrawBuffer(targetFramebuffer == 0 ? GL11.GL_BACK : GL30.GL_COLOR_ATTACHMENT0);
         self().invalidateDrawBufferState(targetFramebuffer);
 
-        GL30.glBlitFramebuffer(
-                0,
-                0,
-                sourceWidth,
-                sourceHeight,
-                0,
-                0,
-                targetWidth,
-                targetHeight,
-                GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT,
-                GL11.GL_NEAREST
-        );
+        if (sourceWidth != targetWidth || sourceHeight != targetHeight) {
+            // Color may be upscaled from AUSM's optional reduced-resolution
+            // scene target. Filter it smoothly, but keep depth point-sampled
+            // so later vanilla/post effects do not interpolate geometry.
+            GL30.glBlitFramebuffer(0, 0, sourceWidth, sourceHeight,
+                    0, 0, targetWidth, targetHeight,
+                    GL11.GL_COLOR_BUFFER_BIT, GL11.GL_LINEAR);
+            GL30.glBlitFramebuffer(0, 0, self().getWidth(), self().getHeight(),
+                    0, 0, targetWidth, targetHeight,
+                    GL11.GL_DEPTH_BUFFER_BIT, GL11.GL_NEAREST);
+        } else {
+            GL30.glBlitFramebuffer(
+                    0,
+                    0,
+                    sourceWidth,
+                    sourceHeight,
+                    0,
+                    0,
+                    targetWidth,
+                    targetHeight,
+                    GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT,
+                    GL11.GL_NEAREST
+            );
+        }
     }
 
     public void blitDepthTo(int targetFramebuffer, int targetWidth, int targetHeight) {

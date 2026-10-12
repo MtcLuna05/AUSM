@@ -440,6 +440,7 @@ abstract class MinecraftWorldEntityReflection extends MinecraftClientReflection 
         THREAD_STATE_STRING_CACHE.get().clear();
         THREAD_STATE_MATERIAL_CACHE.get().clear();
         THREAD_STATE_RENDER_TYPE_CACHE.get().clear();
+        THREAD_STATE_LIQUID_OR_WATER_CACHE.get().clear();
         THREAD_STATE_BLOCK_CACHE.get().clear();
     }
 

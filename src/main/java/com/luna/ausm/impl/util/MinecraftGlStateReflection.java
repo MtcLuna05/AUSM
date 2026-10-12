@@ -7,6 +7,7 @@ import com.luna.ausm.impl.pipeline.vertex.IBufferBuilderExtension;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
+import java.util.IdentityHashMap;
 import java.util.Collections;
 import java.util.List;
 import net.minecraft.block.Block;
@@ -269,10 +270,21 @@ abstract class MinecraftGlStateReflection extends MinecraftGuiRenderingReflectio
     }
 
     public static boolean stateIsLiquidOrWater(IBlockState state) {
-        return MinecraftReflectionCompat.stateIsLiquid(state)
+        if (state == null) {
+            return false;
+        }
+        IdentityHashMap<IBlockState, Boolean> cache = THREAD_STATE_LIQUID_OR_WATER_CACHE.get();
+        Boolean cached = cache.get(state);
+        if (cached != null) {
+            return cached;
+        }
+        boolean liquidOrWater = MinecraftReflectionCompat.stateIsLiquid(state)
                 || MinecraftReflectionCompat.stateMaterialIsWater(state)
                 || MinecraftReflectionCompat.stateRenderType(state) == EnumBlockRenderType.LIQUID
                 || MinecraftReflectionCompat.stateHasFluidLikeRegistryName(state);
+        MinecraftReflectionCompat.cacheStateValue(cache);
+        cache.put(state, liquidOrWater);
+        return liquidOrWater;
     }
 
     public static boolean stateIsVanillaLiquid(IBlockState state) {
