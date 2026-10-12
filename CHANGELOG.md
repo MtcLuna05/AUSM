@@ -1,5 +1,7 @@
 # Unreleased
 
+# 1.0.8
+
 - Fixed sky flicker and missing ordinary terrain in SRG-only runtimes by correcting sky and cloud mixin targets.
 - Added Distant Horizons 3.3.3 shaderpack terrain and water rendering for Complementary Unbound and Reimagined, with saved terrain and hand depth and render-state restoration.
 - Fixed black DH terrain by bypassing native DH antialiasing while shaderpack framebuffer overrides are active; shaderpack temporal antialiasing handles the merged terrain.
@@ -9,10 +11,11 @@
 - Kept shader skies rendering below vanilla's four-chunk sky threshold, without changing the terrain render distance.
 - Made Complementary rainbows respect opaque DH terrain and enabled shadow-map reception on DH terrain and water within the existing shadow-map range.
 - Added opaque Distant Horizons terrain shadow casting for Complementary, using a separate caster shader and light-space selection in the existing shadow map.
+- Corrected Distant Horizons packed-light channel handling and matched its target sizing and color upscale to the world framebuffer while keeping depth resampling nearest-neighbor.
+- Cached block-layer and block-state lookups more safely, and hardened Bloom layer discovery across render-layer implementations.
+- Added bounded CPU timing diagnostics for Nothirium shadow chunk compilation and selection.
 - Removed the automated test suite and its JUnit configuration after in-game DH shader verification.
 - Ignore Complementary's reserved unused `composite2` placeholder instead of compiling it as an active shader pass.
-
-# 1.0.8
 
 # 1.0.7
 
