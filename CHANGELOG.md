@@ -1,5 +1,8 @@
 # Unreleased
 
+- Corrected Distant Horizons packed-light channel handling and matched its target sizing and color upscale to the world framebuffer while keeping depth resampling nearest-neighbor.
+- Cached block-layer and block-state lookups more safely, and hardened Bloom layer discovery across render-layer implementations.
+- Added bounded CPU timing diagnostics for Nothirium shadow chunk compilation and selection.
 - Fixed sky flicker and missing ordinary terrain in SRG-only runtimes by correcting sky and cloud mixin targets.
 - Added Distant Horizons 3.3.3 shaderpack terrain and water rendering for Complementary Unbound and Reimagined, with saved terrain and hand depth and render-state restoration.
 - Fixed black DH terrain by bypassing native DH antialiasing while shaderpack framebuffer overrides are active; shaderpack temporal antialiasing handles the merged terrain.
