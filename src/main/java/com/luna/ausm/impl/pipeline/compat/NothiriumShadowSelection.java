@@ -42,6 +42,7 @@ abstract class NothiriumShadowSelection extends NothiriumShadowReflectionBinding
      * current orthographic shadow frustum before any VBO work.
      */
     public void beginShadowSelection(double cameraX, double cameraY, double cameraZ, double maxDistance) {
+        long selectionStarted = System.nanoTime();
         shadowSelection = null;
         shadowSelectionActive = false;
         self().clearShadowSelectionScratch();
@@ -68,6 +69,8 @@ abstract class NothiriumShadowSelection extends NothiriumShadowReflectionBinding
                 shadowSelection = new NothiriumShadowRenderer.ShadowSelection(reflection, provider, chunks,
                         new NothiriumShadowRenderer.ShadowSelectionChunkList(cachedShadowSelectionChunks, cachedShadowSelectionCount),
                         cameraX, cameraY, cameraZ, maxDistance);
+                NothiriumShadowCpuTiming.selectionFinished(System.nanoTime() - selectionStarted, true,
+                        0, cachedShadowSelectionCount);
                 return;
             }
 
@@ -123,12 +126,15 @@ abstract class NothiriumShadowSelection extends NothiriumShadowReflectionBinding
             List<Object> ordered = new NothiriumShadowRenderer.ShadowSelectionChunkList(cachedShadowSelectionChunks, selectedCount);
             shadowSelection = new NothiriumShadowRenderer.ShadowSelection(reflection, provider, chunks, ordered,
                     cameraX, cameraY, cameraZ, maxDistance);
+            NothiriumShadowCpuTiming.selectionFinished(System.nanoTime() - selectionStarted, false,
+                    nonNull, selectedCount);
         } catch (ReflectiveOperationException | RuntimeException exception) {
             shadowSelection = null;
             shadowSelectionActive = false;
             self().clearShadowSelectionScratch();
             shadowChunkOrigins.clear();
             self().warnOnce(exception);
+            NothiriumShadowCpuTiming.selectionFinished(System.nanoTime() - selectionStarted, false, 0, 0);
         }
     }
 

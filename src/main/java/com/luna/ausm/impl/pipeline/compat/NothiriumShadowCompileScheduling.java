@@ -155,8 +155,16 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowCompileDi
         if (activeShadowSelection
                 && !collectState
                 && requirePipelineStride) {
-            return self().drawPreparedPipelineChunks(pass, chunks, cameraX, cameraY, cameraZ,
-                    fallbackBlockEntityId, fallbackRenderType, context);
+            long drawStarted = System.nanoTime();
+            NothiriumShadowRenderer.DrawStats preparedStats = null;
+            try {
+                preparedStats = self().drawPreparedPipelineChunks(pass, chunks, cameraX, cameraY, cameraZ,
+                        fallbackBlockEntityId, fallbackRenderType, context);
+                return preparedStats;
+            } finally {
+                NothiriumShadowCpuTiming.layerDrawFinished(System.nanoTime() - drawStarted,
+                        preparedStats == null ? 0 : preparedStats.drawn);
+            }
         }
         boolean previousCull = false;
         int previousMatrixMode = -1;
@@ -405,16 +413,28 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowCompileDi
                 : -1;
         boolean allowIndirectDraw = context.isShadowPassActive()
                 || Boolean.getBoolean("ausm.nothirium.indirectMainTerrain");
-        if (allowIndirectDraw
-                && GLContext.getCapabilities().OpenGL43
-                && useChunkOffsetUniform
-                && instanceOffsetAttribute == NOTHIRIUM_OFFSET_ATTRIBUTE) {
-            NothiriumShadowRenderer.DrawStats indirectStats = self().tryDrawPreparedPipelineChunksIndirect(
-                    pass, chunks, cameraX, cameraY, cameraZ, preparedMaxDistanceSquared,
-                    preparedDistanceLimited, fallbackBlockEntityId, fallbackRenderType,
-                    activeChunkOffsetUniform, instanceOffsetAttribute, activeDrawMode);
-            if (indirectStats != null) {
-                return indirectStats;
+        boolean gl43 = GLContext.getCapabilities().OpenGL43;
+        boolean chunkOffsetAttribute = instanceOffsetAttribute == NOTHIRIUM_OFFSET_ATTRIBUTE;
+        if (allowIndirectDraw) {
+            if (gl43 && useChunkOffsetUniform && chunkOffsetAttribute) {
+                long indirectStarted = System.nanoTime();
+                NothiriumShadowRenderer.DrawStats indirectStats = null;
+                try {
+                    indirectStats = self().tryDrawPreparedPipelineChunksIndirect(
+                            pass, chunks, cameraX, cameraY, cameraZ, preparedMaxDistanceSquared,
+                            preparedDistanceLimited, fallbackBlockEntityId, fallbackRenderType,
+                            activeChunkOffsetUniform, instanceOffsetAttribute, activeDrawMode);
+                    if (indirectStats != null) {
+                        return indirectStats;
+                    }
+                } finally {
+                    NothiriumShadowCpuTiming.indirectFinished(System.nanoTime() - indirectStarted,
+                            context.isShadowPassActive(), indirectStats != null,
+                            indirectStats == null ? 0 : indirectStats.drawn);
+                }
+            } else {
+                NothiriumShadowCpuTiming.indirectGateMiss(context.isShadowPassActive(), gl43,
+                        useChunkOffsetUniform, chunkOffsetAttribute);
             }
         }
 

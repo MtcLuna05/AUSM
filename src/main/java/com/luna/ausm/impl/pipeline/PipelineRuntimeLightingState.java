@@ -304,7 +304,7 @@ abstract class PipelineRuntimeLightingState extends PipelineRuntimeEnvironmentSt
             shadowHealthLogged = false;
             shadowHealthLogAttempts = 0;
             ShaderLoadingScreen.step("Preparing framebuffers");
-            pingPongManager.initialize(MinecraftReflectionCompat.displayWidth(mc), MinecraftReflectionCompat.displayHeight(mc), packDirectives.renderTargets());
+            pingPongManager.initialize(self().worldTargetWidth(mc), self().worldTargetHeight(mc), packDirectives.renderTargets());
             self().initializeBlankShadowFramebuffer(pack, properties);
             MainMod.LOGGER.debug(
                     "[Pipeline] Shadow config: framebuffer={} distance={} voxelDistance={} renderMul={} interval={} sunPathRotation={} hardwareFiltering={} tex0Nearest={} tex1Nearest={} polygonOffset={} factor={} units={}",
@@ -331,10 +331,10 @@ abstract class PipelineRuntimeLightingState extends PipelineRuntimeEnvironmentSt
             }
             ShaderLoadingScreen.step("Preparing shader resources");
             shaderImages = ShaderImageSet.load(packDirectives.images());
-            shaderImages.resize(MinecraftReflectionCompat.displayWidth(mc), MinecraftReflectionCompat.displayHeight(mc));
+            shaderImages.resize(self().worldTargetWidth(mc), self().worldTargetHeight(mc));
             self().clearColoredLightImages();
             shaderStorageBuffers = ShaderStorageBufferSet.load(pack, packDirectives.storageBuffers());
-            shaderStorageBuffers.resize(MinecraftReflectionCompat.displayWidth(mc), MinecraftReflectionCompat.displayHeight(mc));
+            shaderStorageBuffers.resize(self().worldTargetWidth(mc), self().worldTargetHeight(mc));
             if (shaderStorageBuffers.active()) {
                 markShaderStorageBuffersBound();
             }

@@ -35,9 +35,10 @@ public final class DistantHorizonsVertexTransform {
                 return vec3(1.0, 0.0, 0.0);
             }
             vec4 ausmDhLightmap() {
+                // DH packs sky light in the low nibble and block light in the high nibble.
                 // Shaderpack light coordinates are block light, then sky light.
                 uint lights = vPosition.w & 255u;
-                return vec4((vec2(float(lights & 15u), float(lights >> 4u)) + 0.5) / 16.0, 0.0, 1.0);
+                return vec4((vec2(float(lights >> 4u), float(lights & 15u)) + 0.5) / 16.0, 0.0, 1.0);
             }
             """;
 

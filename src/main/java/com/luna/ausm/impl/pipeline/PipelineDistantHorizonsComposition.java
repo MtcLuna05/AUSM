@@ -198,7 +198,7 @@ abstract class PipelineDeferredPassOrchestration2 extends PipelineDeferredPassOr
             BetterPortalsCompat.resetRenderStateDiagnostics();
             Minecraft mc = MinecraftReflectionCompat.minecraft();
             if (mc != null && MinecraftReflectionCompat.world(mc) != null) {
-                resizeFramebuffer(MinecraftReflectionCompat.displayWidth(mc), MinecraftReflectionCompat.displayHeight(mc), true);
+                resizeFramebuffer(worldTargetWidth(mc), worldTargetHeight(mc), true);
             }
             clearShaderedNothiriumGlobalBypassState(true);
         } else {
