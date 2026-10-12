@@ -64,6 +64,10 @@ abstract class PipelineFrameLifecycle1 extends PipelineFrameLifecycle0 {
             return 0;
         }
 
+        if (layer == BlockRenderLayer.SOLID) {
+            self().renderDistantHorizonsLods((float) partialTicks);
+        }
+
         boolean prepareVanillaState = self().shouldPrepareShaderlessBlockLayerState();
         if (prepareVanillaState) {
             self().prepareShaderlessBlockLayerState(layer);

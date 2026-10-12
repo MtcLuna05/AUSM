@@ -145,8 +145,11 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
             waterAttachmentProbeHeights[slot] = 0;
             waterAttachmentProbeIndices[slot] = -1;
         }
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
         try {
+            waterAttachmentProbeFramebuffer = framebuffer.getFramebufferId();
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, waterAttachmentProbeFramebuffer);
             for (int slot = 0; slot < count; slot++) {
                 Attachment attachment = attachments.get(slot);
                 int width = framebuffer.getAttachmentWidth(attachment);
@@ -167,6 +170,7 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
             }
             waterAttachmentDeltaProbeActive = count > 0;
         } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
             GL11.glReadBuffer(previousReadBuffer);
         }
     }
@@ -176,9 +180,11 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
             return;
         }
         waterAttachmentDeltaProbeActive = false;
+        int previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousReadBuffer = GL11.glGetInteger(GL11.GL_READ_BUFFER);
         StringBuilder result = new StringBuilder();
         try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, waterAttachmentProbeFramebuffer);
             for (int slot = 0; slot < waterAttachmentBefore.length; slot++) {
                 ByteBuffer before = waterAttachmentBefore[slot];
                 int width = waterAttachmentProbeWidths[slot];
@@ -225,6 +231,7 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
                         .append(",maxDelta=").append(maxDelta);
             }
         } finally {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
             GL11.glReadBuffer(previousReadBuffer);
         }
         waterAttachmentDeltaProbeLogs++;

@@ -54,7 +54,10 @@ final class OptionalMixinTargets {
             target("OpenBlocksSkyBlockRendererMixin", "openblocks/client/renderer/SkyBlockRenderer.class", true),
             target("OpenBlocksSkyCaptureMixin", "openblocks/client/renderer/SkyBlockRenderer$SkyCapture.class", true),
             target("OpenBlocksSkyTextureRendererMixin", "openblocks/client/renderer/tileentity/TileEntitySkyRenderer.class", true),
-            target("BewitchmentSyncExtendedPlayerHandlerMixin", "com/bewitchment/api/message/SyncExtendedPlayer$Handler.class", true));
+            target("BewitchmentSyncExtendedPlayerHandlerMixin", "com/bewitchment/api/message/SyncExtendedPlayer$Handler.class", true),
+            target("DistantHorizonsVanillaFadeMixin", "com/seibel/distanthorizons/core/api/internal/ClientApi.class", false),
+            target("DistantHorizonsFarFadeMixin", "com/seibel/distanthorizons/common/render/openGl/postProcessing/fade/GlDhFarFadeRenderer.class", false),
+            target("DistantHorizonsAntialiasingMixin", "com/seibel/distanthorizons/common/render/openGl/postProcessing/antialiasing/GlDhTaaRenderer.class", false));
 
     private OptionalMixinTargets() {
     }

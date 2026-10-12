@@ -50,7 +50,46 @@ final class ShaderPackRepository {
         try {
             if (Files.isDirectory(packPath)) {
                 MainMod.LOGGER.info("Loading folder shaderpack: {}", packName);
-                return new FolderShaderPack(packPath);
+                return new CachedShaderPack() {
+                    private final Path rootDir = packPath.toAbsolutePath().normalize();
+
+                    @Override
+                    public String getName() {
+                        return packName;
+                    }
+
+                    @Override
+                    protected Path resolveResourcePath(String path, boolean logFailures) {
+                        Path resolved = rootDir.resolve(path).normalize();
+                        if (!resolved.startsWith(rootDir)) {
+                            if (logFailures) {
+                                MainMod.LOGGER.warn("[FolderShaderPack] Blocked path traversal attempt to read: {}", path);
+                            }
+                            return null;
+                        }
+                        return resolved;
+                    }
+
+                    @Override
+                    protected String logPrefix() {
+                        return "FolderShaderPack";
+                    }
+
+                    @Override
+                    protected void logMissingResource(String path, Path resolved) {
+                        MainMod.LOGGER.debug("[FolderShaderPack] File not found when reading: {}", resolved);
+                    }
+
+                    @Override
+                    protected void logReadResource(String path, Path resolved) {
+                        MainMod.LOGGER.debug("[FolderShaderPack] Reading file: {}", resolved);
+                    }
+
+                    @Override
+                    public void close() {
+                        MainMod.LOGGER.debug("Closed FolderShaderPack: {}", packName);
+                    }
+                };
             }
             if (packName.endsWith(".zip")) {
                 MainMod.LOGGER.info("Loading zip shaderpack: {}", packName);

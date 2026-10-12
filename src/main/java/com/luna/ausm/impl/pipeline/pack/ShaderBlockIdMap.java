@@ -699,7 +699,7 @@ public final class ShaderBlockIdMap {
             }
 
             if (metadata != null) {
-                return block.getMetaFromState(state) == metadata;
+                return MinecraftReflectionCompat.blockMetaFromState(block, state) == metadata;
             }
 
             for (Map.Entry<IProperty<?>, Comparable<?>> entry : MinecraftReflectionCompat.stateProperties(state).entrySet()) {

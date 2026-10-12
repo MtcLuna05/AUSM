@@ -29,6 +29,13 @@ public final class ProgramSourceResolver {
         String vertexPath = resolveStage(pack, layout, dimensionId, programId, ".vsh");
         String fragmentPath = resolveStage(pack, layout, dimensionId, programId, ".fsh");
         String glslPath = resolveStage(pack, layout, dimensionId, programId, ".glsl");
+        if (glslPath != null && isReservedUnusedProgram(pack, glslPath)) {
+            // Some packs ship placeholder program/*.glsl files without a
+            // corresponding worldN entrypoint. Complementary uses this for
+            // composite2; compiling the placeholder creates a noisy failed
+            // program and can leave the pass incorrectly considered active.
+            glslPath = null;
+        }
         if (glslPath != null && isStageGuardedSource(pack, glslPath)) {
             if (vertexPath == null) {
                 vertexPath = glslPath;
@@ -85,6 +92,15 @@ public final class ProgramSourceResolver {
                 || source.contains("#if defined VERTEX_SHADER")
                 || source.contains("#if defined(FRAGMENT_SHADER)")
                 || source.contains("#if defined(VERTEX_SHADER)"));
+    }
+
+    private static boolean isReservedUnusedProgram(ShaderPack pack, String path) {
+        if (path == null || !path.endsWith("composite2.glsl")) {
+            return false;
+        }
+        String source = readKnownExisting(pack, path);
+        return source != null && source.contains("reserved for future use")
+                && source.contains("completely unused");
     }
 
     private static String readKnownExisting(ShaderPack pack, String path) {

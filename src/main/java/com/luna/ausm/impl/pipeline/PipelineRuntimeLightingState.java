@@ -346,6 +346,7 @@ abstract class PipelineRuntimeLightingState extends PipelineRuntimeEnvironmentSt
             self().logRequestedFeaturesAndCapabilities();
             ShaderLoadingScreen.step("Loading noise texture");
             self().initializeNoiseTexture(pack, properties);
+            DistantHorizonsShadowRendering.initialize(pack, properties);
             ShaderLoadingScreen.step("Loading custom textures");
             customTextures.load(pack, packDirectives.textureDirectives(), fullscreenArrayPrograms);
             lastPipelineFrameNanos = System.nanoTime() - 1_000_000_000L;
@@ -484,6 +485,7 @@ abstract class PipelineRuntimeLightingState extends PipelineRuntimeEnvironmentSt
             self().restoreCompiledPipeline(cachedPrograms);
             activePackName = pack.getName();
             activeCompiledPipelineCacheKey = cacheKey;
+            DistantHorizonsShadowRendering.initialize(pack, properties);
             setupComputePending = self().hasSetupPrograms();
             self().resetTransientWorldRenderState();
             isPipelineActive = true;

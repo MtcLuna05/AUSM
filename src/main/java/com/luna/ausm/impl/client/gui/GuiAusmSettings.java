@@ -42,6 +42,7 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
     private static final int ID_SHADERED_LOD_2_SLIDER = 351;
     private static final int ID_SHADERED_LOD_3_SLIDER = 352;
     private static final int ID_SHADERED_LOD_4_SLIDER = 353;
+    private static final int ID_SHADERED_LOD_FEATURES = 354;
 
     private final GuiScreen parent;
     private int selectedCategory = ID_CATEGORY_RENDERING;
@@ -93,16 +94,18 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
                     value -> String.format(Locale.ROOT, "%.2fx", value));
             this.buttonList.add(bloomSlider);
         } else if (selectedCategory == ID_CATEGORY_SHADERED) {
-            addShaderedLodSlider(ID_SHADERED_LOD_1_SLIDER, x, 76, buttonWidth, "LOD 1 radius",
+            this.buttonList.add(new GuiFlatButton(ID_SHADERED_LOD_FEATURES, x, 76, buttonWidth,
+                    20, shaderedLodFeaturesLabel()));
+            addShaderedLodSlider(ID_SHADERED_LOD_1_SLIDER, x, 102, buttonWidth, "LOD 1 radius",
                     ClientSettingsConfig::shaderedLod1RadiusBlocks,
                     ClientSettingsConfig::setShaderedLod1RadiusBlocks);
-            addShaderedLodSlider(ID_SHADERED_LOD_2_SLIDER, x, 102, buttonWidth, "LOD 2 radius",
+            addShaderedLodSlider(ID_SHADERED_LOD_2_SLIDER, x, 128, buttonWidth, "LOD 2 radius",
                     ClientSettingsConfig::shaderedLod2RadiusBlocks,
                     ClientSettingsConfig::setShaderedLod2RadiusBlocks);
-            addShaderedLodSlider(ID_SHADERED_LOD_3_SLIDER, x, 128, buttonWidth, "LOD 3 radius",
+            addShaderedLodSlider(ID_SHADERED_LOD_3_SLIDER, x, 154, buttonWidth, "LOD 3 radius",
                     ClientSettingsConfig::shaderedLod3RadiusBlocks,
                     ClientSettingsConfig::setShaderedLod3RadiusBlocks);
-            addShaderedLodSlider(ID_SHADERED_LOD_4_SLIDER, x, 154, buttonWidth, "LOD 4 radius",
+            addShaderedLodSlider(ID_SHADERED_LOD_4_SLIDER, x, 180, buttonWidth, "LOD 4 radius",
                     ClientSettingsConfig::shaderedLod4RadiusBlocks,
                     ClientSettingsConfig::setShaderedLod4RadiusBlocks);
         } else {
@@ -159,6 +162,14 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
         int id = MinecraftReflectionCompat.guiButtonId(button);
         if (id == ID_DONE) {
             MinecraftReflectionCompat.displayGuiScreen(this.mc, parent);
+            return;
+        }
+        if (id == ID_SHADERED_LOD_FEATURES) {
+            ClientSettingsConfig config = MainMod.getClientSettingsConfig();
+            if (config != null) {
+                config.setShaderedLodFeaturesEnabled(!config.shaderedLodFeaturesEnabled());
+            }
+            rebuildButtons();
             return;
         }
         if (id >= ID_CATEGORY_RENDERING && id <= ID_CATEGORY_SHADERED) {
@@ -256,7 +267,7 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
             this.drawString(this.fontRenderer, "Shaderless renderer", x, 66, 0x9DA7B3);
         } else if (selectedCategory == ID_CATEGORY_SHADERED) {
             this.drawString(this.fontRenderer, "Shadered quality LOD (block radius)", x, 66, 0x9DA7B3);
-            this.drawString(this.fontRenderer, "Foliage waving is disabled from LOD 2 onward.", x, 180, 0x9DA7B3);
+            this.drawString(this.fontRenderer, "LOD sliders set the feature transition distances.", x, 210, 0x9DA7B3);
         } else {
             this.drawString(this.fontRenderer, "Dynamic lights", x, 66, 0x9DA7B3);
             DynamicLightConfig config = MainMod.getDynamicLightConfig();
@@ -271,9 +282,14 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
         for (GuiButton button : this.buttonList) {
             int id = MinecraftReflectionCompat.guiButtonId(button);
             if (id == ID_PORTAL_SHADERS || id == ID_AUTOMATIC_SHADER_DISABLING || id == ID_UPDATE_CHECKER || id == ID_BLOOM_SLIDER
+                    || id == ID_SHADERED_LOD_FEATURES
                     || id == ID_RELOAD_CLIENT_SETTINGS || id == ID_OPEN_CLIENT_SETTINGS
                     || id >= ID_SHADERED_LOD_1_SLIDER && id <= ID_SHADERED_LOD_4_SLIDER) {
-                MinecraftReflectionCompat.setGuiButtonEnabled(button, client != null);
+                boolean enabled = client != null;
+                if (id >= ID_SHADERED_LOD_1_SLIDER && id <= ID_SHADERED_LOD_4_SLIDER) {
+                    enabled = client != null && client.shaderedLodFeaturesEnabled();
+                }
+                MinecraftReflectionCompat.setGuiButtonEnabled(button, enabled);
             }
             if (id == ID_DYNAMIC_LIGHTS || id == ID_LIGHT_MULTIPLIER_SLIDER || id == ID_RELOAD_DYNAMIC_LIGHTS || id == ID_OPEN_DYNAMIC_LIGHTS) {
                 boolean requiresAvailableLights = id == ID_DYNAMIC_LIGHTS || id == ID_LIGHT_MULTIPLIER_SLIDER;
@@ -307,6 +323,12 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
         return "Update Checker: " + (config != null && config.updateCheckerEnabled() ? "ON" : "OFF");
     }
 
+    private String shaderedLodFeaturesLabel() {
+        ClientSettingsConfig config = MainMod.getClientSettingsConfig();
+        return "Shadered LOD Features: "
+                + (config != null && config.shaderedLodFeaturesEnabled() ? "ON" : "OFF");
+    }
+
     private String dynamicLightsLabel() {
         DynamicLightConfig config = MainMod.getDynamicLightConfig();
         if (config == null || !config.available()) return "Dynamic Lights: Unavailable";
@@ -328,6 +350,7 @@ public final class GuiAusmSettings extends MappingSafeGuiScreen {
                 case ID_AUTOMATIC_SHADER_DISABLING -> List.of("Disable a restored shader pack at startup to keep the first world load stable.");
                 case ID_UPDATE_CHECKER -> List.of("Check for a newer AUSM release after loading a world. Failures only appear in latest.log.");
                 case ID_BLOOM_SLIDER -> List.of("Strength of emissive bloom in the vanilla, shaderless renderer.");
+                case ID_SHADERED_LOD_FEATURES -> List.of("Enable AUSM's shadered LOD reductions: resolution tiers, foliage-wave cutoff, and distance fading. Defaults off when Distant Horizons is loaded.");
                 case ID_SHADERED_LOD_1_SLIDER -> List.of("Distance in blocks where the shadered LOD changes from full to half resolution.");
                 case ID_SHADERED_LOD_2_SLIDER -> List.of("Distance in blocks where foliage waving is disabled and shadered LOD becomes quarter resolution.");
                 case ID_SHADERED_LOD_3_SLIDER -> List.of("Distance in blocks where shadered LOD becomes eighth resolution.");

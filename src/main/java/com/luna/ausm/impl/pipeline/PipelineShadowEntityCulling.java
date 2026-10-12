@@ -2,6 +2,7 @@ package com.luna.ausm.impl.pipeline;
 
 import com.luna.ausm.api.pipeline.shader.RenderPass;
 import com.luna.ausm.impl.MainMod;
+import com.luna.ausm.impl.client.DistantHorizonsCompat;
 import com.luna.ausm.impl.pipeline.compat.BetterPortalsCompat;
 import com.luna.ausm.impl.pipeline.fbo.DeferredFramebuffer;
 import com.luna.ausm.impl.pipeline.render.TextureBinder;
@@ -14,6 +15,7 @@ import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.AbstractClientPlayer;
 import net.minecraft.client.renderer.OpenGlHelper;
+import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.culling.ICamera;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.client.shader.Framebuffer;
@@ -232,6 +234,53 @@ abstract class PipelineShadowEntityCulling extends PipelineShadowCamera {
     }
 
     public void renderDistantHorizonsLods(float partialTicks) {
+        PipelineContext context = PipelineContext.getInstance();
+        if (!DistantHorizonsCompat.installed()
+                || context == null
+                || !context.canCaptureDistantHorizonsFrame()
+                || renderingShadowMap) {
+            return;
+        }
+
+        Minecraft minecraft = MinecraftReflectionCompat.minecraft();
+        RenderGlobal renderGlobal = minecraft == null ? null : MinecraftReflectionCompat.renderGlobal(minecraft);
+        if (renderGlobal == null) {
+            return;
+        }
+
+        if (distantHorizonsDiagnosticLogs < MAX_DISTANT_HORIZONS_DIAGNOSTIC_LOGS) {
+            MainMod.LOGGER.info("[AUSMDistantHorizons] Redirected opaque LOD render entered frame={}", pipelineFrameId);
+            distantHorizonsDiagnosticLogs++;
+        }
+
+        try {
+            // AUSM's EntityRenderer layer redirect bypasses DH's RenderGlobal
+            // injection. Invoke the same DH state capture and client entrypoint.
+            Class<?> clientApi = Class.forName("com.seibel.distanthorizons.core.api.internal.ClientApi");
+            Object clientApiInstance = clientApi.getField("INSTANCE").get(null);
+            java.lang.reflect.Method captureRenderState = renderGlobal.getClass()
+                    .getDeclaredMethod("distantHorizons$captureRenderState", float.class);
+            captureRenderState.setAccessible(true);
+            java.lang.reflect.Method renderLods = clientApi.getMethod("renderLods");
+            java.lang.reflect.Method unbindBuffers = renderGlobal.getClass()
+                    .getDeclaredMethod("distantHorizons$unbindBuffers");
+            unbindBuffers.setAccessible(true);
+
+            captureRenderState.invoke(renderGlobal, partialTicks);
+            try {
+                renderLods.invoke(clientApiInstance);
+            } finally {
+                unbindBuffers.invoke(null);
+            }
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError failure) {
+            if (distantHorizonsDiagnosticLogs++ < MAX_DISTANT_HORIZONS_DIAGNOSTIC_LOGS) {
+                Throwable cause = failure instanceof java.lang.reflect.InvocationTargetException invocation
+                        && invocation.getCause() != null ? invocation.getCause() : failure;
+                MainMod.LOGGER.warn("[AUSMDistantHorizons] Could not render LODs through the redirected terrain layer.", cause);
+            }
+        } finally {
+            context.restorePassAfterDistantHorizons();
+        }
     }
 
     public void resetDistantHorizonsDiagnostics(String reason) {

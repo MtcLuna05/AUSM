@@ -227,8 +227,9 @@ abstract class GuiShaderOptionsBase extends MappingSafeGuiScreen {
 
         @Override
         protected void mouseDragged(Minecraft mc, int mouseX, int mouseY) {
-            // The vanilla skin is rendered with (-1, -1) to suppress its hover tint. Updating
-            // from those synthetic coordinates would clamp a held slider to its minimum.
+            if (dragging) {
+                updateFromMouse(mouseX, false);
+            }
         }
 
         @Override

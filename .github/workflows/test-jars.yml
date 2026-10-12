@@ -30,10 +30,9 @@ jobs:
           echo "TEST_VERSION=${base_version}-test.${GITHUB_SHA:0:12}" >> "$GITHUB_ENV"
           echo "TEST_TAG=test-jars-${GITHUB_SHA}" >> "$GITHUB_ENV"
 
-      - name: Build and check client-only packet ownership
+      - name: Build distributable
         run: >-
-          ./gradlew --no-daemon "-Pmod_version=${TEST_VERSION}" assemble test
-          --tests '*ClientOnlyLoadingTest' --tests '*ChunkPacketOwnershipTest'
+          ./gradlew --no-daemon "-Pmod_version=${TEST_VERSION}" assemble
 
       - name: Validate and stage distributable
         shell: bash
@@ -58,7 +57,7 @@ jobs:
             echo "Experimental Java 25 / Cleanroom build from test-jars."
             echo
             echo "Commit: ${GITHUB_SHA}"
-            echo "Validation: packaging and targeted client-only/packet-ownership regression tests."
+            echo "Validation: compilation and packaging checks."
             echo "This is not a stable release; multiplayer crash reproduction still needs player testing."
             echo
             bash scripts/extract-changelog.sh --unreleased

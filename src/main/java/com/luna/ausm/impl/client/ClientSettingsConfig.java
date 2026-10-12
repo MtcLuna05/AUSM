@@ -17,6 +17,7 @@ public final class ClientSettingsConfig {
     private static final String SHADERED_LOD_2_RADIUS_BLOCKS_KEY = "shaderedLod2RadiusBlocks";
     private static final String SHADERED_LOD_3_RADIUS_BLOCKS_KEY = "shaderedLod3RadiusBlocks";
     private static final String SHADERED_LOD_4_RADIUS_BLOCKS_KEY = "shaderedLod4RadiusBlocks";
+    private static final String SHADERED_LOD_FEATURES_KEY = "shaderedLodFeatures";
     private static final float DEFAULT_SHADERLESS_BLOOM_INTENSITY = 0.85F;
     private static final int LOD_RADIUS_STEP_BLOCKS = 16;
     private static final int MIN_LOD_RADIUS_BLOCKS = 16;
@@ -35,6 +36,7 @@ public final class ClientSettingsConfig {
     private volatile int shaderedLod2RadiusBlocks = DEFAULT_LOD_2_RADIUS_BLOCKS;
     private volatile int shaderedLod3RadiusBlocks = DEFAULT_LOD_3_RADIUS_BLOCKS;
     private volatile int shaderedLod4RadiusBlocks = DEFAULT_LOD_4_RADIUS_BLOCKS;
+    private volatile boolean shaderedLodFeatures = true;
 
     public ClientSettingsConfig(Path minecraftRunDir) {
         this.configFile = minecraftRunDir.resolve("config").resolve("ausm").resolve("client-settings.properties");
@@ -59,7 +61,8 @@ public final class ClientSettingsConfig {
                 || !properties.containsKey(SHADERED_LOD_1_RADIUS_BLOCKS_KEY)
                 || !properties.containsKey(SHADERED_LOD_2_RADIUS_BLOCKS_KEY)
                 || !properties.containsKey(SHADERED_LOD_3_RADIUS_BLOCKS_KEY)
-                || !properties.containsKey(SHADERED_LOD_4_RADIUS_BLOCKS_KEY);
+                || !properties.containsKey(SHADERED_LOD_4_RADIUS_BLOCKS_KEY)
+                || !properties.containsKey(SHADERED_LOD_FEATURES_KEY);
 
         portalShaders = Boolean.parseBoolean(properties.getProperty(PORTAL_SHADERS_KEY, "true").trim());
         automaticShaderDisabling = Boolean.parseBoolean(
@@ -77,13 +80,16 @@ public final class ClientSettingsConfig {
         shaderedLod2RadiusBlocks = parseLodRadius(properties, SHADERED_LOD_2_RADIUS_BLOCKS_KEY, DEFAULT_LOD_2_RADIUS_BLOCKS);
         shaderedLod3RadiusBlocks = parseLodRadius(properties, SHADERED_LOD_3_RADIUS_BLOCKS_KEY, DEFAULT_LOD_3_RADIUS_BLOCKS);
         shaderedLod4RadiusBlocks = parseLodRadius(properties, SHADERED_LOD_4_RADIUS_BLOCKS_KEY, DEFAULT_LOD_4_RADIUS_BLOCKS);
+        shaderedLodFeatures = Boolean.parseBoolean(properties.getProperty(
+                SHADERED_LOD_FEATURES_KEY, Boolean.toString(!DistantHorizonsCompat.detected())).trim());
         normalizeLodRadii();
         MainMod.LOGGER.info(
-                "[ClientSettings] Loaded config: portalShaders={} automaticShaderDisabling={} updateChecker={} shaderlessBloomIntensity={} shaderedLodRadii=[{}, {}, {}, {}]",
+                "[ClientSettings] Loaded config: portalShaders={} automaticShaderDisabling={} updateChecker={} shaderlessBloomIntensity={} shaderedLodFeatures={} shaderedLodRadii=[{}, {}, {}, {}]",
                 portalShaders,
                 automaticShaderDisabling,
                 updateChecker,
                 shaderlessBloomIntensity,
+                shaderedLodFeatures,
                 shaderedLod1RadiusBlocks,
                 shaderedLod2RadiusBlocks,
                 shaderedLod3RadiusBlocks,
@@ -163,6 +169,18 @@ public final class ClientSettingsConfig {
         return shaderedLod4RadiusBlocks;
     }
 
+    public boolean shaderedLodFeaturesEnabled() {
+        return shaderedLodFeatures;
+    }
+
+    public void setShaderedLodFeaturesEnabled(boolean enabled) {
+        if (shaderedLodFeatures == enabled) {
+            return;
+        }
+        shaderedLodFeatures = enabled;
+        save();
+    }
+
     public void setShaderedLod1RadiusBlocks(int radiusBlocks) {
         setShaderedLodRadiusBlocks(0, radiusBlocks);
     }
@@ -189,6 +207,7 @@ public final class ClientSettingsConfig {
         properties.setProperty(SHADERED_LOD_2_RADIUS_BLOCKS_KEY, Integer.toString(shaderedLod2RadiusBlocks));
         properties.setProperty(SHADERED_LOD_3_RADIUS_BLOCKS_KEY, Integer.toString(shaderedLod3RadiusBlocks));
         properties.setProperty(SHADERED_LOD_4_RADIUS_BLOCKS_KEY, Integer.toString(shaderedLod4RadiusBlocks));
+        properties.setProperty(SHADERED_LOD_FEATURES_KEY, Boolean.toString(shaderedLodFeatures));
 
         try {
             Files.createDirectories(configFile.getParent());
@@ -218,7 +237,9 @@ public final class ClientSettingsConfig {
                     shaderedLod2RadiusBlocks=144
                     shaderedLod3RadiusBlocks=192
                     shaderedLod4RadiusBlocks=240
-                    """;
+                    # Disable shadered LOD features by default when Distant Horizons is loaded.
+                    shaderedLodFeatures=%s
+                    """.formatted(!DistantHorizonsCompat.detected());
             Files.writeString(configFile, text);
         } catch (IOException | RuntimeException e) {
             MainMod.LOGGER.warn("[ClientSettings] Failed to create default config {}", configFile.toAbsolutePath(), e);

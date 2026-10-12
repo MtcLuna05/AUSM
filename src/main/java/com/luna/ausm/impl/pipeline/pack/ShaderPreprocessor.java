@@ -4,6 +4,7 @@ import com.luna.ausm.api.pipeline.pack.ShaderOption;
 import com.luna.ausm.api.pipeline.pack.ShaderOptions;
 import com.luna.ausm.api.pipeline.shader.RenderPass;
 import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
+import com.luna.ausm.impl.pipeline.ShadedDistantHorizonsRendering;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -63,19 +64,19 @@ public class ShaderPreprocessor {
             #define DH_BLOCK_LEAVES 1
             #endif
             #ifndef DH_BLOCK_GRASS
-            #define DH_BLOCK_GRASS 2
+            #define DH_BLOCK_GRASS 13
             #endif
             #ifndef DH_BLOCK_WATER
-            #define DH_BLOCK_WATER 3
+            #define DH_BLOCK_WATER 12
             #endif
             #ifndef DH_BLOCK_ILLUMINATED
-            #define DH_BLOCK_ILLUMINATED 4
+            #define DH_BLOCK_ILLUMINATED 15
             #endif
             #ifndef DH_BLOCK_LAVA
-            #define DH_BLOCK_LAVA 5
+            #define DH_BLOCK_LAVA 6
             #endif
             #ifndef DH_BLOCK_SNOW
-            #define DH_BLOCK_SNOW 6
+            #define DH_BLOCK_SNOW 8
             #endif
             #endif
             """;
@@ -179,6 +180,10 @@ public class ShaderPreprocessor {
         out.append(getOptiFineEnvironmentDefines(preludeOptions, glslVersion, directives)).append("\n");
         out.append(getRenderStageDefines()).append("\n");
         out.append(getProgramDefines(pass, programName)).append("\n");
+        if (pass != RenderPass.DH_TERRAIN && pass != RenderPass.DH_WATER
+                && ShadedDistantHorizonsRendering.requestedFor(pack.getName())) {
+            out.append("#define DISTANT_HORIZONS 1\n");
+        }
         out.append(getOptiFineMetadataDefines()).append("\n");
         if (requiresUnboundLatePiCompatibility) {
             out.append(getUnboundLatePiCompatibilityPrelude()).append("\n");
@@ -186,6 +191,9 @@ public class ShaderPreprocessor {
         out.append(finalSource);
 
         String source = addMissingDistantHorizonsCompat(out.toString(), pass, shaderType);
+        if (ShadedDistantHorizonsRendering.requestedFor(pack.getName())) {
+            source = DistantHorizonsTerrainTransition.transform(source, pass, shaderType);
+        }
         source = addMissingDistantLightBokehFallback(source);
         return ShaderTransformPipeline.transform(source, shaderType, pass);
     }
@@ -285,6 +293,9 @@ public class ShaderPreprocessor {
         if (result.contains("DH_BLOCK_")
                 && shaderType == GL20.GL_FRAGMENT_SHADER) {
             result = insertBeforeProgram(result, DISTANT_HORIZONS_FRAGMENT_COMPAT);
+        }
+        if (shaderType == GL20.GL_VERTEX_SHADER) {
+            result = DistantHorizonsVertexTransform.transform(result);
         }
         return result;
     }
