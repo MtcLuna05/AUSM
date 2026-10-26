@@ -200,12 +200,17 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowCompileDi
                 GL11.glDisable(GL11.GL_CULL_FACE);
             }
             try {
-                NothiriumShadowRenderer.DrawStats indirectStats = self().tryDrawPreparedPipelineChunksIndirect(
-                        pass, chunks, cameraX, cameraY, cameraZ, -1.0D, false,
-                        fallbackBlockEntityId, fallbackRenderType,
-                        activeChunkOffsetUniform, NOTHIRIUM_OFFSET_ATTRIBUTE, activeDrawMode);
-                if (indirectStats != null) {
-                    return indirectStats;
+                int gpuProbe = context.beginTerrainSolidGpuProbe(true);
+                try {
+                    NothiriumShadowRenderer.DrawStats indirectStats = self().tryDrawPreparedPipelineChunksIndirect(
+                            pass, chunks, cameraX, cameraY, cameraZ, -1.0D, false,
+                            fallbackBlockEntityId, fallbackRenderType,
+                            activeChunkOffsetUniform, NOTHIRIUM_OFFSET_ATTRIBUTE, activeDrawMode);
+                    if (indirectStats != null) {
+                        return indirectStats;
+                    }
+                } finally {
+                    context.endTerrainSolidGpuProbe(gpuProbe);
                 }
             } finally {
                 if (disableCullForMainTerrain) {
@@ -218,6 +223,7 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowCompileDi
             }
         }
 
+        int gpuProbe = context.beginTerrainSolidGpuProbe(false);
         try {
             if (GLContext.getCapabilities().OpenGL30) {
                 GL30.glBindVertexArray(0);
@@ -369,6 +375,7 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowCompileDi
             if (waterAttachmentProbe) {
                 context.finishWaterAttachmentDeltaProbe();
             }
+            context.endTerrainSolidGpuProbe(gpuProbe);
         }
 
         return stats;
@@ -647,8 +654,11 @@ abstract class NothiriumShadowCompileScheduling extends NothiriumShadowCompileDi
                 // offsets. Scalar draws leave the instance attribute at zero;
                 // batched draws leave the legacy uniform at zero.
                 GL20.glUniform3f(activeChunkOffsetUniform, 0.0F, 0.0F, 0.0F);
-                shadowIndirectBatch.draw(batchVbo, batchStride, instanceOffsetAttribute, activeDrawMode,
-                        fallbackBlockEntityId, fallbackRenderType, offsets, commands, drawCount);
+                boolean commandUpload = shadowIndirectBatch.draw(batchVbo, batchStride, instanceOffsetAttribute, activeDrawMode,
+                        fallbackBlockEntityId, fallbackRenderType, offsets, commands, drawCount,
+                        NothiriumVisibleTerrainCache.vboGeneration(), pass);
+                NothiriumShadowCpuTiming.indirectCommandCacheResult(
+                        PipelineContext.getInstance().isShadowPassActive(), commandUpload);
                 if (!shadowIndirectBatchLogged) {
                     shadowIndirectBatchLogged = true;
                     MainMod.LOGGER.info(

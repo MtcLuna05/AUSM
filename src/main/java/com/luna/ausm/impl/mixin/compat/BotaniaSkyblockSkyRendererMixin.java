@@ -1,6 +1,7 @@
 package com.luna.ausm.impl.mixin.compat;
 
 import com.luna.ausm.impl.MainMod;
+import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.pipeline.PipelineContext;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import net.minecraft.client.Minecraft;
@@ -12,6 +13,8 @@ import net.minecraft.client.renderer.vertex.VertexBuffer;
 import net.minecraft.util.ResourceLocation;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL14;
+import org.lwjgl.BufferUtils;
+import java.nio.FloatBuffer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -33,9 +36,6 @@ public class BotaniaSkyblockSkyRendererMixin {
         ausm$assetTexture = "unbound";
         context.clearSkyDetailAsset();
         ausm$shaderedVoidPhase = false;
-        if (context.isActive()) {
-            ci.cancel();
-        }
     }
 
     @Inject(method = "render", at = @At("RETURN"), remap = false)
@@ -128,6 +128,16 @@ public class BotaniaSkyblockSkyRendererMixin {
         ausm$assetTexture = MinecraftReflectionCompat.resourceString(location);
         PipelineContext context = PipelineContext.getInstance();
         context.setSkyDetailAsset(ausm$assetTexture);
+        if (context.isActive()) {
+            // Bind the native finite mesh through the overlay shader, retaining
+            // Botania's visibility alpha across AUSM's normal pass setup.
+            FloatBuffer color = BufferUtils.createFloatBuffer(4);
+            GL11.glGetFloat(GL11.GL_CURRENT_COLOR, color);
+            if (ausm$shaderedVoidPhase) context.endPass();
+            context.beginPhase(WorldRenderingPhase.SKY_TEXTURED);
+            ausm$shaderedVoidPhase = true;
+            MinecraftReflectionCompat.glStateColor(color.get(0), color.get(1), color.get(2), color.get(3));
+        }
         MinecraftReflectionCompat.bindTexture(textureManager, location);
     }
 
@@ -190,7 +200,14 @@ public class BotaniaSkyblockSkyRendererMixin {
     private void ausm$drawAndProbeSkyAsset(Tessellator tessellator) {
         PipelineContext.getInstance().uploadSkyDetailUniforms();
         boolean suppressBase = "unbound".equals(ausm$assetTexture) && ausm$shouldSuppressBase();
-        if (suppressBase || ausm$shaderedVoidPhase) {
+        // Native sun/moon quads are superseded by the pack's celestial pass;
+        // Botania's planets, skybox and rainbow keep their original geometry.
+        boolean ordinaryCelestial = ausm$shaderedVoidPhase
+                && !ausm$assetTexture.contains("planet")
+                && !ausm$assetTexture.contains("skybox")
+                && !ausm$assetTexture.contains("rainbow")
+                && !ausm$assetTexture.contains("ribbon");
+        if (suppressBase || ordinaryCelestial) {
             MinecraftReflectionCompat.forceResetBufferDrawingState(
                     MinecraftReflectionCompat.tessellatorBuffer(tessellator));
         } else {
@@ -205,6 +222,11 @@ public class BotaniaSkyblockSkyRendererMixin {
             MainMod.LOGGER.info("[AUSMVoidSkyProbe] Suppressing Botania upper dome and sunset fan; owned continuous backing is active.");
         }
         return suppress;
+    }
+
+    @Inject(method = "renderStars", at = @At("HEAD"), cancellable = true, remap = false)
+    private void ausm$keepOwnedStarField(Minecraft minecraft, float alpha, float partialTicks, CallbackInfo ci) {
+        if (PipelineContext.getInstance().isActive()) ci.cancel();
     }
 
     private static void ausm$probeF1State(String stage, Minecraft minecraft) {

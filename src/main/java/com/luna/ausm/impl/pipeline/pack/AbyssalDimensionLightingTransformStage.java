@@ -4,8 +4,8 @@ import com.luna.ausm.api.pipeline.shader.ProgramGroup;
 
 /**
  * Carries AbyssalCraft's dimension atmosphere into Complementary Unbound.
- * The direct-light tint requires ACT's colored-lighting path and can be
- * disabled independently in AUSM's shader settings.
+ * Direct and ambient tints work with the base pack and ACT lighting paths and
+ * can be disabled independently in AUSM's shader settings.
  */
 public final class AbyssalDimensionLightingTransformStage implements ShaderTransformStage {
     private static final String MARKER = "AUSM_ABYSSAL_DIMENSION_LIGHTING";
@@ -13,10 +13,10 @@ public final class AbyssalDimensionLightingTransformStage implements ShaderTrans
     private static final String ABYSSAL_LENS_FLARE_MARKER = "AUSM_ABYSSAL_DISABLE_LENS_FLARE";
     private static final String LIGHTING = """
             // AUSM_ABYSSAL_DIMENSION_LIGHTING
-            #if COLORED_LIGHTING_INTERNAL > 0 && AUSM_ABYSSAL_SUNLIGHT == 1 && defined AUSM_ABYSSAL_WASTELAND
+            #if AUSM_ABYSSAL_SUNLIGHT == 1 && defined AUSM_ABYSSAL_WASTELAND
                 #define AUSM_ABYSSAL_LIGHT_TINT vec3(0.46, 0.70, 1.04)
                 #define AUSM_ABYSSAL_AMBIENT_TINT vec3(0.55, 0.78, 1.00)
-            #elif COLORED_LIGHTING_INTERNAL > 0 && AUSM_ABYSSAL_SUNLIGHT == 1 && defined AUSM_DREADLANDS
+            #elif AUSM_ABYSSAL_SUNLIGHT == 1 && defined AUSM_DREADLANDS
                 #define AUSM_ABYSSAL_LIGHT_TINT vec3(1.18, 0.34, 0.24)
                 #define AUSM_ABYSSAL_AMBIENT_TINT vec3(0.92, 0.31, 0.25)
             #else
@@ -52,8 +52,10 @@ public final class AbyssalDimensionLightingTransformStage implements ShaderTrans
                             + "    #endif");
         }
         withTints = disableDreadlandsLightShafts(withTints);
-        int versionAt = withTints.indexOf("#version");
-        int insertAt = versionAt < 0 ? 0 : withTints.indexOf('\n', versionAt) + 1;
+        // Dimension and user-option defines are emitted after #version. Evaluate
+        // them at the lighting include, after common.glsl has defined settings.
+        int insertAt = withTints.indexOf("#ifndef INCLUDE_LIGHT_AND_AMBIENT_COLORS");
+        if (insertAt < 0) return source;
         return withTints.substring(0, insertAt) + LIGHTING + '\n' + withTints.substring(insertAt);
     }
 

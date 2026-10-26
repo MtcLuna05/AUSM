@@ -37,12 +37,33 @@ final class PipelineGpuTiming {
     static final int COMPOSITE = 15;
     static final int FINAL = 16;
     static final int BLOOM = 17;
+    static final int TERRAIN_SOLID = 18;
+    static final int TERRAIN_CUTOUT_MIPPED = 19;
+    static final int TERRAIN_CUTOUT = 20;
+    static final int TERRAIN_TRANSLUCENT = 21;
+    static final int TERRAIN_TRIPWIRE = 22;
+    static final int TERRAIN_DESTROY = 23;
+    static final int COMPOSITE_BASE = 24;
+    static final int COMPOSITE_PASS_1 = 25;
+    static final int COMPOSITE_PASS_2 = 26;
+    static final int COMPOSITE_PASS_3 = 27;
+    static final int COMPOSITE_PASS_4 = 28;
+    static final int COMPOSITE_PASS_5 = 29;
+    static final int COMPOSITE_PASS_6 = 30;
+    static final int COMPOSITE_PASS_7 = 31;
+    static final int COMPOSITE_ARRAY = 32;
+    static final int TERRAIN_SOLID_SCALAR_DRAWS = 33;
+    static final int TERRAIN_SOLID_INDIRECT_DRAWS = 34;
 
     private static final String[] SCOPE_NAMES = {
             "frame", "shadow", "shadowTerrain", "shadowEntities", "shadowBlockEntities", "shadowPost",
             "gbufferTerrain", "gbufferSky", "gbufferEntities", "gbufferBlockEntities",
             "gbufferParticlesWeather", "gbufferHand", "gbufferOther", "prepare", "deferred", "composite",
-            "final", "bloom"
+            "final", "bloom", "terrainSolid", "terrainCutoutMipped", "terrainCutout",
+            "terrainTranslucent", "terrainTripwire", "terrainDestroy", "compositeBase",
+            "composite1", "composite2", "composite3", "composite4", "composite5",
+            "composite6", "composite7", "compositeArray", "terrainSolidScalarDraws",
+            "terrainSolidIndirectDraws"
     };
     private static final int SCOPE_COUNT = SCOPE_NAMES.length;
     private static final int SLOT_COUNT = 256;
@@ -57,12 +78,16 @@ final class PipelineGpuTiming {
     private static final int[] FREE_SLOTS = new int[SLOT_COUNT];
     private static final int[] PENDING_SLOTS = new int[SLOT_COUNT];
     private static final int[] PASS_TOKENS = new int[PASS_STACK_CAPACITY];
+    private static final int[] PASS_DETAIL_TOKENS = new int[PASS_STACK_CAPACITY];
     private static final long[] TOTAL_NANOS = new long[SCOPE_COUNT];
     private static final long[] MAX_NANOS = new long[SCOPE_COUNT];
     private static final long[] SAMPLE_COUNTS = new long[SCOPE_COUNT];
 
     private static boolean initialized;
     private static boolean disabled;
+    private static volatile boolean traceRequested;
+    private static boolean tracing;
+    private static boolean drainingTrace;
     private static int freeCount;
     private static int pendingHead;
     private static int pendingTail;
@@ -82,6 +107,25 @@ final class PipelineGpuTiming {
             return;
         }
         collectReadySamples();
+        if (traceRequested && !tracing) {
+            clearStatistics();
+            tracing = true;
+            drainingTrace = false;
+            MainMod.LOGGER.info("[AUSMGpuTiming] capture started");
+            MainMod.LOGGER.info("[AUSMGpuTiming] terrainShaderDetail={}", TerrainShaderGpuProbe.captureStatus());
+        } else if (!traceRequested && tracing) {
+            tracing = false;
+            drainingTrace = true;
+            MainMod.LOGGER.info("[AUSMGpuTiming] capture stopping; waiting for pending GPU timestamps={}", pendingCount);
+        }
+        if (drainingTrace && pendingCount == 0) {
+            logSummary("stopped");
+            drainingTrace = false;
+        }
+        if (!tracing) {
+            frameToken = INVALID_TOKEN;
+            return;
+        }
         if (frameToken != INVALID_TOKEN) {
             end(frameToken);
         }
@@ -94,10 +138,26 @@ final class PipelineGpuTiming {
 
     static void finishFrame() {
         resetPassScopes();
-        if (frameToken != INVALID_TOKEN) {
+        if (tracing && frameToken != INVALID_TOKEN) {
             end(frameToken);
             frameToken = INVALID_TOKEN;
         }
+    }
+
+    static void startCapture() {
+        traceRequested = true;
+    }
+
+    static void stopCapture() {
+        traceRequested = false;
+    }
+
+    static boolean isCaptureRequested() {
+        return traceRequested || tracing || drainingTrace;
+    }
+
+    static boolean isTraceCaptureActive() {
+        return traceRequested || tracing;
     }
 
     static int beginShadow() {
@@ -112,6 +172,15 @@ final class PipelineGpuTiming {
         return begin(scopeForProgram(pass));
     }
 
+    static int beginCompositePass(RenderPass pass) {
+        int scope = scopeForCompositePass(pass);
+        return scope >= 0 ? begin(scope) : INVALID_TOKEN;
+    }
+
+    static int beginCompositeArray() {
+        return begin(COMPOSITE_ARRAY);
+    }
+
     static int beginProgramArray(ProgramArrayId arrayId) {
         return begin(scopeForProgramArray(arrayId));
     }
@@ -119,29 +188,38 @@ final class PipelineGpuTiming {
     static void beginPass(RenderPass pass, WorldRenderingPhase phase, boolean shadow) {
         int scope = scopeForPass(pass, phase, shadow);
         int token = begin(scope);
+        int detailScope = scopeForPassDetail(phase, shadow);
+        int detailToken = detailScope >= 0 ? begin(detailScope) : INVALID_TOKEN;
         if (passDepth >= PASS_TOKENS.length) {
             end(token);
+            end(detailToken);
             skippedSamples++;
             return;
         }
-        PASS_TOKENS[passDepth++] = token;
+        PASS_TOKENS[passDepth] = token;
+        PASS_DETAIL_TOKENS[passDepth] = detailToken;
+        passDepth++;
     }
 
     static void endPass() {
         if (passDepth <= 0) {
             return;
         }
-        end(PASS_TOKENS[--passDepth]);
+        int index = --passDepth;
+        end(PASS_DETAIL_TOKENS[index]);
+        end(PASS_TOKENS[index]);
     }
 
     static void resetPassScopes() {
         while (passDepth > 0) {
-            end(PASS_TOKENS[--passDepth]);
+            int index = --passDepth;
+            end(PASS_DETAIL_TOKENS[index]);
+            end(PASS_TOKENS[index]);
         }
     }
 
     static int begin(int scope) {
-        if (!ensureInitialized() || scope < 0 || scope >= SCOPE_COUNT) {
+        if (!tracing || !ensureInitialized() || scope < 0 || scope >= SCOPE_COUNT) {
             return INVALID_TOKEN;
         }
         if (freeCount <= 0) {
@@ -207,6 +285,9 @@ final class PipelineGpuTiming {
         pendingCount = 0;
         passDepth = 0;
         frameToken = INVALID_TOKEN;
+        traceRequested = false;
+        tracing = false;
+        drainingTrace = false;
         clearStatistics();
         TerrainShaderGpuProbe.release();
     }
@@ -307,6 +388,38 @@ final class PipelineGpuTiming {
         return GBUFFER_OTHER;
     }
 
+    private static int scopeForCompositePass(RenderPass pass) {
+        if (pass == null) {
+            return INVALID_TOKEN;
+        }
+        return switch (pass) {
+            case COMPOSITE -> COMPOSITE_BASE;
+            case COMPOSITE1 -> COMPOSITE_PASS_1;
+            case COMPOSITE2 -> COMPOSITE_PASS_2;
+            case COMPOSITE3 -> COMPOSITE_PASS_3;
+            case COMPOSITE4 -> COMPOSITE_PASS_4;
+            case COMPOSITE5 -> COMPOSITE_PASS_5;
+            case COMPOSITE6 -> COMPOSITE_PASS_6;
+            case COMPOSITE7 -> COMPOSITE_PASS_7;
+            default -> INVALID_TOKEN;
+        };
+    }
+
+    private static int scopeForPassDetail(WorldRenderingPhase phase, boolean shadow) {
+        if (shadow || phase == null) {
+            return INVALID_TOKEN;
+        }
+        return switch (phase) {
+            case TERRAIN_SOLID -> TERRAIN_SOLID;
+            case TERRAIN_CUTOUT_MIPPED -> TERRAIN_CUTOUT_MIPPED;
+            case TERRAIN_CUTOUT -> TERRAIN_CUTOUT;
+            case TERRAIN_TRANSLUCENT -> TERRAIN_TRANSLUCENT;
+            case TRIPWIRE -> TERRAIN_TRIPWIRE;
+            case DESTROY -> TERRAIN_DESTROY;
+            default -> INVALID_TOKEN;
+        };
+    }
+
     static int scopeForProgramArray(ProgramArrayId arrayId) {
         if (arrayId == ProgramArrayId.PREPARE || arrayId == ProgramArrayId.SETUP || arrayId == ProgramArrayId.BEGIN) {
             return PREPARE;
@@ -391,20 +504,23 @@ final class PipelineGpuTiming {
                 FREE_SLOTS[freeCount++] = slot;
             }
             if (SAMPLE_COUNTS[FRAME] >= SUMMARY_FRAMES) {
-                logSummary();
+                logSummary("window-complete");
             }
         } catch (RuntimeException | LinkageError error) {
             disable("collect", error);
         }
     }
 
-    private static void logSummary() {
+    private static void logSummary(String reason) {
         long frames = SAMPLE_COUNTS[FRAME];
         if (frames <= 0L) {
+            lastSummary = "no-completed-frames pending=" + pendingCount;
+            MainMod.LOGGER.info("[AUSMGpuTiming] capture={} {}", reason, lastSummary);
             return;
         }
         StringBuilder summary = new StringBuilder(512);
-        summary.append("frames=").append(frames)
+        summary.append("reason=").append(reason)
+                .append(" frames=").append(frames)
                 .append(" resolution=").append(width).append('x').append(height)
                 .append(" pending=").append(pendingCount)
                 .append(" skipped=").append(skippedSamples);
@@ -436,7 +552,6 @@ final class PipelineGpuTiming {
             SAMPLE_COUNTS[scope] = 0L;
         }
         skippedSamples = 0L;
-        lastSummary = "not-ready";
     }
 
     private static void disable(String stage, Throwable error) {

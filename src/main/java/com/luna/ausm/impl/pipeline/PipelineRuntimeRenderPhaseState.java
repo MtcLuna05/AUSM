@@ -127,7 +127,8 @@ abstract class PipelineRuntimeDiagnosticsState4 extends PipelineRuntimeDiagnosti
 
     public void beginWaterAttachmentDeltaProbe(BlockRenderLayer layer) {
         waterAttachmentDeltaProbeActive = false;
-        if (layer != BlockRenderLayer.TRANSLUCENT
+        if (renderingShadowMap
+                || layer != BlockRenderLayer.TRANSLUCENT
                 || activePass != RenderPass.GBUFFERS_WATER
                 || waterAttachmentDeltaProbeLogs >= MAX_WATER_ATTACHMENT_DELTA_PROBE_LOGS
                 || !pingPongManager.isInitialized()) {

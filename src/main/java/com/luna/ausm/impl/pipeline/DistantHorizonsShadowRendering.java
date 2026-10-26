@@ -68,7 +68,9 @@ public final class DistantHorizonsShadowRendering {
 
     static void initialize(ShaderPack pack, ShaderProperties properties) {
         release();
-        if (!ShadedDistantHorizonsRendering.requestedFor(pack.getName())) return;
+        String lowerPackName = pack.getName().toLowerCase(java.util.Locale.ROOT);
+        if (!ShadedDistantHorizonsRendering.requestedFor(pack.getName())
+                || lowerPackName.startsWith("bsl") || lowerPackName.contains("/bsl")) return;
         ShaderPack casterPack = new ShaderPack() {
             @Override public String getName() { return pack.getName(); }
             @Override public boolean hasResource(String path) {
@@ -97,7 +99,9 @@ public final class DistantHorizonsShadowRendering {
     }
 
     static int render(PipelineContext context, float partialTicks) {
-        if (program == null || !ShadedDistantHorizonsRendering.requested()
+        String lowerPackName = context.activePackName == null ? "" : context.activePackName.toLowerCase(java.util.Locale.ROOT);
+        if (program == null || lowerPackName.startsWith("bsl") || lowerPackName.contains("/bsl")
+                || !ShadedDistantHorizonsRendering.requested()
                 || !ShadedDistantHorizonsRendering.shaderpackOverrideActive
                 || !context.renderingShadowMap || context.isBetterPortalsExternalWorldTarget()) return 0;
         int oldProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);

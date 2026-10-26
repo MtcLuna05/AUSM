@@ -19,6 +19,8 @@ import static com.luna.ausm.impl.pipeline.PipelineSkyConstants.ASTRAL_SKYBOX_CLA
 import static com.luna.ausm.impl.pipeline.pack.PipelineShaderSettings.optionBoolean;
 
 abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosticsState1 {
+    private Object ausmBotaniaVoidSkyRenderer;
+
     public boolean shouldRenderSkyDisc() {
         return !isPipelineActive || shaderProperties.renderSettings().sky();
     }
@@ -94,6 +96,54 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
                     mc);
         } catch (RuntimeException | LinkageError ignored) {
             // Optional detail path; the owned gradient remains authoritative.
+        }
+    }
+
+    /** Replays finite details after the pack's backing, retaining native discovery rules. */
+    public void renderShaderedNativeSkyDetails(float partialTicks) {
+        Minecraft mc = MinecraftReflectionCompat.minecraft();
+        WorldClient world = mc == null ? null : MinecraftReflectionCompat.world(mc);
+        if (!isPipelineActive || world == null
+                || self().isRenderingBetterPortalsNestedView() || self().isRenderingBetterPortalsRenderPass()) return;
+        Object renderer = MinecraftReflectionCompat.worldProviderSkyRenderer(MinecraftReflectionCompat.worldProvider(world));
+        Object botania = renderer;
+        boolean astral = PipelineRuntimeState.isAstralSkyRenderer(renderer);
+        if (astral) botania = MinecraftReflectionCompat.field(renderer, Object.class, null, "otherSkyRenderer");
+        if (self().isSimpleVoidWorld(world)
+                && (botania == null
+                || !"vazkii.botania.client.render.world.SkyblockSkyRenderer".equals(botania.getClass().getName()))) {
+            botania = self().botaniaVoidSkyRenderer();
+        }
+        if (self().isSimpleVoidWorld(world) && botania != null) {
+            MinecraftReflectionCompat.invoke(botania, new String[]{"render"},
+                    new Class<?>[]{float.class, WorldClient.class, Minecraft.class}, partialTicks, world, mc);
+        }
+        if (astral && !self().shouldSuppressShaderedAstralConstellations()) {
+            try {
+                Class<?> sky = Class.forName("hellfirepvp.astralsorcery.client.sky.RenderAstralSkybox");
+                MinecraftReflectionCompat.invoke(sky, new String[]{"renderConstellationsWrapped"},
+                        new Class<?>[]{World.class, float.class}, world, partialTicks);
+            } catch (ClassNotFoundException failure) {
+                throw new IllegalStateException("Registered Astral sky renderer has no constellation renderer", failure);
+            }
+        }
+    }
+
+    /**
+     * Botania only registers its renderer for a dimension-zero Botania
+     * Skyblock world. Simple Void World is dimension 43, so create the same
+     * stateless renderer for AUSM's finite-detail pass when Botania is present.
+     */
+    protected Object botaniaVoidSkyRenderer() {
+        if (ausmBotaniaVoidSkyRenderer != null) {
+            return ausmBotaniaVoidSkyRenderer;
+        }
+        try {
+            Class<?> renderer = Class.forName("vazkii.botania.client.render.world.SkyblockSkyRenderer");
+            ausmBotaniaVoidSkyRenderer = renderer.getDeclaredConstructor().newInstance();
+            return ausmBotaniaVoidSkyRenderer;
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            return null;
         }
     }
 
@@ -365,9 +415,9 @@ abstract class PipelineRuntimeDiagnosticsState2 extends PipelineRuntimeDiagnosti
     }
 
     public boolean shouldSuppressShaderedAstralConstellations() {
-        return self().shouldUseShaderOwnedSkyOverride()
-                || self().shouldSuppressNativeAstralVoidSkyDetail()
-                || isPipelineActive
+        // The owned sky only replaces the backing/star field. Astral's
+        // discovered constellation geometry has no procedural replacement.
+        return isPipelineActive
                 && !optionBoolean(shaderProperties, ASTRAL_NATIVE_CONSTELLATIONS_OPTION, true);
     }
 

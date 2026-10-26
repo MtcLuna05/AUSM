@@ -193,12 +193,12 @@ vec2 AusmComplementaryStarCoord(vec3 viewPos) {
 
 vec3 AusmApplyComplementaryCelestials(vec3 color, vec3 colorWithoutStars,
                                       vec3 viewPos, vec3 sunVec, vec3 upVec) {
-    #if AUSM_VOID_CELESTIALS == 1 && SUN_MOON_STYLE >= 2
+    #if AUSM_VOID_CELESTIALS == 1 && SUN_MOON_STYLE >= 1
         vec3 nViewPos = normalize(viewPos);
         float VdotS = dot(nViewPos, sunVec);
         float SdotU = dot(sunVec, upVec);
         float absVdotS = abs(VdotS);
-        #if SUN_MOON_STYLE == 2
+        #if SUN_MOON_STYLE <= 2
             float sunSizeFactor1 = 0.9975;
             float sunSizeFactor2 = 400.0;
             float moonCrescentOffset = 0.0055;

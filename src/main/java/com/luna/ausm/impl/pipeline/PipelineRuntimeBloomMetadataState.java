@@ -2,6 +2,7 @@ package com.luna.ausm.impl.pipeline;
 
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.pipeline.compat.ProjectRedIlluminationCompat;
+import com.luna.ausm.impl.pipeline.pack.PipelineShaderSettings;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
 import java.util.Locale;
 import java.util.Map;
@@ -227,6 +228,10 @@ abstract class PipelineRuntimeDiagnosticsState1 extends PipelineRuntimeDiagnosti
             self().putSyntheticLightCandidate(pos, true);
         }
         if (self().shouldProbeColoredLightTileEntity(state, lightInfo)) {
+            // Multipart placement can notify the world before its tile has
+            // published the light part. Keep the position until the shadow
+            // pass can query the completed multipart tile.
+            self().putSyntheticLightCandidate(pos, true);
             self().auditProjectRedTileEntity(world, pos, "world_update_te");
         }
     }
@@ -282,9 +287,12 @@ abstract class PipelineRuntimeDiagnosticsState1 extends PipelineRuntimeDiagnosti
         }
         IBlockState actualState = self().actualLightState(state, blockAccess, pos);
         int shaderBlockId = shaderProperties.blockIds().idFor(actualState);
-        int voxelId = PipelineRuntimeState.localActVoxelId(shaderBlockId);
+        boolean bslPalette = PipelineShaderSettings.optionBoolean(
+                shaderProperties, "AUSM_BSL_112_ADAPTER", false);
+        int voxelId = bslPalette ? bslSyntheticLightVoxelId(actualState, shaderBlockId)
+                : PipelineRuntimeState.compatSyntheticLightVoxelId(actualState);
         if (voxelId <= 0) {
-            voxelId = PipelineRuntimeState.compatSyntheticLightVoxelId(actualState);
+            voxelId = PipelineRuntimeState.localActVoxelId(shaderBlockId);
         }
         int emission = self().blockRenderEmissionForState(actualState, null, null);
         if (voxelId <= 0) {
@@ -301,6 +309,50 @@ abstract class PipelineRuntimeDiagnosticsState1 extends PipelineRuntimeDiagnosti
             return new SyntheticLightInfo(state, actualState, shaderBlockId, voxelId, emission, "ok:mapped_emission_fallback");
         }
         return new SyntheticLightInfo(state, actualState, shaderBlockId, voxelId, emission, "ok");
+    }
+
+    /** Converts CPU-injected mod lights to BSL's two-digit light-color palette. */
+    protected static int bslSyntheticLightVoxelId(IBlockState state, int shaderBlockId) {
+        int category = shaderBlockId / 100;
+        int data = shaderBlockId % 100;
+        if (category >= 150 && category <= 160 && data >= 1 && data <= 50) {
+            return data;
+        }
+        ResourceLocation name = registryName(state);
+        if (name == null) return 0;
+        String namespace = MinecraftReflectionCompat.resourceNamespace(name);
+        String path = MinecraftReflectionCompat.resourcePath(name);
+        if ("randomthings".equals(namespace)
+                && ("luminousblock".equals(path) || "luminousstainedbrick".equals(path))) {
+            int meta = MinecraftReflectionCompat.blockMetaFromState(
+                    MinecraftReflectionCompat.blockFromState(state), state) & 15;
+            return switch (meta) {
+                case 1, 12 -> 2;
+                case 2, 6 -> 11;
+                case 3 -> 8;
+                case 4 -> 3;
+                case 5 -> 4;
+                case 7, 15 -> 50;
+                case 9 -> 7;
+                case 10 -> 10;
+                case 11 -> 9;
+                case 13 -> 5;
+                case 14 -> 1;
+                default -> 25;
+            };
+        }
+        if (PipelineRuntimeState.isAstralCrystalCluster(state)) {
+            int material = PipelineBlockEmission.astralCrystalMaterialId(state);
+            if (material == 10904) return 14;
+            if (material == 10916) return 21;
+            return 20;
+        }
+        if ("tconstruct".equals(namespace) && "seared_furnace_controller".equals(path)
+                && stateName(state).contains("active=true")) {
+            return 2;
+        }
+        if ("aether_legacy".equals(namespace) && "aether_portal".equals(path)) return 20;
+        return 0;
     }
 
     protected void putSyntheticLightCandidate(BlockPos pos, boolean force) {

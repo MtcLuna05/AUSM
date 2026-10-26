@@ -179,7 +179,6 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
                 );
             }
 
-            self().clearColoredLightImages();
             // A shaderpack shadow program is meaningless without terrain depth.
             // Treat the active shadow program as an explicit terrain request;
             // stale/pack-local shadowTerrain=false must not silently produce a
@@ -196,12 +195,16 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
                         PipelineWorldRenderScope.interpolate(MinecraftReflectionCompat.lastTickPosZ(viewEntity), MinecraftReflectionCompat.posZ(viewEntity), partialTicks),
                         self().shadowRenderCullDistance()
                 );
-                if (shadowMapUsable && self().shouldKeepPreviousShadowMapForSparseCandidate(
+                if (shadowMapUsable && !self().requiresPerFrameShadowUpdates()
+                        && self().shouldKeepPreviousShadowMapForSparseCandidate(
                         viewEntity, partialTicks)) {
                     return;
                 }
             }
 
+            // Do not clear the voxel image until the cached-map decision is
+            // final: a sparse selection can retain the old shadow/light data.
+            self().clearColoredLightImages();
             shadowFramebuffer.bindForRendering();
             shadowFramebuffer.clear();
             PipelineWorldRenderScope.configureShadowTerrainRenderState();
@@ -287,6 +290,10 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
     }
 
     protected boolean shouldSkipStationaryShadowMap(World world, Entity viewEntity, float partialTicks) {
+        // ACT flood-fill ping-pongs with framemod2, which advances every
+        // presented frame. Throttling dispatches to every second frame pins
+        // the parity and the light never propagates out of its source voxel.
+        if (self().requiresPerFrameShadowUpdates()) return false;
         if (!shadowMapUsable || !shadowMapPopulated || shaderProperties == null) {
             return false;
         }
@@ -334,6 +341,12 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
             MatrixState.rebaseShadowModelView(dx, dy, dz);
         }
         return reuse;
+    }
+
+    protected boolean requiresPerFrameShadowUpdates() {
+        return !shadowComputePrograms.isEmpty()
+                || !computeProgramArrays.getOrDefault(ProgramArrayId.SHADOWCOMP, List.of()).isEmpty()
+                || !fullscreenArrayPrograms.getOrDefault(ProgramArrayId.SHADOWCOMP, List.of()).isEmpty();
     }
 
     protected void rememberShadowMapRender(World world, Entity viewEntity, float partialTicks) {
@@ -420,8 +433,17 @@ abstract class PipelineShadowRendering extends PipelineVanillaTerrainMaintenance
                 continue;
             }
 
-            // Generic shader block-id lights are handled by the shaderpack shadow voxelizer.
-            // Keep this CPU path restricted to ProjectRed tile entities to avoid global tint leaks.
+            if (ENABLE_GENERIC_CPU_SHADER_BLOCK_LIGHT_INJECTION) {
+                IBlockState state = actualLightState(MinecraftReflectionCompat.worldBlockState(world, pos), world, pos);
+                SyntheticLightInfo lightInfo = syntheticLightInfo(state, world, pos);
+                if (lightInfo.voxelId > 0 && lightInfo.emission > 0) {
+                    // Nitor and other TESR-only emitters have no terrain
+                    // vertices for the pack's shadow voxelizer to discover.
+                    putSyntheticLightCandidate(pos, true);
+                    if (self().injectVoxelAt(pos, lightInfo.voxelId, dimensions,
+                            cameraFloorX, cameraFloorY, cameraFloorZ, writtenVoxels)) injected++;
+                }
+            }
         }
 
         if (ENABLE_GENERIC_CPU_SHADER_BLOCK_LIGHT_INJECTION) {

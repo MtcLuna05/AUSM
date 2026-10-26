@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
 public final class DistantHorizonsVertexTransform {
     private static final String INPUTS = """
             in uvec4 vPosition;
-            in vec4 color;
+            in vec4 ausmDhVertexColor;
             in uvec4 dhMaterialData;
             uniform vec3 ausmDhModelOffset;
             uniform mat4 ausmDhModelView;
@@ -56,7 +56,7 @@ public final class DistantHorizonsVertexTransform {
         expressions.put("gl_NormalMatrix", "mat3(ausmDhModelView)");
         expressions.put("gl_Vertex", "ausmDhPosition()");
         expressions.put("gl_Normal", "ausmDhNormal()");
-        expressions.put("gl_Color", "color");
+        expressions.put("gl_Color", "ausmDhVertexColor");
         expressions.put("gl_MultiTexCoord0", "vec4(0.0, 0.0, 0.0, 1.0)");
         expressions.put("gl_MultiTexCoord1", "ausmDhLightmap()");
         expressions.put("gl_MultiTexCoord2", "ausmDhLightmap()");

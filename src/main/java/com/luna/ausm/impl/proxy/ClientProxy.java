@@ -2,6 +2,7 @@ package com.luna.ausm.impl.proxy;
 
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.client.ClientSettingsConfig;
+import com.luna.ausm.impl.client.AusmTraceCommand;
 import com.luna.ausm.impl.client.DistantHorizonsCompat;
 import com.luna.ausm.impl.client.dynamic.DynamicLightConfig;
 import com.luna.ausm.impl.client.EuphoriaEntreePackGenerator;
@@ -47,6 +48,7 @@ public class ClientProxy extends CommonProxy {
     public void init(FMLInitializationEvent event) {
         super.init(event);
 
+        AusmTraceCommand.register();
         KeybindManager.init();
         DistantHorizonsCompat.init();
         EuphoriaEntreePackGenerator.init();

@@ -15,6 +15,8 @@ public final class ShaderTransformPipeline {
             new OwnedSkyStabilityTransformStage(),
             new AbyssalDimensionLightingTransformStage(),
             new LegacySamplerAliasTransformStage(),
+            new LegacyVertexAttributeTransformStage(),
+            new MakeupSkyBasicTransformStage(),
             new GbuffersBuiltinTransformStage(),
             new ItemAlphaCoverageTransformStage(),
             new ItemGlintCoverageTransformStage(),

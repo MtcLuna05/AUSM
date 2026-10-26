@@ -1,5 +1,27 @@
 # Unreleased
 
+# 1.0.9
+
+- Split generated 1.12.2 shader patches into a reusable visual/optimization layer and a structurally validated Complementary-family adapter, ready for additional shader-family adapters.
+- Added a BSL v10 adapter with Astral Sorcery textured-sky rendering, BSL-palette legacy emitters and CPU light injection, isotropic multi-colored blocklight diffusion, and a configurable waving-distance optimization.
+- Added a MakeUp Ultra Fast 9.x adapter with Astral Sorcery textured-sky rendering, legacy emissive/fluid mappings, Distant Horizons shader routing, and a configurable waving-distance optimization.
+- Adapted MakeUp's integer block-entity vertex attribute to GLSL 1.20 so its terrain, entity, hand, weather, and textured programs compile on NVIDIA through AUSM.
+- Kept MakeUp's `USE_BASIC_SH` compatibility switch local to its fallback wrappers, preventing Overworld shaders from being forced into the unknown-dimension lighting path.
+- Made MakeUp identify grayscale star vertices only during the actual star render phase, preventing a white fixed-function sky-dome color from turning the whole sky white.
+- Disabled the water attachment diagnostic during depth-only shadow rendering, avoiding invalid color-buffer reads without changing shadow output.
+- Restored Entree's modded-fluid materials, Astral effect lighting/fog bypass, void star/nebula controls, Abyssal atmosphere, legacy emitter handling and emissive coating guards in generated pack patches.
+- Preserved shader choices across generated-pack renames and merged legacy Entree block mappings without dropping existing IDs or multiline entries.
+- Added a Curvy Pipes 1.12.2 rendering bridge for AUSM's direct Nothirium terrain path, with legacy vertex-array and shader-state handling.
+- Added Astral Sorcery constellation rendering and style options to generated Complementary Unbound, Reimagined, and Euphoria AUSM patch packs.
+- Replayed Astral Sorcery's native constellation layer over shader-owned skies instead of suppressing it with the replaced sky backing.
+- Restored placed colored-light propagation by keeping Euphoria's alternating shadow-compute flood fill advancing every displayed frame, including TESR-only emitters and legacy Entree color IDs.
+- Replaced Euphoria ACT's six-axis diffusion stencil with a face-and-edge stencil that removes the visible cross-shaped regions around placed colored lights.
+- Restored Simple Void World celestial styles and finite Botania planet, ribbon, rainbow, and skybox details over the shader-owned void sky.
+- Applied AbyssalCraft dimension sunlight defines before Complementary evaluates its light colors.
+- Added Curvy Pipes geometry to the shader shadow pass while excluding editing previews and damage overlays.
+
+# 1.0.8
+
 - Corrected Distant Horizons packed-light channel handling and matched its target sizing and color upscale to the world framebuffer while keeping depth resampling nearest-neighbor.
 - Cached block-layer and block-state lookups more safely, and hardened Bloom layer discovery across render-layer implementations.
 - Added bounded CPU timing diagnostics for Nothirium shadow chunk compilation and selection.
@@ -14,8 +36,6 @@
 - Added opaque Distant Horizons terrain shadow casting for Complementary, using a separate caster shader and light-space selection in the existing shadow map.
 - Removed the automated test suite and its JUnit configuration after in-game DH shader verification.
 - Ignore Complementary's reserved unused `composite2` placeholder instead of compiling it as an active shader pass.
-
-# 1.0.8
 
 # 1.0.7
 

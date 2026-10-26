@@ -15,6 +15,8 @@ import com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhAp
 import com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhApiRenderParam;
 import com.seibel.distanthorizons.api.objects.DhApiResult;
 import com.seibel.distanthorizons.api.objects.math.DhApiMat4f;
+import java.util.HashSet;
+import java.util.Set;
 
 /** Borrows native textures for the current frame; never overrides DH's shaders or framebuffer. */
 public final class DistantHorizonsNativeBridge {
@@ -24,6 +26,7 @@ public final class DistantHorizonsNativeBridge {
     private static IDhApiConfigValue<Float> overriddenRadiusSetting;
     private static Float previousRadiusOverride;
     private static boolean loggedShaderedRenderCallback;
+    private static final Set<String> LOGGED_CAPTURE_SKIPS = new HashSet<>();
 
     private DistantHorizonsNativeBridge() {
     }
@@ -123,28 +126,44 @@ public final class DistantHorizonsNativeBridge {
                 || !PipelineContext.getInstance().canCaptureDistantHorizonsFrame()) {
             return;
         }
-        // A missing/unsupported texture must not fall back to copying native
-        // RGBA output into shaderpack MRTs. Keep the ordinary scene intact.
-        event.cancelEvent();
-        if (DistantHorizonsShadedBridge.capture()) return;
+        // Suppress DH's native apply only after AUSM has a replacement for
+        // this frame. Canceling before validating the borrowed textures can
+        // leave a black LOD frame when DH reallocates its targets.
+        if (DistantHorizonsShadedBridge.capture()) {
+            event.cancelEvent();
+            return;
+        }
         IDhApiRenderProxy proxy = DhApi.Delayed.renderProxy;
         if (proxy == null || proxy.getRenderingEngine() != EDhApiRenderingEngine.OPEN_GL
                 || !proxy.isNativeRenderer() || proxy.getDepthRange() != EDhApiDepthRange.NEG_ONE_TO_POS_ONE) {
+            logCaptureSkip("native OpenGL render proxy unavailable");
             return;
         }
         DhApiResult<Integer> color = proxy.getDhColorTextureGlId();
         DhApiResult<Integer> depth = proxy.getDhDepthTextureGlId();
         if (!color.success || !depth.success || color.payload == null || depth.payload == null
                 || color.payload <= 0 || depth.payload <= 0) {
+            logCaptureSkip("native color/depth textures unavailable");
             return;
         }
         float[] inverse = inverseColumnMajor(event.value.dhProjectionMatrix);
         if (inverse == null) {
+            logCaptureSkip("DH projection matrix is not invertible");
             return;
         }
-        NativeDistantHorizonsCompositor.capture(color.payload, depth.payload,
+        if (NativeDistantHorizonsCompositor.capture(color.payload, depth.payload,
                 inverse, columnMajor(event.value.mcProjectionMatrix),
-                proxy.getDepthDirection() == EDhApiDepthDirection.REVERSE_Z ? 0.0F : 1.0F);
+                proxy.getDepthDirection() == EDhApiDepthDirection.REVERSE_Z ? 0.0F : 1.0F)) {
+            event.cancelEvent();
+        } else {
+            logCaptureSkip("native texture capture rejected");
+        }
+    }
+
+    private static void logCaptureSkip(String reason) {
+        if (LOGGED_CAPTURE_SKIPS.add(reason)) {
+            MainMod.LOGGER.warn("[AUSMDistantHorizons] Keeping DH's native output because AUSM could not replace this frame: {}.", reason);
+        }
     }
 
     static float[] inverseColumnMajor(DhApiMat4f matrix) {
