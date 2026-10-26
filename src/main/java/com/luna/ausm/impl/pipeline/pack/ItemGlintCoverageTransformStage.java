@@ -42,7 +42,9 @@ public final class ItemGlintCoverageTransformStage implements ShaderTransformSta
         if (!assignment.find()) {
             return source;
         }
-        String declaration = "// " + MARKER + "\nout vec2 ausmItemGlintBaseTexCoord;\n";
+        String interfaceQualifier = interfaceQualifier(source, true);
+        String declaration = "// " + MARKER + "\n" + interfaceQualifier
+                + " vec2 ausmItemGlintBaseTexCoord;\n";
         String transformed = injectAfterVersion(source, declaration);
         assignment = VERTEX_TEXCOORD_ASSIGNMENT.matcher(transformed);
         if (!assignment.find()) {
@@ -62,11 +64,12 @@ public final class ItemGlintCoverageTransformStage implements ShaderTransformSta
         if (!sample.find()) {
             return source;
         }
+        String interfaceQualifier = interfaceQualifier(source, false);
         String declaration = "// " + MARKER + "\n"
                 + "uniform sampler2D ausmItemGlintBaseAtlas;\n"
                 + "uniform int ausmItemGlintMask;\n"
                 + "uniform float ausmItemAlphaTestRef;\n"
-                + "in vec2 ausmItemGlintBaseTexCoord;\n";
+                + interfaceQualifier + " vec2 ausmItemGlintBaseTexCoord;\n";
         String transformed = injectAfterVersion(source, declaration);
         sample = FRAGMENT_COLOR_SAMPLE.matcher(transformed);
         if (!sample.find()) {
@@ -85,6 +88,27 @@ public final class ItemGlintCoverageTransformStage implements ShaderTransformSta
         return matcher.find()
                 ? source.substring(0, matcher.end()) + declaration + source.substring(matcher.end())
                 : declaration + source;
+    }
+
+    private static String interfaceQualifier(String source, boolean vertexShader) {
+        Matcher matcher = VERSION.matcher(source);
+        if (!matcher.find()) {
+            return "varying";
+        }
+        String versionLine = matcher.group(1).trim();
+        int version = 120;
+        String[] parts = versionLine.split("\\s+");
+        if (parts.length > 1) {
+            try {
+                version = Integer.parseInt(parts[1]);
+            } catch (NumberFormatException ignored) {
+                // Keep the GLSL 1.20 interface for unknown version forms.
+            }
+        }
+        if (version < 130) {
+            return "varying";
+        }
+        return vertexShader ? "out" : "in";
     }
 
     private static String leadingWhitespace(String line) {

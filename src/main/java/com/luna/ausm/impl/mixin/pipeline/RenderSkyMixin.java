@@ -74,6 +74,7 @@ public class RenderSkyMixin {
             // One shader-owned canvas replaces every vanilla or mod renderer
             // in overworld-like dimensions.
             context.renderShaderedSkyBaseBacking();
+            context.renderShaderedNativeSkyDetails(partialTicks);
             context.endPass();
             ci.cancel();
             return;
@@ -104,6 +105,7 @@ public class RenderSkyMixin {
         Deque<Object> blockedRenderers = ausm$blockedSkyRenderers.get();
         if (!blockedRenderers.isEmpty()) {
             context.restoreNonVanillaSkyRenderer(blockedRenderers.pop());
+            context.renderShaderedNativeSkyDetails(partialTicks);
         }
         context.renderShaderlessOwnedSkyDetailsAfterCelestials(partialTicks);
         context.sealShaderlessSkyFramebufferAlpha();

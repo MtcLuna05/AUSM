@@ -5,6 +5,7 @@ import com.luna.ausm.impl.pipeline.PipelineContext;
 import com.luna.ausm.impl.pipeline.DynamicLightNoopWorldEventListener;
 import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import java.util.List;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.EnumSkyBlock;
 import net.minecraft.world.World;
@@ -16,6 +17,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(World.class)
 public class WorldDynamicLightMixin {
+    @Inject(method = "notifyBlockUpdate", at = @At("RETURN"))
+    private void ausm$trackPlacedColoredLight(BlockPos pos, IBlockState oldState,
+                                               IBlockState newState, int flags,
+                                               CallbackInfo ci) {
+        World world = (World) (Object) this;
+        if (world.isRemote) {
+            PipelineContext.getInstance().refreshSyntheticLightCandidate(world, pos);
+        }
+    }
+
     @Redirect(
             method = "notifyBlockUpdate",
             at = @At(value = "INVOKE", target = "Ljava/util/List;get(I)Ljava/lang/Object;")

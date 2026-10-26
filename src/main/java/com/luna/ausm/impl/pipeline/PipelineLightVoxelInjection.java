@@ -1,6 +1,7 @@
 package com.luna.ausm.impl.pipeline;
 
 import com.luna.ausm.impl.pipeline.compat.NothiriumShadowCoverage;
+import com.luna.ausm.impl.pipeline.compat.CurvyPipesTerrainBridge;
 import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.mixin.pipeline.RenderGlobalAccessor;
@@ -79,7 +80,12 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
             IBlockState state = actualLightState(MinecraftReflectionCompat.worldBlockState(world, pos), world, pos);
             SyntheticLightInfo lightInfo = syntheticLightInfo(state, world, pos);
             if (lightInfo.voxelId <= 0 || lightInfo.emission <= 0) {
-                syntheticLightCandidates.remove(entry.getKey(), pos);
+                // ProjectRed's multipart tile can appear one client update
+                // after its host block. Retain the candidate so the next
+                // shadow frame can discover the completed light part.
+                if (!self().isProjectRedTileHost(state) || tileEntity != null) {
+                    syntheticLightCandidates.remove(entry.getKey(), pos);
+                }
                 continue;
             }
 
@@ -205,6 +211,12 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
         if (materialId >= 12270 && materialId <= 12280) {
             return materialId - 12160;
         }
+        // Euphoria 1.10's palette for modded blocks (including RandomThings).
+        if (materialId == 21000) return 97;
+        if (materialId == 21002) return 43;
+        if (materialId >= 21004 && materialId <= 21024 && (materialId & 1) == 0) {
+            return 70 + (materialId - 21004) / 2;
+        }
         return 0;
     }
 
@@ -212,6 +224,28 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
         ResourceLocation name = registryName(state);
         if (name == null) {
             return 0;
+        }
+        if ("randomthings".equals(MinecraftReflectionCompat.resourceNamespace(name))
+                && ("luminousblock".equals(MinecraftReflectionCompat.resourcePath(name))
+                || "luminousstainedbrick".equals(MinecraftReflectionCompat.resourcePath(name)))) {
+            // These blocks encode dye color in metadata, even in base packs
+            // whose 10028 emissive class has no palette entry of its own.
+            int meta = MinecraftReflectionCompat.blockMetaFromState(
+                    MinecraftReflectionCompat.blockFromState(state), state);
+            return switch (meta & 15) {
+                case 1, 12 -> 71;
+                case 2 -> 79;
+                case 3 -> 76;
+                case 4 -> 72;
+                case 5 -> 73;
+                case 6 -> 80;
+                case 9 -> 75;
+                case 10 -> 78;
+                case 11 -> 77;
+                case 13 -> 74;
+                case 14 -> 70;
+                default -> 3;
+            };
         }
         if ("tconstruct".equals(MinecraftReflectionCompat.resourceNamespace(name))
                 && "seared_furnace_controller".equals(MinecraftReflectionCompat.resourcePath(name))
@@ -385,7 +419,7 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
             // Nothirium's view list cannot represent the light-space frustum.
             // Draw every prepared provider chunk inside the shaderpack's
             // shadow distance; compile admission stays bounded separately.
-            return Math.max(0, nothiriumShadowRenderer.renderProviderLayerSchedulingCompiles(
+            int count = Math.max(0, nothiriumShadowRenderer.renderProviderLayerSchedulingCompiles(
                     layer,
                     cameraX,
                     cameraY,
@@ -401,6 +435,8 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
                     // route by renderProviderLayer.
                     true
             ));
+            CurvyPipesTerrainBridge.render(layer);
+            return count;
         }
 
         // RenderGlobal's pass-2 container can report a nonzero chunk count
@@ -423,6 +459,7 @@ abstract class PipelineLightVoxelInjection extends PipelineShadowRendering {
                     shadowFramebuffer.resolution(), shadowFramebuffer.resolution());
         }
         if (directCount > 0) {
+            CurvyPipesTerrainBridge.render(layer);
             return directCount;
         }
 

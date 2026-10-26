@@ -46,8 +46,10 @@ public final class ShadedDistantHorizonsRendering {
     public static boolean requestedFor(String name) {
         String lower = name == null ? "" : name.toLowerCase(Locale.ROOT);
         return Boolean.parseBoolean(System.getProperty("ausm.dh.shaded", "true")) && DistantHorizonsCompat.installed()
-                && (lower.contains("complementaryunbound") || lower.contains("complementaryreimagined"))
-                && !lower.contains("euphoria");
+                && ((lower.contains("complementaryunbound") || lower.contains("complementaryreimagined"))
+                        && !lower.contains("euphoria")
+                        || lower.startsWith("bsl") || lower.contains("/bsl")
+                        || lower.contains("makeup-ultrafast") || lower.contains("makeup ultrafast"));
     }
 
     public static boolean requested() {
@@ -91,7 +93,14 @@ public final class ShadedDistantHorizonsRendering {
     }
 
     private static boolean supported(PipelineProgram program) {
-        return program != null && program.hasOwnProgram() && program.drawBuffers().equals(List.of(Attachment.COLOR))
+        List<Attachment> drawBuffers = program == null ? List.of() : program.drawBuffers();
+        String packName = PipelineContext.getInstance().activePackName;
+        String lowerPackName = packName == null ? "" : packName.toLowerCase(Locale.ROOT);
+        boolean familyPrimaryColor = (lowerPackName.startsWith("bsl") || lowerPackName.contains("/bsl")
+                || lowerPackName.contains("makeup-ultrafast") || lowerPackName.contains("makeup ultrafast"))
+                && drawBuffers.size() == 2 && drawBuffers.get(0) == Attachment.COLOR;
+        return program != null && program.hasOwnProgram()
+                && (drawBuffers.equals(List.of(Attachment.COLOR)) || familyPrimaryColor)
                 && program.shaderProgram().getUniformLocation("ausmDhModelOffset") >= 0;
     }
 

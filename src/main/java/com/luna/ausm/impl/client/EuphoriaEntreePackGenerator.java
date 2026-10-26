@@ -49,14 +49,14 @@ public final class EuphoriaEntreePackGenerator {
     private static final String NATIVE_ENTREE_TAR_SHA256 = "1025144fba3cebec88e39bc15231d17bb16430a4ddfbc6975c93c5140415a065";
     private static final String NATIVE_EUPHORIA_TAR_SHA256 = "bfb06adddad37b81f90101c3a5203f40742c375a22d94f5d85c3070820ee7c8c";
     private static final String EUPHORIA_MARKER = "// Euphoria Patches 1.9.3";
-    private static final String GENERATOR_VERSION = "ausm-entree-euphoria-v10";
+    private static final String GENERATOR_VERSION = "ausm-entree-euphoria-v13";
     private static final String MARKER_FILE = ".ausm-euphoria-entree-version";
     private static final String STAGING_NAME = ".ausm-entree-euphoria-staging";
     private static final String PREVIOUS_NAME = ".ausm-entree-euphoria-previous";
     private static final String WORK_NAME = ".ausm-entree-euphoria-work";
     private static final String AUSM_112_PATCH_SUFFIX = " + AUSM 1.12.2 Patches";
     private static final String AUSM_112_PATCH_MARKER = ".ausm-1.12.2-patches-version";
-    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v18";
+    private static final String AUSM_112_PATCH_VERSION = "ausm-1.12.2-patches-v27";
     private static final String LOD_API_PROPERTY = "ausm.lod.api=1";
     private static final String LOD_HELPER = "shaders/lib/ausm/distantLod.glsl";
     private static final String LOD_HELPER_INCLUDE = "#include \"/lib/ausm/distantLod.glsl\"";
@@ -165,7 +165,7 @@ public final class EuphoriaEntreePackGenerator {
         deleteTree(staging);
         copyTree(euphoria, staging);
         overlayBundledFiles(staging);
-        injectAUSM112LodSupportInto(staging);
+        Ausm112ShaderPatchLayer.apply(staging, TARGET_PACK);
         mergeEntreeBlockMappings(staging.resolve("shaders/block.properties"), entreeBlocks);
         Files.writeString(staging.resolve(MARKER_FILE), token, StandardCharsets.UTF_8);
         publish(shaderpacks, staging, target);
@@ -192,7 +192,7 @@ public final class EuphoriaEntreePackGenerator {
             invokeExtract(euphoriaTar, staging);
             requireEuphoriaMarker(staging);
             overlayBundledFiles(staging);
-            injectAUSM112LodSupportInto(staging);
+            Ausm112ShaderPatchLayer.apply(staging, TARGET_PACK);
             mergeEntreeBlockMappings(staging.resolve("shaders/block.properties"), extractedEntree.resolve("shaders/block.properties"));
             Files.writeString(staging.resolve(MARKER_FILE), token, StandardCharsets.UTF_8);
             publish(shaderpacks, staging, target);
@@ -313,7 +313,10 @@ public final class EuphoriaEntreePackGenerator {
                     .toList();
         }
         for (Path patchPack : patchPacks) {
-            injectAUSM112LodSupportInto(patchPack);
+            String generatedName = patchPack.getFileName().toString();
+            String sourcePackName = generatedName.substring(0,
+                    generatedName.length() - AUSM_112_PATCH_SUFFIX.length());
+            Ausm112ShaderPatchLayer.apply(patchPack, sourcePackName);
         }
     }
     /**
@@ -355,10 +358,19 @@ public final class EuphoriaEntreePackGenerator {
             // The bundled programs target Euphoria/Entree's shader API. Plain
             // Complementary r5.8.1 lacks that API, so replacing its programs
             // leaves unresolved includes and incompatible lighting calls.
-            // Direct derivatives receive only the self-contained LOD injection
-            // below; the Euphoria/Entree paths above retain the full overlay.
-            injectAUSM112LodSupportInto(staging);
-            ComplementaryGlintPatch.inject(staging, sourcePackName);
+            // Direct derivatives receive self-contained LOD and Astral
+            // injections; Euphoria/Entree above retain the full overlay.
+            Ausm112ShaderPatchLayer.apply(staging, sourcePackName);
+            Path entree = findPack(shaderpacks, ENTREE_PACK);
+            if (entree != null && "complementary".equals(Ausm112ShaderPatchLayer.familyId(sourcePackName))) {
+                Path blocks = materializedPackFile(entree, "shaders/block.properties", shaderpacks);
+                try {
+                    mergeEntreeBlockMappings(staging.resolve("shaders/block.properties"), blocks);
+                } finally {
+                    cleanupMaterializedPackFile(blocks, shaderpacks);
+                }
+            }
+            migratePatchOptions(shaderpacks.getParent(), sourcePackName, target.getFileName().toString());
             Files.writeString(staging.resolve(AUSM_112_PATCH_MARKER), token, StandardCharsets.UTF_8);
             publish(shaderpacks, staging, target);
             MainMod.LOGGER.info("[AUSM112] Generated shaderpack '{}' from '{}'", target.getFileName(), sourceName);
@@ -367,25 +379,10 @@ public final class EuphoriaEntreePackGenerator {
     static boolean isAUSM112PatchSource(String name) {
         String packName = withoutZipExtension(name);
         return !packName.endsWith(AUSM_112_PATCH_SUFFIX)
-                && (packName.endsWith(EUPHORIA_PATCH_SUFFIX)
-                || packName.startsWith("ComplementaryUnbound")
-                || packName.startsWith("ComplementaryReimagined"));
+                && Ausm112ShaderPatchLayer.supportsSource(packName);
     }
     private static String withoutZipExtension(String name) {
         return name.endsWith(".zip") ? name.substring(0, name.length() - 4) : name;
-    }
-    private static void injectAUSM112LodSupportInto(Path patchPack) throws IOException {
-        installBundledLuminousBlockMappings(patchPack);
-        Path properties = patchPack.resolve("shaders/shaders.properties");
-        ensureLodApiDeclaration(properties);
-        ensureAUSMOptionsCategory(properties, patchPack.resolve("shaders/lang/en_US.lang"));
-        ensureBundledLodHelper(patchPack.resolve(LOD_HELPER));
-        ensureStablePixelationLibrary(patchPack.resolve(PIXELATION_LIBRARY));
-        ensureDriverSafeFxaaLibrary(patchPack.resolve(FXAA_LIBRARY));
-        ensureClampedVolumetricLight(patchPack.resolve(VOLUMETRIC_LIGHT_LIBRARY));
-        EuphoriaEntreeLodPatches.inject(patchPack);
-        injectLodHelperIntoProgram(patchPack.resolve("shaders/program/gbuffers_terrain.glsl"));
-        injectLodHelperIntoProgram(patchPack.resolve("shaders/program/gbuffers_water.glsl"));
     }
     /**
      * Adds RandomThings' opaque Luminous Blocks to Euphoria's existing modded
@@ -475,7 +472,7 @@ public final class EuphoriaEntreePackGenerator {
         }
         return line;
     }
-    private static void ensureLodApiDeclaration(Path properties) throws IOException {
+    static void ensureLodApiDeclaration(Path properties) throws IOException {
         if (!Files.isRegularFile(properties)) {
             return;
         }
@@ -487,7 +484,7 @@ public final class EuphoriaEntreePackGenerator {
                 + LOD_API_PROPERTY + "\n\n";
         Files.writeString(properties, declaration + source, StandardCharsets.UTF_8);
     }
-    private static void ensureAUSMOptionsCategory(Path properties, Path languageFile) throws IOException {
+    static void ensureAUSMOptionsCategory(Path properties, Path languageFile) throws IOException {
         if (!Files.isRegularFile(properties)) {
             return;
         }
@@ -561,7 +558,7 @@ public final class EuphoriaEntreePackGenerator {
                 + (entries.isEmpty() ? "" : " " + entries);
         return source.substring(0, rootScreen.start()) + replacement + source.substring(rootScreen.end());
     }
-    private static void ensureBundledLodHelper(Path helper) throws IOException {
+    static void ensureBundledLodHelper(Path helper) throws IOException {
         Files.createDirectories(helper.getParent());
         try (InputStream stream = requiredResource(OVERLAY_ROOT + LOD_HELPER)) {
             Files.copy(stream, helper, StandardCopyOption.REPLACE_EXISTING);
@@ -575,7 +572,7 @@ public final class EuphoriaEntreePackGenerator {
             Files.copy(stream, pixelationLibrary, StandardCopyOption.REPLACE_EXISTING);
         }
     }
-    private static void ensureDriverSafeFxaaLibrary(Path fxaaLibrary) throws IOException {
+    static void ensureDriverSafeFxaaLibrary(Path fxaaLibrary) throws IOException {
         if (!Files.isRegularFile(fxaaLibrary)) {
             return;
         }
@@ -643,7 +640,7 @@ public final class EuphoriaEntreePackGenerator {
         Files.writeString(fxaaLibrary, patched, StandardCharsets.UTF_8);
         MainMod.LOGGER.info("[AUSM] Applied clamped, explicit-LOD FXAA sampling");
     }
-    private static void ensureClampedVolumetricLight(Path volumetricLightLibrary) throws IOException {
+    static void ensureClampedVolumetricLight(Path volumetricLightLibrary) throws IOException {
         if (!Files.isRegularFile(volumetricLightLibrary)) {
             return;
         }
@@ -661,7 +658,7 @@ public final class EuphoriaEntreePackGenerator {
                 + "    volumetricLight.rgb = clamp(volumetricLight.rgb, vec3(0.0), vec3(1.0));";
         Files.writeString(volumetricLightLibrary, source.replace(anchor, patch), StandardCharsets.UTF_8);
     }
-    private static void injectLodHelperIntoProgram(Path program) throws IOException {
+    static void injectLodHelperIntoProgram(Path program) throws IOException {
         if (!Files.isRegularFile(program)) {
             return;
         }
@@ -771,26 +768,103 @@ public final class EuphoriaEntreePackGenerator {
             return;
         }
         List<String> targetLines = Files.readAllLines(targetBlocks, StandardCharsets.UTF_8);
-        Set<Integer> existingIds = new HashSet<>();
-        collectBlockIds(targetLines, existingIds);
-        List<String> additions = new ArrayList<>();
-        for (String line : Files.readAllLines(entreeBlocks, StandardCharsets.UTF_8)) {
+        boolean changed = false;
+        List<String> sourceLines = Files.readAllLines(entreeBlocks, StandardCharsets.UTF_8);
+        for (int sourceLine = 0; sourceLine < sourceLines.size(); sourceLine++) {
+            String line = sourceLines.get(sourceLine);
             Matcher matcher = BLOCK_MAPPING.matcher(line);
             if (!matcher.matches()) {
                 continue;
             }
             int id = Integer.parseInt(matcher.group(1));
-            if (isEntreeCustomBlockId(id) && existingIds.add(id)) {
-                additions.add(line);
+            if (isEntreeCustomBlockId(id)) {
+                int last = lastBlockMappingLine(sourceLines, sourceLine);
+                String values = String.join(" ", sourceLines.subList(sourceLine, last + 1));
+                values = values.substring(values.indexOf('=') + 1).replace("\\", "").trim();
+                changed |= mergeBlockMappingValues(targetLines, id, values);
+                sourceLine = last;
             }
         }
-        if (additions.isEmpty()) {
-            return;
+        if (changed) Files.write(targetBlocks, targetLines, StandardCharsets.UTF_8);
+    }
+
+    static void installBundledLegacyBlockMappings(Path pack) throws IOException {
+        List<String> aliases;
+        try (InputStream stream = requiredResource("/assets/ausm/shaderpatches/entree-block-aliases.properties")) {
+            aliases = new String(stream.readAllBytes(), StandardCharsets.UTF_8).lines().toList();
         }
-        targetLines.add("");
-        targetLines.add("# AUSM / MeatballCraft Entree overlay");
-        targetLines.addAll(additions);
-        Files.write(targetBlocks, targetLines, StandardCharsets.UTF_8);
+        for (String relative : new String[]{MERGED_BLOCK_PROPERTIES, EUPHORIA_18_BLOCK_PROPERTIES}) {
+            Path file = pack.resolve(relative);
+            if (!Files.isRegularFile(file)) continue;
+            List<String> lines = Files.readAllLines(file);
+            boolean changed = false;
+            for (String alias : aliases) {
+                Matcher matcher = BLOCK_MAPPING.matcher(alias);
+                if (matcher.matches()) {
+                    changed |= mergeBlockMappingValues(lines, Integer.parseInt(matcher.group(1)),
+                            alias.substring(alias.indexOf('=') + 1).trim());
+                }
+            }
+            if (changed) Files.write(file, lines);
+        }
+    }
+
+    private static boolean mergeBlockMappingValues(List<String> lines, int id, String values) {
+        if (values.isBlank()) return false;
+        boolean found = false;
+        boolean changed = false;
+        for (int i = 0; i < lines.size(); i++) {
+            Matcher matcher = BLOCK_MAPPING.matcher(lines.get(i));
+            if (!matcher.matches() || Integer.parseInt(matcher.group(1)) != id) continue;
+            found = true;
+            int last = lastBlockMappingLine(lines, i);
+            String existing = String.join(" ", lines.subList(i, last + 1));
+            Set<String> present = new HashSet<>(List.of(existing.substring(existing.indexOf('=') + 1).split("\\s+")));
+            StringBuilder additions = new StringBuilder();
+            for (String value : values.split("\\s+")) {
+                if (!value.isBlank() && present.add(value)) additions.append(' ').append(value);
+            }
+            if (!additions.isEmpty()) {
+                lines.set(last, lines.get(last) + additions);
+                changed = true;
+            }
+            i = last;
+        }
+        if (!found) {
+            lines.add("block." + id + "= " + values);
+            changed = true;
+        }
+        return changed;
+    }
+
+    /** Retain choices across pack renames; a destination's own choices win. */
+    private static void migratePatchOptions(Path gameDir, String sourceName, String targetName) throws IOException {
+        Path directory = gameDir.resolve("config/ausm/shader-options");
+        java.util.Properties merged = new java.util.Properties();
+        for (String name : new String[]{ENTREE_PACK, TARGET_PACK, sourceName, targetName}) {
+            Path file = directory.resolve(name.replaceAll("[^A-Za-z0-9._-]", "_") + ".properties");
+            if (Files.isRegularFile(file)) {
+                try (InputStream stream = Files.newInputStream(file)) {
+                    merged.load(stream);
+                }
+            }
+        }
+        if (merged.isEmpty()) return;
+        Files.createDirectories(directory);
+        Path destination = directory.resolve(targetName.replaceAll("[^A-Za-z0-9._-]", "_") + ".properties");
+        Path staged = Files.createTempFile(directory, ".ausm-options-", ".tmp");
+        try {
+            try (var stream = Files.newOutputStream(staged)) {
+                merged.store(stream, "AUSM migrated shader options; destination choices preserved");
+            }
+            try {
+                Files.move(staged, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(staged, destination, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(staged);
+        }
     }
     private static void collectBlockIds(List<String> lines, Set<Integer> result) {
         for (String line : lines) {
@@ -810,13 +884,7 @@ public final class EuphoriaEntreePackGenerator {
                 || id >= 32620 && id <= 32645;
     }
     private static void copyEntreeOptions(Path gameDir) throws IOException {
-        Path options = gameDir.resolve("config/ausm/shader-options");
-        Path source = options.resolve("Complimentary_Entree.properties");
-        Path destination = options.resolve("Complimentary_Entree___EuphoriaPatches_1.9.3.properties");
-        if (Files.isRegularFile(source)) {
-            Files.createDirectories(options);
-            Files.copy(source, destination, StandardCopyOption.REPLACE_EXISTING);
-        }
+        migratePatchOptions(gameDir, ENTREE_PACK, TARGET_PACK);
     }
     private static String fingerprint(Path file) throws IOException {
         if (!Files.isRegularFile(file)) {

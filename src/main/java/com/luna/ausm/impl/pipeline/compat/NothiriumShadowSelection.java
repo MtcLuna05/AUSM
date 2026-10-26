@@ -19,6 +19,7 @@ abstract class NothiriumShadowSelection extends NothiriumShadowReflectionBinding
         chunkOffsetUniformLocations.clear();
         chunkOffsetInstanceAttributeLocations.clear();
         shadowIndirectBatchLogged = false;
+        shadowIndirectBatch.invalidateCachedCommands();
         mainTerrainCompileAttempts.clear();
         mainTerrainCompileScanCursors.clear();
         for (NothiriumShadowRenderer.RotatingShadowSelectionChunkList window : mainTerrainCompileScanWindows) {

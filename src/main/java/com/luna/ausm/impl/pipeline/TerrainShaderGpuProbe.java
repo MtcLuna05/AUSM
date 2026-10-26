@@ -1,11 +1,13 @@
 package com.luna.ausm.impl.pipeline;
 
 import com.luna.ausm.impl.MainMod;
+import com.luna.ausm.impl.pipeline.shader.ShaderProgram;
 import java.nio.IntBuffer;
 import java.util.Locale;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL43;
 import org.lwjgl.opengl.GLContext;
@@ -22,8 +24,8 @@ public final class TerrainShaderGpuProbe {
 
     private static final String[] SCOPE_NAMES = {
             "total",
-            "setup",
             "baseTexture",
+            "surfaceSetup",
             "materialSetup",
             "materials",
             "lightingTotal",
@@ -44,6 +46,8 @@ public final class TerrainShaderGpuProbe {
 
     private static boolean initialized;
     private static boolean disabled;
+    private static boolean shaderInstrumentationReported;
+    private static boolean shaderInstrumentationFailedReported;
     private static Boolean supported;
     private static int bindingIndex = -1;
     private static int activeBuffer;
@@ -55,6 +59,28 @@ public final class TerrainShaderGpuProbe {
 
     public static boolean requestedAndSupported() {
         return Boolean.getBoolean(ENABLE_PROPERTY) && supported();
+    }
+
+    static String captureStatus() {
+        if (!Boolean.getBoolean(ENABLE_PROPERTY)) {
+            return "inactive (restart with -D" + ENABLE_PROPERTY + "=true before shader compilation)";
+        }
+        return supported() ? "armed" : "inactive (requires OpenGL 4.3 and GL_ARB_shader_clock)";
+    }
+
+    public static void reportShaderInstrumented() {
+        if (!shaderInstrumentationReported) {
+            shaderInstrumentationReported = true;
+            MainMod.LOGGER.info("[AUSMTerrainShaderProbe] terrain fragment shader instrumentation applied");
+        }
+    }
+
+    public static void reportShaderInstrumentationFailure(String missingAnchor) {
+        if (!shaderInstrumentationFailedReported) {
+            shaderInstrumentationFailedReported = true;
+            MainMod.LOGGER.warn("[AUSMTerrainShaderProbe] skipped shader instrumentation; missing anchor='{}'",
+                    missingAnchor);
+        }
     }
 
     public static int bindingIndex() {
@@ -74,11 +100,15 @@ public final class TerrainShaderGpuProbe {
         framesInWindow++;
     }
 
-    static void bindForTerrain() {
-        if (!ensureInitialized()) {
-            return;
+    static void bindForTerrain(ShaderProgram program, boolean captureActive) {
+        int activeLocation = program.getUniformLocation("ausmTerrainProbeActive");
+        boolean active = captureActive && ensureInitialized();
+        if (active) {
+            GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindingIndex, BUFFERS[activeBuffer]);
         }
-        GL30.glBindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, bindingIndex, BUFFERS[activeBuffer]);
+        if (activeLocation >= 0) {
+            GL20.glUniform1i(activeLocation, active ? 1 : 0);
+        }
     }
 
     static void release() {
@@ -101,6 +131,8 @@ public final class TerrainShaderGpuProbe {
         activeBuffer = 0;
         framesInWindow = 0;
         nextWindow = 0L;
+        shaderInstrumentationReported = false;
+        shaderInstrumentationFailedReported = false;
     }
 
     private static boolean ensureInitialized() {

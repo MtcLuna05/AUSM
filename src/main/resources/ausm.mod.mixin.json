@@ -7,6 +7,9 @@
   "compatibilityLevel": "JAVA_8",
   "mixins": [],
   "client": [
+    "compat.CurvyPipesClientHandlerMixin",
+    "compat.CurvyPipesVertexBufferMixin",
+    "compat.CurvyPipesCustomRenderMixin",
     "compat.DistantHorizonsVanillaFadeMixin",
     "compat.DistantHorizonsFarFadeMixin",
     "compat.DistantHorizonsAntialiasingMixin",

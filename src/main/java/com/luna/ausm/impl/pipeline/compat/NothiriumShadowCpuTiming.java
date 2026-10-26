@@ -21,6 +21,8 @@ final class NothiriumShadowCpuTiming {
     private static long indirectFallbacks;
     private static long indirectNanos;
     private static long indirectSubmittedChunks;
+    private static long indirectCommandUploads;
+    private static long indirectCommandReuses;
     private static long gateGl43;
     private static long gateUniform;
     private static long gateAttribute;
@@ -75,12 +77,23 @@ final class NothiriumShadowCpuTiming {
         }
     }
 
+    static void indirectCommandCacheResult(boolean shadowPass, boolean uploaded) {
+        if (!shadowPass) {
+            return;
+        }
+        if (uploaded) {
+            indirectCommandUploads++;
+        } else {
+            indirectCommandReuses++;
+        }
+    }
+
     private static void logAndReset() {
         long divisor = Math.max(1L, selectionCalls);
         MainMod.LOGGER.info(
                 "[AUSMNothiriumShadowCpu] selections={} cacheHits={} selection={}/{}us scannedAvg={} selectedAvg={} "
                         + "layerDraws={} layerSubmit={}/{}us chunks={} indirect={}/{} fallback={} indirectBuild={}us chunks={} "
-                        + "gateMiss(gl43={},uniform={},attribute={})",
+                        + "indirectCommands(upload={},reuse={}) gateMiss(gl43={},uniform={},attribute={})",
                 selectionCalls,
                 selectionCacheHits,
                 micros(selectionNanos / divisor),
@@ -96,6 +109,8 @@ final class NothiriumShadowCpuTiming {
                 indirectFallbacks,
                 micros(indirectAttempts == 0 ? 0L : indirectNanos / indirectAttempts),
                 indirectSubmittedChunks,
+                indirectCommandUploads,
+                indirectCommandReuses,
                 gateGl43,
                 gateUniform,
                 gateAttribute);
@@ -114,6 +129,8 @@ final class NothiriumShadowCpuTiming {
         indirectFallbacks = 0L;
         indirectNanos = 0L;
         indirectSubmittedChunks = 0L;
+        indirectCommandUploads = 0L;
+        indirectCommandReuses = 0L;
         gateGl43 = 0L;
         gateUniform = 0L;
         gateAttribute = 0L;

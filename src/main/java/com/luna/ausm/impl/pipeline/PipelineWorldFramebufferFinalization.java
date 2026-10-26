@@ -332,6 +332,8 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
 
     protected void runFullscreenArrayProgram(FullscreenArrayProgram program) {
         int gpuTimer = PipelineGpuTiming.beginProgramArray(program.arrayId());
+        int compositeDetailTimer = program.arrayId() == ProgramArrayId.COMPOSITE
+                ? PipelineGpuTiming.beginCompositeArray() : -1;
         try {
         List<Attachment> drawBuffers = program.drawBuffers();
         Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
@@ -376,6 +378,7 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
             );
         }
         } finally {
+            PipelineGpuTiming.end(compositeDetailTimer);
             PipelineGpuTiming.end(gpuTimer);
         }
     }
@@ -518,6 +521,7 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
 
     protected void runFullscreenPass(PipelineProgram program) {
         int gpuTimer = PipelineGpuTiming.beginProgram(program.pass());
+        int compositeDetailTimer = PipelineGpuTiming.beginCompositePass(program.pass());
         try {
         List<Attachment> drawBuffers = program.drawBuffers();
         Attachment[] drawBufferArray = drawBuffers.toArray(new Attachment[0]);
@@ -576,6 +580,7 @@ abstract class PipelineWorldFramebufferFinalization extends PipelineDeferredPres
             );
         }
         } finally {
+            PipelineGpuTiming.end(compositeDetailTimer);
             PipelineGpuTiming.end(gpuTimer);
         }
     }

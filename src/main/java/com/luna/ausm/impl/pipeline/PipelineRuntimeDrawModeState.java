@@ -180,7 +180,7 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
             markShaderStorageBuffersBound();
         }
         if (pass == RenderPass.GBUFFERS_TERRAIN || pass == RenderPass.GBUFFERS_TERRAIN_SOLID) {
-            TerrainShaderGpuProbe.bindForTerrain();
+            TerrainShaderGpuProbe.bindForTerrain(program, PipelineGpuTiming.isTraceCaptureActive());
         }
         uniformRegistry.uploadAll(program);
         if (!packDirectives.customUniforms().isEmpty()) {
@@ -198,6 +198,14 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
 
     protected List<Attachment> effectiveDrawBuffersForCurrentPhase(PipelineProgram pipelineProgram) {
         List<Attachment> drawBuffers = pipelineProgram.effectiveDrawBuffers(programs);
+        // Native sky overlays write scene color only. In particular Euphoria's
+        // skytextured pass also owns sky/cloud metadata that these draws must
+        // preserve (their fragment branch never writes those outputs).
+        if (pipelineProgram.stage() == ProgramStage.GBUFFERS
+                && self().getPhase().mainPass() == RenderPass.GBUFFERS_SKYTEXTURED
+                && currentSkyDetailKind >= 1 && currentSkyDetailKind <= 5) {
+            return drawBuffers.isEmpty() ? drawBuffers : List.of(drawBuffers.getFirst());
+        }
         if (pipelineProgram.stage() != ProgramStage.GBUFFERS || self().getPhase() != WorldRenderingPhase.STARS || !drawBuffers.contains(Attachment.AUX4)) {
             return drawBuffers;
         }
@@ -314,6 +322,17 @@ abstract class PipelineRuntimeDiagnosticsState8 extends PipelineRuntimeDiagnosti
     }
 
     protected void applyBlendMode(RenderPass pass, List<Attachment> drawBuffers) {
+        if (pass == RenderPass.GBUFFERS_SKYTEXTURED
+                && currentSkyDetailKind >= 1 && currentSkyDetailKind <= 5) {
+            // Keep overlay alpha, even when a pack disables blending for its
+            // ordinary sun/moon pass. Planets use alpha; Astral uses additive.
+            resetIndexedBlendState();
+            MinecraftReflectionCompat.glStateEnableBlend();
+            MinecraftReflectionCompat.glStateTryBlendFuncSeparate(GL11.GL_SRC_ALPHA,
+                    currentSkyDetailKind == 1 ? GL11.GL_ONE_MINUS_SRC_ALPHA : GL11.GL_ONE,
+                    GL11.GL_ONE, GL11.GL_ZERO);
+            return;
+        }
         logEntityBlendProbe(pass, drawBuffers);
         if (self().applyOitBlendMode(pass, drawBuffers)) {
             disableColortex6MetadataBlending(pass, drawBuffers);

@@ -6,6 +6,7 @@ import com.luna.ausm.api.pipeline.shader.WorldRenderingPhase;
 import com.luna.ausm.impl.MainMod;
 import com.luna.ausm.impl.pipeline.bloom.AusmBloomLayer;
 import com.luna.ausm.impl.pipeline.compat.NothiriumBypass;
+import com.luna.ausm.impl.pipeline.compat.CurvyPipesTerrainBridge;
 import com.luna.ausm.impl.pipeline.render.FixedFunctionGlState;
 import com.luna.ausm.impl.pipeline.render.TextureBinder;
 import com.luna.ausm.impl.util.MinecraftReflectionCompat;
@@ -80,6 +81,10 @@ abstract class PipelineFrameLifecycle1 extends PipelineFrameLifecycle0 {
                     : renderNothiriumTerrainLayer(layer, (float) partialTicks, viewEntity);
             if (nothiriumCount >= 0) {
                 self().rebindActiveTerrainPassAfterNothiriumNativeDraw();
+                // Curvy Pipes hooks vanilla's renderBlockLayer. Our direct
+                // Nothirium submission never enters that method, even for an
+                // empty terrain layer, so replay its non-block geometry here.
+                CurvyPipesTerrainBridge.render(layer);
                 if (nothiriumCount > 0) {
                     self().markNothiriumPipelineTranslucentBridge(layer);
                 }

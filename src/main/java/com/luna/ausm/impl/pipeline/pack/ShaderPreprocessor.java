@@ -37,6 +37,14 @@ public class ShaderPreprocessor {
     private static final Pattern VOXEL_FEATURE_IFDEF_PATTERN = Pattern.compile("^(\\s*)#ifdef\\s+(PORTAL_EDGE_EFFECT|CONNECTED_GLASS_EFFECT)\\s*(?://.*)?$");
     private static final Pattern VOXEL_FEATURE_DEFINED_IF_PATTERN = Pattern.compile("^(\\s*)#if\\s+defined\\s*\\(?\\s*(PORTAL_EDGE_EFFECT|CONNECTED_GLASS_EFFECT)\\s*\\)?\\s*(?://.*)?$");
     private static final String DISTANT_LIGHT_BOKEH_FUNCTION = "DoDistantLightBokehMaterial";
+    /**
+     * MakeUp exposes this switch in shaders.properties, but declares it only in
+     * the dimension-neutral fallback wrappers. OptiFine edits those declarations
+     * in place; it does not inject the switch into world0/world-1/world1 shaders.
+     * Treating it as a global prelude option forces every dimension through the
+     * UNKNOWN_DIM branch and corrupts the normal lighting pipeline.
+     */
+    private static final Set<String> FILE_LOCAL_SHADER_OPTIONS = Set.of("USE_BASIC_SH");
     private static final String DISTANT_LIGHT_BOKEH_FALLBACK = """
             #ifndef AUSM_DISTANT_LIGHT_BOKEH_FALLBACK
             #define AUSM_DISTANT_LIGHT_BOKEH_FALLBACK
@@ -139,13 +147,15 @@ public class ShaderPreprocessor {
                 extensionLines.add(line.trim());
             }
         }
-        if (parseGlslVersion(versionLine) < 130 && requiresGlsl130(rawLines)) {
+        if (parseGlslVersion(versionLine) < 130
+                && (requiresGlsl130(rawLines) || isDistantHorizonsPass(pass) && shaderType == GL20.GL_VERTEX_SHADER)) {
             versionLine = "#version 130";
         }
         versionLine = ensureStageMinimumVersion(versionLine, shaderType);
         int glslVersion = parseGlslVersion(versionLine);
         ShaderOptions sourceOptions = removeFunctionCollidingOptions(options, rawLines);
-        ShaderOptions preludeOptions = removeSourceDeclaredOptions(sourceOptions, rawLines);
+        ShaderOptions preludeOptions = removeFileLocalOptions(
+                removeSourceDeclaredOptions(sourceOptions, rawLines));
         boolean requiresUnboundLatePiCompatibility = rawLines.stream()
                 .map(String::trim)
                 .anyMatch(line -> LATE_PI_DECLARATION_PATTERN.matcher(line).matches());
@@ -168,7 +178,7 @@ public class ShaderPreprocessor {
             if (processedTrimmed.matches("(?i)composite\\d+ has been reserved for future use.*")) {
                 processed = processed.substring(0, processed.indexOf(processedTrimmed)) + "// " + processedTrimmed;
             }
-            finalSource.append(normalizeLegacyGlsl(processed, glslVersion)).append("\n");
+            finalSource.append(normalizeLegacyGlsl(processed, glslVersion, shaderType)).append("\n");
         }
 
         // 3. Construct the final valid GLSL string
@@ -180,8 +190,13 @@ public class ShaderPreprocessor {
         out.append(getOptiFineEnvironmentDefines(preludeOptions, glslVersion, directives)).append("\n");
         out.append(getRenderStageDefines()).append("\n");
         out.append(getProgramDefines(pass, programName)).append("\n");
-        if (pass != RenderPass.DH_TERRAIN && pass != RenderPass.DH_WATER
-                && ShadedDistantHorizonsRendering.requestedFor(pack.getName())) {
+        if (isDistantHorizonsPass(pass) && rawLines.stream().anyMatch(line -> line.contains("DH_BLOCK_"))) {
+            out.append(DISTANT_HORIZONS_FRAGMENT_COMPAT).append("\n");
+        }
+        String lowerPackName = pack.getName().toLowerCase(Locale.ROOT);
+        boolean complementaryDhTransitions = ShadedDistantHorizonsRendering.requestedFor(pack.getName())
+                && !lowerPackName.startsWith("bsl") && !lowerPackName.contains("/bsl");
+        if (pass != RenderPass.DH_TERRAIN && pass != RenderPass.DH_WATER && complementaryDhTransitions) {
             out.append("#define DISTANT_HORIZONS 1\n");
         }
         out.append(getOptiFineMetadataDefines()).append("\n");
@@ -191,7 +206,7 @@ public class ShaderPreprocessor {
         out.append(finalSource);
 
         String source = addMissingDistantHorizonsCompat(out.toString(), pass, shaderType);
-        if (ShadedDistantHorizonsRendering.requestedFor(pack.getName())) {
+        if (complementaryDhTransitions) {
             source = DistantHorizonsTerrainTransition.transform(source, pass, shaderType);
         }
         source = addMissingDistantLightBokehFallback(source);
@@ -259,6 +274,15 @@ public class ShaderPreprocessor {
         return removed ? new ShaderOptions(filtered) : options;
     }
 
+    private static ShaderOptions removeFileLocalOptions(ShaderOptions options) {
+        if (options == null || options.all().isEmpty()) {
+            return options;
+        }
+        Map<String, ShaderOption> filtered = new LinkedHashMap<>(options.all());
+        boolean removed = filtered.keySet().removeAll(FILE_LOCAL_SHADER_OPTIONS);
+        return removed ? new ShaderOptions(filtered) : options;
+    }
+
     private static String stripLineComment(String line) {
         int comment = line.indexOf("//");
         return comment >= 0 ? line.substring(0, comment) : line;
@@ -289,10 +313,6 @@ public class ShaderPreprocessor {
                 && shaderType == GL20.GL_VERTEX_SHADER
                 && !declaresSymbolInStage(result, "dhMaterialId", "VERTEX_SHADER")) {
             result = insertBeforeStageProgram(result, DISTANT_HORIZONS_VERTEX_COMPAT, "VERTEX_SHADER");
-        }
-        if (result.contains("DH_BLOCK_")
-                && shaderType == GL20.GL_FRAGMENT_SHADER) {
-            result = insertBeforeProgram(result, DISTANT_HORIZONS_FRAGMENT_COMPAT);
         }
         if (shaderType == GL20.GL_VERTEX_SHADER) {
             result = DistantHorizonsVertexTransform.transform(result);
@@ -604,6 +624,10 @@ public class ShaderPreprocessor {
         return false;
     }
 
+    private static boolean isDistantHorizonsPass(RenderPass pass) {
+        return pass == RenderPass.DH_TERRAIN || pass == RenderPass.DH_WATER;
+    }
+
     private static String ensureStageMinimumVersion(String versionLine, int shaderType) {
         int minimumVersion = minimumGlslVersion(shaderType);
         if (minimumVersion <= 0 || parseGlslVersion(versionLine) >= minimumVersion) {
@@ -641,8 +665,14 @@ public class ShaderPreprocessor {
         return minimumVersion >= 150 ? " compatibility" : "";
     }
 
-    private static String normalizeLegacyGlsl(String line, int glslVersion) {
+    private static String normalizeLegacyGlsl(String line, int glslVersion, int shaderType) {
         if (glslVersion >= 130) {
+            if (shaderType == GL20.GL_VERTEX_SHADER) {
+                return line.replaceFirst("^(\\s*)flat\\s+varying\\b", "$1flat out");
+            }
+            if (shaderType == GL20.GL_FRAGMENT_SHADER) {
+                return line.replaceFirst("^(\\s*)flat\\s+varying\\b", "$1flat in");
+            }
             return line;
         }
 
